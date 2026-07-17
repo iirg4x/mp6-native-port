@@ -1,19 +1,10 @@
 --- a/src/game/sprput.c
 +++ b/src/game/sprput.c
-@@ -6,6 +6,8 @@
- #include "dolphin/mtx.h"
- #include "dolphin/gx.h"
- #include "dolphin/vi.h"
+@@ -8,0 +9,2 @@
 +#include <stdio.h>  /* M11 object census (see HuSprTexLoad below) */
 +#include <stdlib.h>
- 
- void HuSprTexLoad(ANIMDATA *anim, s16 bmpNo, s16 texMapId, GXTexWrapMode wrapS, GXTexWrapMode wrapT, GXTexFilter filter);;
- 
-@@ -250,6 +252,28 @@
-     ANIMBMP *bmp = &anim->bmp[bmpNo];
-     s16 sizeX = bmp->sizeX;
-     s16 sizeY = bmp->sizeY;
-+    /* MP6 native port -- M11  object census: the
+@@ -252,0 +255,22 @@
++    /* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md) object census: the
 +     * ANIM-sourced texture binds (sprites AND hsfdraw's engine reflect/toon/
 +     * hilite maps all funnel through here) -- names which ANIMDATA/format
 +     * each bind came from, the piece the per-model census can't see. Same
@@ -35,15 +26,9 @@
 +            fflush(stdout);
 +        }
 +    }
-     switch(bmp->dataFmt & ANIM_BMP_FMTMASK) {
-         case ANIM_BMP_RGBA8:
-             GXInitTexObj(&texObj, bmp->data, sizeX, sizeY, GX_TF_RGBA8, wrapS, wrapT, GX_FALSE);
-@@ -416,7 +440,37 @@
-     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
-     GXSetArray(GX_VA_POS, data3D->vtx, sizeof(HuVecF));
-     GXSetVtxDesc(GX_VA_TEX0, GX_INDEX16);
+@@ -419 +443,31 @@
 -    GXSetVtxAttrFmt(GX_VA_TEX0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-+    /* MP6 native port -- . Real, unpatched original decomp
++    /* MP6 native port -- docs/M2D_MENUS.md. Real, unpatched original decomp
 +     * bug (not a decompilation error -- this exact typo shape, reusing the
 +     * same GXAttr identifier for both arguments instead of the GXVtxFmt
 +     * slot selector the first parameter actually wants, is a classic
@@ -74,15 +59,8 @@
 +     * exactly right there -- it says WHICH attribute this call configures,
 +     * a completely different, correct use of the same enumerator). */
 +    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-     GXSetArray(GX_VA_TEX0, data3D->st, sizeof(HuVec2f));
-     if(sp->attr & HUSPR_ATTR_VTXCOLOR) {
-         GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
-@@ -560,4 +614,34 @@
-             }
-         }
-     }
--}
-+    /* MP6 native port -- . Real, unpatched original decomp
+@@ -562,0 +617,30 @@
++    /* MP6 native port -- docs/M2D_MENUS.md. Real, unpatched original decomp
 +     * gap (same class as game/hsfman.c's Hu3DZClear -- see
 +     * platform/gx/aurora_bridge.c's section-5 comment for that one and the
 +     * general bridge-side GXBegin/GXEnd tolerance this project added for
@@ -112,4 +90,3 @@
 +     * really ends, closing that gap at the source instead of relying on
 +     * the bridge's necessarily-coarser fallback. */
 +    GXEnd();
-+}

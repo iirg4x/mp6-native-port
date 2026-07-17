@@ -1,15 +1,12 @@
 --- a/src/game/frand.c
 +++ b/src/game/frand.c
-@@ -33,6 +33,28 @@
- u32 frandmod(u32 arg0) {
-     u32 ret;
-     frand_seed = frandom(frand_seed);
-+    /* MP6 native port -- Real PowerPC divwu/divw does
+@@ -35,0 +36,22 @@
++    /* MP6 native port -- docs/M2D_MENUS.md. Real PowerPC divwu/divw does
 +     * NOT trap on a zero divisor (Gekko/Broadway silently produces an
 +     * implementation-defined-but-non-crashing result); x86_64 DOES fault,
 +     * and zig cc's runtime UB checking turns that into a caught panic --
 +     * the same "latent portability landmine only zig's stricter runtime
-+     * catches" class as the frsqrte unsigned-shift
++     * catches" class as docs/M2A_ENDIANNESS.md's frsqrte unsigned-shift
 +     * fix. Confirmed reachable, not theoretical: REL/bootDll/opening.c's
 +     * CharFocusRandom computes `rearmLimit = (s32)(40.f *
 +     * remainingFraction)` -- remainingFraction shrinks toward 0 as the
@@ -26,6 +23,3 @@
 +    if (arg0 == 0) {
 +        return 0;
 +    }
-     ret = (frand_seed & 0x7FFFFFFF)%arg0;
-     return ret;
- }

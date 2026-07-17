@@ -1,15 +1,8 @@
 --- a/src/REL/bootDll/opening.c
 +++ b/src/REL/bootDll/opening.c
-@@ -716,25 +716,40 @@
- static void GuideCharFocus(u32 guideChar, s32 frameCount)
- {
-     s16 frame;
-     s16 toggleCounter;
-     s16 phase;
-     BOOL alternate;
-     float focusValue;
+@@ -725 +725,36 @@
 -    OpeningFocusObject *object;
-+    /* MP6 native port -- . OpeningFocusObject is a
++    /* MP6 native port -- docs/A3_GUIDE_PLACEMENT.md. OpeningFocusObject is a
 +     * hand-modeled PARTIAL OVERLAY of HSF_OBJECT (see its own typedef, just
 +     * above this function): `u8 reserved_00[0x34]; float focus34; float
 +     * focus38;` -- a classic decompiler pattern for "we don't have this
@@ -45,28 +38,14 @@
 +     * cheap "spotlight" highlight on the currently-narrated guide
 +     * character), just no longer aliased onto the wrong field. */
 +    HSF_OBJECT *object;
-
-     alternate = guideChar & GUIDE_FOCUS_SELECTOR_ALT;
-     CharFocusCancelF = 0;
-     guideChar &= GUIDE_FOCUS_SELECTOR_CHAR_MASK;
+@@ -730 +765 @@
 -    object = (OpeningFocusObject *)Hu3DModelObjPtrGet(
 +    object = Hu3DModelObjPtrGet(
-         OpeningMdlId[2],
-         OpeningCharObjNameTbl[guideChar]);
-@@ -749,8 +764,8 @@
-     focusValue = GUIDE_FOCUS_VALUE_LIT;
-     phase = 1;
-     for (frame = 1, toggleCounter = 0; frame <= frameCount; frame++) {
+@@ -751,2 +786,2 @@
 -        object->focus38 = focusValue;
 -        object->focus34 = focusValue;
 +        object->mesh.base.scale.x = focusValue;
 +        object->mesh.base.scale.y = focusValue;
-
-         if (toggleCounter++ > 5) {
-             phase ^= 1;
-@@ -797,4 +812,4 @@
-             SetCharAnimFrame((s16)guideChar, 0x4D);
-         }
-     }
+@@ -799 +834 @@
 -    object->focus34 = object->focus38 = GUIDE_FOCUS_VALUE_REST;
 +    object->mesh.base.scale.x = object->mesh.base.scale.y = GUIDE_FOCUS_VALUE_REST;

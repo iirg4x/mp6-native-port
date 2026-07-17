@@ -1,10 +1,8 @@
 --- a/src/game/charman.c
 +++ b/src/game/charman.c
-@@ -99,7 +99,20 @@
-
- static u8 lbl_8026F7B0[0xE8];
+@@ -102 +102,24 @@
 -static u16 dustFlags[CHAR_NPC_MAX];
-+/* MP6 native port -- . Real, unpatched original decomp
++/* MP6 native port -- docs/M2E_MILESTONE.md. Real, unpatched original decomp
 + * bug (not a decompilation error -- charman.c is independently confirmed
 + * byte-identical/Matching against the real compiled REL, per this repo's
 + * own decomp recovery notes): CharModelKill's own CHARNO_NONE case (below
@@ -28,4 +26,3 @@
 + * change any existing read/write's target), just gives this one loop the
 + * storage it was already assuming it had. */
 +static u16 dustFlags[CHAR_NPC_NO_BASE];
- static HUPROCESS *hookDustProc[CHAR_MOT_MAX];

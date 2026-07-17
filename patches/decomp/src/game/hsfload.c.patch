@@ -1,21 +1,12 @@
 --- a/src/game/hsfload.c
 +++ b/src/game/hsfload.c
-@@ -1,7 +1,11 @@
- #define _MATH_H
- #include "game/hsfload.h"
+@@ -2,0 +3 @@
 +#include "game/memory.h"
- #include "string.h"
- #include "ctype.h"
+@@ -4,0 +6,3 @@
 +#include "mp6_shim_log.h"
 +#include "mp6_hsf_native.h"
 +#include <stdlib.h>
- 
- GXColor rgba[100];
- HSF_HEADER head;
-@@ -59,34 +63,51 @@
- 
- HSF_DATA *LoadHSF(void *data)
- {
+@@ -62,28 +66,74 @@
 -    HSF_DATA *hsf;
 -    Model.root = NULL;
 -    objtop = NULL;
@@ -44,13 +35,13 @@
 -    objtop = NULL;
 -    return hsf;
 -    
-+    /* MP6 native port -- M3 . Real HSF (3D model) loading
++    /* MP6 native port -- M3 (docs/M3_HSF.md). Real HSF (3D model) loading
 +     * now goes through a from-scratch native deserializer
 +     * (platform/hsf/hsf_load_native.c) that reads this file's big-endian,
 +     * 32-bit-pointer-width bytes explicitly (never in-place, unlike every
 +     * *Load() function below) and builds a fresh, natively-laid-out
 +     * HSF_DATA graph -- see that file's own header comment for the full
-+     * architecture and  for the format derivation writeup.
++     * architecture and docs/M3_HSF.md for the format derivation writeup.
 +     * This replaces the M2 milestone's own inert stub (docs/
 +     * M2B_TITLE_PATH.md's "HSF frontier" section): calling any of the
 +     * *Load() functions below directly on this port's raw (unswapped,
@@ -88,7 +79,7 @@
 +        }
 +        return hsf;
 +    }
-+    /* M12 : replicate the ONE global side
++    /* M12 (docs/M12_MDSEL_INTEGRATION.md): replicate the ONE global side
 +     * effect of the original FileLoad() that this body-replacement dropped:
 +     * `StringTable = (char *)((u32)fileptr + head.string.ofs);` (this
 +     * file's own original line ~140, run on EVERY HSF load). The native
@@ -118,6 +109,3 @@
 +        StringTable = (char *)data + mp6StrOfs;
 +    }
 +    return MP6_LoadHSFNative(data);
- }
- 
- void ClusterAdjustObject(HSF_DATA *model, HSF_DATA *srcModel)

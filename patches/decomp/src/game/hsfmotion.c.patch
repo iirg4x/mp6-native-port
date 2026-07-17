@@ -1,13 +1,10 @@
 --- a/src/game/hsfmotion.c
 +++ b/src/game/hsfmotion.c
-@@ -72,7 +72,18 @@
- 
- BOOL Hu3DMotionKill(HU3D_MOTIONID motId)
- {
+@@ -75 +75,12 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
 +    /* MP6 native port: mdsel's teardown calls this with the "no motion"
-+     * sentinel (-1) when a mode is confirmed (reproduced directly, panic
-+     * at &Hu3DMotion[-1]). On hardware the out-of-bounds read lands on
++     * sentinel (-1) when a mode is confirmed (A1 lane's repro, panic at
++     * &Hu3DMotion[-1]). On hardware the out-of-bounds read lands on
 +     * whatever precedes the array and the !motP->hsf gate below almost
 +     * always bails; natively it's a bounds panic. Treat the sentinel as
 +     * the no-op it de-facto is -- same class as this file's existing
@@ -17,15 +14,9 @@
 +        return FALSE;
 +    }
 +    motP = &Hu3DMotion[motId];
-     HU3D_MODEL *modelP;
-     s16 i;
-     if(!motP->hsf) {
-@@ -188,7 +199,27 @@
- void Hu3DMotionShiftSet(HU3D_MODELID modelId, HU3D_MOTIONID motId, float start, float end, u32 attr)
- {
-     HU3D_MODEL *modelP = &Hu3DData[modelId];
+@@ -191 +202,21 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
-+    /* MP6 native port -- . 64-bit/checked-build
++    /* MP6 native port -- docs/M12_MDSEL_INTEGRATION.md. 64-bit/checked-build
 +     * portability fix, negative-sentinel-index class: motId ==
 +     * HU3D_MOTIONID_NONE (-1) reaches this function ORGANICALLY. mdseldll's
 +     * fn_1_6F40 does Hu3DMotionShiftSet(mdlId, Hu3DMotionIDGet(mdlId), ...)
@@ -46,16 +37,10 @@
 +     * nothing observable: the pointer stays dead either way, and every
 +     * modelP field write below is identical. */
 +    HU3D_MOTION *motP = (motId != HU3D_MOTIONID_NONE) ? &Hu3DMotion[motId] : NULL;
-     u32 motAttr;
-     attr &= ~HU3D_MOTATTR;
-     motAttr = HU3D_MOTATTR_NONE;
-@@ -884,16 +915,39 @@
-             
-             case HSF_TRACK_CLUSTER:
-                 if (!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF)) {
+@@ -887,2 +918,20 @@
 -                    clusterP = &hsf->cluster[trackP->cluster];
 -                    clusterP->index = GetClusterCurve(trackP, time);
-+                    /* MP6 native port -- . hsf->cluster is
++                    /* MP6 native port -- docs/A1_MOTION.md. hsf->cluster is
 +                     * still stub-tolerated (forced NULL/0 -- see
 +                     * platform/hsf/hsf_load_native.c's LoadMotion(), which
 +                     * deliberately writes -1 into every CLUSTER/
@@ -75,20 +60,13 @@
 +                        clusterP = &hsf->cluster[trackP->cluster];
 +                        clusterP->index = GetClusterCurve(trackP, time);
 +                    }
-                 }
-                 break;
-             
-             case HSF_TRACK_CLUSTER_WEIGHT:
-                 if (!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF)) {
-                     HSF_TRACK *track = trackP;
+@@ -895,2 +944,7 @@
 -                    clusterP = &hsf->cluster[track->cluster];
 -                    clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
 +                    /* MP6 native port -- same reasoning as
-+                     * HSF_TRACK_CLUSTER immediately above. */
++                     * HSF_TRACK_CLUSTER immediately above
++                     * (docs/A1_MOTION.md). */
 +                    if (track->cluster >= 0 && track->cluster < hsf->clusterNum) {
 +                        clusterP = &hsf->cluster[track->cluster];
 +                        clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
 +                    }
-                 }
-                 break;
-             

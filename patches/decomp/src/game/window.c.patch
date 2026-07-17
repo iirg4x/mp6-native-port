@@ -1,55 +1,9 @@
 --- a/src/game/window.c
 +++ b/src/game/window.c
-@@ -1,5 +1,6 @@
--#define _MATH_H
--#define M_PI 3.141592653589793
--double sin(double x);
--double cos(double x);
--#include "game/window.h"
-+#define _MATH_H
-+#define M_PI 3.141592653589793
-+double sin(double x);
-+double cos(double x);
+@@ -4,0 +5 @@
 +#include "be.h"
-+#include "game/window.h"
-@@ -537,36 +537,52 @@
--u32 HuWinMesMaxDirGet(void)
--{
--    u32 *dirNum = messDataPtr;
--    return *dirNum;
--}
--
--u32 HuWinMesMaxNumGet(u32 dirNum)
--{
--    u32 dir = dirNum >> 16;
--    u32 *messData = messDataPtr;
--    if(dir >= *messData) {
--        OSReport("Error: Message Dir Over\n");
--    }
--    messData++;
--    messData += messData[dir]/sizeof(u32);
--    return *messData;
--}
--
--void *HuWinMesDataPtrGet(void *data, u32 messNum)
--{
--    u32 dir = messNum >> 16;
--    u32 num = messNum & 0xFFFF;
--    u32 *messData = data;
--    if(dir >= *messData) {
--        OSReport("Error: Message Dir Over\n");
--    }
--    messData++;
--    messData += messData[dir]/sizeof(u32);
--    if(num >= *messData) {
--        OSReport("Error: Message Number Over\n");
--    }
--    messData++;
--    messData += messData[num]/sizeof(u32);
--    messData++;
--    return messData;
--}
-+/* MP6 native port -- . messDataPtr (game/window.c's
+@@ -536,0 +538,16 @@
++/* MP6 native port -- docs/M2C_MENU_PATH.md. messDataPtr (game/window.c's
 + * HuWinMesRead()) is a plain memcpy() of a real DVD file's raw bytes
 + * (mess/messdata*.bin), never byte-swapped on the way in -- the exact
 + * same "directory count, then a per-entry offset table" container shape
@@ -65,45 +19,31 @@
 + * corrupted messData pointer it produced is the direct cause of the
 + * first-ever "GXBegin: called without matching GXEnd" Aurora FATAL this
 + * port hit, a few lines later, once real frame drawing tried to use it. */
-+u32 HuWinMesMaxDirGet(void)
-+{
-+    u32 *dirNum = messDataPtr;
+@@ -540 +557 @@
+-    return *dirNum;
 +    return be32(dirNum);
-+}
-+
-+u32 HuWinMesMaxNumGet(u32 dirNum)
-+{
-+    u32 dir = dirNum >> 16;
-+    u32 *messData = messDataPtr;
+@@ -547 +564 @@
+-    if(dir >= *messData) {
 +    if(dir >= be32(messData)) {
-+        OSReport("Error: Message Dir Over\n");
-+    }
-+    messData++;
+@@ -551,2 +568,2 @@
+-    messData += messData[dir]/sizeof(u32);
+-    return *messData;
 +    messData += be32(&messData[dir])/sizeof(u32);
 +    return be32(messData);
-+}
-+
-+void *HuWinMesDataPtrGet(void *data, u32 messNum)
-+{
-+    u32 dir = messNum >> 16;
-+    u32 num = messNum & 0xFFFF;
-+    u32 *messData = data;
+@@ -560 +577 @@
+-    if(dir >= *messData) {
 +    if(dir >= be32(messData)) {
-+        OSReport("Error: Message Dir Over\n");
-+    }
-+    messData++;
+@@ -564,2 +581,2 @@
+-    messData += messData[dir]/sizeof(u32);
+-    if(num >= *messData) {
 +    messData += be32(&messData[dir])/sizeof(u32);
 +    if(num >= be32(messData)) {
-+        OSReport("Error: Message Number Over\n");
-+    }
-+    messData++;
+@@ -569 +586 @@
+-    messData += messData[num]/sizeof(u32);
 +    messData += be32(&messData[num])/sizeof(u32);
-+    messData++;
-+    return messData;
-+}
-@@ -1525,20 +1525,37 @@
-+/* MP6 native port -- M4c ("Message Dir Over" crash fix, a
-+ * menus milestone). HuWinMesSet/HuWinInsertMesSet's "is messNum a
+@@ -1524,0 +1542,32 @@
++/* MP6 native port -- M4c ("Message Dir Over" crash fix, docs/NO_LEAK_POLICY.md-
++ * adjacent menus milestone). HuWinMesSet/HuWinInsertMesSet's "is messNum a
 + * real pointer, or a packed dir<<16|num value?" check was `messNum &
 + * 0x80000000` -- reliable on real hardware, where EVERY live pointer
 + * (static .bss/.data OR heap) unconditionally starts at MEM1's
@@ -134,71 +74,13 @@
 + * this port's. */
 +#define MP6_MESSNUM_ENCODED_MAX 0x01000000u
 +
- void HuWinMesSet(HUWINID winId, u32 messNum)
- {
-     HUWIN *winP = &winData[winId];
-     s16 messW;
-     winP->stat = HUWIN_STAT_DRAWMES;
+@@ -1530 +1579 @@
 -    if(!(messNum & 0x80000000)) {
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-         if(!messDataPtr) {
-             OSReport("Error: No Message\n");
-             return;
-         }
-         winP->messData = HuWinMesPtrGet(messNum);
-         if(!winP->messData) {
-             OSReport("Error: No Message data\n");
-         }
-     } else {
-         winP->messData = (void *)messNum;
-     }
-     if(HuWinMesCopyCheck(winP->messData)) {
-         winP->messData = HuWinMesCopy(winId, winP->messData);
-     }
-     _HuWinHomeClear(winP);
-     winP->origMes = messNum;
-     if(winP->attr & HUWIN_ATTR_ALIGN_CENTER) {
-         messW = GetMesMaxSizeSub2(winP, winP->messData);
-         winP->mesX = (winP->mesRectW - messW) / 2;
-     } else if(winP->attr & HUWIN_ATTR_ALIGN_RIGHT) {
-         messW = GetMesMaxSizeSub2(winP, winP->messData);
-         winP->mesX = winP->mesRectW - messW;
-     }
-     if(!(winP->attr & HUWIN_ATTR_SETCOLOR)) {
-         winP->mesCol = HUWIN_MESCOL_WHITE;
-     }
- }
-
- void HuWinInsertMesSet(HUWINID winId, u32 messNum, s16 insertMesNo)
- {
-     HUWIN *winP = &winData[winId];
-     s16 messW;
+@@ -1563 +1612 @@
 -    if(!(messNum & 0x80000000)) {
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-         if(!messDataPtr) {
-             OSReport("Error: No Message\n");
-             return;
-         }
-         winP->messDataInsert[insertMesNo] = HuWinMesPtrGet(messNum);
-         if(!winP->messDataInsert[insertMesNo]) {
-             OSReport("Error: No Message data\n");
-         }
-     } else {
-         winP->messDataInsert[insertMesNo] = (void *)messNum;
-     }
- }
-@@ -2022,11 +2039,20 @@
- static s32 GetMesMaxSizeSub(u32 messNum)
- {
-     s16 winHeight;
-     s16 winWidth;
-     s16 charW;
-     s16 charH;
-     char *messData;
-     char *messDataOrig = NULL;
-     BOOL crF = FALSE;
-     s16 messDataF;
-     
+@@ -2033 +2082,13 @@
 -    if(messNum > 0x80000000) {
 +    /* MP6 native port -- same M4c fix as HuWinMesSet/HuWinInsertMesSet
 +     * above (this file's own section-comment there has the full story):
@@ -213,22 +95,7 @@
 +     * Branch order/bodies unchanged from the original -- only the
 +     * condition itself changes, same as the other two instances. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
-         messDataF = FALSE;
-         messData = (char *)messNum;
-     } else {
-         messDataF = TRUE;
-         messData = messDataOrig = HuWinMesPtrGet(messNum);
-     }
-@@ -2220,9 +2246,10 @@
- s16 HuWinKeyWaitNumGet(u32 messNum)
- {
-     s16 waitNum;
-     char *messData;
+@@ -2224 +2285,2 @@
 -    if(messNum > 0x80000000) {
 +    /* MP6 native port -- same M4c fix, third instance in this file. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
-         messData = (char *)messNum;
-     } else {
-         messData = HuWinMesPtrGet(messNum);
-     }
-     for(waitNum=0; messData[0]; messData++) {

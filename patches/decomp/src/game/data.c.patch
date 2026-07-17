@@ -1,43 +1,24 @@
 --- a/src/game/data.c
 +++ b/src/game/data.c
-@@ -1,6 +1,7 @@
- #include "game/data.h"
- #include "game/dvd.h"
- 
+@@ -3,0 +4 @@
 +#include "be.h"
- #include "game/armem.h"
- #include "game/process.h"
- #include "dolphin/dvd.h"
-@@ -328,12 +329,15 @@
- 
- static void GetFileInfo(HUDATASTAT *readStat, s32 fileNum)
- {
+@@ -330,0 +332,3 @@
 +    /* dirP's own directory/index table and the per-file rawLen/decodeType
-+     * header are both big-endian-packed -- read via
++     * header are both big-endian-packed (docs/M2A_ENDIANNESS.md) -- read via
 +     * be32() rather than a native u32 dereference. */
-     u32 *ptr;
-     ptr = (u32 *)PTR_OFFSET(readStat->dirP, (fileNum * 4))+1;
+@@ -333 +337 @@
 -    readStat->fileDataP = PTR_OFFSET(readStat->dirP, *ptr);
 +    readStat->fileDataP = PTR_OFFSET(readStat->dirP, be32(ptr));
-     ptr = readStat->fileDataP;
+@@ -335,2 +339,2 @@
 -    readStat->rawLen = *ptr++;
 -    readStat->decodeType = *ptr++;
 +    readStat->rawLen = be32(ptr); ptr++;
 +    readStat->decodeType = be32(ptr); ptr++;
-     readStat->fileDataP = ptr;
- }
- 
-@@ -668,9 +672,11 @@
- 		decodeType += *data++;
- 		dataStart = data;
- 	} else {
+@@ -670,0 +675,2 @@
 +		/* Aligned case: same big-endian header as the unaligned branch above,
 +		 * just read a word at a time -- needs the same be32() fix. */
- 		s32 *data = buf;
+@@ -672,2 +678,2 @@
 -		rawLen = *data++;
 -		decodeType = *data++;
 +		rawLen = (s32)be32(data); data++;
 +		decodeType = (s32)be32(data); data++;
- 		dataStart = data;
- 	}
- 	switch(heap) {

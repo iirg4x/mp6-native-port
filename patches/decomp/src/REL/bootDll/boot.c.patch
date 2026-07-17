@@ -1,21 +1,12 @@
 --- a/src/REL/bootDll/boot.c
 +++ b/src/REL/bootDll/boot.c
-@@ -12,7 +12,10 @@
- #include "game/sprite.h"
- #include "game/window.h"
- #include "game/wipe.h"
+@@ -14,0 +15 @@
 +#include "be.h"
- #include "math.h"
+@@ -15,0 +17,2 @@
 +#include <stdio.h>  /* M11 census diagnostics (CameraOutView below) */
 +#include <stdlib.h>
- 
- typedef void (*VoidFunc)(void);
- 
-@@ -325,6 +328,49 @@
- title_exec:
-     if (BootTitleExec(firstRun) == 0) {
-         firstRun = FALSE;
-+        /* MP6 native port -- M4c (the leak-policy's "headless creep"
+@@ -327,0 +331,70 @@
++        /* MP6 native port -- M4c (docs/NO_LEAK_POLICY.md's "headless creep"
 +         * entry). Real, unpatched original decomp code: this is the
 +         * attract-loop replay path (title screen's own input-wait timed out
 +         * with no START press, so the opening cutscene plays again from the
@@ -55,7 +46,7 @@
 +         * so nothing is still rendering or referencing this tag's memory
 +         * at this exact point, matching the same safety condition
 +         * omOvlKill's own real call sites already rely on. */
-+        /* MP6 native port -- Z1 : the M4c cleanup
++        /* MP6 native port -- Z1 (docs/Z1_TITLE_CAMERA.md): the M4c cleanup
 +         * above/here originally ALSO ran HuMemDirectFreeNum(HEAP_HEAP,
 +         * HU_MEMNUM_OVL). That line freed BootObjMan's objWork+objData, which
 +         * game/objmain.c's omInitObjMan allocates HuMemDirectMallocNum(
@@ -85,14 +76,8 @@
 +         * survive until the overlay really ends. */
 +        HuMemDirectFreeNum(HEAP_DVD, HU_MEMNUM_OVL);
 +        HuMemDirectFreeNum(HEAP_MODEL, HU_MEMNUM_OVL);
-         HuPrcSleep(30);
-         goto opening_exec;
-     }
-@@ -491,6 +537,29 @@
-     HuVecF target;
-     HuVecF up;
- 
-+    /* MP6 native port -- M11 :
+@@ -493,0 +567,23 @@
++    /* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md, open remainder):
 +     * the full-story title's residual zoom is camera pos z=500 (the
 +     * opening's last write) where this function should be re-aiming
 +     * z=1000 every frame. This census line answers "does CameraOutView
@@ -115,14 +100,8 @@
 +        }
 +    }
 +
-     for (i = 0; i < 1; i++) {
-         rotX = BootCameraRot[i].x;
-         rotY = BootCameraRot[i].y;
-@@ -625,6 +694,14 @@
-     Hu3DModelDispOff(TitleMdlId[1]);
-     Hu3DModelDispOff(TitleMdlId[2]);
-     Hu3DModelLayerSet(TitleMdlId[0], 1);
-+    /* MP6 native port -- M11  diagnostic: the
+@@ -627,0 +724,8 @@
++    /* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md) diagnostic: the
 +     * wordmark census (patches/decomp/src/game/hsfman.c.patch's
 +     * MP6_DRAW_CENSUS) reports models by Hu3DData INDEX only -- this one
 +     * unconditional, once-per-overlay-load line is what maps those indices
@@ -130,22 +109,16 @@
 +     * file's existing [MP6-DIAG-WARN] print. */
 +    OSReport("[MP6-DIAG-TITLE] BootTitleCreate: TitleMdlId PARTY=%d SIX=%d STAR=%d (tick=%u)\n",
 +             TitleMdlId[0], TitleMdlId[1], TitleMdlId[2], VIGetRetraceCount());
- }
- 
- s32 BootTitleExec(s32 firstRun)
-@@ -657,8 +734,44 @@
-         HuPrcSleep(TITLE_STREAM_DELAY_FRAMES);
-         HuAudSStreamPlay(MSM_STREAM_TEST);
-         WipeWait();
+@@ -660,2 +764,38 @@
 -        while (Hu3DMotionTimeGet(TitleMdlId[2]) < 70.0f) {
 -            HuPrcVSleep();
-+        /* MP6 native port -- . Real, unpatched original
++        /* MP6 native port -- docs/M2E_MILESTONE.md. Real, unpatched original
 +         * decomp code assumes TitleMdlId[2] (the title screen's STAR model)
 +         * has real motion data that naturally plays its own time counter
 +         * past 70.0f within a fraction of a second -- true on real hardware,
 +         * where BootTitleCreate()'s Hu3DModelCreateData(TITLE_HSF_STAR) load
 +         * always succeeds with real animation keyframes. This port's own HSF
-+         * stub (patches/decomp/src/game/hsfload.c.patch, )
++         * stub (patches/decomp/src/game/hsfload.c.patch, docs/M2C_MENU_PATH.md)
 +         * deliberately returns a structurally-valid but EMPTY HSF_DATA
 +         * (motionNum=0) instead of solving the ~19-function HSF loader --
 +         * game/hsfman.c's own Hu3DModelCreate (unpatched) correctly, safely
@@ -177,71 +150,38 @@
 +                 mp6TitleMotionWaitFrame++) {
 +                HuPrcVSleep();
 +            }
-         }
-         Hu3DMotionStartEndSet(TitleMdlId[2], 70.0f, 500.0f);
-     } else {
-@@ -701,9 +814,9 @@
-     s32 decodeType;
- 
-     src = (u32 *)nintendoData;
+@@ -704 +844 @@
 -    size = *src++;
 +    size = be32(src); src++;
-     dst = HuMemDirectMalloc(HEAP_MODEL, size);
+@@ -706 +846 @@
 -    decodeType = *src++;
 +    decodeType = be32(src); src++;
-     if (dst) {
-         HuDecodeData(src, dst, size, decodeType);
-     }
-@@ -717,9 +830,9 @@
-     void *dst;
-     s32 decodeType;
- 
+@@ -720 +860 @@
 -    size = *src++;
 +    size = be32(src); src++;
-     dst = HuMemDirectMalloc(HEAP_MODEL, size);
+@@ -722 +862 @@
 -    decodeType = *src++;
 +    decodeType = be32(src); src++;
-     if (dst) {
-         HuDecodeData(src, dst, size, decodeType);
-     }
-@@ -755,9 +868,13 @@
-     group = HuSprGrpCreate(WARNING_SPRITE_MEMBER_COUNT);
- 
-     warningPacked = warningData;
+@@ -758 +898 @@
 -    warningSize = *warningPacked++;
 +    warningSize = be32(warningPacked); warningPacked++;
-     warningRawData = HuMemDirectMalloc(HEAP_MODEL, warningSize);
+@@ -760 +900,5 @@
 -    warningDecodeType = *warningPacked++;
 +    warningDecodeType = be32(warningPacked); warningPacked++;
 +#ifdef MP6_ANIM_DEBUG_DUMP
 +    OSReport("[ANIM] warningSize=%u warningDecodeType=%d warningRawData=%p\n",
 +              warningSize, warningDecodeType, warningRawData);
 +#endif
-     if (warningRawData) {
-         HuDecodeData(warningPacked, warningRawData, warningSize, warningDecodeType);
-     }
-@@ -769,9 +886,9 @@
-     HuSprScaleSet(group, WARNING_SPRITE_MEMBER, scaleX, scaleY);
- 
-     pressStartPacked = warningPressStartData;
+@@ -772 +916 @@
 -    pressStartSize = *pressStartPacked++;
 +    pressStartSize = be32(pressStartPacked); pressStartPacked++;
-     pressStartRawData = HuMemDirectMalloc(HEAP_MODEL, pressStartSize);
+@@ -774 +918 @@
 -    pressStartDecodeType = *pressStartPacked++;
 +    pressStartDecodeType = be32(pressStartPacked); pressStartPacked++;
-     if (pressStartRawData) {
-         HuDecodeData(pressStartPacked, pressStartRawData, pressStartSize, pressStartDecodeType);
-     }
-@@ -791,6 +908,12 @@
-     phaseSign = 1;
-     HuSprDispOn(group, PRESS_START_SPRITE_MEMBER);
-     frame = 0;
-+    /* MP6 native port -- M3b  TEMPORARY diagnostic:
+@@ -793,0 +938,6 @@
++    /* MP6 native port -- M3b (docs/M3B_VISIBILITY.md) TEMPORARY diagnostic:
 +     * prints the real VIGetRetraceCount() tick number right as the warning
 +     * screen starts accepting input, so a driving session can compute a
 +     * reliable MP6_AUTO_START_TICKS value instead of guessing. Remove once
 +     * the visibility investigation no longer needs it. */
 +    OSReport("[MP6-DIAG-WARN] BootWarningExec input-wait loop starting at tick=%u\n", VIGetRetraceCount());
-     while (frame < MAX_INPUT_WAIT_FRAMES &&
-            !(HuPadBtnDown[0] | HuPadBtnDown[1] | HuPadBtnDown[2] | HuPadBtnDown[3])) {
-         if (frame != 0 && (frame % BLINK_PERIOD_FRAMES) == 0) {

@@ -1,20 +1,11 @@
 --- a/src/game/decode.c
 +++ b/src/game/decode.c
-@@ -2,6 +2,9 @@
- #include "game/memory.h"
- #include "dolphin/os.h"
- #include "zlib.h"
+@@ -4,0 +5,3 @@
 +#include "be.h"
 +#include <stdio.h>
 +#include <stdlib.h>
- 
- typedef struct Decode_s
- {
-@@ -171,6 +174,26 @@ static void HuDecodeRle(DECODE *decode)
-     }
- }
- 
-+/* MP6 native port -- M13 : decode guard.
+@@ -173,0 +177,20 @@
++/* MP6 native port -- M13 (docs/M13_MENUS_TO_REFERENCE.md): decode guard.
 + * The menu-scene "vertices all over the place" hunt traced corrupt HSF face
 + * indices to the DECODED DATA BLOB (bad already at parse time, float-flavored
 + * garbage, nondeterministic between runs). This choke point logs, for
@@ -34,13 +25,7 @@
 +    return mp6DecodeGuardFlag;
 +}
 +
- void HuDecodeData(void *src, void *dst, u32 size, s32 decodeType)
- {
-     DECODE decode;
-@@ -211,6 +234,21 @@ void HuDecodeData(void *src, void *dst, u32 size, s32 decodeType)
-             OSReport("decode tyep unknown.(%x)\n", decodeType);
-             break;
-     }
+@@ -213,0 +237,15 @@
 +    if (mp6DecodeGuardOn()) { /* M13 decode guard -- see mp6DecodeGuardOn above */
 +        unsigned char *d0 = (unsigned char *)dst;
 +        long long wrote = (long long)(decodeP->dst - d0); /* dst-advancing decoders only */
@@ -56,27 +41,13 @@
 +               (lenCheckValid && wrote != (long long)size) ? "  <-- LENGTH MISMATCH (overrun/underrun)" : "");
 +        fflush(stdout);
 +    }
-     DCFlushRange(dst, size);
- }
- 
-@@ -233,11 +271,11 @@ static int HuDecodeZlib(DECODE *decode)
-     u32 dummy;
-     int result;
-     u32 *src = (u32 *)decode->src;
+@@ -236 +274 @@
 -    stream.avail_in = src[1];
 +    stream.avail_in = be32(&src[1]);
-     src += 2;
-     stream.next_in = (Bytef *)src;
-     stream.next_out = decode->dst;
+@@ -240 +278 @@
 -    stream.avail_out = (uInt)(&dummy);
 +    stream.avail_out = decode->size;
-     stream.zalloc = ZlibCalloc;
-     stream.zfree = ZlibFree;
-     result = inflateInit(&stream);
-@@ -245,6 +283,14 @@ static int HuDecodeZlib(DECODE *decode)
-         return result;
-     }
-     result = inflate(&stream, Z_FINISH);
+@@ -247,0 +286,8 @@
 +#ifdef MP6_ZLIB_DEBUG_DUMP
 +    {
 +        u8 *d = (u8 *)decode->dst;
@@ -85,6 +56,3 @@
 +                  d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 +    }
 +#endif
-     if(result != Z_STREAM_END) {
-         inflateEnd(&stream);
-         return (result == Z_OK) ? Z_BUF_ERROR : result;

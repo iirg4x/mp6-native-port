@@ -1,11 +1,8 @@
 --- a/src/game/dvd.c
 +++ b/src/game/dvd.c
-@@ -13,7 +13,20 @@
-     CallBackStatus = 1;
- }
-
+@@ -15 +15,23 @@
 -static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async)
-+/* MP6 native port -- . `outBufP`, when non-NULL, is
++/* MP6 native port -- docs/M2B_TITLE_PATH.md. `outBufP`, when non-NULL, is
 + * written with `buf` immediately after allocation, before either read path
 + * below starts -- NOT a behavior change on real hardware (where nothing
 + * else could possibly run before this function returns anyway, since
@@ -28,68 +25,23 @@
 + * true root, for both this port and real hardware alike (a strict no-op
 + * there). */
 +static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async, void **outBufP)
- {
-     u32 len;
-     void *buf;
-@@ -39,6 +52,7 @@
-         OSPanic("dvd.c", 63, "\n");
-         return NULL;
-     }
+@@ -47,0 +70 @@
 +    if (outBufP) *outBufP = buf;
-     OSReport("Rest Memory %x\n", HuRestMemGet(HEAP_DVD));
-     if(async) {
-         if(len > HU_DVD_BLOCKSIZE) {
-@@ -68,7 +82,7 @@
-     if(!DVDOpen(path, &file)) {
-         OSPanic("dvd.c", 109, "dvd.c: File Open Error");
-     } else {
+@@ -81 +104 @@
 -        data = HuDvdDataReadWait(&file, 0, 0, FALSE);
 +        data = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
-         DVDClose(&file);
-     }
-     return data;
-@@ -89,7 +103,7 @@
-             OSPanic("dvd.c", 145, "dvd.c: File Open Error");
-             return NULL;
-         } else {
+@@ -103 +126 @@
 -            file_ptrs[i] = HuDvdDataReadWait(&file, 0, 0, FALSE);
 +            file_ptrs[i] = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
-             DVDClose(&file);
-         }
-     }
-@@ -103,7 +117,7 @@
-     if(!DVDOpen(path, &file)) {
-         OSPanic("dvd.c", 164, "dvd.c: File Open Error");
-     } else {
+@@ -117 +140 @@
 -        data = HuDvdDataReadWait(&file, 2, heap, FALSE);
 +        data = HuDvdDataReadWait(&file, 2, heap, FALSE, NULL);
-         DVDClose(&file);
-     }
-     return data;
-@@ -116,7 +130,7 @@
-     if(!DVDFastOpen(entrynum, &file)) {
-         OSPanic("dvd.c", 205, "dvd.c: File Open Error");
-     } else {
+@@ -130 +153 @@
 -        data = HuDvdDataReadWait(&file, 0, 0, FALSE);
 +        data = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
-         DVDClose(&file);
-     }
-     return data;
-@@ -129,7 +143,7 @@
-     if(!DVDFastOpen(entrynum, &file)) {
-         OSPanic("dvd.c", 220, "dvd.c: File Open Error");
-     } else {
+@@ -143 +166 @@
 -        data = HuDvdDataReadWait(&file, 1, num, FALSE);
 +        data = HuDvdDataReadWait(&file, 1, num, FALSE, NULL);
-         DVDClose(&file);
-     }
-     return data;
-@@ -142,7 +156,7 @@
-     } else {
-         stat->readOfs = 0;
-         stat->readLen = stat->dvdFile.length;
+@@ -158 +181 @@
 -        data = HuDvdDataReadWait(&stat->dvdFile, 0, 0, TRUE);
 +        data = HuDvdDataReadWait(&stat->dvdFile, 0, 0, TRUE, &stat->dirP);
-     }
-     return data;
- }

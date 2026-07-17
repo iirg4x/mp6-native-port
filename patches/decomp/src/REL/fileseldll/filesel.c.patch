@@ -1,9 +1,6 @@
 --- a/src/REL/fileseldll/filesel.c
 +++ b/src/REL/fileseldll/filesel.c
-@@ -456,9 +456,35 @@
-     Hu3DCameraLayerHookSet(2, 0, (HU3D_LAYER_HOOK)fn_1_C8C);
-     omAddObjEx(lbl_1_bss_340, 0x1000, 0x10, 0x10, -1, fn_1_8688);
- 
+@@ -458,0 +459,26 @@
 +
 +    /* MP6 native port: lbl_1_data_E8 is the raw big-endian BYTE IMAGE of a
 +     * HU3D_PARMAN_PARAM (dtk renders unnameable initialized data as u32
@@ -30,19 +27,12 @@
 +        { {240,224,32,255}, {255,255,64,255}, {0,0,0,0}, {0,0,0,0} },
 +        { {192,128,16,0},   {192,64,16,0},   {0,0,0,0}, {0,0,0,0} },
 +    };
-     parAnim = HuSprAnimRead(HuDataSelHeapReadNum(0x210000, 0x10000000, 2));
-     for (i = 0; i < 5; i++) {
+@@ -461 +487 @@
 -        lbl_1_bss_98[i] = Hu3DParManCreate(parAnim, 0x64, (HU3D_PARMAN_PARAM *)lbl_1_data_E8);
 +        lbl_1_bss_98[i] = Hu3DParManCreate(parAnim, 0x64, &fileselSparkleParam);
-         Hu3DParManAttrSet(lbl_1_bss_98[i], 0x64);
-         Hu3DParticleBlendModeSet(Hu3DParManModelIDGet(lbl_1_bss_98[i]), 1);
-         Hu3DParManRotSet(lbl_1_bss_98[i], 90.0f, 0.0f, 0.0f);
-@@ -1055,7 +1081,24 @@
-         Hu3DAnimCreate(p->unk_58, p->unk_A, lbl_1_data_1BB);
-         p->unk_7C = HuPrcChildCreate(fn_1_3D14, 0x10, 0x3000, 0, HuPrcCurrentGet());
-         obj = Hu3DModelObjPtrGet(p->unk_8, lbl_1_data_1C8);
+@@ -1058 +1084,18 @@
 -        strcpy(obj->name, lbl_1_data_190[i]);
-+        /* MP6 native port -- . Under this port's HSF
++        /* MP6 native port -- docs/M2E_MILESTONE.md. Under this port's HSF
 +         * stub (patches/decomp/src/game/hsfload.c.patch), every loaded model
 +         * has objectNum==0, so Hu3DModelObjPtrGet's by-name lookup can never
 +         * succeed -- it OSReports "OBJPtr Error! siori_fix-itemhook_a" and
@@ -60,15 +50,9 @@
 +        if (obj != NULL) {
 +            strcpy(obj->name, lbl_1_data_190[i]);
 +        }
-         p->unk_C = Hu3DModelCreate(HuDataSelHeapReadNum(0x23001A, 0x10000000, 2));
-         Hu3DModelCameraSet(p->unk_C, 2);
-         Hu3DModelLayerSet(p->unk_C, 2);
-@@ -2107,7 +2150,33 @@
-     GXTexObj texObj;
-     f32 transS;
- 
+@@ -2110 +2153,27 @@
 -    q = arg->unk_00->unk_120;
-+    /* MP6 native port -- . `F7E58_Arg`/`F7E58_P` (this
++    /* MP6 native port -- docs/M6_MODESELECT.md. `F7E58_Arg`/`F7E58_P` (this
 +     * file's own hand-reconstructed "arg-chain views", see their definition
 +     * comment near the top of this file) hardcode BYTE OFFSETS (0x00/0x0C/
 +     * 0x120) reverse-engineered from the ORIGINAL 32-bit GameCube binary's
@@ -95,27 +79,12 @@
 +     * correct offset for THIS build automatically, exactly as fn_1_8688's
 +     * own `mdl->hookData = &lbl_1_bss_18[i];` write already does. */
 +    q = (F7E58_Q *)((HU3D_DRAW_OBJ *)arg)->model->hookData;
-     q->unk_1c = q->unk_1c + q->unk_20;
- 
-     GXInitTexObj(&texObj, lbl_1_bss_C, 0x280, 0x1e0, 4, 0, 0, 0);
-@@ -2121,7 +2190,10 @@
-     transS = ((f32)cam->scissorX + (f32)cam->scissorW / 2.0f) / 640.0f;
-     C_MTXLightPerspective(lightMtx, cam->fov, 1.2f, 0.5f, -0.5f, transS, 0.5f);
-     PSMTXInverse(Hu3DCameraMtx, invMtx);
+@@ -2124 +2193,4 @@
 -    PSMTXConcat(invMtx, arg->unk_0c, tmpMtx);
 +    /* MP6 native port -- same 32-bit-offset issue as `q` above; `unk_0c`
 +     * (HU3D_DRAW_OBJ.matrix) sits after 2 pointer fields (model/object), so
 +     * it shifts too. Same fix: go through the real, compiler-computed field. */
 +    PSMTXConcat(invMtx, ((HU3D_DRAW_OBJ *)arg)->matrix, tmpMtx);
-     PSMTXConcat(lightMtx, Hu3DCameraMtx, texMtx);
-     PSMTXConcat(texMtx, tmpMtx, texMtx);
-     GXLoadTexMtxImm(texMtx, 0x21, 0);
-@@ -2305,7 +2377,7 @@
- char lbl_1_data_1F3[0xA] = "%f,%f,%f\n";
- char lbl_1_data_1FD[0x17] = "siori_fix02-siori_waku";
- 
+@@ -2308 +2380 @@
 -/* ==================== module .bss (head, REVERSE definition order — exact sizes) ==================== */
 +/* ==================== module .bss (head, REVERSE definition order ï¿½ exact sizes) ==================== */
- OMOBJ *lbl_1_bss_344;
- OMOBJMAN *lbl_1_bss_340;
- static u8 filesel_bss_pad_338[8]; /* 2E4 tail pad -> 2E4 size 0x5C, 340 @ 0x340 */
