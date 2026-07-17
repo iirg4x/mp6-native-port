@@ -99,6 +99,10 @@ This port stands on the work of a lot of other people:
 - [ImWhoreHay](https://x.com/ImWhoreHay), for the "N64 Party" display font
   used in the launcher.
 - justcamtro, for the launcher's UI visual design.
+- The open fonts bundled under `res/fonts/`: **Inter** and **Alegreya SC**
+  (SIL Open Font License), and **Material Symbols** (Apache-2.0). Inter is
+  the UI body font, replacing a commercial face the upstream UI used. See
+  [res/fonts/LICENSES.txt](res/fonts/LICENSES.txt).
 - This port's direct dependencies: [RmlUi](https://github.com/mikke89/RmlUi)
   (mikke89), [nod](https://github.com/encounter/nod) (encounter), SDL3, and
   Dawn/WebGPU.

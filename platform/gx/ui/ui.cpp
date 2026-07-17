@@ -54,22 +54,17 @@ bool initialize() noexcept
         return false;
     }
 
-    /* [MP6] same five faces partyboard loads, from our res/fonts/ subdir
-     * (theirs sit at res/ root) -- files copied with the rip, see
-     * docs/PARTYBOARD_PROVENANCE.md for each font's license status.
-     * FOT-NewRodin Pro DB.otf is a commercial Fontworks face with no
-     * redistribution rights -- the top licensing risk in this repository --
-     * but it is the primary body font `res/rml/*.rcss` selects for nearly
-     * all launcher/settings text (`font-family: "FOT-NewRodin Pro"`); RmlUi
-     * has no registered fallback face for that family, so dropping this
-     * load leaves that text with "No font face defined" and nothing drawn.
-     * Kept for correct rendering until the stylesheets are re-pointed at a
-     * redistributable face; see PARTYBOARD_PROVENANCE.md. */
+    /* [MP6] UI faces from res/fonts/. The body font is Inter (SIL OFL,
+     * redistributable) in place of the commercial FOT-NewRodin Pro the
+     * upstream UI used; the .rcss body rules were re-pointed to the "Inter"
+     * family to match. See docs/PARTYBOARD_PROVENANCE.md and
+     * res/fonts/LICENSES.txt for each font's license status. */
     load_font("fonts/AlegreyaSC-Regular.ttf");
     load_font("fonts/AlegreyaSC-Bold.ttf");
     load_font("fonts/MaterialSymbolsRounded-Regular.ttf");
     load_font("fonts/N64Party-Monochromatic.otf");
-    load_font("fonts/FOT-NewRodin Pro DB.otf");
+    load_font("fonts/Inter-Regular.ttf");
+    load_font("fonts/Inter-Bold.ttf");
 
     // Rml::Debugger::Initialise(aurora::rmlui::get_context());
     // Rml::Debugger::SetVisible(true);

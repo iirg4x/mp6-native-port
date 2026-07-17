@@ -10,7 +10,7 @@ body {
     height: 100%;
     margin: 0;
     padding: 0;
-    font-family: "FOT-NewRodin Pro";
+    font-family: "Inter";
     font-weight: normal;
     font-size: 16dp;
     color: #E0DBC8;

@@ -1,0 +1,17 @@
+Font licenses for the fonts bundled in this directory.
+
+Inter-Regular.ttf, Inter-Bold.ttf
+  Inter — Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+  SIL Open Font License, Version 1.1. Redistributable. Full text: https://openfontlicense.org
+  Used as the UI body font (in place of the commercial FOT-NewRodin the upstream UI used).
+
+AlegreyaSC-Regular.ttf, AlegreyaSC-Bold.ttf
+  Alegreya SC — Copyright the Huerta Tipografica authors.
+  SIL Open Font License, Version 1.1. Redistributable.
+
+MaterialSymbolsRounded-Regular.ttf
+  Material Symbols — Copyright Google. Apache License 2.0. Redistributable.
+
+N64Party-Monochromatic.otf
+  Display font gifted to the Mario Party R&D / partyboard project by ImWhoreHay.
+  Credited, no formal license text. See docs/PARTYBOARD_PROVENANCE.md.
