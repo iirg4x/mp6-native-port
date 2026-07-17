@@ -20,7 +20,7 @@ clones it.
 ## Currently tracking
 
 ```
-b05ede1d53f5763539a4a33ab0505b4d7749b96d
+4a6761094935be3588ca2b1eda0a71a0988f8efb
 ```
 
 This is the output of, run from this file's location:
@@ -33,3 +33,13 @@ i.e. the commit `HEAD` was pointing at in
 `../../external_refs/repos/marioparty6` as of this document's last update.
 Update this value whenever the port is resynced against a newer decomp
 commit.
+
+(Corrected during the setup/ tool's build: the previous value here,
+`b05ede1d53f5763539a4a33ab0505b4d7749b96d`, was one decomp commit stale --
+commit `0b9dbb4` on this branch already dropped the port's local
+`decomp-overrides` shield for mdparty.c/stage.c "now that decomp settled at
+4a67610", but this file was never bumped to match. Building against the
+old pin would have fed the port the pre-4a67610 mdparty.c/stage.c with no
+shield and no override, i.e. a real, reproducible break -- setup/'s decomp
+step reads this file at run time, so keeping it accurate is load-bearing,
+not just informational.)

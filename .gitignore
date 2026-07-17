@@ -63,3 +63,8 @@ platforms/android/app/src/main/jniLibs/
 
 # Logs
 *.log
+
+# local setup-tool outputs (never committed)
+/dist/
+/toolchain/
+setup/**/__pycache__/

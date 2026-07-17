@@ -10,6 +10,27 @@ layer they call into (GX/OS/VI/PAD/DVD/CARD/MSM) is reimplemented on top of
 seam. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
 breakdown.
 
+## Quick start — build and play from your own disc
+
+**You supply your own Mario Party 6 (USA) disc. No game data or prebuilt game
+binaries are distributed here** — a runnable build is assembled on your machine
+from your own disc plus the decompiled source, so nothing containing game code
+or assets is ever redistributed.
+
+The easiest path is the setup tool. It checks prerequisites, fetches the
+toolchain and the decompilation, extracts the assets it needs from your disc
+locally, and builds a playable `dist/`:
+
+```
+setup.bat --disc "path\to\Mario Party 6 (USA).iso"
+```
+
+(or double-click `setup.bat` / run `python setup/setup.py`; add `--android` to
+also build the APK). Accepts `.iso` / `.rvz` / `.gcm` or an already-extracted
+folder. See [`setup/README.md`](setup/README.md) and
+[`docs/SETUP_TOOL.md`](docs/SETUP_TOOL.md); to build by hand instead, see
+[`docs/BUILDING.md`](docs/BUILDING.md).
+
 ## Status
 
 Boots to a fully navigable title screen, file-select, and mode-select, with
