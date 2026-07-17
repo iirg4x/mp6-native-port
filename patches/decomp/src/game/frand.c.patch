@@ -1,0 +1,31 @@
+--- a/src/game/frand.c
++++ b/src/game/frand.c
+@@ -33,6 +33,28 @@
+ u32 frandmod(u32 arg0) {
+     u32 ret;
+     frand_seed = frandom(frand_seed);
++    /* MP6 native port -- Real PowerPC divwu/divw does
++     * NOT trap on a zero divisor (Gekko/Broadway silently produces an
++     * implementation-defined-but-non-crashing result); x86_64 DOES fault,
++     * and zig cc's runtime UB checking turns that into a caught panic --
++     * the same "latent portability landmine only zig's stricter runtime
++     * catches" class as the frsqrte unsigned-shift
++     * fix. Confirmed reachable, not theoretical: REL/bootDll/opening.c's
++     * CharFocusRandom computes `rearmLimit = (s32)(40.f *
++     * remainingFraction)` -- remainingFraction shrinks toward 0 as the
++     * opening cutscene's per-character focus loop runs out its own frame
++     * budget, so rearmLimit itself truncates to exactly 0 late in the
++     * loop, and CharFocusRandom passes it straight through to
++     * frandmod((s16)rearmLimit) with no guard of its own -- a genuine
++     * divide-by-zero panic, caught directly (headless build, --headless
++     * 600000), not guessed at. arg0==0 means "no valid range to constrain
++     * into" regardless of platform; 0 is the most semantically honest
++     * fallback (matches this function's own return type/meaning better
++     * than any random nonzero value would), not just a crash-avoidance
++     * hack. */
++    if (arg0 == 0) {
++        return 0;
++    }
+     ret = (frand_seed & 0x7FFFFFFF)%arg0;
+     return ret;
+ }

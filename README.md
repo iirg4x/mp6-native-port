@@ -1,0 +1,104 @@
+# MP6 Native Port
+
+A native PC (Windows) and Android port of the Mario Party 6 decompilation,
+running boot-to-menu as real host-native code -- no emulator involved.
+`game/` plus the `bootDll`, `selmenuDll`, `fileseldll`, and `mdseldll`
+overlays are compiled directly from the decompiled source (see
+[docs/DECOMP_DEPENDENCY.md](docs/DECOMP_DEPENDENCY.md)); the Dolphin SDK
+layer they call into (GX/OS/VI/PAD/DVD/CARD/MSM) is reimplemented on top of
+[Aurora](https://github.com/encounter/aurora), SDL3, and a small host-OS
+seam. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
+breakdown.
+
+## Status
+
+Boots to a fully navigable title screen, file-select, and mode-select, with
+real audio (streamed music and sound effects) and working save/load against
+Dolphin-compatible memory card images. Windows ships a pre-boot settings
+launcher; Android runs the same game logic touch-driven on device. Gameplay
+past the menu (the board and minigames) is out of scope for now -- see
+"Non-goals" below.
+
+## Quick start
+
+**Windows**, from this directory:
+
+```
+python tools/build.py                    # windowed build -> build/mp6native.exe
+build\mp6native.exe                       # run it (opens the launcher menu)
+```
+
+**Android** (needs the NDK and a device or emulator):
+
+```
+python tools/build.py --target aarch64-android --windowed
+cd platforms/android && gradlew.bat assembleDebug
+```
+
+Install the resulting APK and launch it; first run walks through picking the
+game's disc files on-device. See [docs/BUILDING.md](docs/BUILDING.md) for
+prerequisites, the headless/CI build rows, and troubleshooting.
+
+## Launcher and settings
+
+Interactive Windows launches open a pre-boot menu (window mode/size/aspect,
+volume, tick rate, content-root override) before handing off to the game;
+settings persist to a portable `mp6_config.json` next to the executable.
+Any invocation that looks like an automated run (a tick-budget argument, an
+input script, or `MP6_AUTO_START_TICKS`) skips the launcher entirely and
+boots straight to the game -- see docs/TESTING.md's automation contract.
+
+## Save compatibility
+
+Saves are ordinary Dolphin memory-card images under `saves/USA/Card A/`,
+byte-compatible with real hardware and with Dolphin itself -- a card written
+by this port loads in Dolphin and vice versa. See docs/ARCHITECTURE.md's
+"Save system" section for how the endian marshal keeps that true.
+
+## Non-goals (for now)
+
+Gameplay past the menu is explicitly out of scope. Board gameplay depends on
+`board/` and the minigame RELs, and native porting of that code is gated on
+those parts of the decompilation reaching the same "100% recovered" standard
+already met by game/bootDll/selmenuDll/fileseldll/mdseldll. Until that
+dependency is satisfied, this repository's scope stops at the menu.
+
+## Legal
+
+This repository contains no game assets. Assets (models, textures, audio,
+save data, and so on) are extracted from the user's own legally owned disc
+at build time (or picked on-device for Android) and are never checked into
+this repository. Decompiled game source is consumed, read-only, from the
+sibling matching (decompilation) repository -- see
+[docs/DECOMP_DEPENDENCY.md](docs/DECOMP_DEPENDENCY.md) -- and is not
+vendored, copied, or redistributed here.
+
+The pre-boot launcher UI (`platform/gx/ui/`, `res/rml/`) is adapted from the
+unlicensed `mariopartyrd/partyboard` project; see
+[docs/PARTYBOARD_PROVENANCE.md](docs/PARTYBOARD_PROVENANCE.md) for the full
+provenance ledger, including exactly which files were copied, from which
+commit, and their licensing status. **That project has no license**, which
+is the one open licensing question hanging over this repository -- read the
+provenance doc before republishing or redistributing.
+
+## Credits
+
+This port stands on the work of a lot of other people:
+
+- The GC/Wii decompilation community, whose tools and conventions this
+  project's [decompilation dependency](docs/DECOMP_DEPENDENCY.md) builds on.
+- The [Aurora](https://github.com/encounter/aurora) developers (encounter),
+  for the GameCube GX/VI/PAD/CARD-over-modern-GPU backend this port renders
+  and reads input through.
+- The Dusk developers.
+- Mario Party R&D and the contributors to
+  [mariopartyrd/partyboard](https://github.com/mariopartyrd/partyboard), the
+  Mario Party 4 PC port this port's launcher/settings UI was adapted from --
+  see [docs/PARTYBOARD_PROVENANCE.md](docs/PARTYBOARD_PROVENANCE.md) for the
+  full ledger, including the original per-file credit lines.
+- [ImWhoreHay](https://x.com/ImWhoreHay), for the "N64 Party" display font
+  used in the launcher.
+- justcamtro, for the launcher's UI visual design.
+- This port's direct dependencies: [RmlUi](https://github.com/mikke89/RmlUi)
+  (mikke89), [nod](https://github.com/encounter/nod) (encounter), SDL3, and
+  Dawn/WebGPU.

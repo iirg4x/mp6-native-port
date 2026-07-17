@@ -1,0 +1,87 @@
+// MP6 native port -- Android app module.
+// Gradle NEVER runs the NDK here: tools/build.py --target aarch64-android
+// --windowed builds libmp6game.so + libmain.so and stages them into
+// src/main/jniLibs/arm64-v8a (the decoupling the U1 design documents from
+// the MP4 port's CI: driver build -> stage -> gradle packages).
+plugins {
+    id 'com.android.application'
+}
+
+//  the RmlUi launcher's resources (res/rml
+// stylesheets + res/fonts) ship as APK assets under assets/res/..., synced
+// from the repo's own res/ tree -- the MP4 port's exact gradle wiring
+// (their app/build.gradle syncPartyBoardAssets task). At runtime the
+// launcher opens them RELATIVE ("res/rml/...") so SDL_IOFromFile's
+// transparent asset fallback serves them straight from the APK -- no
+// extraction step exists.
+def mp6RepoDir = rootProject.projectDir.parentFile.parentFile
+def mp6GeneratedAssetsDir = layout.buildDirectory.dir('generated/assets/mp6').get().asFile
+def syncMp6Assets = tasks.register('syncMp6Assets', Sync) {
+    from(new File(mp6RepoDir, 'res')) {
+        into 'res'
+        exclude '**/.DS_Store'
+    }
+    into mp6GeneratedAssetsDir
+}
+
+android {
+    namespace 'com.mp6.game'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.mp6.game'
+        minSdk 28          // = ANDROID_PLATFORM=android-28, the U-A0 probe row
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0-ua2'
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    sourceSets {
+        main {
+            // A4: launcher resources (see syncMp6Assets above).
+            assets.srcDirs = [mp6GeneratedAssetsDir]
+        }
+    }
+
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'arm64-v8a'
+            universalApk false
+        }
+    }
+
+    // jniLibs default source dir (src/main/jniLibs) is used as-is; the .so
+    // files there are 16KB-page-aligned AND release-style stripped already
+    // (build.py links, strips at staging, and keeps the unstripped
+    // originals in build/android/aurora/ for symbolization).
+    // useLegacyPackaging=false stores them
+    // UNCOMPRESSED in the APK so the loader mmaps them in place: the
+    // install-size-friendly choice (no extracted second copy on disk).
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging false
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+tasks.configureEach { task ->
+    if ((task.name.startsWith('merge') && task.name.endsWith('Assets')) ||
+        task.name.toLowerCase().contains('lint')) {
+        task.dependsOn(syncMp6Assets)
+    }
+}

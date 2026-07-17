@@ -1,0 +1,109 @@
+Patch: aurora lib/gx/command_processor.cpp -- unaligned_load takes const void*
+Applies to: Aurora repo itself (external_refs/repos/aurora), commit 1dde08f.
+Tracked file, edited directly (not a FetchContent dependency).
+
+Why:
+The zig-cc (x86_64-windows-gnu, LLVM-backed) build of the `simple` example
+ran the full Aurora init sequence (WebGPU instance, D3D12 adapter/device,
+surface, pipeline cache) successfully, opened a real window, then hard
+crashed on the very first frame with:
+
+    thread NNNN panic: load of misaligned address 0x... for type
+    'const unsigned int *', which requires 4 byte alignment
+      lib/gx/command_processor.cpp:120 in unaligned_load<unsigned int>
+      lib/gx/command_processor.cpp:134 in read_u32
+      lib/gx/command_processor.cpp:392 in fifo::process
+      lib/gx/fifo.cpp:75 in fifo::drain
+      lib/aurora.cpp:251 in end_frame / aurora_end_frame
+
+Root cause: the non-MSVC branch of `unaligned_load` reads a genuinely
+unaligned GX FIFO command-stream pointer via the standard "memcpy into a
+local" type-punning idiom, but its parameter was typed `const T*`:
+
+    template <typename T>
+    inline T unaligned_load(const T* ptr) {
+      T copy;
+      memcpy(&copy, ptr, sizeof(T));
+      return copy;
+    }
+    ...
+    const u32 val = unaligned_load(reinterpret_cast<const u32*>(ptr));
+
+A `const T*` parameter still carries T's alignment requirement in the C++
+abstract machine, independent of the fact that memcpy's own ABI doesn't
+care about source alignment: forming `reinterpret_cast<const u32*>(ptr)`
+from a `ptr` that isn't actually 4-byte aligned is already
+implementation-defined/UB territory, and an optimizer is entitled to lower
+`memcpy(&copy, ptr, 4)` straight to `load i32, ptr %ptr, align 4` on the
+strength of that assumption. Real hardware (x86/x64) tolerates the
+resulting unaligned load fine, but zig cc's LLVM backend instruments/traps
+on it. This is a latent, portability-landmine bug in Aurora's own
+"portable" (non-MSVC) fallback -- the MSVC branch sidesteps it entirely via
+the `__unaligned` compiler extension, which is presumably why it was never
+noticed there.
+
+Fix: change `unaligned_load`'s parameter (both the MSVC and non-MSVC
+branches, for a consistent signature) from `const T*` to `const void*`, and
+update the two call sites (`read_u16`, `read_u32`) to stop forming a typed,
+possibly-misaligned pointer before calling it -- pass the already-`const
+u8*` pointer straight through and specify T explicitly as the template
+argument instead. `void*` carries no alignment assumption, so the
+optimizer can no longer "prove" 4-byte alignment and silently upgrade the
+memcpy into a trapping aligned load.
+
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -108,19 +108,31 @@
+
+ // Read helpers for big/little endian
+ #if _MSC_VER
+ template <typename T>
+ __forceinline // Yes, this was necessary.
+-    inline T unaligned_load(const T* ptr) {
++    inline T unaligned_load(const void* ptr) {
+   return *static_cast<const __unaligned T*>(ptr);
+ }
+ #else
++// NOTE(mp6-native/aurora-patches): templated on T but deliberately takes a
++// `const void*`, not `const T*`. A `const T*` parameter still carries T's
++// alignment requirement in the abstract machine even though memcpy itself
++// doesn't care about the source's alignment -- an optimizer is entitled to
++// (and, under zig cc's LLVM backend, does) lower this memcpy into a plain
++// `load ..., align sizeof(T)` and trap on the genuinely-unaligned FIFO
++// command-stream pointers this is called with. Confirmed via direct repro:
++// zig-cc-built aurora crashed with "panic: load of misaligned address ...
++// which requires 4 byte alignment" inside this function on the very first
++// aurora_end_frame()/fifo::drain() call. Taking `const void*` removes the
++// alignment assumption at its source instead of only hiding it one call
++// deeper (the call sites below also stopped forming a typed, possibly-
++// misaligned `const T*` at all, for the same reason).
+ template <typename T>
+-inline T unaligned_load(const T* ptr) {
++inline T unaligned_load(const void* ptr) {
+   T copy;
+   memcpy(&copy, ptr, sizeof(T));
+   return copy;
+ }
+ #endif
+
+ static inline u16 read_u16(const u8* ptr, bool bigEndian) {
+-  const u16 val = unaligned_load(reinterpret_cast<const u16*>(ptr));
++  const u16 val = unaligned_load<u16>(ptr);
+   if (bigEndian) {
+     return bswap(val);
+   }
+   return val;
+ }
+
+ static inline u32 read_u32(const u8* ptr, bool bigEndian) {
+-  const u32 val = unaligned_load(reinterpret_cast<const u32*>(ptr));
++  const u32 val = unaligned_load<u32>(ptr);
+   if (bigEndian) {
+     return bswap(val);
+   }
+   return val;
+ }
+
+Verified: after this change, both the zig-cc (x86_64-windows-gnu) build and
+the MSVC (Visual Studio 17 2022) build of `simple` compile clean and run;
+the zig-cc build no longer panics in fifo::drain() on the first frame.

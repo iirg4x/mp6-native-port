@@ -1,0 +1,66 @@
+Patch: abseil-cpp cctz — skip WinRT windows.globalization.h on MinGW/zig targets
+Applies to: abseil-cpp 20240722.0, file absl/time/internal/cctz/src/time_zone_lookup.cc
+Not part of the Aurora repo; abseil-cpp is fetched by Aurora's
+extern/CMakeLists.txt via FetchContent (URL tarball, not a git checkout).
+
+Why:
+Building Aurora against the zig 0.16.0 `x86_64-windows-gnu` toolchain fails
+abseil's own CMake target `absl_time_zone` with:
+
+    absl/time/internal/cctz/src/time_zone_lookup.cc:48:10: fatal error:
+    'windows.globalization.h' file not found
+
+cctz's Windows-only branch decides whether to use the WinRT
+`Windows::Globalization::Calendar` API for local-timezone lookup by checking
+`defined(NTDDI_WIN10_NI) && NTDDI_VERSION >= NTDDI_WIN10_NI` for MinGW
+targets (see the comment cctz itself carries just above the #if: "MinGW did
+not add [windows.globalization.h] until NTDDI_WIN10_NI (SDK version
+10.0.22621.0)"). zig's vendored mingw-w64 headers define the NTDDI_WIN10_NI
+version macro (so the gate evaluates true) but do not actually ship the
+generated WinRT projection header `windows.globalization.h` in the
+distributed subset, so the #include fails.
+
+This code path is an optional fallback strategy purely for abseil's
+absl::Time local-timezone detection (absl/time/internal/cctz). Aurora only
+consumes absl::flat_hash_map and absl::btree — it never calls into
+absl::Time / cctz at all — so disabling this one WinRT fallback has no
+effect on Aurora functionality; cctz still has its other Windows lookup
+paths (registry-based) for anyone who does use absl::Time.
+
+Fix: extend the existing "!defined(__MINGW32__)" exclusion (already used in
+the first half of the same condition, for non-MinGW/MSVC builds) to also
+gate the MinGW/NTDDI_WIN10_NI clause, so the whole branch — and the
+`#include <windows.globalization.h>` — is skipped for any MinGW-ABI target
+(zig cc's `x86_64-windows-gnu` included), regardless of what the vendored
+sdkddkver.h version macros claim.
+
+How it's applied:
+Hand-edited directly in the FetchContent-extracted source tree at
+aurora/build/_deps/abseil-cpp-src/... (inside Aurora's own out-of-tree,
+gitignored `build/` dir — not a tracked file of the Aurora clone). This
+patch file is the documented, reproducible record of that change; re-apply
+it by hand whenever the `build/` tree is regenerated from scratch.
+
+To make the build reproducible without a manual step, wire this into
+Aurora's own extern/CMakeLists.txt by adding a PATCH_COMMAND to the
+existing `FetchContent_Declare(abseil-cpp ...)` call, following the same
+convention Aurora already uses for its SDL3/RmlUi patches
+(cmake/patches/apply-*.cmake, invoked via `${CMAKE_COMMAND} -P`) -- a
+one-line addition to a tracked Aurora file, or upstream the fix to
+abseil-cpp / encounter's Aurora fork.
+
+--- a/absl/time/internal/cctz/src/time_zone_lookup.cc
++++ b/absl/time/internal/cctz/src/time_zone_lookup.cc
+@@ -39,7 +39,10 @@
+ // Note: The Windows SDK added windows.globalization.h file for Windows 10, but
+ // MinGW did not add it until NTDDI_WIN10_NI (SDK version 10.0.22621.0).
+ #if ((defined(_WIN32_WINNT_WIN10) && !defined(__MINGW32__)) ||        \
+      (defined(NTDDI_WIN10_NI) && NTDDI_VERSION >= NTDDI_WIN10_NI)) && \
+-    (_WIN32_WINNT >= _WIN32_WINNT_WINXP)
++    (_WIN32_WINNT >= _WIN32_WINNT_WINXP) &&                           \
++    !defined(__MINGW32__) /* mp6-native/aurora-patches: zig's vendored  \
++                              mingw-w64 headers report NTDDI_WIN10_NI  \
++                              but do not ship windows.globalization.h */
+ #define USE_WIN32_LOCAL_TIME_ZONE
+ #include <roapi.h>
+ #include <tchar.h>

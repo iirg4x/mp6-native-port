@@ -1,0 +1,65 @@
+# Build output
+build/
+assets/
+files/
+saves/
+
+# Disc/emulator artifacts that must never be committed (supplied by the user)
+*.iso
+*.gcm
+*.rvz
+*.wia
+*.wbfs
+*.ciso
+*.gcz
+*.bnr
+*.dol
+*.rel
+*.gci
+*.raw
+*.hsf
+
+# Prebuilt runtime libraries (produced by the Aurora build, not part of source)
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+*.pdb
+
+# Python
+__pycache__/
+*.pyc
+.gen_shims_tmp/
+
+# Editor/IDE
+.vs/
+.vscode/
+.idea/
+
+# Misc caches
+.cache/
+
+# Images (this repo ships no art; keep it that way)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+
+# Android (platforms/android): generated project state, local SDK/NDK
+# pointers, gradle caches, and packaged outputs.
+platforms/android/.gradle/
+platforms/android/app/build/
+platforms/android/build/
+platforms/android/local.properties
+platforms/android/app/src/main/jniLibs/
+*.apk
+*.aab
+
+# Logs
+*.log

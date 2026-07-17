@@ -1,0 +1,115 @@
+--- a/src/game/sprput.c
++++ b/src/game/sprput.c
+@@ -6,6 +6,8 @@
+ #include "dolphin/mtx.h"
+ #include "dolphin/gx.h"
+ #include "dolphin/vi.h"
++#include <stdio.h>  /* M11 object census (see HuSprTexLoad below) */
++#include <stdlib.h>
+ 
+ void HuSprTexLoad(ANIMDATA *anim, s16 bmpNo, s16 texMapId, GXTexWrapMode wrapS, GXTexWrapMode wrapT, GXTexFilter filter);;
+ 
+@@ -250,6 +252,28 @@
+     ANIMBMP *bmp = &anim->bmp[bmpNo];
+     s16 sizeX = bmp->sizeX;
+     s16 sizeY = bmp->sizeY;
++    /* MP6 native port -- M11  object census: the
++     * ANIM-sourced texture binds (sprites AND hsfdraw's engine reflect/toon/
++     * hilite maps all funnel through here) -- names which ANIMDATA/format
++     * each bind came from, the piece the per-model census can't see. Same
++     * MP6_DRAW_CENSUS_OBJ=<tick> two-tick window as hsfdraw.c's census
++     * (independent parse, same env var -- both TUs see the same tick).
++     * PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++    {
++        static long mp6SprCensusTick = -2;
++        extern long mp6_tick_count;
++        if (mp6SprCensusTick == -2) {
++            const char *e = getenv("MP6_DRAW_CENSUS_OBJ");
++            mp6SprCensusTick = (e && atol(e) > 0) ? atol(e) : -1;
++        }
++        if (mp6SprCensusTick > 0 && mp6_tick_count >= mp6SprCensusTick &&
++            mp6_tick_count < mp6SprCensusTick + 2) {
++            printf("[CENSUS-OBJ]    SprTexLoad anim=%p bmpNo=%d texMap=%d fmt=%d %dx%d data=%p pal=%p palNum=%d\n",
++                   (void *)anim, bmpNo, texMapId, bmp->dataFmt & ANIM_BMP_FMTMASK,
++                   sizeX, sizeY, (void *)bmp->data, (void *)bmp->palData, bmp->palNum);
++            fflush(stdout);
++        }
++    }
+     switch(bmp->dataFmt & ANIM_BMP_FMTMASK) {
+         case ANIM_BMP_RGBA8:
+             GXInitTexObj(&texObj, bmp->data, sizeX, sizeY, GX_TF_RGBA8, wrapS, wrapT, GX_FALSE);
+@@ -416,7 +440,37 @@
+     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+     GXSetArray(GX_VA_POS, data3D->vtx, sizeof(HuVecF));
+     GXSetVtxDesc(GX_VA_TEX0, GX_INDEX16);
+-    GXSetVtxAttrFmt(GX_VA_TEX0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
++    /* MP6 native port -- . Real, unpatched original decomp
++     * bug (not a decompilation error -- this exact typo shape, reusing the
++     * same GXAttr identifier for both arguments instead of the GXVtxFmt
++     * slot selector the first parameter actually wants, is a classic
++     * copy-paste mistake): every OTHER GXSetVtxAttrFmt call in this same
++     * function (see 4 lines up, and 4 lines down) correctly passes
++     * GX_VTXFMT0 as the first (GXVtxFmt) argument; this one instead passes
++     * GX_VA_TEX0 (a GXAttr enumerator, value 13 -- confirmed via
++     * include/dolphin/gx/GXEnum.h's own enum order) where GX_VTXFMT0 (0)
++     * belongs. Real hardware's own GX has no vtxfmt bounds check at all (it
++     * just computes a VAT register offset from whatever value it's given),
++     * so this silently sets up the wrong-but-not-fatal vertex-attribute-
++     * format slot on real hardware -- a genuine, latent rendering bug in
++     * the original game (this is HuSpr3DDisp, the sprite "3D warp/page-
++     * flip" hook3D effect window.c's HuWinExCreateFrame registers on every
++     * window's sprite 0) that nobody ever needed to notice. Aurora's own
++     * GXSetVtxAttrFmt DOES validate (`CHECK(vtxfmt >= GX_VTXFMT0 && vtxfmt
++     * < GX_MAX_VTXFMT, ...)`) and FATALs outright -- "invalid vtxfmt 13",
++     * caught directly (Aurora/real-rendering build -- headless's null GX
++     * shim never validates anything) the first time any window (created
++     * via HuWinExCreateFrame, reachable from OpeningExec's own window
++     * frames) actually gets drawn through this hook, matching this port's
++     * own recurring "real bug that only becomes load-bearing once a code
++     * path is exercised for the first time" pattern. Fixed to the value
++     * every neighboring call site (and simple reading of intent -- this
++     * line sets up the TEX0 *attribute*, within vertex format slot 0, same
++     * as the position attribute 4 lines up) already establishes as
++     * correct; the 2nd/3rd/4th/5th arguments are unchanged (GX_VA_TEX0 is
++     * exactly right there -- it says WHICH attribute this call configures,
++     * a completely different, correct use of the same enumerator). */
++    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+     GXSetArray(GX_VA_TEX0, data3D->st, sizeof(HuVec2f));
+     if(sp->attr & HUSPR_ATTR_VTXCOLOR) {
+         GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+@@ -560,4 +614,34 @@
+             }
+         }
+     }
+-}
++    /* MP6 native port -- . Real, unpatched original decomp
++     * gap (same class as game/hsfman.c's Hu3DZClear -- see
++     * platform/gx/aurora_bridge.c's section-5 comment for that one and the
++     * general bridge-side GXBegin/GXEnd tolerance this project added for
++     * it): this function's own GXBegin(GX_QUADS, GX_VTXFMT0, col*row*4)
++     * (several lines up) is followed by a loop that emits EXACTLY
++     * col*row*4 vertices (confirmed by inspection: the same col/row bounds
++     * drive both), so on real hardware -- whose GX FIFO ends a primitive
++     * purely by vertex count, not an explicit End signal -- this was
++     * always complete and correct with no GXEnd() call at all. Patched
++     * here (unlike Hu3DZClear, left as bridge-side-tolerated) because THIS
++     * specific gap has a real, confirmed downstream consequence the
++     * general bridge fix can't safely paper over: HuSpr3DDisp is a sprite
++     * hook3D callback (window.c's HuWinExCreateFrame registers it on every
++     * window's sprite 0 via HuSpr3DSet), called from HuSprDisp's own
++     * per-layer loop -- an arbitrary amount of OTHER code can run between
++     * this function's own last vertex and whatever the NEXT real GXBegin
++     * happens to be, and the bridge's generic "auto-close on the next
++     * GXBegin" tolerance has no way to know this function's own primitive
++     * was already, correctly, complete well before that point. Caught
++     * directly (Aurora build): "GXEnd: vertex count mismatch: GXBegin
++     * declared 128 vertices (8B each, 1024B total) but 1075 bytes were
++     * written (134 vertices)" -- extra bytes from whatever ran in the gap
++     * before the bridge's own auto-close finally fired. A real, explicit
++     * GXEnd() call here is a pure no-op on real hardware (zero behavior
++     * change there -- it already correctly inferred completion from the
++     * vertex count) while telling Aurora exactly where this primitive
++     * really ends, closing that gap at the source instead of relying on
++     * the bridge's necessarily-coarser fallback. */
++    GXEnd();
++}

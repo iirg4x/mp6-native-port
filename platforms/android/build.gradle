@@ -1,0 +1,5 @@
+// MP6 native port : U-A2. AGP version follows the working reference the U1
+// design vetted (the MP4 port ships Android on the same aurora with 8.13.x).
+plugins {
+    id 'com.android.application' version '8.13.2' apply false
+}

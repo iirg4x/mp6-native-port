@@ -1,0 +1,19 @@
+diff --git a/lib/card/CardGciFolder.cpp b/lib/card/CardGciFolder.cpp
+--- a/lib/card/CardGciFolder.cpp
++++ b/lib/card/CardGciFolder.cpp
+@@ -128,7 +128,14 @@
+   }
+ 
+   gciFileHeader->swapEndian();
+-  m_files.push_back({*gciFileHeader, fileSize, reinterpret_cast<const char8_t*>(gciFilename.c_str()), false}); // push non-endian swapped header first
++  // push non-endian swapped header first. opened=true: SDK semantics -- the
++  // CARDFileInfo CARDCreate returns is directly usable for CARDWrite (games
++  // create-then-write without any CARDOpen in between; Mario Party 6's
++  // save-file creation does exactly that), but getFile() only resolves
++  // handles whose entry is marked opened, so pushing this as closed made
++  // the game's immediate first write fail NOCARD ("Failed to write 40960
++  // bytes to card") and left a created-but-empty .gci.
++  m_files.push_back({*gciFileHeader, fileSize, reinterpret_cast<const char8_t*>(gciFilename.c_str()), true});
+   handleOut = FileHandle(m_files.size() - 1, 0);
+ 
+   return ECardResult::READY;

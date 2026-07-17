@@ -1,0 +1,75 @@
+--- a/src/game/memory.c
++++ b/src/game/memory.c
+@@ -1,9 +1,18 @@
+ #include "game/memory.h"
+ #include "dolphin/os.h"
+
+-#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-32))
+-#define BLOCK_GET_DATA(block) (((char *)(block))+32)
++/* MP6 native port -- MEMORY_BLOCK's own prev/next
++ * fields are real pointers: 8 bytes each on this native 64-bit build vs 4
++ * bytes on the original 32-bit target, so the true native header is 40
++ * bytes, not the 32 these three macros hardcoded. Same root cause and fix
++ * shape as the ANIMDATA/ANIMBANK/ANIMPAT/ANIMBMP
++ * relayout (a pointer-width struct-size mismatch, not an endianness
++ * issue) -- caught directly, not guessed: HuMemMemoryFileSet's `block->file
++ * = file` was landing exactly on the FIRST 4 BYTES of the caller's own
++ * data (confirmed byte-for-byte: a corrupted ANIM header's first 4 bytes
++ * decoded to the exact little-endian encoding of the dataNum tag being
++ * set), because BLOCK_GET_DATA(block) (block+32) pointed 8 bytes before
++ * the real data start (block+40) -- i.e. straight at the `file` field
++ * (real offset 32) this struct's own layout puts there. */
++#define MP6_MEMBLOCK_HDR ((s32)sizeof(MEMORY_BLOCK))
++#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-MP6_MEMBLOCK_HDR))
++#define BLOCK_GET_DATA(block) (((char *)(block))+MP6_MEMBLOCK_HDR)
+
+-#define MEM_ALLOC_SIZE(size) (((size)+63) & 0xFFFFFFE0)
++#define MEM_ALLOC_SIZE(size) (((size)+MP6_MEMBLOCK_HDR+31) & 0xFFFFFFE0)
+
+ #define BLOCK_CHECK_BROKEN(block) (((u32)((block)->next) & 0x80000000) == 0)
+
+@@ -54,7 +63,7 @@
+     MEMORY_BLOCK *prev;
+     do {
+         if(!block->flag && block->size >= blockSize) {
+-            if(block->size-blockSize > 32u) {
++            if(block->size-blockSize > MP6_MEMBLOCK_HDR) {
+                 MEMORY_BLOCK *new_block = (MEMORY_BLOCK *)(((u32)block)+blockSize);
+                 new_block->size = block->size-blockSize;
+                 new_block->magic = 205;
+@@ -104,7 +113,7 @@
+     }
+     do {
+         if(!block->flag && block->size >= blockSize) {
+-            if(block->size-blockSize > 32u) {
++            if(block->size-blockSize > MP6_MEMBLOCK_HDR) {
+                 MEMORY_BLOCK *old_block = block;
+                 block = (MEMORY_BLOCK *)(((char *)old_block)+(old_block->size-blockSize));
+                 block->size = blockSize;
+@@ -132,7 +141,7 @@
+     s32 blockSize = MEM_ALLOC_SIZE(size);
+     MEMORY_BLOCK *block = DATA_GET_BLOCK(ptr);
+     if(block->size >= blockSize) {
+-        if(block->size-blockSize > 32u) {
++        if(block->size-blockSize > MP6_MEMBLOCK_HDR) {
+             MEMORY_BLOCK *new_block = (MEMORY_BLOCK *)(((u32)block)+blockSize);
+             new_block->size = block->size-blockSize;
+             new_block->magic = 205;
+@@ -149,7 +158,7 @@
+     } else {
+         void *newPtr = HuMemMemoryAllocNum(heap, size, block->num, retAddr);
+         if(newPtr) {
+-            memcpy(newPtr, ptr, block->size-32);
++            memcpy(newPtr, ptr, block->size-MP6_MEMBLOCK_HDR);
+             HuMemMemoryFree(ptr, retAddr);
+         }
+         return newPtr;
+@@ -289,7 +298,7 @@
+     }
+     block = DATA_GET_BLOCK(ptr);
+     if(block->flag == 1 && block->magic == 165) {
+-        return block->size-32;
++        return block->size-MP6_MEMBLOCK_HDR;
+     } else {
+         return 0;
+     }

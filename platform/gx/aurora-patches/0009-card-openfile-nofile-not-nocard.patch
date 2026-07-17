@@ -1,0 +1,27 @@
+diff --git a/lib/card/CardGciFolder.cpp b/lib/card/CardGciFolder.cpp
+index a7be3cb..d6014a4 100644
+--- a/lib/card/CardGciFolder.cpp
++++ b/lib/card/CardGciFolder.cpp
+@@ -80,7 +80,12 @@ ECardResult CardGciFolder::openFile(const char* filename, FileHandle& handleOut)
+     idx++;
+   }
+ 
+-  return ECardResult::NOCARD;
++  // The card itself is present and mounted; only the requested file is
++  // absent. SDK semantics distinguish these (CARD_RESULT_NOFILE = -4 vs
++  // NOCARD = -3) and games branch on it: Mario Party 6's file-select shows
++  // "There is no Memory Card in Slot A" for NOCARD but its normal
++  // create-new-save flow for NOFILE.
++  return ECardResult::NOFILE;
+ }
+ 
+ ECardResult CardGciFolder::openFile(uint32_t fileno, FileHandle& handleOut) {
+@@ -94,7 +99,7 @@ ECardResult CardGciFolder::openFile(uint32_t fileno, FileHandle& handleOut) {
+     return ECardResult::READY;
+   }
+ 
+-  return ECardResult::NOCARD;
++  return ECardResult::NOFILE; // same SDK distinction as the by-name overload above
+ }
+ 
+ ECardResult CardGciFolder::createFile(const char* filename, size_t size, FileHandle& handleOut) {

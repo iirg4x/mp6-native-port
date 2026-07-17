@@ -1,0 +1,52 @@
+diff --git a/lib/dolphin/gx/GXTexture.cpp b/lib/dolphin/gx/GXTexture.cpp
+index 04f97f5..3769240 100644
+--- a/lib/dolphin/gx/GXTexture.cpp
++++ b/lib/dolphin/gx/GXTexture.cpp
+@@ -47,6 +47,29 @@ int __cntlzw(unsigned int val) {
+ #endif
+ }
+ 
++
++/* mp6-port patch 0005 (leak fix): Hudson engines re-run GXInitTexObj/
++ * GXInitTlutObj on stack-locals EVERY FRAME for the same underlying
++ * texture data. With counter-minted ids, each re-init misses
++ * s_textureObjectCaches and stores a brand-new converted texture keyed by
++ * an id that will never be looked up again -- unbounded growth (~4MB/frame
++ * observed in MP6's opening: 18GB RSS in minutes). Deriving the id from
++ * the object's IDENTITY (data pointer, dimensions, format) makes identical
++ * re-inits cache-hit instead; explicit data changes still invalidate via
++ * the existing texDataVersion/tlutDataVersion bumps (GXInitTexObjData/
++ * GXInitTlutObjData). id 0 is reserved ("uncached") by the resolve paths.
++ * 32-bit collision odds across the few hundred live textures a scene has
++ * are ~1e-5 and the failure mode is a visual glitch, not corruption. */
++static u32 mp6_stable_obj_id(const void* data, u32 a, u32 b, u32 c) {
++  uint64_t x = (uint64_t)(uintptr_t)data;
++  x ^= ((uint64_t)a << 40) ^ ((uint64_t)b << 20) ^ (uint64_t)c;
++  x ^= x >> 30; x *= 0xbf58476d1ce4e5b9ULL;
++  x ^= x >> 27; x *= 0x94d049bb133111ebULL;
++  x ^= x >> 31;
++  u32 id = (u32)(x ^ (x >> 32));
++  return id ? id : 1u;
++}
++
+ void init_texobj_common(GXTexObj_& obj, const void* data, u16 width, u16 height, u32 format, GXTexWrapMode wrapS,
+                         GXTexWrapMode wrapT, GXBool mipmap) {
+   obj = {};
+@@ -55,7 +78,7 @@ void init_texobj_common(GXTexObj_& obj, const void* data, u16 width, u16 height,
+   obj.mFormat = format;
+   obj.tlut = GX_TLUT0;
+   obj.flags = 2;
+-  obj.texObjId = next_tex_obj_id();
++  obj.texObjId = mp6_stable_obj_id(data, ((u32)width << 16) | height, format, (u32)wrapS ^ ((u32)wrapT << 4) ^ ((u32)mipmap << 8));
+   obj.texDataVersion = 1;
+ 
+   SET_REG_FIELD(0, obj.mode0, 2, 0, wrapS);
+@@ -311,7 +334,7 @@ void GXInitTlutObj(GXTlutObj* obj_, const void* data, GXTlutFmt format, u16 entr
+   obj->data = data;
+   obj->format = format;
+   obj->numEntries = entries;
+-  obj->tlutObjId = next_tlut_obj_id();
++  obj->tlutObjId = mp6_stable_obj_id(data, entries, (u32)format, 0x7107u);
+   obj->tlutDataVersion = 1;
+ 
+   SET_REG_FIELD(0, obj->tlut, 2, 10, format);

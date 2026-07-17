@@ -1,0 +1,15 @@
+--- a/src/REL/fileseldll/saveload.c
++++ b/src/REL/fileseldll/saveload.c
+@@ -235,8 +235,11 @@
+             for (i = 0; i < 3; i++) {
+                 boxStatus[i] = 0;
+             }
++            /* MP6 native port: same BE stored-checksum load as
++             * SLCheckSumBoxSlotCheck (see game/saveload.c.patch) -- the
++             * icon/banner area sum at 0x2040 is stored as two BE bytes. */
+             p = (u16 *)(saveBuf[curSlotNo] + 0x2040);
+-            if (*p != SLCheckSumGet(0, 0x2040)) {
++            if ((u16)((((u8 *)p)[0] << 8) | ((u8 *)p)[1]) != SLCheckSumGet(0, 0x2040)) {
+                 OSReport("IconBanner Area Broken!\n");
+                 time = OSGetTime();
+                 SLSaveDataMake(0, &time);

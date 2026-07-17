@@ -1,0 +1,194 @@
+--- a/src/game/hsfman.c
++++ b/src/game/hsfman.c
+@@ -7,6 +7,8 @@
+ #include "game/init.h"
+ #include "game/disp.h"
+ 
++#include <stdio.h>
++#include <stdlib.h>
+ #include "game/hu3d.h"
+ #include "game/hsfload.h"
+ 
+@@ -148,6 +150,33 @@
+     NoSyncF = FALSE;
+ }
+ 
++/* MP6 native port -- M11 : the title-wordmark
++ * draw census. M10's framescope census proved the three BootTitleCreate
++ * models (TITLE_HSF_PARTY/SIX/STAR) never load a single texture on the
++ * title frame -- i.e. they never reach ObjDraw at all -- but framescope
++ * can only see GX calls, not WHY the Hu3DExec model loop skipped a model.
++ * This census prints, for MP6_DRAW_CENSUS=<tick> (two consecutive ticks
++ * starting there, so one full Hu3DExec pass is guaranteed even if the
++ * first armed tick lands mid-frame):
++ *   - one entry-state dump per Hu3DExec call (live cameras, layerNum[],
++ *     and every live model's routing state: layer, cameraBit, attr bits,
++ *     scale, motion id, object count), and
++ *   - one verdict line per live model on its OWN layer's pass per camera,
++ *     evaluating the loop's real skip chain in the loop's real order.
++ * Zero output and one getenv (cached) when the env var is unset.
++ * PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++extern long mp6_tick_count;
++static long mp6CensusTick = -2; /* -2 = env not parsed yet, -1 = disabled */
++static int mp6CensusActive(void)
++{
++    if (mp6CensusTick == -2) {
++        const char *e = getenv("MP6_DRAW_CENSUS");
++        mp6CensusTick = (e && atol(e) > 0) ? atol(e) : -1;
++    }
++    return mp6CensusTick > 0 && mp6_tick_count >= mp6CensusTick &&
++           mp6_tick_count < mp6CensusTick + 2;
++}
++
+ void Hu3DPreProc(void)
+ {
+     GXColor shadowClear = { 0, 0, 0, 255 };
+@@ -193,6 +222,39 @@
+     s16 shadowCameraNo;
+     
+     HuPerfBegin(HUPERF_USR1);
++    if (mp6CensusActive()) { /* M11 census entry dump -- see mp6CensusActive above */
++        HU3D_MODEL *cmP;
++        s16 ci;
++        printf("[CENSUS] tick=%ld Hu3DExec entry, cameraExistF=%04x\n",
++               mp6_tick_count, (unsigned)Hu3DCameraExistF);
++        for (ci = 0; ci < HU3D_CAM_MAX; ci++) {
++            if (Hu3DCamera[ci].fov != -1) {
++                printf("[CENSUS]  cam%d fov=%.1f near=%.1f far=%.1f aspect=%.2f vp=(%.0f,%.0f %.0fx%.0f) "
++                       "pos=(%.1f,%.1f,%.1f) target=(%.1f,%.1f,%.1f)\n",
++                       ci, Hu3DCamera[ci].fov, Hu3DCamera[ci].near, Hu3DCamera[ci].far,
++                       Hu3DCamera[ci].aspect, Hu3DCamera[ci].viewportX, Hu3DCamera[ci].viewportY,
++                       Hu3DCamera[ci].viewportW, Hu3DCamera[ci].viewportH,
++                       Hu3DCamera[ci].pos.x, Hu3DCamera[ci].pos.y, Hu3DCamera[ci].pos.z,
++                       Hu3DCamera[ci].target.x, Hu3DCamera[ci].target.y, Hu3DCamera[ci].target.z);
++            }
++        }
++        printf("[CENSUS]  layerNum:");
++        for (ci = 0; ci < HU3D_LAYER_MAX; ci++) {
++            printf(" %d", layerNum[ci]);
++        }
++        printf("\n");
++        for (cmP = &Hu3DData[0], ci = 0; ci < HU3D_MODEL_MAX; ci++, cmP++) {
++            if (!cmP->hsf) {
++                continue;
++            }
++            printf("[CENSUS]  model%d layer=%d camBit=%04x attr=%08x motAttr=%08x objN=%d motId=%d "
++                   "scale=(%.2f,%.2f,%.2f) pos=(%.1f,%.1f,%.1f)\n",
++                   ci, cmP->layerNo, (unsigned)cmP->cameraBit, (unsigned)cmP->attr,
++                   (unsigned)cmP->motAttr, cmP->hsf->objectNum, cmP->motId,
++                   cmP->scale.x, cmP->scale.y, cmP->scale.z, cmP->pos.x, cmP->pos.y, cmP->pos.z);
++        }
++        fflush(stdout);
++    }
+     GXSetCurrentMtx(GX_PNMTX0);
+     shadowModelDrawF = FALSE;
+     HuSprBegin();
+@@ -274,6 +336,33 @@
+                 for(modelP=&Hu3DData[0], layerMdlNum=i=0; i<HU3D_MODEL_MAX; i++, modelP++) {
+                     if(!modelP->hsf) {
+                         continue;
++                    }
++                    /* M11 census verdict line -- evaluates the loop's own
++                     * skip chain, in the loop's own order, once per live
++                     * model on its own layer's pass (see mp6CensusActive's
++                     * comment above). Prints only; changes nothing. */
++                    if (mp6CensusActive() && modelP->layerNo == layer) {
++                        const char *mp6Verdict;
++                        if (modelP->attr & HU3D_ATTR_CAMERA) {
++                            mp6Verdict = "skip:camera-model";
++                        } else if (modelP->attr & HU3D_ATTR_DISPOFF) {
++                            mp6Verdict = "skip:dispoff";
++                        } else if (modelP->attr & HU3D_ATTR_REFLECT_MODEL) {
++                            mp6Verdict = "skip:reflect-model";
++                        } else if (modelP->attr & HU3D_ATTR_MOTION_OFF) {
++                            mp6Verdict = "skip:motion-off";
++                        } else if ((modelP->cameraBit & cameraBit) == 0) {
++                            mp6Verdict = "skip:cam-mismatch";
++                        } else if (modelP->attr & HU3D_ATTR_HOOK) {
++                            mp6Verdict = "skip:hook-attr";
++                        } else if (modelP->scale.x == 0.0f && modelP->scale.y == 0.0f && modelP->scale.z == 0.0f) {
++                            mp6Verdict = "skip:zero-scale";
++                        } else {
++                            mp6Verdict = "DRAW";
++                        }
++                        printf("[CENSUS]  cam%d layer%d model%d -> %s (layerMdlNum=%d/%d)\n",
++                               Hu3DCameraNo, layer, i, mp6Verdict, layerMdlNum, layerNum[layer]);
++                        fflush(stdout);
+                     }
+                     if(modelP->attr & HU3D_ATTR_CAMERA) {
+                         Hu3DCameraMotionExec(i);
+@@ -933,6 +1022,28 @@
+     layerNum[layerNo]++;
+ }
+ 
++/* MP6 native port -- On real hardware this lookup
++ * always finds a real object -- a model's real HSF data always has the
++ * name callers ask for, so returning NULL here was pure defensive code,
++ * never actually exercised. The M2c HSF stub (a
++ * frontier, deferred rather than solved) gives every model an EMPTY
++ * object list on purpose, so this lookup now genuinely fails every time
++ * -- and 18 call sites across 7 files (src/REL/bootDll/opening.c alone
++ * has 6, src/REL/fileseldll/filesel.c has 2 -- grep-confirmed, not
++ * guessed) immediately write through the result with no NULL check of
++ * their own (object->mesh.base.pos.x = ..., the same shape this patch
++ * queue already fixed once for Hu3DAnimAnimSet/HuAR_ARAMtoMRAMFileRead's
++ * own callers). Patching all 18 call sites individually -- several in
++ * files this milestone hasn't even reached yet -- is far more surface
++ * area than fixing the one shared chokepoint they all already funnel
++ * through. This dummy is a plain zeroed HSF_OBJECT, never linked into
++ * any real hsf->root/object[] tree, so nothing ever traverses INTO it
++ * (Hu3DDraw/MakeDisplayList never see it); it only ever absorbs a
++ * caller's writes harmlessly instead of crashing. Shared across every
++ * "not found" case rather than allocated fresh: nothing ever reads a
++ * meaningful value back out of it, so there is no cross-talk to avoid. */
++static HSF_OBJECT mp6_dummyObj;
++
+ HSF_OBJECT *Hu3DModelObjPtrGet(HU3D_MODELID modelId, char *objName)
+ {
+     char name[HSF_OBJNAME_MAX_LEN];
+@@ -949,7 +1060,7 @@
+     if(i == hsf->objectNum) {
+         OSReport("Error: OBJPtr Error! %s\n", objName);
+     }
+-    return NULL;
++    return &mp6_dummyObj;
+ }
+ 
+ void Hu3DModelTPLvlSet(HU3D_MODELID modelId, float tpLvl)
+@@ -1292,6 +1403,9 @@
+             *cameraP = defCamera;
+         }
+     }
++    printf("[MP6-DIAG-CAM] Hu3DCameraCreate(bit=%d) ran; Hu3DCameraExistF=%d Hu3DCamera[0].fov=%f\n",
++           cameraBit, Hu3DCameraExistF, Hu3DCamera[0].fov);
++    fflush(stdout);
+ }
+ 
+ void Hu3DCameraPerspectiveSet(int cameraBit, float fov, float near, float far, float aspect)
+@@ -2609,6 +2723,27 @@
+     GXPosition3f32(pos.x, -pos.y, -z);
+     GXPosition3f32(pos.x, pos.y, -z);
+     GXPosition3f32(-pos.x, pos.y, -z);
++    /* MP6 native port -- M3 . Explicit GXEnd() -- a pure
++     * no-op on real hardware (this function's own 4-vertex GXBegin count
++     * already exactly matches the 4 GXPosition3f32 calls above; real GX
++     * hardware ends a primitive by vertex count, never needing this call
++     * at all for this exact function). Aurora's own GX emulation tracks completion via an
++     * explicit open/close flag instead, and the general "auto-close on the
++     * next GXBegin" bridge-side tolerance this project already has
++     * (platform/gx/aurora_bridge.c) isn't precise enough once OTHER,
++     * unrelated vertex-emitting calls can interleave between this
++     * function's own last vertex and whatever the next real GXBegin
++     * happens to be -- exactly the same gap already
++     * root-caused and fixed once for game/sprput.c's HuSpr3DDisp, and
++     * unreachable for THIS function until real HSF meshes (this
++     * milestone) started actually rendering multiple objects/materials
++     * per frame around it. Confirmed by direct evidence, not guessed:
++     * repeating "[AURORA WARNING: aurora::gx] GXEnd: vertex data not
++     * evenly divisible" for exactly 4 (this function's own count) and 6
++     * (an unrelated interleaved call's count) vertices, every frame,
++     * during the opening cutscene once HSF loading started succeeding. */
++    GXEnd();
+     GXSetColorUpdate(GX_TRUE);
+ }
+ 

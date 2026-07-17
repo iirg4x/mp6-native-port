@@ -1,0 +1,24 @@
+diff --git a/lib/dolphin/gx/GXFrameBuffer.cpp b/lib/dolphin/gx/GXFrameBuffer.cpp
+index 536ebf1..f8b45b5 100644
+--- a/lib/dolphin/gx/GXFrameBuffer.cpp
++++ b/lib/dolphin/gx/GXFrameBuffer.cpp
+@@ -82,6 +82,19 @@ void copy_tex(const void* dest, GXBool clear) noexcept {
+                          clear_depth_value(), texCopyFmt);
+   ++handle.revision;
+   g_gxState.copyTextures[dest] = handle;
++
++  // With stable texObjIds a texture object bound BEFORE the first copy into
++  // its data pointer never re-resolves: the bind-unchanged early-out in
++  // resolve_sampled_textures sees identical id+version (the CPU bytes at a
++  // copy dest never change), so the stale pre-copy upload stays bound
++  // forever. Kick any bind aliasing this dest so the next resolve consults
++  // copyTextures and picks up this copy (also refreshes dynamic-palette
++  // copies whose revision advanced).
++  for (auto& bind : g_gxState.textures) {
++    if (bind.texObj.data == dest) {
++      bind.texObj.texObjId = 0;
++    }
++  }
+ }
+ } // namespace aurora::gx
+ 

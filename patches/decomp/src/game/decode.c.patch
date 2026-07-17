@@ -1,0 +1,90 @@
+--- a/src/game/decode.c
++++ b/src/game/decode.c
+@@ -2,6 +2,9 @@
+ #include "game/memory.h"
+ #include "dolphin/os.h"
+ #include "zlib.h"
++#include "be.h"
++#include <stdio.h>
++#include <stdlib.h>
+ 
+ typedef struct Decode_s
+ {
+@@ -171,6 +174,26 @@ static void HuDecodeRle(DECODE *decode)
+     }
+ }
+ 
++/* MP6 native port -- M13 : decode guard.
++ * The menu-scene "vertices all over the place" hunt traced corrupt HSF face
++ * indices to the DECODED DATA BLOB (bad already at parse time, float-flavored
++ * garbage, nondeterministic between runs). This choke point logs, for
++ * MP6_DECODE_GUARD=1, every decompression: type, dst range, expected size,
++ * BYTES ACTUALLY WRITTEN (an overrun writes into neighboring heap blocks --
++ * the prime stomp suspect), leftover size counter (u32 underflow detector),
++ * and a djb2 checksum of the output (two runs diff run-to-run
++ * nondeterminism per decode). Zero output and one cached getenv when unset.
++ * PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++static int mp6DecodeGuardFlag = -1;
++static int mp6DecodeGuardOn(void)
++{
++    if (mp6DecodeGuardFlag < 0) {
++        const char *e = getenv("MP6_DECODE_GUARD");
++        mp6DecodeGuardFlag = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
++    }
++    return mp6DecodeGuardFlag;
++}
++
+ void HuDecodeData(void *src, void *dst, u32 size, s32 decodeType)
+ {
+     DECODE decode;
+@@ -211,6 +234,21 @@ void HuDecodeData(void *src, void *dst, u32 size, s32 decodeType)
+             OSReport("decode tyep unknown.(%x)\n", decodeType);
+             break;
+     }
++    if (mp6DecodeGuardOn()) { /* M13 decode guard -- see mp6DecodeGuardOn above */
++        unsigned char *d0 = (unsigned char *)dst;
++        long long wrote = (long long)(decodeP->dst - d0); /* dst-advancing decoders only */
++        unsigned int sum = 5381u;
++        u32 k;
++        int lenCheckValid = (decodeType != HU_DECODE_TYPE_ZLIB); /* zlib path doesn't advance decodeP->dst */
++        for (k = 0; k < size; k++) {
++            sum = sum * 33u + d0[k];
++        }
++        printf("[DECODE] type=%d dst=%p..%p size=%u wrote=%lld left=%u sum=%08x%s\n",
++               (int)decodeType, dst, (void *)(d0 + size), (unsigned)size,
++               wrote, (unsigned)decodeP->size, sum,
++               (lenCheckValid && wrote != (long long)size) ? "  <-- LENGTH MISMATCH (overrun/underrun)" : "");
++        fflush(stdout);
++    }
+     DCFlushRange(dst, size);
+ }
+ 
+@@ -233,11 +271,11 @@ static int HuDecodeZlib(DECODE *decode)
+     u32 dummy;
+     int result;
+     u32 *src = (u32 *)decode->src;
+-    stream.avail_in = src[1];
++    stream.avail_in = be32(&src[1]);
+     src += 2;
+     stream.next_in = (Bytef *)src;
+     stream.next_out = decode->dst;
+-    stream.avail_out = (uInt)(&dummy);
++    stream.avail_out = decode->size;
+     stream.zalloc = ZlibCalloc;
+     stream.zfree = ZlibFree;
+     result = inflateInit(&stream);
+@@ -245,6 +283,14 @@ static int HuDecodeZlib(DECODE *decode)
+         return result;
+     }
+     result = inflate(&stream, Z_FINISH);
++#ifdef MP6_ZLIB_DEBUG_DUMP
++    {
++        u8 *d = (u8 *)decode->dst;
++        OSReport("[ZLIB] result=%d total_out=%lu avail_in_left=%u dst[0..7]=%02x %02x %02x %02x %02x %02x %02x %02x\n",
++                  result, stream.total_out, stream.avail_in,
++                  d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
++    }
++#endif
+     if(result != Z_STREAM_END) {
+         inflateEnd(&stream);
+         return (result == Z_OK) ? Z_BUF_ERROR : result;

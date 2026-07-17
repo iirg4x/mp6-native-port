@@ -1,0 +1,19 @@
+diff --git a/lib/card/DolphinCardPath.cpp b/lib/card/DolphinCardPath.cpp
+index 2c2c9df..90a2b3c 100644
+--- a/lib/card/DolphinCardPath.cpp
++++ b/lib/card/DolphinCardPath.cpp
+@@ -5,8 +5,14 @@
+ #if WIN32
+ #include "windows.h"
+ #include "winreg.h"
++// mingw ships SHGetKnownFolderPath & friends via shlobj.h; shlobj_core.h is
++// an MSVC-SDK-only header name.
++#ifdef __MINGW32__
++#include "shlobj.h"
++#else
+ #include "shlobj_core.h"
+ #endif
++#endif
+ 
+ #include <SDL3/SDL_filesystem.h>
+ 

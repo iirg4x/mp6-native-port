@@ -1,0 +1,33 @@
+--- a/src/REL/fileseldll/filename.c
++++ b/src/REL/fileseldll/filename.c
+@@ -25,7 +25,7 @@
+ #include "string.h"
+ 
+ #pragma cplusplus on
+-extern inline float sqrtf(float x)
++extern inline float mp6_fileseldll_sqrtf(float x)
+ {
+     volatile float y;
+     if (x > 0.0f)
+@@ -577,7 +577,7 @@
+     s16 i;
+     s16 bestIdx;
+ 
+-    len = sqrtf(dirX * dirX + dirY * dirY);
++    len = mp6_fileseldll_sqrtf(dirX * dirX + dirY * dirY);
+     ndx = dirX / len;
+     ndy = dirY / len;
+     best = 409600.0f;
+@@ -586,10 +586,10 @@
+         if (i != id) {
+             px = (f32)lbl_1_bss_348[i].x - refX;
+             py = (f32)lbl_1_bss_348[i].y - refY;
+-            dist = sqrtf(px * px + py * py);
++            dist = mp6_fileseldll_sqrtf(px * px + py * py);
+             px = px / dist;
+             py = py / dist;
+-            angDist = sqrtf((px - ndx) * (px - ndx) + (py - ndy) * (py - ndy));
++            angDist = mp6_fileseldll_sqrtf((px - ndx) * (px - ndx) + (py - ndy) * (py - ndy));
+             if (lbl_1_bss_348[id].flag >= 0x100 && lbl_1_bss_348[id].flag <= 0x500 &&
+                 lbl_1_bss_348[i].flag >= 0x100 && lbl_1_bss_348[i].flag <= 0x500 &&
+                 angDist < 0.1 && dist < 55.0f + best) {

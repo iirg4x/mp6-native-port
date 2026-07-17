@@ -1,0 +1,48 @@
+diff --git a/lib/card/FileIO.hpp b/lib/card/FileIO.hpp
+index 98fa929..6886064 100644
+--- a/lib/card/FileIO.hpp
++++ b/lib/card/FileIO.hpp
+@@ -6,6 +6,10 @@
+ 
+ #include <SDL3/SDL_iostream.h>
+ 
++#ifdef __ANDROID__
++#include <cstdio> // mp6 patch 0011 (fileOpen below): fopen pre-flight
++#endif
++
+ namespace aurora::card {
+ 
+ class FileIO {
+@@ -24,7 +28,32 @@ public:
+   FileIO(const FileIO& other) = delete;
+   FileIO& operator=(const FileIO& other) = delete;
+ 
++#ifdef __ANDROID__
++  // mp6 patch 0011: never let a card open reach SDL's Android asset fallback.
++  // SDL_IOFromFile falls back to a JNI AssetManager lookup whenever plain
++  // fopen fails (e.g. a .gci that simply does not exist yet) -- but games
++  // call the CARD API from coroutine contexts whose stacks live outside the
++  // ART-registered thread stack, and ART's JNI-entry stack-bounds check then
++  // throws a spurious java.lang.StackOverflowError that aborts the app at
++  // the next JNI call (measured on device: CARDOpen of an absent save from a
++  // game coroutine -> pending StackOverflowError -> CheckJNI abort in
++  // SDL_UpdateJoysticks). Card paths are always real filesystem paths, never
++  // APK assets, so the fallback is meaningless here: pre-flight with plain
++  // fopen and only hand SDL a path its own internal fopen will succeed on.
++  static SDL_IOStream* fileOpen(const std::string& path, const char* mode) {
++    if (path.empty()) {
++      return nullptr;
++    }
++    FILE* probe = fopen(path.c_str(), mode);
++    if (probe == nullptr) {
++      return nullptr;
++    }
++    fclose(probe);
++    return SDL_IOFromFile(path.c_str(), mode);
++  }
++#else
+   static SDL_IOStream* fileOpen(const std::string& path, const char* mode) {return path.empty() ? nullptr : SDL_IOFromFile(path.c_str(), mode);}
++#endif
+   bool fileRead(void* buf, size_t length, off_t offset);
+   bool fileWrite(const void* buf, size_t length, off_t offset);
+   size_t fileSize() const;

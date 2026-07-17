@@ -1,0 +1,71 @@
+--- a/src/game/armem.c
++++ b/src/game/armem.c
+@@ -1,5 +1,6 @@
+ #include "game/armem.h"
+ #include "game/data.h"
++#include "be.h"
+
+ #define ARMEM_BLOCK_MAX 64
+
+@@ -324,7 +325,7 @@
+ }
+
+ void *HuAR_ARAMtoMRAMFileRead(unsigned int dataNum, u32 num, HEAPID heap) {
+-    s32 *dirBuf;
++    s32 *dirBuf; s32 nextOff; s32 rawLen; s32 decodeType;
+     void *dst;
+     void *dvdBuf;
+     AMEM_PTR srcAMemP;
+@@ -344,12 +345,25 @@
+     arqIdx &= 0xF;
+     while(HuARDMACheck());
+     dirBuf = &preLoadBuf[(dataNum + 1) & 7];
+-    count = dirBuf[0];
++    /* MP6 native port -- preLoadBuf is DMA'd
++     * straight from ARAM -- itself a raw copy of the original big-endian
++     * disc bytes -- so dirBuf[0]/dirBuf[1] here are two consecutive BE
++     * u32 offsets into this ARAM-cached directory's blob, the exact same
++     * per-file offset-table shape game/data.c's GetFileInfo already reads
++     * via be32(), not native ints. Confirmed a
++     * real bug, not a guess: an unfixed read here fed a bogus, huge size
++     * into HuMemDirectMallocNum a few lines down, printing a genuine
++     * "HuMem>memory alloc error" and -- via HuWinFrameCreate's own
++     * missing NULL check one level up (game/window.c) -- crashing
++     * OpeningExec's window-frame setup the first time this port ever
++     * reached that far (the HSF stub + the
++     * HuSprAnimMake/Hu3DAnimAnimSet fixes in this same patch queue all
++     * needed to land first before this code path was even reachable). */
++    count = (s32)be32(&dirBuf[0]);
+     srcAMemP = aMemP + (u32)(count & 0xFFFFFFFE0);
+-    if(dirBuf[1] - count < 0) {
++    nextOff = (s32)be32(&dirBuf[1]);
++    if(nextOff - count < 0) {
+         size = (HuARSizeGet(aMemP) - count + 0x3F) & 0xFFFFFFFE0;
+     } else {
+-        size = (dirBuf[1] - count + 0x3F) & 0xFFFFFFFE0;
++        size = (nextOff - count + 0x3F) & 0xFFFFFFFE0;
+     }
+     dvdBuf = HuMemDirectMalloc(HEAP_DVD, size);
+     if(!dvdBuf) {
+@@ -362,11 +376,16 @@
+     arqIdx &= 0xF;
+     while(HuARDMACheck());
+     dirBuf = (s32*) ((u8*) dvdBuf + (count & 0x1F));
+-    dst = HuMemDirectMallocNum(heap, (dirBuf[0] + 1) & ~1, num);
++    /* Same container-header shape game/data.c's GetFileInfo and
++     * src/REL/bootDll/boot.c's NintendoDataDecode/WarningDataDecode
++     * (both already patched) fix elsewhere: a BE u32 rawLen then a BE
++     * u32 decodeType immediately before the actual payload bytes
++     * HuDecodeData consumes (those payload bytes themselves are never
++     * byte-swapped -- decode.c/sprman.c's own concern, not this one). */
++    rawLen = (s32)be32(&dirBuf[0]);
++    decodeType = (s32)be32(&dirBuf[1]);
++    dst = HuMemDirectMallocNum(heap, (rawLen + 1) & ~1, num);
+     if(!dst) {
+         return 0;
+     }
+-    HuDecodeData(&dirBuf[2], dst, dirBuf[0], dirBuf[1]);
++    HuDecodeData(&dirBuf[2], dst, rawLen, decodeType);
+     HuMemMemoryFileSet(dst, dataNum);
+     HuMemDirectFree(dvdBuf);
+     return dst;

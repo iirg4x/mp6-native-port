@@ -1,0 +1,463 @@
+--- src/game/sprman.c
++++ src/game/sprman.c
+@@ -4,9 +4,49 @@ double sin(double x);
+ #include "game/sprite.h"
+ #include "game/memory.h"
+ #include "game/init.h"
++#include "be.h"
++#include "mp6_shim_log.h"
++#include <stdio.h>
+ 
+ #include "dolphin/mtx.h"
+ 
++/* MP6 native port -- . This TU calls mtxTransCat
++ * (HuSprBegin, below) with NO prototype anywhere in its own #include chain
++ * in scope (confirmed by direct check: game/sprite.h/game/memory.h/
++ * game/init.h -- this file's only includes -- neither declare it nor
++ * transitively pull in game/hu3d.h, the ONE header in the whole decomp
++ * tree that does, at line 545; game/sprput.c, whose own mtxTransCat calls
++ * this bug does NOT affect, has its own local prototype 4 lines into that
++ * file for exactly this reason). Calling a function taking `float`
++ * parameters with no visible prototype is genuinely undefined behavior in
++ * C -- the call site, having no prototype, applies the default argument
++ * promotions (float -> double) to gp->pos.x/gp->pos.y, while
++ * mtxTransCat's real definition (game/hsfdraw.c) declares plain `float x,
++ * float y, float z` parameters, expecting the FLOAT (not promoted-double)
++ * calling convention. Real PowerPC/MWCC's own float-argument ABI passes
++ * the first several floating-point arguments in dedicated float registers
++ * (f1-f13) that a callee reads back at its OWN declared width regardless
++ * of what width the (unprototyped) caller assumed it was sending -- this
++ * exact mismatch is harmless there, so it shipped unnoticed. This port's
++ * x86-64 target does NOT tolerate the same mismatch (confirmed
++ * empirically, not just theoretically: a temporary debug print at the
++ * exact call site showed gp->pos correctly read as (16.0,364.0)
++ * immediately before the call, yet the resulting gp->mtx translation came
++ * back as exactly gp->center with gp->pos's own contribution silently
++ * dropped entirely -- the signature of corrupted/misrouted float
++ * arguments, not a logic bug). Confirmed as the root cause of every
++ * message window rendering pinned to a fixed top-left-ish position
++ * (matching gp->center alone) instead of its own real, requested
++ * HuWinCreate position: adding this prototype (the EXACT signature
++ * game/hu3d.h already establishes elsewhere in this same codebase)
++ * restores the correct float-argument ABI at this call site and fixed it,
++ * verified by screenshot. Same bug SHAPE (real, latent, PowerPC-ABI-
++ * tolerant UB exposed by this port's different architecture) as
++ * the frsqrte fix and the frandmod
++ * divide-by-zero fix -- not a decompilation error, nothing to "fix" in
++ * the sense of changing observable behavior on real hardware. */
++void mtxTransCat(Mtx dst, float x, float y, float z);
++
+ #define HUSPR_ORDER_MAX 768
+ 
+ #define SPRITE_DIRTY_ATTR 0x1
+@@ -142,6 +182,26 @@ HUSPRITE *HuSprCall(void)
+         if(sp->attr & HUSPR_ATTR_FUNC) {
+             return sp;
+         }
++        /* MP6 native port -- defensive net kept even
++         * after root-causing and fixing the real bug (mp6_animCacheRemove(),
++         * this file's own HuSprAnimKill, below): a stale mp6_animCache[]
++         * entry surviving past its ANIMDATA's own free was traced (via a
++         * temporary per-call diagnostic dump, ~14,600 clean calls then one
++         * genuine access violation) to a bank->frame field reading back as
++         * exactly address -1 -- not a real pointer, just whatever bytes now
++         * occupy memory that was freed and reused for something else,
++         * because the cache never purged its entry on free. Left in place,
++         * logged once, as a last-resort safety net -- cheap, and correct
++         * behavior (skip this sprite's frame/pat lookup for one call rather
++         * than fault) even if some future change reopens a similar gap. */
++        if (!sp->data || sp->bank < 0 || sp->bank >= sp->data->bankNum ||
++            sp->data->bank[sp->bank].frame == NULL ||
++            sp->animNo < 0 || sp->animNo >= sp->data->bank[sp->bank].timeNum) {
++            MP6_LOG_ONCE("SPR", "HuSprCall-invalid-frame-lookup");
++            sp->frameP = NULL;
++            sp->patP = NULL;
++            return sp;
++        }
+         sp->frameP = &sp->data->bank[sp->bank].frame[sp->animNo];
+         sp->patP = &sp->data->pat[sp->frameP->pat];
+         return sp;
+@@ -215,35 +275,277 @@ void HuSprPauseSet(BOOL value)
+     HuSprPauseF = value;
+ }
+ 
+-ANIMDATA *HuSprAnimRead(void *data)
++/* MP6 native port -- BE fixup + 32-on-64-bit pointer relayout.
++ * Two independent problems live in this one
++ * chokepoint:
++ *
++ * 1. Every multi-byte field in the packed ANIM blob (produced by the
++ *    original big-endian PowerPC toolchain) is big-endian; a plain
++ *    struct-member read on this little-endian host reads it byte-swapped.
++ * 2. ANIMDATA/ANIMBANK/ANIMPAT/ANIMBMP each embed one or more real
++ *    pointer-typed fields (bank/pat/bmp, frame, layer, palData/data).
++ *    Those fields are 4 bytes on the original 32-bit target but 8 bytes in
++ *    this native 64-bit build, so the record STRIDES
++ *    differ from what the packed blob actually contains -- walking this
++ *    data through the native struct types in place (as the original code
++ *    did, relying on real hardware's matching 32-bit ABI) reads the wrong
++ *    bytes entirely, a separate bug from pure byte order.
++ *
++ * Fixed by treating `data` as an opaque byte blob laid out per the
++ * ORIGINAL (32-bit, big-endian) ANIM format -- read explicitly via be16()/
++ * be32() at the format's fixed byte offsets -- and building a fresh,
++ * natively-laid-out ANIMDATA/ANIMBANK/ANIMPAT/ANIMBMP/ANIMFRAME/ANIMLAYER
++ * graph from it in one new allocation. ANIMFRAME and ANIMLAYER contain no
++ * pointer fields, so their native layout already matches the packed
++ * layout byte-for-byte; only their s16 fields need swapping. Raw texture/
++ * palette PIXEL bytes (ANIMBMP.data/.palData) are deliberately NOT copied
++ * or byte-swapped -- they stay exactly where the decoder put them and are
++ * consumed as opaque GameCube-native tiled/paletted texture data.
++ * Only the CPU-parsed container fields above them
++ * are converted here.
++ *
++ * A small side-table cache (mirroring platform/os/dll_bridge.c's own
++ * open-file side table) reproduces the original's "already fixed up,
++ * just bump the refcount" fast path -- the original detected that case by
++ * testing the high bits of the still-packed `bank` OFFSET against a real
++ * pointer's high bits, a test that doesn't transfer once fixed-up data no
++ * longer lives at the same address as its own packed source. */
++/* M3, round 3: 64 was already tight for a full boot's
++ worth of ANIM objects (79 character anims alone in one opening.c loop);
++ the two self-registration fixes above double the fill rate (each
++ HuSprAnimRead/HuSprAnimMake call can now add TWO entries, input and
++ output identity, instead of one). A linear scan over a few thousand
++ pointer-sized slots costs nothing measurable at this call frequency
++ (load-time, not per-frame), so there's no real downside to a generous
++ budget here. */
++#define MP6_ANIM_CACHE_MAX 4096
++static struct { void *rawData; ANIMDATA *anim; } mp6_animCache[MP6_ANIM_CACHE_MAX];
++
++static ANIMDATA *mp6_animCacheFind(void *data)
+ {
+     s16 i;
+-    ANIMBMP *bmp;
++    for(i=0; i<MP6_ANIM_CACHE_MAX; i++) {
++        if(mp6_animCache[i].rawData == data) {
++            return mp6_animCache[i].anim;
++        }
++    }
++    return NULL;
++}
++
++static void mp6_animCacheAdd(void *data, ANIMDATA *anim)
++{
++    s16 i;
++    for(i=0; i<MP6_ANIM_CACHE_MAX; i++) {
++        if(mp6_animCache[i].rawData == NULL) {
++            mp6_animCache[i].rawData = data;
++            mp6_animCache[i].anim = anim;
++            return;
++        }
++    }
++    /* Table full: harmless to drop -- a repeat HuSprAnimRead(data) call
++     * just re-parses into its own independent (still correct) copy
++     * instead of sharing/refcounting one. */
++}
++
++/* MP6 native port -- M3 . Real root-cause fix: this table
++ * has no expiry, but the ANIMDATA objects it references DO get freed
++ * (HuSprAnimKill, below, once useNum drops to 0) -- called from here right
++ * before the real HuMemDirectFree(anim), so no stale entry can ever
++ * outlive the memory it points at. Purges EVERY slot whose key OR value
++ * matches `anim`: a self-registered entry (this file's own
++ * HuSprAnimRead/HuSprAnimMake fixes, above) has rawData==anim==this exact
++ * pointer; an original raw-packed-data-keyed entry has anim==this pointer
++ * but a DIFFERENT rawData key (the still-packed source blob) -- both need
++ * to go, since either one, left stale, lets a future allocation that
++ * happens to reuse this exact freed address get a false-positive cache
++ * hit against semantically unrelated (or simply no-longer-valid) data.
++ * A linear scan over a few thousand slots costs nothing measurable at
++ * this call frequency (once per sprite/model teardown, not per-frame). */
++static void mp6_animCacheRemove(ANIMDATA *anim)
++{
++    s16 i;
++    for(i=0; i<MP6_ANIM_CACHE_MAX; i++) {
++        if(mp6_animCache[i].anim == anim || mp6_animCache[i].rawData == (void *)anim) {
++            mp6_animCache[i].rawData = NULL;
++            mp6_animCache[i].anim = NULL;
++        }
++    }
++}
++
++ANIMDATA *HuSprAnimRead(void *data)
++{
++    u8 *raw = (u8 *)data;
++    s16 bankNum, patNum, bmpNum;
++    u32 bankOff, patOff, bmpOff;
++    s32 frameTotal, layerTotal;
++    u32 skeletonSize;
++    u8 *cursor;
++    ANIMDATA *anim;
+     ANIMBANK *bank;
+     ANIMPAT *pat;
+-    
+-    ANIMDATA *anim = (ANIMDATA *)data;
+-    if((u32)anim->bank & 0xFFFF0000) {
++    ANIMBMP *bmp;
++    s32 i, j;
++
++    anim = mp6_animCacheFind(data);
++    if(anim) {
+         anim->useNum++;
+         return anim;
+     }
+-    bank = (ANIMBANK *)((u32)anim->bank+(u32)data);
++
++    bankNum = (s16)be16(raw+0);
++    patNum  = (s16)be16(raw+2);
++    bmpNum  = (s16)be16(raw+4);
++    bankOff = be32(raw+8);
++    patOff  = be32(raw+12);
++    bmpOff  = be32(raw+16);
++
++#ifdef MP6_ANIM_DEBUG_DUMP_EARLY
++    OSReport("[ANIM-EARLY] data=%p bankNum=%d patNum=%d bmpNum=%d bankOff=%x patOff=%x bmpOff=%x "
++             "raw[0..15]=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
++             data, bankNum, patNum, bmpNum, bankOff, patOff, bmpOff,
++             raw[0],raw[1],raw[2],raw[3],raw[4],raw[5],raw[6],raw[7],
++             raw[8],raw[9],raw[10],raw[11],raw[12],raw[13],raw[14],raw[15]);
++#endif
++
++    frameTotal = 0;
++    for(i=0; i<bankNum; i++) {
++        frameTotal += (s16)be16(raw+bankOff+i*8+0);
++    }
++    layerTotal = 0;
++    for(i=0; i<patNum; i++) {
++        layerTotal += (s16)be16(raw+patOff+i*16+0);
++    }
++
++    skeletonSize = sizeof(ANIMDATA) + bankNum*sizeof(ANIMBANK) + patNum*sizeof(ANIMPAT)
++                 + bmpNum*sizeof(ANIMBMP) + frameTotal*sizeof(ANIMFRAME) + layerTotal*sizeof(ANIMLAYER);
++    anim = (ANIMDATA *)HuMemDirectMalloc(HEAP_MODEL, skeletonSize);
++
++    cursor = (u8 *)anim + sizeof(ANIMDATA);
++    bank = (ANIMBANK *)cursor; cursor += bankNum*sizeof(ANIMBANK);
++    pat  = (ANIMPAT  *)cursor; cursor += patNum*sizeof(ANIMPAT);
++    bmp  = (ANIMBMP  *)cursor; cursor += bmpNum*sizeof(ANIMBMP);
++
++    anim->bankNum = bankNum;
++    anim->patNum = patNum;
++    anim->bmpNum = bmpNum;
++    anim->useNum = 0;
+     anim->bank = bank;
+-    pat = (ANIMPAT *)((u32)anim->pat+(u32)data);
+     anim->pat = pat;
+-    bmp = (ANIMBMP *)((u32)anim->bmp+(u32)data);
+     anim->bmp = bmp;
+-    for(i=0; i<anim->bankNum; i++, bank++) {
+-        bank->frame = (ANIMFRAME *)((u32)bank->frame+(u32)data);
++
++    for(i=0; i<bankNum; i++) {
++        u8 *src = raw+bankOff+i*8;
++        s16 timeNum = (s16)be16(src+0);
++        u32 frameOff = be32(src+4);
++        ANIMFRAME *frame = (ANIMFRAME *)cursor;
++        cursor += timeNum*sizeof(ANIMFRAME);
++
++        bank[i].timeNum = timeNum;
++        bank[i].unk = (s16)be16(src+2);
++        bank[i].frame = frame;
++        for(j=0; j<timeNum; j++) {
++            u8 *fsrc = raw+frameOff+j*12;
++            frame[j].pat = (s16)be16(fsrc+0);
++            frame[j].time = (s16)be16(fsrc+2);
++            frame[j].shiftX = (s16)be16(fsrc+4);
++            frame[j].shiftY = (s16)be16(fsrc+6);
++            frame[j].flip = (s16)be16(fsrc+8);
++            frame[j].pad = (s16)be16(fsrc+10);
++        }
+     }
+-    for(i=0; i<anim->patNum; i++, pat++) {
+-        pat->layer = (ANIMLAYER *)((u32)pat->layer+(u32)data);
++
++    for(i=0; i<patNum; i++) {
++        u8 *src = raw+patOff+i*16;
++        s16 layerNum = (s16)be16(src+0);
++        u32 layerOff = be32(src+12);
++        ANIMLAYER *layer = (ANIMLAYER *)cursor;
++        cursor += layerNum*sizeof(ANIMLAYER);
++
++        pat[i].layerNum = layerNum;
++        pat[i].centerX = (s16)be16(src+2);
++        pat[i].centerY = (s16)be16(src+4);
++        pat[i].sizeX = (s16)be16(src+6);
++        pat[i].sizeY = (s16)be16(src+8);
++        pat[i].layer = layer;
++        for(j=0; j<layerNum; j++) {
++            u8 *lsrc = raw+layerOff+j*32;
++            s16 k;
++            layer[j].alpha = lsrc[0];
++            layer[j].flip = lsrc[1];
++            layer[j].bmpNo = (s16)be16(lsrc+2);
++            layer[j].startX = (s16)be16(lsrc+4);
++            layer[j].startY = (s16)be16(lsrc+6);
++            layer[j].sizeX = (s16)be16(lsrc+8);
++            layer[j].sizeY = (s16)be16(lsrc+10);
++            layer[j].shiftX = (s16)be16(lsrc+12);
++            layer[j].shiftY = (s16)be16(lsrc+14);
++            for(k=0; k<8; k++) {
++                layer[j].vtx[k] = (s16)be16(lsrc+16+k*2);
++            }
++        }
+     }
+-    for(i=0; i<anim->bmpNum; i++, bmp++) {
+-        bmp->palData = (void *)((u32)bmp->palData+(u32)data);
+-        bmp->data = (void *)((u32)bmp->data+(u32)data);
++
++    for(i=0; i<bmpNum; i++) {
++        u8 *src = raw+bmpOff+i*20;
++        u32 palOff = be32(src+12);
++        u32 dataOff = be32(src+16);
++        bmp[i].pixSize = src[0];
++        bmp[i].dataFmt = src[1];
++        bmp[i].palNum = (s16)be16(src+2);
++        bmp[i].sizeX = (s16)be16(src+4);
++        bmp[i].sizeY = (s16)be16(src+6);
++        bmp[i].dataSize = be32(src+8);
++        /* Pixel/palette PAYLOAD bytes stay where the decoder put them --
++         * see this function's header comment -- only the offset fields
++         * pointing at them are converted. */
++        bmp[i].palData = palOff ? (void *)(raw+palOff) : NULL;
++        bmp[i].data = (void *)(raw+dataOff);
+     }
+-    anim->useNum = 0;
++
++#ifdef MP6_ANIM_DEBUG_DUMP
++    /* Instrument-first verification  -- parsed-vs-
++     * expected header fields, kept behind a build flag rather than ripped
++     * out, since it's cheap and a real aid if a future asset trips this
++     * parser differently than the boot-warning sprite did. */
++    OSReport("[ANIM] data=%p bankNum=%d patNum=%d bmpNum=%d skeletonSize=%u\n",
++              data, bankNum, patNum, bmpNum, skeletonSize);
++    for(i=0; i<bmpNum; i++) {
++        OSReport("[ANIM] bmp[%d] pixSize=%d dataFmt=%d palNum=%d sizeX=%d sizeY=%d dataSize=%u data=%p palData=%p\n",
++                  i, bmp[i].pixSize, bmp[i].dataFmt, bmp[i].palNum, bmp[i].sizeX, bmp[i].sizeY,
++                  bmp[i].dataSize, bmp[i].data, bmp[i].palData);
++    }
++    for(i=0; i<patNum; i++) {
++        OSReport("[ANIM] pat[%d] layerNum=%d centerX=%d centerY=%d sizeX=%d sizeY=%d\n",
++                  i, pat[i].layerNum, pat[i].centerX, pat[i].centerY, pat[i].sizeX, pat[i].sizeY);
++        for(j=0; j<pat[i].layerNum; j++) {
++            ANIMLAYER *ly = &pat[i].layer[j];
++            OSReport("[ANIM]   layer[%d] bmpNo=%d start=(%d,%d) size=(%d,%d) shift=(%d,%d) flip=%d alpha=%d "
++                      "vtx=(%d,%d)(%d,%d)(%d,%d)(%d,%d)\n",
++                      j, ly->bmpNo, ly->startX, ly->startY, ly->sizeX, ly->sizeY, ly->shiftX, ly->shiftY,
++                      ly->flip, ly->alpha,
++                      ly->vtx[0], ly->vtx[1], ly->vtx[2], ly->vtx[3], ly->vtx[4], ly->vtx[5], ly->vtx[6], ly->vtx[7]);
++        }
++    }
++#endif
++
++    mp6_animCacheAdd(data, anim);
++    /* MP6 native port -- M3, round 2 of this same gap.
++     * Also register the OUTPUT under its OWN identity, not just the INPUT
++     * it was parsed from: REL/bootDll/opening.c's OpeningCreate() passes
++     * OpeningCharAnim[0] (itself a prior HuSprAnimRead() result -- real
++     * DVD-sourced ANIM data, read via HuDataSelHeapReadNum) into
++     * Hu3DAnimCreate(), which re-calls HuSprAnimRead(dataP) on it whenever
++     * it finds a bitmap-name match -- a second, independent way (alongside
++     * HuSprAnimMake's own output, fixed above) that an ALREADY-VALID
++     * native ANIMDATA* reaches this function as if it were still-packed
++     * bytes. Real hardware's own high-bit check on `anim->bank` (see this
++     * function's own header comment) caught this shape transparently too,
++     * for the same reason: this function's OWN result has a real heap
++     * pointer in that slot. Self-registering the output here closes the
++     * gap generally (any object this function either recognizes as input
++     * OR produces as output becomes a valid future lookup key), rather
++     * than patching each new call shape as it's discovered. */
++    mp6_animCacheAdd(anim, anim);
+     return anim;
+ }
+ 
+@@ -418,6 +720,7 @@ void HuSprAnimKill(ANIMDATA *anim)
+                 HuMemDirectFree(anim->bmp->palData);
+             }
+         }
++        mp6_animCacheRemove(anim); /* MP6 native port -- M3 ; see mp6_animCacheRemove's own comment. */
+         HuMemDirectFree(anim);
+     }
+ }
+@@ -683,16 +986,38 @@ ANIMDATA *HuSprAnimMake(s16 sizeX, s16 sizeY, s16 dataFmt)
+     anim = newAnim = HuMemDirectMalloc(HEAP_MODEL, sizeof(ANIMDATA)+sizeof(ANIMBANK)+sizeof(ANIMFRAME)
+                                             +sizeof(ANIMPAT)+sizeof(ANIMLAYER)+sizeof(ANIMBMP));
+ 
++    /* MP6 native port -- . Same fix SHAPE as this
++     * file's own HuSprAnimRead relayout above :
++     * ANIMBANK/ANIMPAT/ANIMBMP each embed a real pointer field, so their
++     * native sizeof() is guaranteed a multiple of 8 (the C standard ties a
++     * struct's size to its own alignment, and an 8-byte pointer member
++     * forces 8-byte alignment) -- laying all THREE of them out back-to-
++     * back keeps every cursor position 8-aligned by construction.
++     * ANIMFRAME/ANIMLAYER have no pointer fields at all (2-byte alignment
++     * only) and go LAST, where laxer alignment can't break anything
++     * (nothing else is carved out after them). The ORIGINAL code
++     * positionally interleaved ANIMDATA/ANIMBANK/ANIMFRAME/ANIMPAT/
++     * ANIMLAYER/ANIMBMP (one of each, immediately following) -- harmless
++     * on the 32-bit original (every one of these structs is a multiple of
++     * 4 bytes there, and nothing ever needs more than 4-byte alignment),
++     * but ANIMFRAME sitting between two pointer-bearing structs breaks
++     * 8-byte alignment here -- caught directly: a real "misaligned
++     * address ... for type 'ANIMPAT', which requires 8 byte alignment"
++     * crash, not a guess, the first time OpeningCreate() (the boot flow's
++     * own frame-buffer-copy sprite, downstream of the M2c HSF stub
++     * finally letting BootTitleCreate() return) called this function.
++     * Total allocation size is unchanged -- same 6 sizeof()s summed, just
++     * carved out in a different order. */
+     bank = temp = &newAnim[1];
+     anim->bank = bank;
+-    frame = temp = ((char *)temp+sizeof(ANIMBANK));
+-    bank->frame = frame;
+-    pat = temp = ((char *)temp+sizeof(ANIMFRAME));
++    pat = temp = ((char *)temp+sizeof(ANIMBANK));
+     anim->pat = pat;
+-    layer = temp = ((char *)temp+sizeof(ANIMPAT));
+-    pat->layer = layer;
+-    bmp = temp = ((char *)temp+sizeof(ANIMLAYER));
++    bmp = temp = ((char *)temp+sizeof(ANIMPAT));
+     anim->bmp = bmp;
++    frame = temp = ((char *)temp+sizeof(ANIMBMP));
++    bank->frame = frame;
++    layer = temp = ((char *)temp+sizeof(ANIMFRAME));
++    pat->layer = layer;
+     anim->useNum = 0;
+     anim->bankNum = 1;
+     anim->patNum = 1;
+@@ -729,6 +1054,36 @@ ANIMDATA *HuSprAnimMake(s16 sizeX, s16 sizeY, s16 dataFmt)
+     bmp->dataSize = sizeX*sizeY*bitSizeTbl[dataFmt]/8;
+     bmp->palData = NULL;
+     bmp->data = NULL;
++
++    /* MP6 native port -- M3 . HuSprAnimRead's own
++     * "already fixed up, just bump the refcount" fast path (this same
++     * patch queue, above) is a cache keyed by exact pointer identity --
++     * added to replace real hardware's own check (`(u32)anim->bank &
++     * 0xFFFF0000`, true for any real heap pointer, false for a small
++     * packed-file offset) once this port's fixed-up data stopped living at
++     * its packed source's own address. That replacement covers "the same
++     * packed blob passed to HuSprAnimRead twice" but NOT this function's
++     * own output being handed to HuSprAnimRead: game/hsfanim.c's
++     * Hu3DAnimCreate does exactly that (`texAnimP->anim =
++     * HuSprAnimRead(dataP)` where `dataP` is a HuSprAnimMake() result, not
++     * raw packed bytes -- REL/bootDll/opening.c's own BookFrameBufAnim[0/1]
++     * is the concrete call site) -- real hardware's own high-bit check
++     * caught this transparently too (a fresh HuMemDirectMalloc'd pointer's
++     * high bits are always set on real GC RAM), so this is the same class
++     * of "replacement heuristic doesn't cover a case the original one
++     * happened to also cover" gap, not a new bug in this function itself.
++     * Confirmed by direct crash evidence: unreachable before M3 (nothing
++     * upstream of Hu3DAnimCreate ever found a real bitmap-name match while
++     * every model's own object/attribute list was still the M2-era HSF
++     * stub's intentionally-empty one), and reproduced directly once real
++     * HSF attribute data let that lookup succeed for the first time --
++     * HuSprAnimRead's cache-miss path then misread this native ANIMDATA's
++     * own bytes as a packed BE header, computing garbage offsets and
++     * eventually dereferencing an invalid pointer. Self-registering here
++     * (this function's own freshly-built object, keyed by its own
++     * identity) closes the gap the same way the original hardware's check
++     * did, with no change to HuSprAnimRead itself. */
++    mp6_animCacheAdd(anim, anim);
+     return anim;
+ }
+ 

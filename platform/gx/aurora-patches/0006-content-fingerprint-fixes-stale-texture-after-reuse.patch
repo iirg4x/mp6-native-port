@@ -1,0 +1,106 @@
+Depends on patch 0005 (apply that one first) -- this diff is against the
+post-0005 state of the file, matching the actual chronological order these
+two patches were authored and applied in this checkout.
+
+diff --git a/lib/dolphin/gx/GXTexture.cpp b/lib/dolphin/gx/GXTexture.cpp
+--- a/lib/dolphin/gx/GXTexture.cpp
++++ b/lib/dolphin/gx/GXTexture.cpp
+@@ -1,10 +1,12 @@
+ #include "gx.hpp"
+ #include "__gx.h"
+
++#include "../../gfx/common.hpp" // aurora::xxh3_hash_s -- mp6-port patch 0006, see mp6_content_fingerprint below
+ #include "../../gfx/texture.hpp"
+ #include "dolphin/gx/GXAurora.h"
+
+ #include <algorithm>
++#include <cstring>
+
+ #include "tracy/Tracy.hpp"
+
+@@ -70,6 +72,58 @@
+   return id ? id : 1u;
+ }
+
++/* mp6-port patch 0006 (staleness fix, follows patch 0005 above): patch
++ * 0005 made texObjId stable by IDENTITY (data pointer + dims + format +
++ * wrap) so per-frame re-inits of the SAME underlying data cache-hit
++ * instead of leaking a new entry every frame -- but texDataVersion was
++ * left a constant 1 at init time (below), compared for equality in
++ * gx.cpp's resolve_static_texture()/resolve_static_palette_texture()
++ * cache lookups. If a DIFFERENT texture's data later lands at the SAME
++ * heap address with the SAME dimensions/format/wrap (routine across a
++ * scene transition: free scene A's texture buffer, allocate scene B's --
++ * same allocator, same size class, same address), the identity hash
++ * collides AND texDataVersion still reads as "1 == 1", so the cache
++ * serves scene A's stale converted texture under scene B's new content.
++ * Reported symptom: correct textures during a scene, wrong/missing ones
++ * right after a transition (e.g. opening -> title, HEAP_MODEL reused).
++ *
++ * Fix: make texDataVersion (and tlutDataVersion, GXInitTlutObj below) a
++ * cheap CONTENT fingerprint taken at init time, so unchanged content
++ * still cache-hits (same bytes -> same fingerprint -- the whole point of
++ * patch 0005 stays intact) but different content at a reused address
++ * correctly busts the cache. Bounded, constant cost regardless of the
++ * texture's real size -- this runs on EVERY GXInitTexObj/GXInitTlutObj
++ * call (i.e. every frame, per patch 0005's own comment above), so it
++ * deliberately does NOT hash the whole buffer (see the existing, much
++ * more expensive full-buffer XXH64 in gfx/texture_replacement.cpp's
++ * compute_referenced_tlut_hash/find_replacement -- that one is fine
++ * because it only runs on an actual cache miss, not every init): just
++ * the first 64 + last 64 bytes (or the whole thing, contiguously, when
++ * byteSize <= 128) plus the byte count, through the same xxh3 helper
++ * already used throughout this codebase for pipeline/bind-group cache
++ * keys (gfx/common.hpp's xxh3_hash_s). id/version 0 stays reserved
++ * ("uncached"/mismatch-by-construction) as before. */
++static u32 mp6_content_fingerprint(const void* data, u32 byteSize) {
++  if (data == nullptr || byteSize == 0 || (uintptr_t)data < 0x10000) {
++    return 1u; // no real data yet -- stable, distinct from 0 ("uncached")
++  }
++  const auto* p = static_cast<const u8*>(data);
++  u8 scratch[136];
++  u32 n = 0;
++  const u32 headLen = std::min<u32>(byteSize, 64);
++  memcpy(scratch + n, p, headLen);
++  n += headLen;
++  if (byteSize > headLen) {
++    const u32 tailLen = std::min<u32>(byteSize - headLen, 64);
++    memcpy(scratch + n, p + (byteSize - tailLen), tailLen);
++    n += tailLen;
++  }
++  memcpy(scratch + n, &byteSize, sizeof(byteSize));
++  n += sizeof(byteSize);
++  const u32 h = static_cast<u32>(aurora::xxh3_hash_s(scratch, n));
++  return h ? h : 1u;
++}
++
+ void init_texobj_common(GXTexObj_& obj, const void* data, u16 width, u16 height, u32 format, GXTexWrapMode wrapS,
+                         GXTexWrapMode wrapT, GXBool mipmap) {
+   obj = {};
+@@ -79,7 +133,12 @@
+   obj.tlut = GX_TLUT0;
+   obj.flags = 2;
+   obj.texObjId = mp6_stable_obj_id(data, ((u32)width << 16) | height, format, (u32)wrapS ^ ((u32)wrapT << 4) ^ ((u32)mipmap << 8));
+-  obj.texDataVersion = 1;
++  // mp6-port patch 0006: content fingerprint, not a constant -- see the comment above
++  // mp6_content_fingerprint. Base-level (no-mips) size is enough to distinguish real
++  // content differences; matches the existing texture_base_level_size()/
++  // GXGetTexBufferSize(..., false, 0) idiom already used elsewhere in this codebase
++  // (gfx/texture_replacement.cpp) for "the size of the buffer at obj.data".
++  obj.texDataVersion = mp6_content_fingerprint(data, GXGetTexBufferSize(width, height, format, GX_FALSE, 0));
+
+   SET_REG_FIELD(0, obj.mode0, 2, 0, wrapS);
+   SET_REG_FIELD(0, obj.mode0, 2, 2, wrapT);
+@@ -335,7 +394,11 @@
+   obj->format = format;
+   obj->numEntries = entries;
+   obj->tlutObjId = mp6_stable_obj_id(data, entries, (u32)format, 0x7107u);
+-  obj->tlutDataVersion = 1;
++  // mp6-port patch 0006: content fingerprint, not a constant -- same staleness fix as
++  // init_texobj_common above, "same for tlut". Buffer size matches the existing
++  // tlut_bytes()/get_tlut_texture() idiom already used elsewhere in this file/codebase:
++  // numEntries 16-bit TLUT entries.
++  obj->tlutDataVersion = mp6_content_fingerprint(data, (u32)entries * sizeof(u16));
+
+   SET_REG_FIELD(0, obj->tlut, 2, 10, format);
+   SET_REG_FIELD(0, obj->loadTlut0, 8, 24, 0x64);

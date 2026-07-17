@@ -1,0 +1,74 @@
+Patch: aurora include/dolphin/ppc_math.h -- frsqrte's exponent-bias constant
+       needs an unsigned shift, not a signed one.
+Applies to: Aurora repo itself (external_refs/repos/aurora), commit 1dde08f.
+Tracked file, edited directly (not a FetchContent dependency).
+This is the second of two real, load-bearing Aurora-side bugs found while
+diagnosing why a byte-correct sprite draw still produced a solid-black
+window (the first was patch #3's unaligned load, in this same directory).
+
+Why:
+Once the game's own big-endian data was fixed to be byte-correct
+and Aurora's own MTX/VEC library was linked in for the first time (a
+separate finding, not part of this patch), the very first real light-
+direction vector normalize (`Hu3DGLightCreate` -> `HuNormVecF` ->
+`PSVECNormalize`) crashed the whole process:
+
+    thread NNNN panic: left shift of 3068 by 52 places cannot be
+    represented in type 'long long'
+      include/dolphin/ppc_math.h:120 in frsqrte
+      lib/dolphin/mtx/vec.c:57 in PSVECNormalize
+
+Root cause: `frsqrte()`'s exponent-bias constant is declared with a
+SIGNED 64-bit literal suffix:
+
+    new_exp = ((uint64_t)((0xbfcLL << EXPONENT_SHIFT_F64) - exponent) >> 1)
+               & EXPONENT_MASK_F64;
+
+`0xbfc` is 3068 decimal; `EXPONENT_SHIFT_F64` is 52. `3068 << 52`
+(~1.38e19) exceeds `INT64_MAX` (~9.22e18) -- the shift's mathematical
+result cannot be represented in `int64_t` at all, which is undefined
+behavior per the C standard REGARDLESS of the actual runtime value of
+`exponent` (i.e. this fires for every single call, not just an edge
+case -- confirmed: it crashed on `PSVECNormalize({0,0,1})`, about as
+ordinary an input as exists). Plain clang/gcc (and, presumably, the
+original MSVC build this header was written against) silently wrap this
+to a two's-complement bit pattern and move on; zig cc's runtime UB
+instrumentation traps it instead, the same category of "latent portability
+landmine only zig's stricter runtime catches" as this directory's existing
+patch #3 (`command_processor.cpp`'s unaligned load). Every OTHER 64-bit
+mask/shift constant in this exact file (`MANTISSA_MASK_F64`,
+`EXPONENT_MASK_F64`, `SIGN_MASK_F64`, every entry in `RSQRTE_TABLE`) is
+already correctly `ULL`-suffixed -- this one constant is the sole,
+clearly-accidental inconsistency.
+
+Fix: change the one literal's suffix from `LL` (signed) to `ULL`
+(unsigned). `uint64_t - int64_t` already promotes the signed operand to
+unsigned per the usual arithmetic conversions (so the subtraction itself
+was never the problem), and unsigned overflow is well-defined modular
+wraparound in C -- producing the exact same bit pattern plain clang/gcc's
+"silent" signed-overflow handling already gave in practice, just without
+triggering the UB classification zig's runtime traps. The result is
+masked with `& EXPONENT_MASK_F64` immediately afterward regardless, so
+only the low bits ever mattered to begin with.
+
+--- a/include/dolphin/ppc_math.h
++++ b/include/dolphin/ppc_math.h
+@@ -117,7 +117,7 @@ static inline double frsqrte(double val) {
+   }
+
+   key = (uint32_t)(((uint64_t)exponent | mantissa) >> 37);
+-  new_exp = ((uint64_t)((0xbfcLL << EXPONENT_SHIFT_F64) - exponent) >> 1) & EXPONENT_MASK_F64;
++  new_exp = ((uint64_t)((0xbfcULL << EXPONENT_SHIFT_F64) - exponent) >> 1) & EXPONENT_MASK_F64;
+
+   entry = &RSQRTE_TABLE[0x1fu & (key >> 11)];
+   result.u = new_exp | (uint64_t)(entry->base + entry->dec * (int64_t)(key & 0x7ffu));
+
+Verified: after this change, PSVECNormalize/frsqrte no longer panics for
+any input exercised during boot (light-direction normalize, camera-basis
+normalize, sprite-group rotation axis normalize all confirmed working via
+direct instrumentation), and produces numerically correct results
+(spot-checked: frsqrte(1.0) round-trips to a rsqrt of 1.0 after Newton-
+Raphson refinement, matching plain 1/sqrt(1.0)).
+
+Rebuild after applying: `cmake --build aurora/build --target aurora_mtx`
+(the only target whose sources include this header).

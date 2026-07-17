@@ -1,0 +1,93 @@
+Patch: aurora lib/webgpu/gpu.cpp -- skip dawn::native::DawnInstanceDescriptor on MinGW-ABI compilers
+Applies to: Aurora repo itself (external_refs/repos/aurora), commit 1dde08f.
+Tracked file, edited directly (not a FetchContent dependency).
+
+Why:
+With AURORA_DAWN_PROVIDER=package (the Windows default -- see
+cmake/AuroraDawnProvider.cmake), Dawn is consumed as encounter/dawn's
+prebuilt `dawn-windows-amd64.tar.gz` release asset. That package is built
+with the Microsoft C++ ABI (only one Windows/amd64 variant is published;
+there is no MinGW-ABI counterpart -- checked via
+`gh release view <tag> --repo encounter/dawn --json assets`).
+
+aurora_core built and linked completely clean under zig cc
+(x86_64-windows-gnu) *except* for one call site, `initialize()` in
+lib/webgpu/gpu.cpp:
+
+    #ifdef WEBGPU_DAWN
+    dawn::native::DawnInstanceDescriptor dawnInstanceDescriptor;
+    dawnInstanceDescriptor.backendValidationLevel = dawn::native::BackendValidationLevel::Disabled;
+    dawnInstanceDescriptor.SetLoggingCallback(wgpu_log);
+    ...
+    instanceDescriptor.nextInChain = &dawnInstanceDescriptor;
+    #endif
+
+`dawn::native::DawnInstanceDescriptor` is Dawn's C++ "native" extension API
+(dawn/native/DawnNative.h) -- a real C++ class compiled into
+webgpu_dawn.dll/lib with MSVC name mangling and class layout. A MinGW-ABI
+compiler (Itanium mangling/layout, incl. zig cc's x86_64-windows-gnu
+target) cannot link against it. Confirmed by direct build attempt:
+
+    lld-link: error: undefined symbol: dawn::native::DawnInstanceDescriptor::DawnInstanceDescriptor()
+    >>> referenced by lib/webgpu/gpu.cpp:764
+    >>>               libaurora_core.a(gpu.cpp.obj):(aurora::webgpu::initialize(AuroraBackend, bool))
+
+This is the *only* dawn::native (C++ native-extension) usage anywhere in
+Aurora's lib/ tree (grepped). Everywhere else, gpu.cpp uses Dawn's plain
+`wgpu::`-namespaced C++ wrapper (webgpu_cpp.h), which is a header-only
+inline forwarder to the `extern "C"` WebGPU C API (wgpuCreateInstance,
+etc.) -- those symbols are undecorated/ABI-neutral at the x64 Windows
+calling-convention level and link fine from either MSVC or MinGW-ABI code
+against the same prebuilt DLL, as proven by the rest of aurora_core/gx
+linking without any other undefined-symbol errors.
+
+Fix: skip the whole dawn::native::DawnInstanceDescriptor block (and its
+`#include <dawn/native/DawnNative.h>`) when `__MINGW32__` is defined. This
+only loses Dawn's default backend-validation-level override and Aurora's
+custom Dawn-internal logging-callback hookup (Tracy's dawn platform hookup
+is unaffected either way -- it's already separately gated on
+TRACY_ENABLE, which defaults OFF). wgpu::CreateInstance and everything
+else in initialize() is untouched and still runs.
+
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -21,7 +21,9 @@
+ #ifdef WEBGPU_DAWN
+ #include "../dawn/BackendBinding.hpp"
+ #include "../dawn/TracyPlatform.hpp"
+-#include <dawn/native/DawnNative.h>
++#ifndef __MINGW32__
++#include <dawn/native/DawnNative.h>
++#endif
+ #endif
+
+@@ -760,7 +762,16 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+         wgpu::InstanceFeatureName::TimedWaitAny,
+     };
+     wgpu::InstanceDescriptor instanceDescriptor{...};
+-#ifdef WEBGPU_DAWN
++#if defined(WEBGPU_DAWN) && !defined(__MINGW32__)
++    // dawn::native::DawnInstanceDescriptor is Dawn's C++ "native" extension API
++    // (dawn/native/DawnNative.h), compiled into the prebuilt webgpu_dawn.dll/lib
++    // with the Microsoft C++ ABI. A MinGW-ABI compiler (incl. zig cc's
++    // x86_64-windows-gnu target) mangles/lays out these C++ symbols differently
++    // and cannot link against them -- confirmed via direct build attempt
++    // (lld-link: undefined symbol dawn::native::DawnInstanceDescriptor::
++    // DawnInstanceDescriptor()). Skipping this block only loses Dawn's default
++    // backend-validation level override and Aurora's custom Dawn-internal
++    // logging callback hookup; wgpu::CreateInstance and the rest of the WebGPU
++    // C API below are extern "C" and link fine regardless of ABI.
+     dawn::native::DawnInstanceDescriptor dawnInstanceDescriptor;
+     dawnInstanceDescriptor.backendValidationLevel = dawn::native::BackendValidationLevel::Disabled;
+     dawnInstanceDescriptor.SetLoggingCallback(wgpu_log);
+@@ -771,3 +782,3 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+     instanceDescriptor.nextInChain = &dawnInstanceDescriptor;
+ #endif
+
+Verified: after this change, `aurora_core`/`aurora_gx` and the `simple`
+example link completely under zig cc (x86_64-windows-gnu) with
+AURORA_DAWN_PROVIDER=package, and the resulting executable runs (see
+0003-command-processor-unaligned-load-void-ptr.patch for the next --
+separate -- issue this uncovered at runtime). MSVC builds are unaffected
+(__MINGW32__ is never defined there), confirmed by rebuilding and rerunning
+the build-msvc tree after this patch.

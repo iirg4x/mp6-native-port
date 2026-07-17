@@ -1,0 +1,107 @@
+--- a/src/game/saveload.c
++++ b/src/game/saveload.c
+@@ -14,6 +14,16 @@
+ #include "game/memory.h"
+ #include "game/sprite.h"
+ 
++/* MP6 native port: the save-box payload is the CONSOLE (big-endian, MWCC
++ * MSB-first-bitfield) byte image of GW_COMMON/GW_SYSTEM/GW_PLAYER -- kept
++ * byte-true so cards keep interchanging with Dolphin. The six struct<->
++ * saveBuf memcpy boundaries below marshal field-wise through platform/os/
++ * save_endian.c instead (see shim/include/mp6_save_endian.h for the whole
++ * design). Load side converts AFTER the box bytes are located (buffer
++ * stays BE); save side composes the BE image directly into the buffer
++ * (the card image never holds a native-endian word). */
++#include "mp6_save_endian.h"
++
+ #define SAVE_BOX_COMMON_OFS 0
+ #define SAVE_BOX_BOARD_SYSTEM_OFS (sizeof(GW_COMMON))
+ #define SAVE_BOX_BOARD_PLAYER_OFS (SAVE_BOX_BOARD_SYSTEM_OFS+sizeof(GW_SYSTEM))
+@@ -385,7 +395,9 @@
+     GW_COMMON *backupP;
+     GwCommon.time = time;
+     memcpy(&GwCommon.magic[0], "SAVE", 4);
+-    memcpy(&saveBuf[curSlotNo][boxOfs+SAVE_BOX_COMMON_OFS], &GwCommon, sizeof(GW_COMMON));
++    /* MP6 native port: compose the box's BE GW_COMMON image field-wise (was
++     * a raw memcpy of the little-endian native struct). */
++    mp6_save_common_to_be(&saveBuf[curSlotNo][boxOfs+SAVE_BOX_COMMON_OFS], &GwCommon);
+     SLSaveDataInfoSet(curSlotNo, &time);
+     commonBackup = GwCommon;
+     backupP = &commonBackup;
+@@ -395,16 +407,19 @@
+ void SLCommonSaveCopy(GW_COMMON *commonP, s16 slotNo, s16 boxNo)
+ {
+     u32 boxOfs = boxDataOfs[boxNo];
+-    memcpy(&saveBuf[slotNo][boxOfs+SAVE_BOX_COMMON_OFS], commonP, sizeof(GW_COMMON));
++    /* MP6 native port: BE compose, same as SLCommonSet. */
++    mp6_save_common_to_be(&saveBuf[slotNo][boxOfs+SAVE_BOX_COMMON_OFS], commonP);
+ }
+ 
+ void SLBoardSave(void)
+ {
+     u32 boxOfs = boxDataOfs[curBoxNo];
+     s16 i;
+-    memcpy(&saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_SYSTEM_OFS], &GwSystem, sizeof(GW_SYSTEM));
++    /* MP6 native port: BE compose for the box's board section too (same
++     * boundary as SLCommonSet; GW_SYSTEM then GW_PLAYER[GW_PLAYER_MAX]). */
++    mp6_save_system_to_be(&saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_SYSTEM_OFS], &GwSystem);
+     for(i=0; i<GW_PLAYER_MAX; i++) {
+-        memcpy(&saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_PLAYER_OFS+(i*sizeof(GW_PLAYER))], &GwPlayer[i], sizeof(GW_PLAYER));
++        mp6_save_player_to_be(&saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_PLAYER_OFS+(i*sizeof(GW_PLAYER))], &GwPlayer[i]);
+     }
+ }
+ 
+@@ -520,7 +535,11 @@
+     u32 boxOfs = boxDataOfs[curBoxNo];
+     GW_COMMON commonBackup;
+     GW_COMMON *backupP;
+-    memcpy(&GwCommon, &saveBuf[curSlotNo][boxOfs+SAVE_BOX_COMMON_OFS], sizeof(GW_COMMON));
++    /* MP6 native port: box bytes are console big-endian -- unmarshal
++     * field-wise into the native struct (was a raw memcpy, which left every
++     * multi-byte field byte-swapped: the "x9999 stars / 01/00/0000 date"
++     * file-select tags). */
++    mp6_save_common_from_be(&GwCommon, &saveBuf[curSlotNo][boxOfs+SAVE_BOX_COMMON_OFS]);
+     commonBackup = GwCommon;
+     backupP = &commonBackup;
+     memcpy(&SLGwCommonBackup, backupP, sizeof(GW_COMMON));
+@@ -529,16 +548,19 @@
+ void SLCommonLoadCopy(GW_COMMON *commonP, s16 slotNo, s16 boxNo)
+ {
+     u32 boxOfs = boxDataOfs[boxNo];
+-    memcpy(commonP, &saveBuf[slotNo][boxOfs+SAVE_BOX_COMMON_OFS], sizeof(GW_COMMON));
++    /* MP6 native port: BE unmarshal, same as SLCommonLoad. */
++    mp6_save_common_from_be(commonP, &saveBuf[slotNo][boxOfs+SAVE_BOX_COMMON_OFS]);
+ }
+ 
+ void SLBoardLoad(void)
+ {
+     u32 boxOfs = boxDataOfs[curBoxNo];
+     s16 i;
+-    memcpy(&GwSystem, &saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_SYSTEM_OFS], sizeof(GW_SYSTEM));
++    /* MP6 native port: BE unmarshal for the board section, mirroring
++     * SLBoardSave. */
++    mp6_save_system_from_be(&GwSystem, &saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_SYSTEM_OFS]);
+     for(i=0; i<GW_PLAYER_MAX; i++) {
+-        memcpy(&GwPlayer[i], &saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_PLAYER_OFS+(i*sizeof(GW_PLAYER))], sizeof(GW_PLAYER));
++        mp6_save_player_from_be(&GwPlayer[i], &saveBuf[curSlotNo][boxOfs+SAVE_BOX_BOARD_PLAYER_OFS+(i*sizeof(GW_PLAYER))]);
+         GwPlayerConf[i].charNo = GwPlayer[i].charNo;
+         GwPlayerConf[i].padNo = GwPlayer[i].padNo;
+         GwPlayerConf[i].comDif = GwPlayer[i].comDif;
+@@ -573,9 +595,15 @@
+ BOOL SLCheckSumBoxSlotCheck(s16 slotNo, s16 boxNo)
+ {
+     u32 boxOfs = boxDataOfs[boxNo];
+-    u16 *checkSumBuf = (u16 *)&saveBuf[slotNo][boxOfs+SAVE_BOX_SIZE-2];
++    /* MP6 native port: the stored checksum is two BIG-ENDIAN bytes --
++     * SLCheckSumBoxSet writes (sum>>8) then (sum&0xFF) byte-wise, and the
++     * byte-wise sum itself is endian-neutral. Only this u16 LOAD was
++     * endian-sensitive: on GC it read the two bytes big-endian and
++     * matched; natively it byte-swapped and flagged every console/Dolphin
++     * save box "Broken" ("Data 1 is corrupted"). Compose explicitly. */
++    u8 *checkSumBuf = &saveBuf[slotNo][boxOfs+SAVE_BOX_SIZE-2];
+     u16 checkSum = SLCheckSumSlotGet(slotNo, boxOfs, SAVE_BOX_SIZE-2);
+-    if(*checkSumBuf == checkSum) {
++    if((u16)((checkSumBuf[0] << 8) | checkSumBuf[1]) == checkSum) {
+         return TRUE;
+     } else {
+         return FALSE;

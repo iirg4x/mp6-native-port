@@ -1,0 +1,121 @@
+--- a/src/REL/fileseldll/filesel.c
++++ b/src/REL/fileseldll/filesel.c
+@@ -456,9 +456,35 @@
+     Hu3DCameraLayerHookSet(2, 0, (HU3D_LAYER_HOOK)fn_1_C8C);
+     omAddObjEx(lbl_1_bss_340, 0x1000, 0x10, 0x10, -1, fn_1_8688);
+ 
++
++    /* MP6 native port: lbl_1_data_E8 is the raw big-endian BYTE IMAGE of a
++     * HU3D_PARMAN_PARAM (dtk renders unnameable initialized data as u32
++     * words; on GameCube those word initializers reproduce the original
++     * bytes exactly, but compiled little-endian every field word-swaps --
++     * colorNum read as garbage and ParManFunc's colorStart[frandmod(
++     * colorNum)] indexed with -22183, crashing the save-create flow;
++     * every float in the blob was equally scrambled). Hand-decoded from
++     * the BE stream into a typed native initializer -- values are
++     * semantically coherent (a 50-frame golden save-sparkle: 2 colors,
++     * gold F0E020 / bright yellow fading to transparent amber, gravity
++     * -0.02, size 20 decaying 0.98/frame). The blob itself stays for the
++     * decomp's data-section identity; only this port build reads the
++     * typed twin. Same porting class as any (SomeType*)lbl_N_data_X cast
++     * of compiled word data -- grep for that shape when a first-contact
++     * scene misbehaves. */
++    static HU3D_PARMAN_PARAM fileselSparkleParam = {
++        50, 0,                    /* maxTime, unk2 */
++        1.0f, 10.0f, 0.0f,        /* accelRange, scaleRange, angleRange */
++        { 0.0f, -0.02f, 0.0f },   /* gravity */
++        2.0f, 1.0f,               /* speedBase, speedDecay */
++        20.0f, 0.98f,             /* scaleBase, scaleDecay */
++        2,                        /* colorNum */
++        { {240,224,32,255}, {255,255,64,255}, {0,0,0,0}, {0,0,0,0} },
++        { {192,128,16,0},   {192,64,16,0},   {0,0,0,0}, {0,0,0,0} },
++    };
+     parAnim = HuSprAnimRead(HuDataSelHeapReadNum(0x210000, 0x10000000, 2));
+     for (i = 0; i < 5; i++) {
+-        lbl_1_bss_98[i] = Hu3DParManCreate(parAnim, 0x64, (HU3D_PARMAN_PARAM *)lbl_1_data_E8);
++        lbl_1_bss_98[i] = Hu3DParManCreate(parAnim, 0x64, &fileselSparkleParam);
+         Hu3DParManAttrSet(lbl_1_bss_98[i], 0x64);
+         Hu3DParticleBlendModeSet(Hu3DParManModelIDGet(lbl_1_bss_98[i]), 1);
+         Hu3DParManRotSet(lbl_1_bss_98[i], 90.0f, 0.0f, 0.0f);
+@@ -1055,7 +1081,24 @@
+         Hu3DAnimCreate(p->unk_58, p->unk_A, lbl_1_data_1BB);
+         p->unk_7C = HuPrcChildCreate(fn_1_3D14, 0x10, 0x3000, 0, HuPrcCurrentGet());
+         obj = Hu3DModelObjPtrGet(p->unk_8, lbl_1_data_1C8);
+-        strcpy(obj->name, lbl_1_data_190[i]);
++        /* MP6 native port -- . Under this port's HSF
++         * stub (patches/decomp/src/game/hsfload.c.patch), every loaded model
++         * has objectNum==0, so Hu3DModelObjPtrGet's by-name lookup can never
++         * succeed -- it OSReports "OBJPtr Error! siori_fix-itemhook_a" and
++         * returns NULL (its own existing not-found contract, unchanged). The
++         * original code strcpy's through that pointer unconditionally because
++         * on real hardware the real model ALWAYS contains this object -- the
++         * NULL branch is unreachable there. Natively it's a guaranteed access
++         * violation (write through NULL), and an OS-level one, so zig's
++         * runtime UB checker prints NO panic trace -- confirmed as this exact
++         * crash by the log ending at hsfman.c's own OBJPtr OSReport line,
++         * reproduced twice. Skipping the rename when the object doesn't exist
++         * is semantically exact: the rename's only purpose is to retarget
++         * which sub-object later per-slot logic finds by name, and with zero
++         * objects there is nothing to find either way. */
++        if (obj != NULL) {
++            strcpy(obj->name, lbl_1_data_190[i]);
++        }
+         p->unk_C = Hu3DModelCreate(HuDataSelHeapReadNum(0x23001A, 0x10000000, 2));
+         Hu3DModelCameraSet(p->unk_C, 2);
+         Hu3DModelLayerSet(p->unk_C, 2);
+@@ -2107,7 +2150,33 @@
+     GXTexObj texObj;
+     f32 transS;
+ 
+-    q = arg->unk_00->unk_120;
++    /* MP6 native port -- . `F7E58_Arg`/`F7E58_P` (this
++     * file's own hand-reconstructed "arg-chain views", see their definition
++     * comment near the top of this file) hardcode BYTE OFFSETS (0x00/0x0C/
++     * 0x120) reverse-engineered from the ORIGINAL 32-bit GameCube binary's
++     * disassembly, where every pointer field is 4 bytes. This port compiles
++     * HU3D_DRAW_OBJ/HU3D_MODEL (game/hu3d.h, completely unmodified) natively
++     * at 64-bit pointer width, so any field declared AFTER an earlier
++     * pointer field in either struct sits at a DIFFERENT real offset than
++     * these hardcoded 32-bit-derived constants assume -- `unk_120` in
++     * particular no longer lands on HU3D_MODEL's real `hookData` field.
++     * Confirmed with direct evidence (a temporary diagnostic, since removed):
++     * `arg`/`arg->unk_00` (the model pointer) were both sane, live arena
++     * pointers, but the raw 8 bytes read from the hardcoded `unk_120` offset
++     * were `0x3F80000000000000` -- the IEEE-754 bit pattern for 1.0f sitting
++     * in the UPPER 32 bits, i.e. some unrelated float field very close to
++     * (but not at) the real hookData offset (Hu3DModelCreate initializes
++     * several fields to exactly 1.0f right around there: scale.x/y/z,
++     * ambR/G/B) -- not a null/freed pointer, a plain struct-offset
++     * miscalculation, then dereferenced as if it were one, reliably
++     * reachable via a single, realistically-paced press dismissing file-
++     * select's no-card warning (not an aggressive-input artifact). Fixed by
++     * going through the REAL typed fields instead of the hardcoded offsets
++     * -- `arg` always was a `HU3D_DRAW_OBJ*` (confirmed: matches `HU3D_MAT_
++     * HOOK`'s own real typedef, game/hu3d.h), so the compiler computes the
++     * correct offset for THIS build automatically, exactly as fn_1_8688's
++     * own `mdl->hookData = &lbl_1_bss_18[i];` write already does. */
++    q = (F7E58_Q *)((HU3D_DRAW_OBJ *)arg)->model->hookData;
+     q->unk_1c = q->unk_1c + q->unk_20;
+ 
+     GXInitTexObj(&texObj, lbl_1_bss_C, 0x280, 0x1e0, 4, 0, 0, 0);
+@@ -2121,7 +2190,10 @@
+     transS = ((f32)cam->scissorX + (f32)cam->scissorW / 2.0f) / 640.0f;
+     C_MTXLightPerspective(lightMtx, cam->fov, 1.2f, 0.5f, -0.5f, transS, 0.5f);
+     PSMTXInverse(Hu3DCameraMtx, invMtx);
+-    PSMTXConcat(invMtx, arg->unk_0c, tmpMtx);
++    /* MP6 native port -- same 32-bit-offset issue as `q` above; `unk_0c`
++     * (HU3D_DRAW_OBJ.matrix) sits after 2 pointer fields (model/object), so
++     * it shifts too. Same fix: go through the real, compiler-computed field. */
++    PSMTXConcat(invMtx, ((HU3D_DRAW_OBJ *)arg)->matrix, tmpMtx);
+     PSMTXConcat(lightMtx, Hu3DCameraMtx, texMtx);
+     PSMTXConcat(texMtx, tmpMtx, texMtx);
+     GXLoadTexMtxImm(texMtx, 0x21, 0);
+@@ -2305,7 +2377,7 @@
+ char lbl_1_data_1F3[0xA] = "%f,%f,%f\n";
+ char lbl_1_data_1FD[0x17] = "siori_fix02-siori_waku";
+ 
+-/* ==================== module .bss (head, REVERSE definition order — exact sizes) ==================== */
++/* ==================== module .bss (head, REVERSE definition order ï¿½ exact sizes) ==================== */
+ OMOBJ *lbl_1_bss_344;
+ OMOBJMAN *lbl_1_bss_340;
+ static u8 filesel_bss_pad_338[8]; /* 2E4 tail pad -> 2E4 size 0x5C, 340 @ 0x340 */

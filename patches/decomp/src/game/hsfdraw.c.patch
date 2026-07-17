@@ -1,0 +1,423 @@
+--- a/src/game/hsfdraw.c
++++ b/src/game/hsfdraw.c
+@@ -24,6 +24,60 @@ static inline float acosf(float x) { return (float)acos((double)x); }
+ 
+ #define MTXBUF_MAX 96
+ 
++/* MP6 native port -- M11 : object-level draw
++ * census, the per-OBJECT companion to hsfman.c's per-MODEL one (that
++ * patch's MP6_DRAW_CENSUS explains what the Hu3DExec loop decided; this
++ * one, behind its own MP6_DRAW_CENSUS_OBJ=<tick>, explains what happened
++ * INSIDE each Hu3DDraw tree walk: which objects were visited, which were
++ * skipped by LOCK/DISPOFF-flags/zero-scale, which deferred to the
++ * z-sorted XLU list, and which reached ObjDraw). Same two-tick window
++ * semantics as the hsfman census; zero output and one cached getenv when
++ * unset. PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++#include <stdio.h>
++#include <stdlib.h>
++extern long mp6_tick_count;
++static long mp6ObjCensusTick = -2; /* -2 = env not parsed yet, -1 = disabled */
++static int mp6ObjCensusActive(void)
++{
++    if (mp6ObjCensusTick == -2) {
++        const char *e = getenv("MP6_DRAW_CENSUS_OBJ");
++        mp6ObjCensusTick = (e && atol(e) > 0) ? atol(e) : -1;
++    }
++    return mp6ObjCensusTick > 0 && mp6_tick_count >= mp6ObjCensusTick &&
++           mp6_tick_count < mp6ObjCensusTick + 2;
++}
++
++/* MP6 native port -- M13 : display-list /
++ * vertex ground-truth dump. The mode-select/file-select "vertices all over
++ * the place" hunt needs the actual bytes, not more theories: for the one
++ * object named by MP6_DL_DUMP=<name> this dumps, at DL-BUILD time
++ * (MDObjMesh, i.e. model-create), to build/dldump_<name>.txt:
++ *   - the parsed face records (type/mat/index tuples) the DL was built from,
++ *   - the vertex/st array contents summary (count, first entries, min/max
++ *     magnitude, out-of-range-index scan over every face tuple),
++ *   - the referenced materials' vtxMode/attrNum/flags (the vertex-descriptor
++ *     selectors), and
++ *   - the raw built DL bytes (first 1 KB hex) + per-batch dlOfs table.
++ * Decoding those bytes against the descriptor the draw path will set is a
++ * mechanical, offline check of stream-vs-descriptor alignment. One getenv,
++ * zero output when unset. PORT-DIAGNOSTIC ONLY: never changes behavior. */
++#include <string.h>
++static int mp6DlDumpParsed = 0;       /* 0 = env not parsed yet */
++static const char *mp6DlDumpName = NULL;
++static const char *mp6DlDumpEnv(void)
++{
++    if (!mp6DlDumpParsed) {
++        mp6DlDumpName = getenv("MP6_DL_DUMP");
++        mp6DlDumpParsed = 1;
++    }
++    return mp6DlDumpName;
++}
++static int mp6DlDumpWant(const char *objName)
++{
++    const char *want = mp6DlDumpEnv();
++    return want && objName && strcmp(want, objName) == 0;
++}
++
+ void HuSprTexLoad(ANIMDATA *anim, s16 bmpNo, s16 texMapId, GXTexWrapMode wrapS, GXTexWrapMode wrapT, GXTexFilter filter);
+ 
+ static void objCall(HU3D_MODEL *modelP, HSF_OBJECT *objPtr);
+@@ -147,6 +201,12 @@ void Hu3DDraw(HU3D_MODEL *modelP, Mtx mtx, HuVecF *scale)
+     s16 i;
+ 
+     hsf = modelP->hsf;
++    if (mp6ObjCensusActive()) { /* M11 object census -- see mp6ObjCensusActive above */
++        printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=%p root=%p rootType=%d objectNum=%d motId=%d\n",
++               (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)hsf, (void *)hsf->root,
++               hsf->root ? hsf->root->type : -1, hsf->objectNum, modelP->motId);
++        fflush(stdout);
++    }
+     if(modelP->attr & HU3D_ATTR_HOOKFUNC) {
+         drawObj = &DrawObjData[DrawObjIdx];
+         PSMTXCopy(mtx, drawObj->matrix);
+@@ -187,6 +247,13 @@ void Hu3DDraw(HU3D_MODEL *modelP, Mtx mtx, HuVecF *scale)
+ static void objCall(HU3D_MODEL *modelP, HSF_OBJECT *objPtr)
+ {
+     modelObjNum++;
++    if (mp6ObjCensusActive()) { /* M11 object census (rot/pos: thread 3's sky-wheel angle) */
++        printf("[CENSUS-OBJ]  objCall type=%d name=%s childNum=%d baseRot=(%.1f,%.1f,%.1f) basePos=(%.1f,%.1f,%.1f) curRot=(%.1f,%.1f,%.1f)\n",
++               objPtr->type, objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum,
++               objPtr->mesh.base.rot.x, objPtr->mesh.base.rot.y, objPtr->mesh.base.rot.z,
++               objPtr->mesh.base.pos.x, objPtr->mesh.base.pos.y, objPtr->mesh.base.pos.z,
++               objPtr->mesh.curr.rot.x, objPtr->mesh.curr.rot.y, objPtr->mesh.curr.rot.z);
++    }
+     switch (objPtr->type) {
+         case HSF_OBJ_MESH:
+             objMesh(modelP, objPtr);
+@@ -254,6 +321,9 @@ static void objMesh(HU3D_MODEL *modelP, HSF_OBJECT *objPtr)
+         transformP = &objPtr->mesh.curr;
+     }
+     constData = objPtr->constData;
++    if (mp6ObjCensusActive() && (constData->attr & HU3D_CONST_LOCK)) { /* M11 object census */
++        printf("[CENSUS-OBJ]  mesh %s -> skip:LOCK\n", objPtr->name ? objPtr->name : "(null)");
++    }
+     if(!(constData->attr & HU3D_CONST_LOCK)) {
+         if(cancelTRXF == FALSE) {
+             if(!constData->hook) {
+@@ -337,6 +407,25 @@ static void objMesh(HU3D_MODEL *modelP, HSF_OBJECT *objPtr)
+             if((constData->attr & HU3D_CONST_DISPOFF) || (objPtr->flags & HSF_MATERIAL_DISPOFF)) {
+                 dispF = FALSE;
+             }
++            if (mp6ObjCensusActive()) { /* M11 object census: predict the branch below, in its order */
++                const char *mp6Br;
++                if (!dispF) {
++                    mp6Br = "skip:dispF(cull/DISPOFF-flag)";
++                } else if (transformP->scale.x == 0.0f && transformP->scale.y == 0.0f && transformP->scale.z == 0.0f) {
++                    mp6Br = "skip:zero-scale";
++                } else if (!(constData->attr & HU3D_CONST_REFLECTMODEL) &&
++                           ((constData->attr & (HU3D_CONST_NEAR|HU3D_CONST_ALTBLEND|HU3D_CONST_XLU)) && shadowModelDrawF == FALSE)) {
++                    mp6Br = "deferred-xlu";
++                } else if (modelP->attr & HU3D_ATTR_ZCMP_OFF) {
++                    mp6Br = "deferred-zoff";
++                } else {
++                    mp6Br = "ObjDraw";
++                }
++                printf("[CENSUS-OBJ]  mesh %s -> %s constAttr=%08x objFlags=%08x curScale=(%.2f,%.2f,%.2f)\n",
++                       objPtr->name ? objPtr->name : "(null)", mp6Br, (unsigned)constData->attr,
++                       (unsigned)objPtr->flags, transformP->scale.x, transformP->scale.y, transformP->scale.z);
++                fflush(stdout);
++            }
+             if(dispF != FALSE && (transformP->scale.x != 0.0f || transformP->scale.y != 0.0f || transformP->scale.z != 0.0f)) {
+                 drawObj->model = modelP;
+                 drawObj->object = objPtr;
+@@ -1994,6 +2083,13 @@ static void LoadTexture(HU3D_MODEL *modelP, HSF_BITMAP *bmpPtr, HSF_ATTRIBUTE *a
+         OSReport("Error: No Texture\n\0");
+         return;
+     }
++    if (mp6ObjCensusActive()) { /* M11 object census: name the texture each draw binds */
++        printf("[CENSUS-OBJ]    LoadTexture bmp=%s data=%p fmt=%d %dx%d texId=%d attr=%s tint=(%d,%d,%d,%d)\n",
++               bmpPtr->name ? bmpPtr->name : "(null)", (void *)bmpPtr->data, bmpPtr->dataFmt,
++               bmpPtr->sizeX, bmpPtr->sizeY, texId, attrP->name ? attrP->name : "(null)",
++               bmpPtr->tint.r, bmpPtr->tint.g, bmpPtr->tint.b, bmpPtr->tint.a);
++        fflush(stdout);
++    }
+     sizeX = bmpPtr->sizeX;
+     sizeY = bmpPtr->sizeY;
+     wrapX = (attrP->wrapS == TRUE) ? GX_REPEAT : GX_CLAMP;
+@@ -2122,6 +2218,11 @@ static void objNull(HU3D_MODEL *modelP, HSF_OBJECT *objPtr)
+             transformP = &objPtr->mesh.curr;
+         }
+         if(transformP->scale.x == 0 && transformP->scale.y == 0 && transformP->scale.z == 0) {
++            if (mp6ObjCensusActive()) { /* M11 object census: whole subtree pruned here */
++                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
++                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
++                fflush(stdout);
++            }
+             return;
+         }
+         if(modelP->hsf->cenvNum == 0 || hookIdx != HU3D_MODELID_NONE) {
+@@ -2172,6 +2273,11 @@ static void objRoot(HU3D_MODEL *modelP, HSF_OBJECT *objPtr)
+             transformP = &objPtr->mesh.curr;
+         }
+         if(transformP->scale.x == 0 && transformP->scale.y == 0 && transformP->scale.z == 0) {
++            if (mp6ObjCensusActive()) { /* M11 object census: whole subtree pruned here */
++                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
++                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
++                fflush(stdout);
++            }
+             return;
+         }
+         if(modelP->hsf->cenvNum == 0 || hookIdx != HU3D_MODELID_NONE) {
+@@ -2397,6 +2503,12 @@ void Hu3DDrawPost(void)
+                 }
+             } else {
+                 Hu3DObjInfoP = drawObj->object->constData;
++                if (mp6ObjCensusActive()) { /* M11 object census: deferred z-sorted draws */
++                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d obj=%s z=%.1f\n",
++                           drawObjNo, (int)(drawObj->model - Hu3DData),
++                           drawObj->object->name ? drawObj->object->name : "(null)", drawObj->z);
++                    fflush(stdout);
++                }
+                 DLBufStartP = Hu3DObjInfoP->dlBuf;
+                 DrawData = Hu3DObjInfoP->drawData;
+                 GXLoadPosMtxImm(drawObj->matrix, GX_PNMTX0);
+@@ -2505,6 +2617,16 @@ static void ObjDraw(HU3D_DRAW_OBJ *drawObj)
+     Mtx invCamera;
+ 
+     Hu3DObjInfoP = drawObj->object->constData;
++    if (mp6ObjCensusActive()) { /* M11 object census (matrix row: thread 3's applied wheel rotation) */
++        printf("[CENSUS-OBJ]   ObjDraw model=%d obj=%s faceCount=%d mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
++               (int)(drawObj->model - Hu3DData),
++               drawObj->object->name ? drawObj->object->name : "(null)",
++               drawObj->object->mesh.face ? drawObj->object->mesh.face->count : -1,
++               drawObj->matrix[0][0], drawObj->matrix[0][1], drawObj->matrix[0][2], drawObj->matrix[0][3],
++               drawObj->matrix[1][0], drawObj->matrix[1][1], drawObj->matrix[1][2], drawObj->matrix[1][3],
++               drawObj->matrix[2][0], drawObj->matrix[2][1], drawObj->matrix[2][2], drawObj->matrix[2][3]);
++        fflush(stdout);
++    }
+     DLBufStartP = Hu3DObjInfoP->dlBuf;
+     DrawData = Hu3DObjInfoP->drawData;
+     GXLoadPosMtxImm(drawObj->matrix, GX_PNMTX0);
+@@ -2691,6 +2813,125 @@ static void MDObjMesh(HSF_DATA *hsf, HSF_OBJECT *objPtr)
+         OSReport("DLBuf Over >>>>>>>>>>>>>");
+         OSReport("%x:%x:%x\n", Hu3DObjInfoP->dlBuf, totalSize, DLTotalNum);
+     }
++    if (mp6DlDumpEnv() && mp6DlDumpEnv()[0] == '*') { /* M13 sweep mode: one line per built object */
++        HSF_FACE *fp = faceBuf->data;
++        HuVecF *vtx = objPtr->mesh.vertex ? (HuVecF *)objPtr->mesh.vertex->data : NULL;
++        s32 vtxN = objPtr->mesh.vertex ? objPtr->mesh.vertex->count : 0;
++        s32 stN = objPtr->mesh.st ? objPtr->mesh.st->count : 0;
++        s32 fi, k, badV = 0, badS = 0;
++        float mn = 1e30f, mx = -1e30f;
++        for (fi = 0; fi < vtxN; fi++) {
++            float ax = vtx[fi].x < 0 ? -vtx[fi].x : vtx[fi].x;
++            float ay = vtx[fi].y < 0 ? -vtx[fi].y : vtx[fi].y;
++            float az = vtx[fi].z < 0 ? -vtx[fi].z : vtx[fi].z;
++            float m = ax > ay ? ax : ay; if (az > m) m = az;
++            if (m < mn) mn = m; if (m > mx) mx = m;
++        }
++        for (fi = 0; fi < faceBuf->count; fi++) {
++            HSF_FACE *f = &fp[fi];
++            s32 nIdx = ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_QUAD) ? 4 :
++                       ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRI) ? 3 : 0;
++            for (k = 0; k < nIdx; k++) {
++                if (f->index[k].vertex < 0 || f->index[k].vertex >= vtxN) badV++;
++                if (stN > 0 && (f->index[k].st < -1 || f->index[k].st >= stN)) badS++;
++            }
++            if ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRISTRIP) {
++                HSF_FACE_INDEX *sd = f->strip.data;
++                u32 sc = f->strip.count, m2;
++                for (m2 = 0; m2 < 3; m2++) {
++                    if (f->strip.index[m2].vertex < 0 || f->strip.index[m2].vertex >= vtxN) badV++;
++                }
++                for (m2 = 0; sd && m2 < sc; m2++) {
++                    if (sd[m2].vertex < 0 || sd[m2].vertex >= vtxN) badV++;
++                    if (stN > 0 && (sd[m2].st < -1 || sd[m2].st >= stN)) badS++;
++                }
++            }
++        }
++        printf("[DL-SWEEP] obj=%s faces=%d vtxN=%d dl=%d/%d badV=%d badS=%d vmag=[%g..%g]%s\n",
++               objPtr->name ? objPtr->name : "(null)", faceBuf->count, vtxN,
++               (int)totalSize, (int)DLTotalNum, (int)badV, (int)badS, mn, mx,
++               ((int)totalSize > (int)DLTotalNum || badV || badS) ? "  <-- ANOMALY" : "");
++        fflush(stdout);
++    }
++    if (mp6DlDumpWant(objPtr->name)) { /* M13 DL/vertex ground-truth dump -- see mp6DlDumpWant above */
++        char path[128];
++        FILE *df;
++        snprintf(path, sizeof(path), "build/dldump_%s.txt", objPtr->name);
++        df = fopen(path, "w");
++        if (df) {
++            HSF_FACE *fp = faceBuf->data;
++            HuVecF *vtx = objPtr->mesh.vertex ? (HuVecF *)objPtr->mesh.vertex->data : NULL;
++            s32 vtxN = objPtr->mesh.vertex ? objPtr->mesh.vertex->count : 0;
++            HuVec2f *stp = objPtr->mesh.st ? (HuVec2f *)objPtr->mesh.st->data : NULL;
++            s32 stN = objPtr->mesh.st ? objPtr->mesh.st->count : 0;
++            s32 nrmN = objPtr->mesh.normal ? objPtr->mesh.normal->count : 0;
++            s32 colN = objPtr->mesh.color ? objPtr->mesh.color->count : 0;
++            s32 fi, k, badV = 0, badS = 0;
++            float mn = 1e30f, mx = -1e30f;
++            const u8 *dl = (const u8 *)DLBufStartP;
++            fprintf(df, "obj=%s faces=%d vtxN=%d stN=%d nrmN=%d colN=%d dlSize=%d dlCap=%d batches=%d\n",
++                    objPtr->name, faceBuf->count, vtxN, stN, nrmN, colN, (int)totalSize, (int)DLTotalNum, (int)matChgCnt);
++            for (fi = 0; fi < vtxN; fi++) {
++                float ax = vtx[fi].x < 0 ? -vtx[fi].x : vtx[fi].x;
++                float ay = vtx[fi].y < 0 ? -vtx[fi].y : vtx[fi].y;
++                float az = vtx[fi].z < 0 ? -vtx[fi].z : vtx[fi].z;
++                float m = ax > ay ? ax : ay; if (az > m) m = az;
++                if (m < mn) mn = m; if (m > mx) mx = m;
++            }
++            fprintf(df, "vtx magnitude min=%g max=%g\n", mn, mx);
++            for (fi = 0; fi < vtxN && fi < 8; fi++) {
++                fprintf(df, "  vtx[%d]=(%g, %g, %g)\n", fi, vtx[fi].x, vtx[fi].y, vtx[fi].z);
++            }
++            for (fi = 0; fi < stN && fi < 8; fi++) {
++                fprintf(df, "  st[%d]=(%g, %g)\n", fi, stp[fi].x, stp[fi].y);
++            }
++            for (fi = 0; fi < faceBuf->count; fi++) {
++                HSF_FACE *f = &fp[fi];
++                s32 nIdx = ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_QUAD) ? 4 :
++                           ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRI) ? 3 : 0;
++                for (k = 0; k < nIdx; k++) {
++                    if (f->index[k].vertex < 0 || f->index[k].vertex >= vtxN) badV++;
++                    if (stN > 0 && (f->index[k].st < -1 || f->index[k].st >= stN)) badS++;
++                }
++                if (fi < 24) {
++                    fprintf(df, "face[%d] type=%04x mat=%d", fi, (unsigned)f->typeSrc, f->mat & 0xFFF);
++                    if ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRISTRIP) {
++                        u32 m2;
++                        for (m2 = 0; m2 < 3; m2++) {
++                            fprintf(df, " (v=%d n=%d c=%d st=%d)", f->strip.index[m2].vertex,
++                                    f->strip.index[m2].normal, f->strip.index[m2].color, f->strip.index[m2].st);
++                        }
++                        fprintf(df, " STRIP count=%u:", (unsigned)f->strip.count);
++                        for (m2 = 0; f->strip.data && m2 < f->strip.count && m2 < 8; m2++) {
++                            fprintf(df, " (v=%d n=%d c=%d st=%d)", f->strip.data[m2].vertex,
++                                    f->strip.data[m2].normal, f->strip.data[m2].color, f->strip.data[m2].st);
++                        }
++                    } else {
++                        for (k = 0; k < (nIdx ? nIdx : 3); k++) {
++                            fprintf(df, " (v=%d n=%d c=%d st=%d)", f->index[k].vertex,
++                                    f->index[k].normal, f->index[k].color, f->index[k].st);
++                        }
++                    }
++                    {
++                        HSF_MATERIAL *fm = &objPtr->mesh.material[f->mat & 0xFFF];
++                        fprintf(df, " | mat vtxMode=%d attrNum=%d flags=%08x pass=%d\n",
++                                fm->vtxMode, (int)fm->attrNum, (unsigned)fm->flags, fm->pass);
++                    }
++                }
++            }
++            fprintf(df, "out-of-range indices: vertex=%d st=%d (over %d faces)\n", (int)badV, (int)badS, faceBuf->count);
++            for (fi = 0; fi < matChgCnt && fi < 8; fi++) {
++                fprintf(df, "batch[%d] dlOfs=%u flags=%x\n", fi, (unsigned)DrawData[fi].dlOfs, (unsigned)DrawData[fi].flags);
++            }
++            for (fi = 0; fi < (s32)totalSize && fi < 1024; fi++) {
++                fprintf(df, "%02x%s", dl[fi], ((fi & 15) == 15) ? "\n" : " ");
++            }
++            fprintf(df, "\n");
++            fclose(df);
++            printf("[DL-DUMP] wrote %s (faces=%d dlSize=%d)\n", path, faceBuf->count, (int)totalSize);
++            fflush(stdout);
++        }
++    }
+     for(i = 0; i < objPtr->mesh.childNum; i++) {
+         MDObjCall(hsf, objPtr->mesh.child[i]);
+     }
+@@ -2832,6 +3073,45 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
+                         GXTexCoord1x16(face->index[1].st);
+                     }
+                 }
++                /* MP6 native port -- . Real, unpatched
++                 * original decomp gap, same class as game/hsfman.c's
++                 * Hu3DZClear and game/sprput.c's HuSpr3DDisp (see
++                 * platform/gx/aurora_bridge.c's section-5 comment): this
++                 * GXBegin(GX_TRIANGLES, ..., faceNumBuf[drawCnt]) is always
++                 * followed by a loop emitting EXACTLY faceNumBuf[drawCnt]
++                 * vertices, so on real hardware (GX FIFO ends a primitive by
++                 * vertex count, no explicit End needed) this was always
++                 * complete and correct with no GXEnd() call. Unlike
++                 * HuSpr3DDisp, this one is NOT safe to leave to the bridge's
++                 * general auto-close tolerance: this whole per-material
++                 * batch is recorded inside a GXBeginDisplayList/
++                 * GXEndDisplayList bracket (see 3 lines up / below), and
++                 * Aurora's own fifo module (lib/gx/fifo.cpp) tracks the
++                 * display-list recording buffer (sDlBuffer/sDlWritePos)
++                 * completely separately from the immediate-mode buffer
++                 * (sBufferSize) that GXBegin/GXEnd's byte-count validation
++                 * always reads from, even while GXBeginDisplayList has
++                 * redirected every write to the OTHER buffer -- so by the
++                 * time the bridge's tolerance finally calls the real
++                 * GXEnd() (the next GXBegin, typically well after this
++                 * material's own GXEndDisplayList already returned),
++                 * whatever unrelated IMMEDIATE-mode GX traffic happened to
++                 * run in between gets misattributed as extra bytes for
++                 * THIS primitive. Caught directly (Aurora build, fileseldll
++                 * reached for the first time): "GXEnd: vertex count
++                 * mismatch: GXBegin declared 60 vertices (6B each, 360B
++                 * total) but 389 bytes were written (64 vertices)". A real,
++                 * explicit GXEnd() here -- BEFORE GXEndDisplayList() falls
++                 * through below -- is a pure no-op on real hardware (zero
++                 * behavior change: it already correctly inferred completion
++                 * from the vertex count) while guaranteeing Aurora's own
++                 * (buffer-blind) byte measurement always sees a 0-byte
++                 * delta at this exact point (nothing else runs between the
++                 * last vertex and this call), which trivially satisfies its
++                 * `bytesWritten > 0` validation gate instead of leaving the
++                 * primitive open for the bridge's necessarily-coarser,
++                 * wrong-buffer fallback to eventually mis-close. */
++                GXEnd();
+                 faceCnt = faceNumBuf[drawCnt] / 3;
+                 break;
+             case HSF_FACE_QUAD:
+@@ -2902,6 +3182,12 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
+                         GXTexCoord1x16(face->index[1].st);
+                     }
+                 }
++                /* MP6 native port -- . Same class and
++                 * same fix as the HSF_FACE_TRI case above (this function's
++                 * own comment there has the full root-cause story) --
++                 * GXQUADS' own vertex loop always emits exactly
++                 * faceNumBuf[drawCnt] vertices too. */
++                GXEnd();
+                 faceCnt = faceNumBuf[drawCnt] / 4;
+                 break;
+             case HSF_FACE_TRISTRIP:
+@@ -2973,6 +3259,12 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
+                         GXTexCoord1x16(stripPtr->st);
+                     }
+                 }
++                /* MP6 native port -- . Same class and
++                 * same fix as the HSF_FACE_TRI case above (this function's
++                 * own comment there has the full root-cause story) -- the
++                 * initial 3 vertices plus this strip loop always emit
++                 * exactly faceNumBuf[drawCnt] vertices in total too. */
++                GXEnd();
+                 faceCnt = face->strip.count + 1;
+                 break;
+         }
+@@ -3492,7 +3784,29 @@ HSF_ATTRIBUTE *Hu3DAttrDuplicate(HSF_DATA *hsf, u32 mallocNo)
+     objPtr = hsf->object;
+     for(i=0; i<hsf->objectNum; i++, objPtr++) {
+         if(objPtr->type == HSF_OBJ_MESH) {
+-            objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
++            /* MP6 native port -- . 64-bit/
++             * checked-build portability fix, NULL-in-pointer-rebase class:
++             * a mesh with no attributes has mesh.attribute == NULL -- BY
++             * DESIGN, on real hardware too (ObjectLoad's own
++             * `if((s32)data->attribute >= 0) ... else newObj->mesh.attribute
++             * = NULL;`, the file's -1 "no attributes" sentinel -- itself the
++             * classic bit-31 idiom). Hardware's version of this line then
++             * computes `attrBuf + (NULL - base)` for such meshes: a garbage
++             * pointer, written back, and provably never read (GC mode
++             * select runs fine -- the attribute pointer of an
++             * attribute-less mesh has no consumer). This port's checked
++             * build (zig cc UBSan) instead panics at the arithmetic itself
++             * ("addition of unsigned offset ... overflowed", reproduced
++             * via mdseldll fn_1_5614's Hu3DModelLink of the 30 linked fish
++             * models -- the first Hu3DModelLink call any flow in this port
++             * has ever reached). Keeping NULL for the linked copy is
++             * observably identical on the never-read contract, and
++             * strictly better diagnostics if some future path DOES read
++             * it: an immediate, symbolized null-deref at the read site
++             * instead of a wild pointer. */
++            if (objPtr->mesh.attribute != NULL) {
++                objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
++            }
+         }
+     }
+     hsf->attribute = attrBuf;

@@ -1,0 +1,72 @@
+--- a/src/REL/bootDll/opening.c
++++ b/src/REL/bootDll/opening.c
+@@ -716,25 +716,40 @@
+ static void GuideCharFocus(u32 guideChar, s32 frameCount)
+ {
+     s16 frame;
+     s16 toggleCounter;
+     s16 phase;
+     BOOL alternate;
+     float focusValue;
+-    OpeningFocusObject *object;
++    /* MP6 native port -- . OpeningFocusObject is a
++     * hand-modeled PARTIAL OVERLAY of HSF_OBJECT (see its own typedef, just
++     * above this function): `u8 reserved_00[0x34]; float focus34; float
++     * focus38;` -- a classic decompiler pattern for "we don't have this
++     * struct's real field names, so address it by raw byte offset instead."
++     * Those offsets (0x34/0x38 = 52/56) are only correct against the REAL
++     * GameCube build's 32-BIT-POINTER HSF_OBJECT layout, where they land
++     * exactly on `mesh.base.scale.x`/`scale.y` (confirmed by hand: name@0
++     * type@4 constData@8 flags@12, mesh.parent@16 childNum@20 child@24
++     * base.pos@28 base.rot@40 base.scale@52 -- every member 4-byte-aligned
++     * with no gaps on a 32-bit ABI). This port's HSF_OBJECT has 8-byte
++     * pointers (name/constData/parent/child), which shifts every offset at
++     * and after `mesh.child` -- confirmed empirically via offsetof() on
++     * this exact build: mesh.child@48 (an 8-byte pointer, occupying bytes
++     * 48-55) and mesh.base.pos@56, mesh.base.scale@80. So on THIS build,
++     * raw offset 0x34(52) lands inside the upper 4 bytes of the
++     * `mesh.child` pointer (corrupting it -- harmless only because these
++     * two guide objects happen to have childNum==0, so it's never
++     * dereferenced) and offset 0x38(56) lands exactly on `mesh.base.pos.x`
++     * (NOT scale.y) -- i.e., every "focus pulse" call below was silently
++     * overwriting the guide's own carefully-computed SetStarDist() arc
++     * X-position with a plain 1.0/1.2 scale-pulse value, which is exactly
++     * the "moon and sun sprites ... weirdly placed" bug this milestone was
++     * asked to fix (confirmed instrumented: both soruru's and luluna's
++     * base.pos.x converged on identical 1.0/1.2 values whenever either
++     * guide's focus pulse ran, while base.pos.y silently froze at whatever
++     * SetStarDist last set it to). Fixed at the root by bypassing the
++     * fragile offset-based overlay entirely and writing the REAL,
++     * named `mesh.base.scale.x`/`scale.y` fields directly through a plain
++     * HSF_OBJECT*, which is immune to pointer width (and any future
++     * HSF_OBJECT layout change) instead of re-deriving another
++     * build-specific magic-number offset pair. Semantically this is
++     * unchanged from the original's own intent (a scale pulse used as a
++     * cheap "spotlight" highlight on the currently-narrated guide
++     * character), just no longer aliased onto the wrong field. */
++    HSF_OBJECT *object;
+
+     alternate = guideChar & GUIDE_FOCUS_SELECTOR_ALT;
+     CharFocusCancelF = 0;
+     guideChar &= GUIDE_FOCUS_SELECTOR_CHAR_MASK;
+-    object = (OpeningFocusObject *)Hu3DModelObjPtrGet(
++    object = Hu3DModelObjPtrGet(
+         OpeningMdlId[2],
+         OpeningCharObjNameTbl[guideChar]);
+@@ -749,8 +764,8 @@
+     focusValue = GUIDE_FOCUS_VALUE_LIT;
+     phase = 1;
+     for (frame = 1, toggleCounter = 0; frame <= frameCount; frame++) {
+-        object->focus38 = focusValue;
+-        object->focus34 = focusValue;
++        object->mesh.base.scale.x = focusValue;
++        object->mesh.base.scale.y = focusValue;
+
+         if (toggleCounter++ > 5) {
+             phase ^= 1;
+@@ -797,4 +812,4 @@
+             SetCharAnimFrame((s16)guideChar, 0x4D);
+         }
+     }
+-    object->focus34 = object->focus38 = GUIDE_FOCUS_VALUE_REST;
++    object->mesh.base.scale.x = object->mesh.base.scale.y = GUIDE_FOCUS_VALUE_REST;
