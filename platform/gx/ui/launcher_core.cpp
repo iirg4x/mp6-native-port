@@ -28,6 +28,7 @@
 #include <SDL3/SDL.h>
 #include <zlib.h> /* title.bin entry inflate (same zlib-ng build game/decode.c links) */
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -38,10 +39,24 @@
 #include "launcher_state.hpp"
 #include "overlay.hpp"
 #include "prelaunch.hpp"
+#include "settings.hpp" /* the persistent in-game menu instance (section 9) */
 #include "ui.hpp"
 
 extern "C" {
 #include "host.h" /* mp6_host_monotonic_ns / mp6_host_sleep_ns / mp6_host_save_dir */
+#include "mp6_savestate.h" /* in-game menu: savestate result toasts (section 9) */
+
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+ * includes is load-bearing, not stylistic: it is a #pragma clang section that
+ * redirects every file-scope definition FOLLOWING it. As a -include (before all
+ * headers) it also captured the decomp headers' C TENTATIVE definitions --
+ * dolphin/os.h:27 `u32 __OSBusClock;` and friends -- turning those common
+ * symbols into strong per-TU definitions and breaking the link with duplicate
+ * symbol errors. Here, headers keep their normal linkage and only this file's
+ * own statics move. tools/build.py asserts this line exists in every TU listed
+ * in HOST_STATE_SECTION_SOURCES. */
+#include "mp6_host_section.h"
+
 
 /* Additive hooks in existing platform files (see their own comments): */
 void mp6_dvd_set_root_override(const char *filesRoot, const char *fstPath); /* platform/dvd/dvd_files.c */
@@ -75,6 +90,8 @@ static void mp6_launcher_defaults(void)
     g_cfg.tickHz = 60.0;
     g_cfg.contentRoot[0] = '\0';
     g_cfg.masterVolume = 100;
+    g_cfg.widescreen = 0; /* WS2: default OFF -- existing 4:3 pillarboxed behavior, byte-unchanged */
+    g_cfg.shadowQuality = 1; /* Shadow Quality: default native -- byte-identical, the sacred contract */
 }
 
 /* =======================================================================
@@ -137,10 +154,15 @@ static void mp6_launcher_parse_config(const char *text)
         } else if (strncmp(p, "true", 4) == 0 || strncmp(p, "false", 5) == 0) {
             int v = (*p == 't');
             p += v ? 4 : 5;
+            /* "video.aspect_locked" is deliberately NOT read anymore (the
+             * "Lock 4:3" row was removed -- Widescreen is the one aspect
+             * switch); an old config's key falls through to the tolerant
+             * unknown-key ignore below, and the built-in default (locked
+             * whenever Widescreen is off) applies. */
             if      (strcmp(key, "launcher.skip") == 0)       g_cfg.skipLauncher = v;
-            else if (strcmp(key, "video.aspect_locked") == 0) g_cfg.aspectLocked = v;
             else if (strcmp(key, "video.vsync") == 0)         g_cfg.vsync = v;
             else if (strcmp(key, "video.show_fps") == 0)      g_cfg.showFps = v;
+            else if (strcmp(key, "video.widescreen") == 0)    g_cfg.widescreen = v; /* WS2: additive, backward-compatible -- absent in any pre-WS2 config.json, tolerant parser default (0) applies */
         } else { /* number */
             char *end = NULL;
             double v = strtod(p, &end);
@@ -156,6 +178,16 @@ static void mp6_launcher_parse_config(const char *text)
                 g_cfg.masterVolume = (int)v;
                 if (g_cfg.masterVolume < 0) g_cfg.masterVolume = 0;
                 if (g_cfg.masterVolume > 100) g_cfg.masterVolume = 100;
+            }
+            else if (strcmp(key, "video.shadow_quality") == 0) {
+                /* Tolerant by construction (this file's own header
+                 * comment): anything outside the five valid scales --
+                 * missing key, a future downgrade, or hand-edited JSON --
+                 * falls back to 1 (native), never a crash or an
+                 * out-of-range shadowP->size downstream. */
+                int sq = (int)v;
+                if (sq != 1 && sq != 2 && sq != 4 && sq != 8 && sq != 16) sq = 1;
+                g_cfg.shadowQuality = sq;
             }
         }
         p = js_skip_ws(p);
@@ -183,31 +215,35 @@ static void mp6_launcher_config_save(void)
         return;
     }
     js_escape(g_cfg.contentRoot, rootEsc, sizeof(rootEsc));
+    /* "video.aspect_locked" is no longer written (row removed; the key in
+     * an existing file is ignored on read, so old configs stay valid). */
     fprintf(f,
             "{\n"
             "    \"launcher.skip\": %s,\n"
             "    \"video.window_mode\": \"%s\",\n"
             "    \"video.window_scale\": %g,\n"
-            "    \"video.aspect_locked\": %s,\n"
             "    \"video.vsync\": %s,\n"
             "    \"video.backend\": \"%s\",\n"
             "    \"video.show_fps\": %s,\n"
             "    \"video.fps_corner\": %d,\n"
             "    \"game.tick_hz\": %g,\n"
             "    \"game.content_root\": \"%s\",\n"
-            "    \"audio.master_volume\": %d\n"
+            "    \"audio.master_volume\": %d,\n"
+            "    \"video.widescreen\": %s,\n"
+            "    \"video.shadow_quality\": %d\n"
             "}\n",
             g_cfg.skipLauncher ? "true" : "false",
             g_cfg.windowMode == MP6_WINMODE_FULLSCREEN ? "fullscreen" : "windowed",
             (double)g_cfg.windowScale,
-            g_cfg.aspectLocked ? "true" : "false",
             g_cfg.vsync ? "true" : "false",
             g_cfg.backend,
             g_cfg.showFps ? "true" : "false",
             g_cfg.fpsCorner,
             g_cfg.tickHz,
             rootEsc,
-            g_cfg.masterVolume);
+            g_cfg.masterVolume,
+            g_cfg.widescreen ? "true" : "false", /* WS2: additive key */
+            g_cfg.shadowQuality); /* Shadow Quality: additive key, appended last so any external tooling scraping the first N keys positionally (none known) is unaffected */
     fclose(f);
 }
 
@@ -218,7 +254,7 @@ static void mp6_launcher_config_save(void)
 static void mp6_launcher_resolve_paths(void)
 {
 #ifdef __ANDROID__
-    /*  SDL_GetBasePath() is "./" on Android
+    /* A4 (docs/A4_ANDROID_UI.md): SDL_GetBasePath() is "./" on Android
      * (the app has no exe directory and cwd is "/", unwritable) -- the
      * config lives under the same base dir mp6_android_main publishes for
      * disc/save data (external files dir preferred), which is exported as
@@ -242,7 +278,8 @@ static void mp6_launcher_resolve_paths(void)
         char rel[64];
         if (mp6_host_save_dir(rel, sizeof(rel)) != 0) snprintf(rel, sizeof(rel), "saves");
 #if defined(__ANDROID__)
-        /* Display-only: saves resolve under MP6_HOST_BASE on device. */
+        /* Display-only: saves resolve under MP6_HOST_BASE on device
+         * (docs/UA2_ANDROID_GRAPHICS.md section 7). */
         const char *saveBase = getenv("MP6_HOST_BASE");
         if (saveBase != NULL && saveBase[0] != '\0') {
             snprintf(g_saveDirAbs, sizeof(g_saveDirAbs), "%s/%s", saveBase, rel);
@@ -314,6 +351,17 @@ extern "C" int mp6_launcher_decide_mode(int hasNumericArg, int hasInputScript, i
     return g_launcherMode;
 }
 
+/* 1 in automation/straight-boot mode (numeric tick-budget argv / --input-script
+ * / MP6_AUTO_START_TICKS / MP6_LAUNCHER=0), 0 in interactive launcher mode.
+ * Read by the tick throttle (aurora_bridge.c) to default automation runs to
+ * free-run pacing -- a drive only needs to REACH a state, not run in real time.
+ * Valid only after mp6_launcher_decide_mode() has run (main_native.c, before
+ * the game loop -- so it is set well before the throttle's first-tick init). */
+extern "C" int mp6_launcher_is_automation(void)
+{
+    return g_launcherMode ? 0 : 1;
+}
+
 /* Launch-time values of the two next-launch settings, for the restart-
  * pending check (the ripped prelaunch shows its "Apply Options" modal when
  * these differ from the current config). */
@@ -359,6 +407,33 @@ extern "C" int mp6_launcher_cfg_aspect_locked(void)
     return g_launcherMode ? g_cfg.aspectLocked : 1;
 }
 
+/* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): resolved "dynamic true-widescreen"
+ * preference for mp6_widescreen_set_enabled() (aurora_bridge.c), called
+ * once right before GameMain() alongside mp6_bridge_apply_content_aspect_
+ * policy() above -- same launcher-mode-vs-automation-default shape as
+ * every other accessor in this section. Automation's fixed 0 matches this
+ * config key's own default (mp6_launcher_defaults() above) and is what
+ * every existing automated gate already assumes (a widescreen-ON gate is
+ * a new, additional scenario -- docs/WS2_DYNAMIC_WIDESCREEN.md -- not a
+ * change to what automation mode has always done). */
+extern "C" int mp6_launcher_cfg_widescreen(void)
+{
+    return g_launcherMode ? g_cfg.widescreen : 0;
+}
+
+/* Shadow Quality (shim/include/mp6_shadow_quality.h): the configured
+ * shadow-map linear scale in launcher mode, or a fixed 1 (native) in
+ * automation/pre-launcher-init -- same "automation never sees a non-
+ * default value" contract as mp6_launcher_cfg_widescreen() above.
+ * mp6_shadow_quality_scale() (platform/hsf/mp6_shadow_quality.c) is the
+ * actual origin-site helper hsfman.c's patched Hu3DShadow* functions call;
+ * it reads this to get the user's own preference, then clamps for
+ * HEAP_MODEL headroom before returning the EFFECTIVE scale. */
+extern "C" int mp6_launcher_cfg_shadow_quality(void)
+{
+    return g_launcherMode ? g_cfg.shadowQuality : 1;
+}
+
 /* =======================================================================
  * 5. Applying settings.
  * ======================================================================= */
@@ -389,10 +464,35 @@ static void mp6_launcher_apply_display(void)
      * also flipped AuroraSetViewportPolicy live, which quietly
      * letterboxed the RmlUi launcher itself (menu/wordmark/watermark/
      * disc-info/version-info) for its ENTIRE lifetime on any non-4:3
-     * display -- . The MP6_FREE_ASPECT env
+     * display -- docs/A5_LAUNCHER_ASPECT.md. The MP6_FREE_ASPECT env
      * lever keeps absolute priority in BOTH directions. */
+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): widescreen ON means "the window
+     * is freely resizable to any shape, and the render/camera/2D-shim all
+     * track whatever shape it ends up" -- the exact opposite of
+     * aspectLocked's 4:3 window-shape constraint, so widescreen wins
+     * outright when both are set (a user turning Widescreen on on top of
+     * an old "Lock 4:3" preference gets widescreen -- aspectLocked's OWN
+     * value is untouched in the saved config either way, so turning
+     * Widescreen back off later restores whatever aspectLocked preference
+     * was already there). MP6_FREE_ASPECT keeps absolute top priority in
+     * both directions, unchanged from before WS2. */
     if (getenv("MP6_FREE_ASPECT") == NULL) {
-        if (g_cfg.aspectLocked) {
+        /* WS: the MP6_WIDESCREEN env lever forces the free/widescreen window
+         * shape here too -- same inline getenv semantics as
+         * mp6_widescreen_enabled() (aurora_bridge.c) and MP6_FREE_ASPECT
+         * above -- so the lever is consistent across the interactive
+         * launcher's window-shape decision and automation mode (where it
+         * already worked). A fresh interactive config never sets
+         * g_cfg.widescreen, so without this an MP6_WIDESCREEN=1 launch would
+         * still 4:3-lock and SDL would shrink a wide window (2200x720 ->
+         * 960x720). Default-OFF (no env, widescreen off in config) is
+         * byte-unchanged: envWide is 0 and the 4:3 aspectLocked branch runs
+         * exactly as today. */
+        const char *forceWide = getenv("MP6_WIDESCREEN");
+        int envWide = (forceWide != NULL && forceWide[0] != '\0' && forceWide[0] != '0');
+        if (g_cfg.widescreen || envWide) {
+            SDL_SetWindowAspectRatio(g_window, 0.0f, 0.0f);
+        } else if (g_cfg.aspectLocked) {
             SDL_SetWindowAspectRatio(g_window, 4.0f / 3.0f, 4.0f / 3.0f);
         } else {
             SDL_SetWindowAspectRatio(g_window, 0.0f, 0.0f);
@@ -485,7 +585,7 @@ static void mp6_refresh_content_state(void)
     }
 }
 
-/*  C-side probe for main_native.c's onboarding
+/* A4 (docs/A4_ANDROID_UI.md): C-side probe for main_native.c's onboarding
  * decision -- "is bootable game content actually present right now?".
  * Launcher mode only by contract (call after mp6_launcher_decide_mode said
  * launcher); automation boots never consult it, so the L1 zero-[LAUNCHER]
@@ -781,7 +881,7 @@ static const char *mp6_resource_base(void)
     if (g_resBase[0] != '\0') return g_resBase;
 
 #ifdef __ANDROID__
-    /*  res/ ships INSIDE the APK as assets
+    /* A4 (docs/A4_ANDROID_UI.md): res/ ships INSIDE the APK as assets
      * (gradle syncs the repo's res/ tree -- platforms/android/app/
      * build.gradle). A bare relative "res" base keeps every resource path
      * relative ("res/rml/...", "res/fonts/..."), which SDL_IOFromFile
@@ -900,11 +1000,102 @@ extern "C" void mp6_launcher_apply_display_settings(void *sdlWindowPtr)
  * aurora_bridge.c hook. The overlay document persists after boot; RmlUi
  * records its (usually empty) surface inside aurora_end_frame. With
  * show_fps off the chip element stays closed; automation mode
- * (g_launcherMode false) never reaches any of this. */
+ * (g_launcherMode false) never reaches any of this.
+ *
+ * ALSO the in-game menu host: on the FIRST in-game frame (this hook only
+ * runs once GameMain's own frame loop is live -- the pre-boot menu loop
+ * calls mp6::ui::update() directly) it pushes ONE persistent, hidden
+ * SettingsWindow (inGame=true: adds the Save States tab, hides instead of
+ * closing). F10 (aurora_bridge.c hotkey), F1/gamepad Back/R+Start/3-finger
+ * tap (the ripped partyboard bindings, via the SDL-event forward below),
+ * and the Android gear button all toggle it; while visible,
+ * input.cpp's sync_input_block PADBlockInput()s the game -- the world
+ * keeps ticking, its input is paused so menu navigation never leaks. */
+static mp6::ui::SettingsWindow *g_gameMenu; /* owned by the ui document stack; never closed */
+
 extern "C" void mp6_launcher_frame_overlay(void)
 {
     if (!g_launcherMode || !g_uiReady) return;
+    if (g_gameMenu == nullptr) {
+        g_gameMenu = static_cast<mp6::ui::SettingsWindow *>(&mp6::ui::push_document(
+            std::make_unique<mp6::ui::SettingsWindow>(false, 0, /*inGame=*/true), /*show=*/false));
+        mp6::ui::show_menu_notification(); /* "Press F10 ... to open menu" toast */
+    }
+    /* Savestate feedback: a queued save/load was serviced at the frame
+     * boundary -- surface the outcome as a toast (the Save States page's
+     * own labels refresh via mp6_savestate_ui_generation()). */
+    {
+        int wasSave = 0, result = 0;
+        if (mp6_savestate_take_last_result(&wasSave, &result)) {
+            Rml::String content;
+            if (result == MP6_SAVESTATE_OK) {
+                content = wasSave ? "State saved." : "State loaded.";
+            } else if (result == MP6_SAVESTATE_ERR_BINARY_MISMATCH) {
+                content = "Incompatible (other build).";
+            } else {
+                content = mp6_savestate_strerror(result);
+            }
+            mp6::ui::push_toast({
+                .type = "savestate",
+                .title = wasSave ? "Save State" : "Load State",
+                .content = content,
+                .duration = std::chrono::seconds(4),
+            });
+        }
+    }
     mp6::ui::update();
+}
+
+/* Pre-shutdown UI teardown. MUST run BEFORE aurora_shutdown(): the UI
+ * document stacks are static (carved-out) vectors of live RmlUi documents;
+ * left alone, the CRT destroys them AFTER aurora_shutdown()'s
+ * rmlui::shutdown()/Rml::Shutdown() has already freed the context and
+ * every ElementDocument -- Document::~Document then calls Close() on a
+ * dead document (observed 0xC0000005 in Rml::Context::UnloadDocument from
+ * Overlay::~Overlay at exit; a silent, longstanding teardown crash for
+ * ANY interactive session, surfaced by exit-code-checking harness runs).
+ * mp6::ui::shutdown() clears both stacks while the context is still
+ * alive, releases the input block, and marks the UI uninitialized.
+ * Automation mode: g_uiReady is never set, so this is a no-op branch --
+ * zero log lines, zero behavior change (the automation contract). */
+extern "C" void mp6_launcher_ui_teardown(void)
+{
+    if (!g_uiReady) return;
+    g_gameMenu = nullptr; /* owned by the stack being cleared */
+    mp6::ui::shutdown();
+    g_uiReady = false;
+}
+
+/* Toggle the in-game menu (F10 via aurora_bridge.c's event pump; the
+ * Android touch overlay's gear button). Inert in automation mode and
+ * before the first in-game frame. */
+extern "C" void mp6_launcher_toggle_menu(void)
+{
+    if (!g_launcherMode || !g_uiReady || g_gameMenu == nullptr) return;
+    g_gameMenu->toggle();
+}
+
+/* Is ANY launcher UI document visible right now? Consumed by the freecam
+ * input collector (suspend flying while menus are up) and the Android
+ * touch overlay (hide the pad controls under the menu -- their input is
+ * PADBlockInput()ed anyway). Automation mode: always 0. */
+extern "C" int mp6_launcher_menu_visible(void)
+{
+    if (!g_launcherMode || !g_uiReady) return 0;
+    return mp6::ui::any_document_visible() ? 1 : 0;
+}
+
+/* Game-time SDL event forward into the ripped UI framework (gamepad ->
+ * RmlUi nav keys, the R+Start menu chord, the 3-finger menu tap,
+ * controller connect/disconnect toasts). The pre-boot menu loop already
+ * forwards its own events; this is the same call for in-game frames.
+ * Mouse/keyboard/touch reach the RmlUi CONTEXT through aurora's own
+ * process_event -> rmlui::handle_event regardless -- this adds only the
+ * mp6::ui layer's own handling on top, exactly like the pre-boot loop. */
+extern "C" void mp6_launcher_forward_sdl_event(const SDL_Event *ev)
+{
+    if (!g_launcherMode || !g_uiReady || ev == NULL) return;
+    mp6::ui::handle_event(*ev);
 }
 
 extern "C" int mp6_launcher_run_menu(void *sdlWindowPtr)

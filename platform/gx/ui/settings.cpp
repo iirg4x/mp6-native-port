@@ -20,6 +20,8 @@
 #include "ui.hpp"
 
 #include <SDL3/SDL_misc.h> /* [MP6] SDL_OpenURL for the save-folder action */
+#include <SDL3/SDL_filesystem.h> /* [MP6] SDL_GetPathInfo for savestate slot stat */
+#include <SDL3/SDL_time.h>       /* [MP6] SDL_TimeToDateTime for slot timestamps */
 
 #include <algorithm>
 #include <array>
@@ -27,6 +29,22 @@
 #include <cstdio>
 #include <cstring>
 #include <fmt/format.h>
+
+#include "mp6_freecam.h"   /* [MP6] Mods tab: freecam toggle (shim/include) */
+#include "mp6_savestate.h" /* [MP6] Save States tab: slot request/probe seam */
+
+/* [MP6] Mods tab, live Widescreen flip (aurora_bridge.c; see the Mods tab
+ * builder below for the honest live-vs-scene-load semantics). */
+extern "C" void mp6_widescreen_set_enabled(int enabled);
+extern "C" void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg);
+
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): host-owned statics (RmlUi document
+ * sources, UI framework state, debug-tool latches) must not be captured or
+ * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
+ * LEVEL (build.py rejects a conditionally-nested include -- a platform
+ * branch would silently uncarve the TU). See mp6_host_section.h. */
+#include "mp6_host_section.h"
+
 
 namespace mp6::ui {
 namespace {
@@ -206,11 +224,36 @@ namespace {
         return button;
     }
 
+    /* [MP6] Save States tab: one status string per slot file. The probe is
+     * header-only (savestate.c), so a stale-binary slot reads as
+     * "incompatible (other build)" here instead of a raw console error. */
+    Rml::String slot_status(const char *path)
+    {
+        SDL_PathInfo info;
+        if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE) {
+            return "empty";
+        }
+        const int probe = mp6_savestate_probe(path);
+        if (probe == MP6_SAVESTATE_ERR_BINARY_MISMATCH) {
+            return "incompatible (other build)";
+        }
+        if (probe != MP6_SAVESTATE_OK) {
+            return "unreadable (not a savestate)";
+        }
+        SDL_DateTime dt;
+        if (SDL_TimeToDateTime(info.modify_time, &dt, true)) {
+            return fmt::format("{:04}-{:02}-{:02} {:02}:{:02}", dt.year, dt.month, dt.day, dt.hour, dt.minute);
+        }
+        return "saved";
+    }
+
 } // namespace
 
-SettingsWindow::SettingsWindow(bool prelaunch, int initialTab)
+SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
     : mPrelaunch(prelaunch)
+    , mInGame(inGame)
 {
+    mSeenSavestateGen = mp6_savestate_ui_generation();
     if (prelaunch) {
         mSuppressNavFallback = true;
     }
@@ -286,21 +329,13 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab)
                 pane.add_rml("<br/>Client-area presets (4:3). Applies immediately in windowed mode.");
             });
 
-        config_bool_select(leftPane, rightPane,
-            {
-                .key = "Lock 4:3 Aspect Ratio",
-                .helpText = "Lock the game's aspect ratio to the original. Also constrains the window "
-                            "shape while windowed.<br/><br/>Disabled while the MP6_FREE_ASPECT "
-                            "environment lever is set (it keeps absolute priority).",
-                .getValue = [] { return cfg().aspectLocked != 0; },
-                .setValue =
-                    [](bool value) {
-                        cfg().aspectLocked = value ? 1 : 0;
-                        apply_display();
-                    },
-                .isDisabled = [] { return getenv("MP6_FREE_ASPECT") != NULL; },
-                .isModified = [] { return cfg().aspectLocked != 1; },
-            });
+        /* [MP6] the "Lock 4:3 Aspect Ratio" row was REMOVED here (user
+         * direction: redundant -- Widescreen on the Mods tab is the one
+         * aspect switch). The config key is simply no longer read or
+         * written (the tolerant parser ignores it in old files); the
+         * internal default stays locked-4:3 whenever Widescreen is off,
+         * and the MP6_FREE_ASPECT env lever keeps absolute priority.
+         * The Dynamic Widescreen toggle itself moved to the Mods tab. */
 
         /* Their FPS row, verbatim mechanism over our two keys. */
         leftPane.register_control(leftPane.add_select_button({
@@ -449,7 +484,7 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab)
                 pane.add_rml(text);
             });
 
-        /* [MP6]  the guided import path -- disc
+        /* [MP6] A4 (docs/A4_ANDROID_UI.md): the guided import path -- disc
          * image (nod-backed) or extracted folder through the system picker,
          * same dialog the prelaunch "Select Game" button opens. */
         leftPane.register_control(leftPane.add_button("Select Game...").on_pressed([this] {
@@ -502,6 +537,202 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab)
     });
 
     /* ------------------------------------------------------------------
+     * MODS ([MP6] content: freecam + widescreen -- runtime toggles)
+     * ------------------------------------------------------------------ */
+    add_tab("Mods", [this](Rml::Element *content) {
+        auto &leftPane = add_child<Pane>(content, Pane::Type::Controlled);
+        auto &rightPane = add_child<Pane>(content, Pane::Type::Uncontrolled);
+
+        leftPane.add_section("Camera");
+
+        config_bool_select(leftPane, rightPane,
+            {
+                .key = "Freecam",
+                .helpText = "Fly the 3D camera freely; the game keeps running (its input is "
+                            "paused only while this menu is open).<br/><br/>"
+                            "Desktop: W/A/S/D move, Q/E down/up, hold RIGHT MOUSE and move "
+                            "to look, wheel dollies, SHIFT fast, CTRL slow. Gamepad: right "
+                            "stick looks. Touch: one-finger drag looks, two-finger drag "
+                            "moves, pinch dollies.<br/><br/>Turning it off hands the camera "
+                            "straight back to the game. Not saved to the config -- freecam "
+                            "always starts a session off.",
+                .getValue = [] { return mp6_freecam_enabled() != 0; },
+                .setValue = [](bool value) { mp6_freecam_set_enabled(value ? 1 : 0); },
+                .isDisabled = [this] { return !mInGame; },
+                .isModified = [] { return mp6_freecam_enabled() != 0; },
+            });
+
+        leftPane.add_section("Display");
+
+        /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): dynamic true-widescreen --
+         * NOT the fixed 16:9 a binary ROM patch is stuck with. Moved here
+         * from the Video tab; flipping it MID-GAME now also flips the live
+         * engine flag (window shape, render width, 2D layer track it
+         * within a tick) -- but scene-load-time registrations (per-scene
+         * camera widening, backdrop extension strips, the floor dup) only
+         * register when a scene loads with Widescreen on, so the full
+         * effect lands on the next scene change. Said in the help text
+         * rather than papered over. */
+        config_bool_select(leftPane, rightPane,
+            {
+                .key = "Dynamic Widescreen",
+                .helpText = "Render at the window's own live aspect ratio instead of fixed 4:3 -- "
+                            "widen the window to any shape (16:9, 21:9, ...) and the 3D camera/HUD "
+                            "track it continuously, no stretching.<br/><br/>Flipping it during play "
+                            "applies the window shape, render width and HUD immediately; the "
+                            "scene's own cameras and widescreen backdrop extensions register at "
+                            "scene load, so it fully applies on the next scene change.<br/><br/>"
+                            "Disabled while the MP6_FREE_ASPECT environment lever is set (it keeps "
+                            "absolute priority).",
+                .getValue = [] { return cfg().widescreen != 0; },
+                .setValue =
+                    [inGame = mInGame](bool value) {
+                        cfg().widescreen = value ? 1 : 0;
+                        apply_display();
+                        if (inGame) {
+                            /* Live engine flip. Order matters: the policy
+                             * call reads mp6_widescreen_enabled(). NOT done
+                             * pre-boot (prelaunch instance): A5 keeps the
+                             * content-fit policy off until right before
+                             * GameMain so the launcher itself never
+                             * letterboxes -- main_native.c applies the
+                             * config value on boot as always. */
+                            mp6_widescreen_set_enabled(value ? 1 : 0);
+                            mp6_bridge_apply_content_aspect_policy(cfg().aspectLocked);
+                        }
+                    },
+                .isDisabled = [] { return getenv("MP6_FREE_ASPECT") != NULL; },
+                .isModified = [] { return cfg().widescreen != 0; },
+            });
+
+        leftPane.add_section("Rendering");
+
+        /* Shadow Quality (shim/include/mp6_shadow_quality.h has the full
+         * contract): raises the real-time projected shadow map's
+         * resolution (Hu3DShadow*, game/hsfman.c + game/hsfdraw.c) --
+         * same lighting, same shadow shape, strictly more texels sampled
+         * through the same live-projected texcoord. Read at shadow-CREATE
+         * time, so flipping it mid-game doesn't retroactively resize a
+         * map that's already up -- said in the description below rather
+         * than papered over, same as Dynamic Widescreen's own row.
+         * Their FPS row's exact select_button + register_control shape,
+         * five options instead of six. */
+        leftPane.register_control(leftPane.add_select_button({
+                                      .key = "Shadow Quality",
+                                      .getValue = [] { return Rml::String { fmt::format("{}x", cfg().shadowQuality) }; },
+                                      .isDisabled = [] { return getenv("MP6_SHADOW_QUALITY") != NULL; },
+                                      .isModified = [] { return cfg().shadowQuality != 1; },
+                                  }),
+            rightPane, [](Pane &pane) {
+                pane.clear();
+                for (const int scale : { 1, 2, 4, 8, 16 }) {
+                    pane
+                        .add_button({
+                            .text = fmt::format("{}x", scale),
+                            .isSelected = [scale] { return cfg().shadowQuality == scale; },
+                        })
+                        .on_pressed([scale] {
+                            cfg().shadowQuality = scale;
+                            cfg_save();
+                        });
+                }
+                pane.add_rml("<br/>Raises the texel resolution of the game's real-time projected "
+                             "shadows (the blob under characters and hosts) -- same lighting, same "
+                             "shadow size and shape, just sharper edges. 1x is the original game's "
+                             "own resolution (byte-identical).<br/><br/>"
+                             "Right now 2x is the effective ceiling: the shadow view is bounded by "
+                             "the GameCube's own framebuffer box, and 2x already captures every "
+                             "pixel it renders. Higher settings safely clamp to 2x (logged) until "
+                             "the renderer grows a dedicated shadow pass.<br/><br/>"
+                             "Takes effect the next time a board or scene loads -- not "
+                             "retroactively on a shadow map that's already up.<br/><br/>"
+                             "Disabled while the MP6_SHADOW_QUALITY environment lever is set (it "
+                             "wins).");
+            });
+    });
+
+    /* ------------------------------------------------------------------
+     * SAVE STATES ([MP6] content: 5 slot files -- in-game instance only;
+     * capture/restore must run at the game's own frame boundary, so a
+     * pre-boot instance has nothing meaningful to offer)
+     * ------------------------------------------------------------------ */
+    if (mInGame) {
+        add_tab("Save States", [this](Rml::Element *content) {
+            auto &leftPane = add_child<Pane>(content, Pane::Type::Controlled);
+            auto &rightPane = add_child<Pane>(content, Pane::Type::Uncontrolled);
+
+            for (int slot = 1; slot <= 5; ++slot) {
+                char path[520];
+                mp6_savestate_slot_file(slot, path, sizeof(path));
+                const Rml::String status = slot_status(path);
+                leftPane.add_section(fmt::format("Slot {} \xE2\x80\x94 {}", slot, status));
+
+                leftPane.register_control(leftPane.add_button("Save").on_pressed([slot] {
+                    char p[520];
+                    mp6_savestate_slot_file(slot, p, sizeof(p));
+                    mp6_savestate_request_save_path(p);
+                }),
+                    rightPane, [slot, path = Rml::String(path)](Pane &pane) {
+                        pane.clear();
+                        pane.add_rml(fmt::format("Capture the whole session into slot {} at the next "
+                                                 "frame boundary (takes a moment).<br/><br/>{}",
+                            slot, escape(path)));
+                    });
+
+                leftPane.register_control(leftPane.add_button("Load").on_pressed([slot] {
+                    char p[520];
+                    mp6_savestate_slot_file(slot, p, sizeof(p));
+                    const int probe = mp6_savestate_probe(p);
+                    if (probe == MP6_SAVESTATE_ERR_IO) {
+                        push_toast({ .type = "savestate", .title = "Load State",
+                            .content = fmt::format("Slot {} is empty.", slot),
+                            .duration = std::chrono::seconds(4) });
+                        return;
+                    }
+                    if (probe == MP6_SAVESTATE_ERR_BINARY_MISMATCH) {
+                        push_toast({ .type = "savestate", .title = "Load State",
+                            .content = fmt::format("Slot {} is incompatible (other build).", slot),
+                            .duration = std::chrono::seconds(4) });
+                        return;
+                    }
+                    mp6_savestate_request_load_path(p);
+                }),
+                    rightPane, [slot, status](Pane &pane) {
+                        pane.clear();
+                        Rml::String text = fmt::format("Restore slot {} over the running session at the "
+                                                       "next frame boundary.", slot);
+                        if (status == "empty") {
+                            text += "<br/><br/>This slot is empty.";
+                        }
+                        else if (status == "incompatible (other build)") {
+                            text += "<br/><br/>This slot was captured by a DIFFERENT build of the "
+                                    "port and will refuse to load -- rebuilding invalidates "
+                                    "savestates.";
+                        }
+                        pane.add_rml(text);
+                    });
+            }
+
+            leftPane.add_section("Default slot");
+            leftPane.register_control(leftPane.add_button("Save (F5)").on_pressed([] {
+                mp6_savestate_request_save();
+            }),
+                rightPane, [](Pane &pane) {
+                    pane.clear();
+                    pane.add_text("The unnumbered default slot the F5/F8 hotkeys use "
+                                  "(MP6_SAVESTATE_PATH overrides its location).");
+                });
+            leftPane.register_control(leftPane.add_button("Load (F8)").on_pressed([] {
+                mp6_savestate_request_load();
+            }),
+                rightPane, [](Pane &pane) {
+                    pane.clear();
+                    pane.add_text("Load the default slot (same as pressing F8 during play).");
+                });
+        });
+    }
+
+    /* ------------------------------------------------------------------
      * ABOUT ([MP6] content)
      * ------------------------------------------------------------------ */
     add_tab("About", [this](Rml::Element *content) {
@@ -538,7 +769,34 @@ void SettingsWindow::update()
 {
     /* [MP6] their prelaunch-verification-modal hook dropped -- no disc
      * verification flow in our content model. */
+
+    /* [MP6] Save States tab: a queued save/load was serviced at a frame
+     * boundary since we last looked -- rebuild the ACTIVE tab so slot
+     * timestamps/compatibility lines are fresh (cheap: once per serviced
+     * request, not per frame; rebuilding a non-saves tab is harmless). */
+    if (mInGame) {
+        const unsigned int gen = mp6_savestate_ui_generation();
+        if (gen != mSeenSavestateGen) {
+            mSeenSavestateGen = gen;
+            if (visible()) {
+                refresh_active_tab();
+            }
+        }
+    }
     Window::update();
+}
+
+bool SettingsWindow::consume_close_request()
+{
+    /* [MP6] the persistent in-game instance HIDES on Cancel/close and stays
+     * on the document stack, so the next F10/F1/gear press re-summons the
+     * same window (state, tab, scroll intact). Pre-boot instances keep the
+     * ripped pop-on-close behavior. */
+    if (mInGame) {
+        hide(false);
+        return true;
+    }
+    return false;
 }
 
 } // namespace mp6::ui

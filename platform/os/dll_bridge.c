@@ -91,7 +91,8 @@ const VoidFunc mdselDll_dtors[] = { 0 };
  * ovl_table.h index 91). Compiled from the decomp's
  * src/REL/mdpartydll/{mdparty.c,stage.c} and bound for real, exactly like
  * the other overlays; same -D rename scheme (tools/build.py REL_SOURCES)
- * for the shared _prolog/_epilog/_ctors/_dtors/ObjectSetup names. */
+ * for the shared _prolog/_epilog/_ctors/_dtors/ObjectSetup names. See
+ * docs/M14_MDPARTY_INTEGRATION.md. */
 extern int mdpartyDll_prolog(void);
 extern void mdpartyDll_epilog(void);
 const VoidFunc mdpartyDll_ctors[] = { 0 };

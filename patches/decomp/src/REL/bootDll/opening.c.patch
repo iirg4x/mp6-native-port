@@ -1,6 +1,58 @@
 --- a/src/REL/bootDll/opening.c
 +++ b/src/REL/bootDll/opening.c
-@@ -725 +725,36 @@
+@@ -23,0 +24 @@
++#include "mp6_widescreen.h" /* WS6 (docs/WS6_OVERLAY_CAMERAS.md) */
+@@ -169,0 +171,22 @@
++    /* MP6 native port -- WS12 (docs/WS11_EXTRUDE_BACKDROPS.md): OpeningMdlId[0]
++     * (pos z=-4500, the furthest-back layer-1 model, slow ambient
++     * Hu3DMotionSpeedSet(0.015f) -- already documented as "backdrop" by
++     * this same file's own PostDrawHook comment above, which groups
++     * "OpeningMdlId[0]/[3..7] (backdrop + star effects)") is the opening
++     * storybook's own 3D backdrop, drawn behind the book (OpeningMdlId[1],
++     * untouched, separately confirmed rotated -20/-30/30 -- NOT extruded)
++     * and unrelated to the character/story-texture layer (OpeningMdlId[2],
++     * layer 0, its own PreDrawHook camera, feeds the native BookFrameBuf
++     * capture -- explicitly out of scope). HSF diagnostic dump (this
++     * session) found OpeningMdlId[0] loads the EXACT SAME underlying HSF
++     * asset as fileseldll/filesel.c's own storybook backdrop
++     * (lbl_1_bss_2D8[1] -- identical sub-object names bg_hiru/bg_sora/
++     * bg_yoru/grid1/hikari, identical bitmap names, identical computed
++     * hierarchical center) -- see that file's own comment on this same
++     * call for the full CLAMP-vs-REPEAT finding, which applies here
++     * unchanged. OpeningMdlId[0]'s own top-level transform is confirmed
++     * unrotated (no Hu3DModelRotSet call anywhere in this file for it,
++     * leaving Hu3DModelCreate's own default rot=(0,0,0)). Camera
++     * unchanged (WS9's native PreDrawHook / WS6's widened PostDrawHook,
++     * both untouched by this change). */
++    mp6_widescreen_extrude_model(OpeningMdlId[0]);
+@@ -522,2 +545,24 @@
+-    Hu3DCameraPerspectiveSet(OPENING_CAMERA_BIT, 30.f, 20.f, 15000.f, 1.2f);
+-    Hu3DCameraViewportSet(OPENING_CAMERA_BIT, 0.0f, 0.0f, 640.f, 480.f, 0.0f, 1.0f);
++    /* MP6 native port -- WS9 (docs/WS8_2D_COHERENCE.md section 5.0/1.7;
++     * see PreDrawHook above for the fuller writeup): this camera bit is
++     * shared by two layers with opposite needs. PreDrawHook (just above)
++     * was reverted to fully native -- it only ever configures a RENDER-TO-
++     * TEXTURE pass (OpeningMdlId[2], layer 0, the story-texture: sun/moon +
++     * character stickers), immediately photographed by a hardcoded-native
++     * Hu3DFbCopyExec(x=0, w=640) a few lines below into BookFrameBuf[] --
++     * widening that render while the capture stayed native shifted the
++     * captured page content off-center. THIS hook is different: it
++     * reconfigures the SAME camera bit for LAYER 1 -- OpeningMdlId[1] (the
++     * real 3D book, cluster-deformed for page turns) plus OpeningMdlId[0]/
++     * [3..7] (backdrop + star effects) -- which then draw straight to the
++     * visible frame (hsfman.c's Hu3DExec re-applies whatever camera state
++     * is current immediately before each layer's own models draw; nothing
++     * else reconfigures this bit between layers). That content is never
++     * captured, so it must track the live wide render width to fill/
++     * center the screen, same as every other overlay camera in this
++     * project -- confirmed correctly centered at the user's own wide
++     * aspect by direct pixel measurement (WS8: book spine within 10px of
++     * true center at 2560x1180). Reverting this hook too would shrink the
++     * book/backdrop back to a native 640px column on a wide screen -- a
++     * regression, not a fix. No-op when Widescreen is disabled. */
++    Hu3DCameraPerspectiveSet(OPENING_CAMERA_BIT, 30.f, 20.f, 15000.f, 1.2f * mp6_widescreen_scale_factor());
++    Hu3DCameraViewportSet(OPENING_CAMERA_BIT, 0.0f, 0.0f, mp6_widescreen_render_width(), 480.f, 0.0f, 1.0f);
+@@ -725 +770,36 @@
 -    OpeningFocusObject *object;
 +    /* MP6 native port -- docs/A3_GUIDE_PLACEMENT.md. OpeningFocusObject is a
 +     * hand-modeled PARTIAL OVERLAY of HSF_OBJECT (see its own typedef, just
@@ -38,14 +90,14 @@
 +     * cheap "spotlight" highlight on the currently-narrated guide
 +     * character), just no longer aliased onto the wrong field. */
 +    HSF_OBJECT *object;
-@@ -730 +765 @@
+@@ -730 +810 @@
 -    object = (OpeningFocusObject *)Hu3DModelObjPtrGet(
 +    object = Hu3DModelObjPtrGet(
-@@ -751,2 +786,2 @@
+@@ -751,2 +831,2 @@
 -        object->focus38 = focusValue;
 -        object->focus34 = focusValue;
 +        object->mesh.base.scale.x = focusValue;
 +        object->mesh.base.scale.y = focusValue;
-@@ -799 +834 @@
+@@ -799 +879 @@
 -    object->focus34 = object->focus38 = GUIDE_FOCUS_VALUE_REST;
 +    object->mesh.base.scale.x = object->mesh.base.scale.y = GUIDE_FOCUS_VALUE_REST;

@@ -2,7 +2,9 @@
 +++ b/src/game/window.c
 @@ -4,0 +5 @@
 +#include "be.h"
-@@ -536,0 +538,16 @@
+@@ -16,0 +18 @@
++#include "mp6_widescreen.h" /* WS5 (docs/WS5_OPENING_STORYBOOK.md) */
+@@ -536,0 +539,16 @@
 +/* MP6 native port -- docs/M2C_MENU_PATH.md. messDataPtr (game/window.c's
 + * HuWinMesRead()) is a plain memcpy() of a real DVD file's raw bytes
 + * (mess/messdata*.bin), never byte-swapped on the way in -- the exact
@@ -19,29 +21,52 @@
 + * corrupted messData pointer it produced is the direct cause of the
 + * first-ever "GXBegin: called without matching GXEnd" Aurora FATAL this
 + * port hit, a few lines later, once real frame drawing tried to use it. */
-@@ -540 +557 @@
+@@ -540 +558 @@
 -    return *dirNum;
 +    return be32(dirNum);
-@@ -547 +564 @@
+@@ -547 +565 @@
 -    if(dir >= *messData) {
 +    if(dir >= be32(messData)) {
-@@ -551,2 +568,2 @@
+@@ -551,2 +569,2 @@
 -    messData += messData[dir]/sizeof(u32);
 -    return *messData;
 +    messData += be32(&messData[dir])/sizeof(u32);
 +    return be32(messData);
-@@ -560 +577 @@
+@@ -560 +578 @@
 -    if(dir >= *messData) {
 +    if(dir >= be32(messData)) {
-@@ -564,2 +581,2 @@
+@@ -564,2 +582,2 @@
 -    messData += messData[dir]/sizeof(u32);
 -    if(num >= *messData) {
 +    messData += be32(&messData[dir])/sizeof(u32);
 +    if(num >= be32(messData)) {
-@@ -569 +586 @@
+@@ -569 +587 @@
 -    messData += messData[num]/sizeof(u32);
 +    messData += be32(&messData[num])/sizeof(u32);
-@@ -1524,0 +1542,32 @@
+@@ -596 +614,21 @@
+-        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, 0.0f, HU_DISP_WIDTH, 0.0f, 10.0f);
++        /* MP6 native port -- WS5 (docs/WS5_OPENING_STORYBOOK.md). This is a
++         * THIRD, independent copy of the exact ortho HuSprDispInit sets up
++         * (game/sprput.c) -- MesDispFunc is a "func sprite" draw callback
++         * (HuSprFuncCreate, this file's own HuWinCreate/HuWinExCreateFrame),
++         * invoked from game/sprput.c's HuSprDisp for EVERY HuWin window's
++         * message-glyph quads, every frame. A func sprite re-establishes its
++         * OWN GX pipeline state from scratch (HuSprDisp calls HuSprDispInit()
++         * again right after it returns, specifically because a func sprite is
++         * free to leave this state however it wants) -- including its own
++         * hardcoded, native-only MTXOrtho(0, HU_DISP_WIDTH). WS4's own recenter
++         * of the SHARED HuSprDispInit ortho (docs/WS4_WIDESCREEN_2D.md section
++         * 1) never touched this second, self-contained copy, so every character
++         * glyph in every message window was still being projected through the
++         * OLD native-only mapping while that same window's own frame/background
++         * sprites (ordinary, non-func sprites drawn through the shared,
++         * now-recentered ortho) were correctly centered -- a real mismatch
++         * between where a window's box renders and where its own text renders.
++         * Recentered exactly like HuSprDispInit's own copy -- same accessor,
++         * same formula, 0.0f/no-op (byte-identical native call) when Widescreen
++         * is disabled. */
++        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0.0f, 10.0f);
+@@ -1524,0 +1563,32 @@
 +/* MP6 native port -- M4c ("Message Dir Over" crash fix, docs/NO_LEAK_POLICY.md-
 + * adjacent menus milestone). HuWinMesSet/HuWinInsertMesSet's "is messNum a
 + * real pointer, or a packed dir<<16|num value?" check was `messNum &
@@ -74,13 +99,13 @@
 + * this port's. */
 +#define MP6_MESSNUM_ENCODED_MAX 0x01000000u
 +
-@@ -1530 +1579 @@
+@@ -1530 +1600 @@
 -    if(!(messNum & 0x80000000)) {
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-@@ -1563 +1612 @@
+@@ -1563 +1633 @@
 -    if(!(messNum & 0x80000000)) {
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-@@ -2033 +2082,13 @@
+@@ -2033 +2103,13 @@
 -    if(messNum > 0x80000000) {
 +    /* MP6 native port -- same M4c fix as HuWinMesSet/HuWinInsertMesSet
 +     * above (this file's own section-comment there has the full story):
@@ -95,7 +120,7 @@
 +     * Branch order/bodies unchanged from the original -- only the
 +     * condition itself changes, same as the other two instances. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
-@@ -2224 +2285,2 @@
+@@ -2224 +2306,2 @@
 -    if(messNum > 0x80000000) {
 +    /* MP6 native port -- same M4c fix, third instance in this file. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {

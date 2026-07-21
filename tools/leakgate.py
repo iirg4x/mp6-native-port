@@ -86,7 +86,13 @@ def main():
         # cleanup and leaking a stale lockfile that then wrongly refuses
         # every subsequent run ("lockfile busy") until it's manually removed.
         capture_fh = open(a.capture_stdout, "w") if a.capture_stdout else subprocess.DEVNULL
-        proc = subprocess.Popen([a.exe] + a.args + [a.ticks],
+        # The leak slope is a per-MINUTE fit, so the run must pace in real time.
+        # Automation mode now defaults the tick throttle OFF (free-run) for speed,
+        # so opt this gate back into 60Hz explicitly (setdefault: a caller who
+        # passes MP6_TICK_HZ still wins).
+        child_env = dict(os.environ)
+        child_env.setdefault("MP6_TICK_HZ", "60")
+        proc = subprocess.Popen([a.exe] + a.args + [a.ticks], env=child_env,
                                 stdout=capture_fh, stderr=subprocess.STDOUT if a.capture_stdout else subprocess.DEVNULL)
         handle = int(proc._handle)
         t0 = time.time()

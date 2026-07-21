@@ -1,7 +1,7 @@
 /* MP6 native port -- explicit placeholder bridge for src/board/board.c's
  * mbSaveInit/mbSavePartyInit entry points, discovered as the real
  * undefined-symbol closure when wiring the fully-recovered mdpartydll
- * overlay in.
+ * overlay in (docs/M14_MDPARTY_INTEGRATION.md).
  *
  * WHY THIS FILE EXISTS, NOT gen_shims.py: these two symbols are NOT
  * Nintendo SDK surface (dolphin/msm) -- they are ordinary MP6 GAME code,
@@ -14,7 +14,7 @@
  * definition somewhere.
  *
  * WHY A STUB, NOT THE REAL board.c BODY: board.c is a SEPARATE, still
- * actively-worked decompilation effort (main-DOL code, not a REL overlay --
+ * actively-worked decomp lane (main-DOL code, not a REL overlay --
  * configure.py keeps the whole file NonMatching; STATUS.md reports
  * individual functions including mbSaveInit itself as byte-exact
  * already, but siblings in the same TU -- mbObjectSetup/mbMain/
@@ -26,8 +26,8 @@
  * only ("do NOT try to recover downstream overlays -- that's the decomp
  * worker's job"). board.c is not in tools/build.py's game_sources() (it
  * only walks src/game/*.c, never src/board/) or any REL_SOURCES entry;
- * integrating it for real is future work for whichever effort eventually
- * owns board.c.
+ * integrating it for real is future work for whichever lane owns
+ * board.c (see the project's board-recover history).
  *
  * WHY A STUB IS SAFE HERE: mdparty.c's own two callers (fn_1_718,
  * fn_1_E30 -- both reached only at the END of a full player-count /
@@ -67,7 +67,8 @@
 void mbSaveInit(s32 boardNo)
 {
     printf("[STUB] mbSaveInit(boardNo=%d) -- src/board/board.c is not yet integrated into this "
-           "port (see platform/os/board_stub.c) -- no-op.\n", (int)boardNo);
+           "port (separate recovery lane; see platform/os/board_stub.c and "
+           "docs/M14_MDPARTY_INTEGRATION.md) -- no-op.\n", (int)boardNo);
     fflush(stdout);
 }
 
@@ -76,7 +77,7 @@ void mbSavePartyInit(s32 tagF, s32 bonusStarF, s32 mgPack, s32 turnMax,
 {
     printf("[STUB] mbSavePartyInit(tagF=%d, bonusStarF=%d, mgPack=%d, turnMax=%d, "
            "handicap=%d/%d/%d/%d) -- src/board/board.c is not yet integrated into this port "
-           "(a separate, not-yet-integrated effort) -- no-op.\n",
+           "(separate recovery lane) -- no-op.\n",
            (int)tagF, (int)bonusStarF, (int)mgPack, (int)turnMax,
            (int)handicapP1, (int)handicapP2, (int)handicapP3, (int)handicapP4);
     fflush(stdout);

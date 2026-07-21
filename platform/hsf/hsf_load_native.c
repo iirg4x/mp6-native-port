@@ -98,6 +98,7 @@
 #include "mp6_shim_log.h"
 #include "mp6_hsf_native.h"
 #include "mp6_gxarray_registry.h"
+#include "mp6_boot.h" /* mp6_heap_block_data_size -- LoadBitmaps' copy bound */
 
 #include <string.h>
 #include <stdio.h>
@@ -633,6 +634,47 @@ static HSF_PALETTE *FindPaletteById(const LoadCtx *ctx, s32 id)
 /* ==========================================================================
  * Bitmap (needs Palette already loaded).
  * ========================================================================== */
+
+/* Byte length of one bitmap's GX-tiled texel data. GX stores textures in
+ * WHOLE tiles, so the correct length is ceil(w/tileW)*ceil(h/tileH)*
+ * bytesPerTile -- NOT the naive w*h*bpp/8 this loader originally used,
+ * which under-counts any bitmap whose width or height is not a tile
+ * multiple. 27 bitmap instances on the real disc (13 unique bitmaps, e.g.
+ * actman's 203x385 RGB565 "test09a", m605's 191x191 C8 "Thasira") are not
+ * tile-aligned; with the naive count their last tile row was never copied,
+ * and Aurora's own tile-aligned texture upload then read past the heap
+ * allocation's end.
+ *
+ * Tile geometry per HSF dataFmt (game/hsfformat.h BMPFMT_* order; the CI_*
+ * formats pick C4 vs C8 off `pixSize < 8`, mirroring game/hsfdraw.c's
+ * LoadTexture switch). Mirrors tools/mp6scene/mp6_hsf.py's _GX_TILE, which
+ * validated these against the whole disc (12,844 bitmaps, 0 failures). An
+ * unknown format falls back to the naive count -- old behavior, never
+ * larger. */
+static u32 BitmapTileBytes(u8 dataFmt, u8 pixSize, u16 w, u16 h)
+{
+    u32 tw, th, tb;
+    switch (dataFmt) {
+    case 0:  tw = 8; th = 8; tb = 32; break;                 /* I4     */
+    case 1:                                                  /* I8     */
+    case 2:  tw = 8; th = 4; tb = 32; break;                 /* IA4    */
+    case 3:                                                  /* IA8    */
+    case 4:                                                  /* RGB565 */
+    case 5:  tw = 4; th = 4; tb = 32; break;                 /* RGB5A3 */
+    case 6:  tw = 4; th = 4; tb = 64; break;                 /* RGBA8  */
+    case 7:  tw = 8; th = 8; tb = 32; break;                 /* CMPR: 4 DXT1 sub-blocks x 8B */
+    case 9:                                                  /* CI_RGB565 */
+    case 10:                                                 /* CI_RGB5A3 */
+    case 11:                                                 /* CI_IA8    */
+        if (pixSize < 8) { tw = 8; th = 8; tb = 32; }        /* -> C4 */
+        else             { tw = 8; th = 4; tb = 32; }        /* -> C8 */
+        break;
+    default:
+        return ((u32)w * (u32)h * (u32)pixSize) / 8;
+    }
+    return ((u32)(w + tw - 1) / tw) * ((u32)(h + th - 1) / th) * tb;
+}
+
 static void LoadBitmaps(LoadCtx *ctx)
 {
     s32 num = ctx->h.sec[FSEC_BITMAP].num;
@@ -661,6 +703,7 @@ static void LoadBitmaps(LoadCtx *ctx)
         u32 dataOfs = be32(rec + FBMP_DATA);
         HSF_PALETTE *pal;
         u32 pixelBytes;
+        u32 naiveBytes;
 
         out[i].name = GetStr(ctx, nameOfs);
         out[i].maxLod = be32(rec + FBMP_MAXLOD);
@@ -680,14 +723,44 @@ static void LoadBitmaps(LoadCtx *ctx)
 
         /* Pixel data: raw GX-native texel bytes -- Aurora consumes this
          * GameCube-native GPU data completely UNCHANGED (no byte-swap, no
-         * relayout). Byte count = sizeX*sizeY*
-         * bitsPerPixel/8, the same formula every real GX texture format
-         * (including CMPR, whose pixSize is already the tool's own
-         * average-bits-per-pixel convention) satisfies. */
-        pixelBytes = ((u32)(u16)sizeX * (u32)(u16)sizeY * (u32)pixSize) / 8;
+         * relayout).
+         *
+         * Byte count = TILE-aligned (BitmapTileBytes above), not the naive
+         * w*h*bpp/8 -- see that helper's comment for the 13 real bitmaps
+         * the naive count under-copied.
+         *
+         * Copy bound: the source is an offset into the decoded FILE buffer,
+         * whose length this loader is never told -- and 2 of those 13
+         * bitmaps are physically TRUNCATED at EOF (the authoring tool wrote
+         * the naive size: actman "test09a" is short 1,800 bytes, ishi
+         * "testPic" 222). Real hardware just DMA'd whatever followed in
+         * RAM; this port bounds the copy by the buffer's own allocation
+         * extent (mp6_heap_block_data_size -- data.c allocates every file
+         * buffer via HuMemDirectMalloc) and ZERO-pads the missing tail, the
+         * same policy as tools/mp6scene/mp6_hsf.py's importer. If the bound
+         * is unavailable (pointer not a verifiable block base), copy only
+         * the naive byte count -- bytes guaranteed present in every real
+         * file -- and zero the rest. */
+        naiveBytes = ((u32)(u16)sizeX * (u32)(u16)sizeY * (u32)pixSize) / 8;
+        pixelBytes = BitmapTileBytes(out[i].dataFmt, pixSize, (u16)sizeX, (u16)sizeY);
         if (pixelBytes > 0) {
             u8 *pixels = (u8 *)HuMemDirectMallocNum(HEAP_MODEL, (s32)pixelBytes, ctx->mallocTag);
-            memcpy(pixels, poolBase + dataOfs, pixelBytes);
+            u32 avail = mp6_heap_block_data_size(ctx->base);
+            u32 srcOfs = (u32)(poolBase - ctx->base) + dataOfs;
+            u32 copyN;
+            if (avail > 0) {
+                copyN = (srcOfs >= avail) ? 0
+                      : (pixelBytes <= avail - srcOfs) ? pixelBytes
+                                                       : (avail - srcOfs);
+            } else {
+                copyN = (naiveBytes < pixelBytes) ? naiveBytes : pixelBytes;
+            }
+            if (copyN < pixelBytes) {
+                memset(pixels + copyN, 0, pixelBytes - copyN);
+            }
+            if (copyN > 0) {
+                memcpy(pixels, poolBase + dataOfs, copyN);
+            }
             out[i].data = pixels;
         } else {
             out[i].data = NULL;

@@ -1,6 +1,9 @@
 --- a/src/game/hsfdraw.c
 +++ b/src/game/hsfdraw.c
-@@ -26,0 +27,54 @@
+@@ -14,0 +15 @@
++#include "mp6_shadow_quality.h" /* [MP6 Shadow Quality] effective map size */
+@@ -25,0 +27,54 @@
++
 +/* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md): object-level draw
 + * census, the per-OBJECT companion to hsfman.c's per-MODEL one (that
 + * patch's MP6_DRAW_CENSUS explains what the Hu3DExec loop decided; this
@@ -54,15 +57,14 @@
 +    const char *want = mp6DlDumpEnv();
 +    return want && objName && strcmp(want, objName) == 0;
 +}
-+
-@@ -149,0 +204,6 @@
+@@ -149,0 +205,6 @@
 +    if (mp6ObjCensusActive()) { /* M11 object census -- see mp6ObjCensusActive above */
 +        printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=%p root=%p rootType=%d objectNum=%d motId=%d\n",
 +               (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)hsf, (void *)hsf->root,
 +               hsf->root ? hsf->root->type : -1, hsf->objectNum, modelP->motId);
 +        fflush(stdout);
 +    }
-@@ -189,0 +250,7 @@
+@@ -189,0 +251,7 @@
 +    if (mp6ObjCensusActive()) { /* M11 object census (rot/pos: thread 3's sky-wheel angle) */
 +        printf("[CENSUS-OBJ]  objCall type=%d name=%s childNum=%d baseRot=(%.1f,%.1f,%.1f) basePos=(%.1f,%.1f,%.1f) curRot=(%.1f,%.1f,%.1f)\n",
 +               objPtr->type, objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum,
@@ -70,11 +72,12 @@
 +               objPtr->mesh.base.pos.x, objPtr->mesh.base.pos.y, objPtr->mesh.base.pos.z,
 +               objPtr->mesh.curr.rot.x, objPtr->mesh.curr.rot.y, objPtr->mesh.curr.rot.z);
 +    }
-@@ -256,0 +324,3 @@
+@@ -256,0 +325,3 @@
 +    if (mp6ObjCensusActive() && (constData->attr & HU3D_CONST_LOCK)) { /* M11 object census */
 +        printf("[CENSUS-OBJ]  mesh %s -> skip:LOCK\n", objPtr->name ? objPtr->name : "(null)");
 +    }
-@@ -339,0 +410,19 @@
+@@ -338,0 +410,19 @@
++            }
 +            if (mp6ObjCensusActive()) { /* M11 object census: predict the branch below, in its order */
 +                const char *mp6Br;
 +                if (!dispF) {
@@ -93,35 +96,42 @@
 +                       objPtr->name ? objPtr->name : "(null)", mp6Br, (unsigned)constData->attr,
 +                       (unsigned)objPtr->flags, transformP->scale.x, transformP->scale.y, transformP->scale.z);
 +                fflush(stdout);
-+            }
-@@ -1996,0 +2086,7 @@
+@@ -1836 +1926,6 @@
+-    GXInitTexObj(&texObj, Hu3DShadow->buf, Hu3DShadow->size, Hu3DShadow->size, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
++    /* [MP6 Shadow Quality] the texObj's claimed dims track the scaled
++     * copy DESTINATION (mp6_shadow_effective_size()), matching what
++     * Hu3DShadowExec's GXSetTexCopyDst resolved into Hu3DShadow->buf.
++     * Identity at the native setting. */
++    s32 effSize = mp6_shadow_effective_size(Hu3DShadow->size);
++    GXInitTexObj(&texObj, Hu3DShadow->buf, (u16)effSize, (u16)effSize, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+@@ -1995,0 +2091,7 @@
++    }
 +    if (mp6ObjCensusActive()) { /* M11 object census: name the texture each draw binds */
 +        printf("[CENSUS-OBJ]    LoadTexture bmp=%s data=%p fmt=%d %dx%d texId=%d attr=%s tint=(%d,%d,%d,%d)\n",
 +               bmpPtr->name ? bmpPtr->name : "(null)", (void *)bmpPtr->data, bmpPtr->dataFmt,
 +               bmpPtr->sizeX, bmpPtr->sizeY, texId, attrP->name ? attrP->name : "(null)",
 +               bmpPtr->tint.r, bmpPtr->tint.g, bmpPtr->tint.b, bmpPtr->tint.a);
 +        fflush(stdout);
-+    }
-@@ -2124,0 +2221,5 @@
+@@ -2124,0 +2227,5 @@
 +            if (mp6ObjCensusActive()) { /* M11 object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
-@@ -2174,0 +2276,5 @@
+@@ -2174,0 +2282,5 @@
 +            if (mp6ObjCensusActive()) { /* M11 object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
-@@ -2399,0 +2506,6 @@
+@@ -2399,0 +2512,6 @@
 +                if (mp6ObjCensusActive()) { /* M11 object census: deferred z-sorted draws */
 +                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d obj=%s z=%.1f\n",
 +                           drawObjNo, (int)(drawObj->model - Hu3DData),
 +                           drawObj->object->name ? drawObj->object->name : "(null)", drawObj->z);
 +                    fflush(stdout);
 +                }
-@@ -2507,0 +2620,10 @@
+@@ -2507,0 +2626,10 @@
 +    if (mp6ObjCensusActive()) { /* M11 object census (matrix row: thread 3's applied wheel rotation) */
 +        printf("[CENSUS-OBJ]   ObjDraw model=%d obj=%s faceCount=%d mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
 +               (int)(drawObj->model - Hu3DData),
@@ -132,7 +142,8 @@
 +               drawObj->matrix[2][0], drawObj->matrix[2][1], drawObj->matrix[2][2], drawObj->matrix[2][3]);
 +        fflush(stdout);
 +    }
-@@ -2693,0 +2816,119 @@
+@@ -2692,0 +2821,119 @@
++    }
 +    if (mp6DlDumpEnv() && mp6DlDumpEnv()[0] == '*') { /* M13 sweep mode: one line per built object */
 +        HSF_FACE *fp = faceBuf->data;
 +        HuVecF *vtx = objPtr->mesh.vertex ? (HuVecF *)objPtr->mesh.vertex->data : NULL;
@@ -251,8 +262,7 @@
 +            printf("[DL-DUMP] wrote %s (faces=%d dlSize=%d)\n", path, faceBuf->count, (int)totalSize);
 +            fflush(stdout);
 +        }
-+    }
-@@ -2834,0 +3076,39 @@
+@@ -2834,0 +3082,39 @@
 +                /* MP6 native port -- docs/M5_MENUS_STAR.md. Real, unpatched
 +                 * original decomp gap, same class as game/hsfman.c's
 +                 * Hu3DZClear and game/sprput.c's HuSpr3DDisp (see
@@ -292,21 +302,21 @@
 +                 * primitive open for the bridge's necessarily-coarser,
 +                 * wrong-buffer fallback to eventually mis-close. */
 +                GXEnd();
-@@ -2904,0 +3185,6 @@
+@@ -2904,0 +3191,6 @@
 +                /* MP6 native port -- docs/M5_MENUS_STAR.md. Same class and
 +                 * same fix as the HSF_FACE_TRI case above (this function's
 +                 * own comment there has the full root-cause story) --
 +                 * GXQUADS' own vertex loop always emits exactly
 +                 * faceNumBuf[drawCnt] vertices too. */
 +                GXEnd();
-@@ -2975,0 +3262,6 @@
+@@ -2975,0 +3268,6 @@
 +                /* MP6 native port -- docs/M5_MENUS_STAR.md. Same class and
 +                 * same fix as the HSF_FACE_TRI case above (this function's
 +                 * own comment there has the full root-cause story) -- the
 +                 * initial 3 vertices plus this strip loop always emit
 +                 * exactly faceNumBuf[drawCnt] vertices in total too. */
 +                GXEnd();
-@@ -3495 +3787,23 @@
+@@ -3495 +3793,23 @@
 -            objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
 +            /* MP6 native port -- docs/M12_MDSEL_INTEGRATION.md. 64-bit/
 +             * checked-build portability fix, NULL-in-pointer-rebase class:

@@ -247,6 +247,23 @@ int mp6_host_image_below_4gb(void)
     return q.found && q.below4g;
 }
 
+/* Savestate: not supported on Android today -- returns 0 ("query failed"),
+ * which every caller already treats as fail-closed (see host.h). Kept as a
+ * real definition rather than an omission because host.h is a SHARED seam:
+ * the Windows and Android backends must expose the identical symbol set or
+ * the shared callers stop linking. The feature is Windows-only for now
+ * because savestates are a desktop debugging tool (docs/SAVESTATE.md);
+ * whenever it is wanted here, the honest implementation is the
+ * dl_iterate_phdr walk this file already uses just above, keeping PT_LOAD
+ * segments whose p_flags carry PF_W -- deliberately NOT written blind,
+ * since it cannot be tested from this lane. */
+int mp6_host_image_writable_sections(Mp6HostImageSection *out, int maxOut)
+{
+    (void)out;
+    (void)maxOut;
+    return 0;
+}
+
 /* =======================================================================
  * Paths & filesystem
  * The launcher publishes the on-device base dir as MP6_HOST_BASE;

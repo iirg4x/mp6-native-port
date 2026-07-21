@@ -5,6 +5,7 @@
 #define MP6_BOOT_H
 
 #include <stddef.h> /* size_t, for mp6_symbolize_addr below */
+#include <stdint.h> /* uint32_t, for mp6_heap_block_data_size below */
 
 #ifdef __cplusplus
 extern "C" {
@@ -114,9 +115,9 @@ void mp6_bridge_post_window_init(void *sdlWindow);
  * phantom letterboxed 4:3 sub-rectangle instead of the real window/
  * display surface. Invisible on the desktop default 1024x768 window
  * (already 4:3, so the fit is a no-op) but severe on any non-4:3 physical
- * surface (confirmed on a Galaxy S22+, ~21.5:9 landscape). See
- * mp6_bridge_apply_content_aspect_policy() below for where that half of
- * the policy moved. */
+ * surface (confirmed on a Galaxy S22+, ~21.5:9 landscape --
+ * docs/A5_LAUNCHER_ASPECT.md). See mp6_bridge_apply_content_aspect_policy()
+ * below for where that half of the policy moved. */
 void mp6_bridge_window_policy_init(void *sdlWindow);
 
 /* A5: the CONTENT half of the fixed-aspect policy -- AuroraSetViewportPolicy
@@ -194,6 +195,33 @@ void mp6_symbolize_addr(void *addr, char *outBuf, size_t outBufSz);
  * next to it). A complete no-op unless MP6_ALLOC_CENSUS_START_TICK is
  * set. */
 void mp6_alloc_census_tick_check(void);
+
+/* Bytes readable from `ptr` through the end of its own HuMemDirectMalloc
+ * block, or 0 when `ptr` is not verifiably a live block base (wrong shadow
+ * magic, outside every heap, NULL). Lets a consumer handed a bare buffer
+ * pointer with no length (the HSF loader's file buffers, allocated by
+ * game/data.c) bound its reads to the allocation instead of trusting
+ * in-file offsets. Conservative: may under-report by up to 8 bytes, never
+ * over-reports. Defined in platform/os/malloc_direct.c next to the
+ * shadow-header convention it reads. uint32_t (not the decomp's u32) so
+ * this header stays includable from TUs without dolphin/types.h. */
+uint32_t mp6_heap_block_data_size(const void *ptr);
+
+/* WS6 (docs/WS6_OVERLAY_CAMERAS.md): the real GPU's maxTextureDimension2D,
+ * as actually negotiated for THIS run -- captured by main_native.c's
+ * mp6_aurora_log_callback, which scans Aurora's own startup "Using
+ * limits:\n  maxTextureDimension2D: N" INFO log line (lib/webgpu/gpu.cpp)
+ * for that exact substring and parses N. This is a live runtime query in
+ * spirit without touching or rebuilding the vendored Aurora library: Aurora
+ * already logs the value it queried from the real adapter/device, and the
+ * port already registers a log callback that sees every line -- this just
+ * reads what was already there. Returns 0 if the line hasn't been seen yet
+ * (never called before aurora_initialize() returns, in practice) or this
+ * build has no Aurora log stream at all (--headless, where
+ * mp6_widescreen_render_width() is a fixed-640 stub that never consults
+ * this at all) -- callers must treat 0 as "unknown, use a safe fallback",
+ * never as a real zero-sized limit. */
+int mp6_aurora_queried_max_texture_dimension_2d(void);
 
 #ifdef __cplusplus
 }

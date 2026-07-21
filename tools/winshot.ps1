@@ -13,9 +13,19 @@ using System.Runtime.InteropServices;
 public class WinShot2 {
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+    [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 }
 "@
+# Make THIS capture process per-monitor DPI-aware BEFORE querying any window/DC.
+# The game window is per-monitor-aware (SDL3 default). If this process stays
+# DPI-unaware, then on a scaled monitor (e.g. a 125% secondary display, even when
+# the primary is 100%) Windows virtualizes the window down by the scale factor:
+# GetClientRect returns physical/scale (1280x720 -> 1024x576 at 125%), so the grab
+# comes out at ~80% size and loses native resolution / outer-edge pixels. Setting
+# per-monitor-aware-v2 (-4; -3 = v1 fallback for older Windows) makes GetClientRect
+# and PrintWindow see the window's true physical pixels, capturing the full window.
+foreach ($ctx in @(-4, -3)) { if ([WinShot2]::SetProcessDpiAwarenessContext([IntPtr]$ctx)) { break } }
 $proc = Get-Process -Name $Process -ErrorAction SilentlyContinue |
         Where-Object { $_.MainWindowHandle -ne 0 } |
         Sort-Object StartTime -Descending | Select-Object -First 1

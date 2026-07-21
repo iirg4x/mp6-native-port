@@ -1,0 +1,45 @@
+--- a/src/REL/mdpartydll/stage.c
++++ b/src/REL/mdpartydll/stage.c
+@@ -17,0 +18 @@
++#include "mp6_widescreen.h" /* WS8 (docs/WS8_2D_COHERENCE.md) */
+@@ -108 +109 @@
+-        GXSetTexCopySrc(0, 0, 640, 480);
++        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
+@@ -314 +315,27 @@
+-    MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f, 10.0f);
++    /* MP6 native port -- WS8 (docs/WS8_2D_COHERENCE.md). fn_1_400E0 is a
++     * full-screen fade/dissolve overlay (Hu3DLayerHookSet(14, ...) below --
++     * a low-res, previous-frame screenshot cross-faded in over ~90 frames,
++     * the "heat-haze"-looking transition this file's own board-preview
++     * stage uses between its setup screens) with its own independent,
++     * hardcoded-native ortho + quad + capture, completely bypassing the
++     * shared, already-widened HuSprDispInit ortho (game/sprput.c) and this
++     * REL's own Party board camera (mdparty.c's fn_1_33A0, WIDENED by WS8 per explicit user direction that a clean backdrop-model edge cutoff is an accepted tradeoff, not a defect -- docs/WS8_2D_COHERENCE.md).
++     * Left native, this overlay only ever covered the original 640-wide
++     * strip of a now-wider frame -- widened here to actually fill it, same
++     * WIDEN (not recenter -- this is a full-bleed background effect, not
++     * logically-centered content) treatment already proven for game/wipe.c's
++     * own near-identical inflated-corner full-screen quad. mp6_widescreen_
++     * render_width() is exactly 640 when Widescreen is disabled, so every
++     * touched line below is byte-identical to the original in that case.
++     * GXSetTexCopyDst's own 320x240 destination is deliberately left alone
++     * -- lbl_1_bss_A90's backing allocation (this file's own object-setup
++     * function, GXGetTexBufferSize(320, 240, ...)) is a fixed-size buffer;
++     * changing only the SOURCE capture width (below) changes the hardware
++     * downscale ratio, not the destination's own byte size, so there is no
++     * overflow risk -- and since the quad this texture paints onto is
++     * ALSO widened to the same render_width, the extra horizontal squish
++     * from capturing a wider source into the same fixed-width destination
++     * is exactly undone when that texture is stretched back across the
++     * (equally wider) quad -- same reasoning class as WS6's own explicit
++     * decision not to touch WipeCrossFade's fixed backing texture size. */
++    MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f, 10.0f);
+@@ -372 +399 @@
+-        GXPosition3f32(640 + i, i * -1, 0.0f);
++        GXPosition3f32(mp6_widescreen_render_width() + i, i * -1, 0.0f);
+@@ -378 +405 @@
+-        GXPosition3f32(640 + i, 480 + i, 0.0f);
++        GXPosition3f32(mp6_widescreen_render_width() + i, 480 + i, 0.0f);
+@@ -391 +418 @@
+-    GXSetTexCopySrc(0, 0, 640, 480);
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);

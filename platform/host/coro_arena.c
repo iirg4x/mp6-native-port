@@ -274,4 +274,48 @@ void mp6_coro_destroy(Mp6Coro *c)
     }
 }
 
+/* =======================================================================
+ * Savestate introspection (docs/SAVESTATE.md)
+ * =======================================================================
+ * Read-only accessors over this file's own statics. A savestate has to
+ * capture the live coroutine stacks themselves -- suspended HuPrc
+ * processes are the ONE place this port keeps genuinely resumable
+ * execution state (the OS main thread's own stack never needs capturing;
+ * capture and restore both re-enter through VIWaitForRetrace and return
+ * normally) -- and those stacks live in this pool, not in the game arena.
+ *
+ * Deliberately whole-slot, not a measured high-water: nothing here tracks
+ * touched stack bytes (there is no fill pattern and no guard page, and the
+ * pool is MEM_COMMIT'd in one shot, so VirtualQuery cannot infer it
+ * either). Copying the entire slot is correct by construction and captures
+ * minicoro's own mco_coro header + storage, which sit at the slot's base,
+ * alongside the stack that grows down from its top. At the observed peak
+ * concurrency (single-digit slots) that is a few MB before compression,
+ * and the savestate writer deflates it -- so the simpler, provably-correct
+ * choice costs nothing worth reclaiming with new tracking code. */
+void *mp6_coro_pool_base(void) { return g_pool; }
+size_t mp6_coro_pool_size(void) { return MP6_CORO_POOL_SIZE; }
+size_t mp6_coro_slot_size(void) { return MP6_CORO_SLOT_SIZE; }
+int mp6_coro_slot_count(void) { return MP6_CORO_MAX_SLOTS; }
+
+/* A slot is live iff its wrapper still owns it (slot index self-consistent)
+ * AND minicoro still has a coroutine there -- exactly the pair
+ * mp6_coro_destroy() clears together above, so this can never report a
+ * destroyed slot as live. */
+int mp6_coro_slot_in_use(int slot)
+{
+    if (!g_poolInit || slot < 0 || slot >= MP6_CORO_MAX_SLOTS) {
+        return 0;
+    }
+    return g_wrappers[slot].slot == slot && g_wrappers[slot].co != NULL;
+}
+
+void *mp6_coro_slot_addr(int slot)
+{
+    if (!g_poolInit || slot < 0 || slot >= MP6_CORO_MAX_SLOTS) {
+        return NULL;
+    }
+    return g_pool + (size_t)slot * MP6_CORO_SLOT_SIZE;
+}
+
 #endif /* !MP6_CORO_FIBERS */

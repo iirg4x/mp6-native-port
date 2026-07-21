@@ -296,7 +296,7 @@ void mp6_CARDInit(void);
 #define CARDInit mp6_CARDInit
 #endif
 
-/* FRAMESCOPE (frame diagnostic toolkit, platform/gx/framescope.c): reroute
+/* FRAMESCOPE (fable diagnostic toolkit, platform/gx/framescope.c): reroute
  * the game's TEV/texture-state calls through logging wrappers so one env
  * var (MP6_FRAMESCOPE=N) captures a complete frame's configuration trace,
  * per draw index. Wrappers forward to the real Aurora implementations;

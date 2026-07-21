@@ -171,7 +171,7 @@ def decode(data, w, h, fmt, tlut=None):
     return bytes(out)
 
 def stats(rgba, w, h):
-    """tiny content summary so you can triage without opening an image viewer"""
+    """tiny content summary so a text-only agent can triage without eyes"""
     n = w * h
     alphas = rgba[3::4]
     opaque = sum(1 for a in alphas if a == 255)

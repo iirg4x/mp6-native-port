@@ -3,7 +3,10 @@
 @@ -9,0 +10,2 @@
 +#include <stdio.h>
 +#include <stdlib.h>
-@@ -150,0 +153,27 @@
+@@ -11,0 +14,2 @@
++#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) */
++#include "mp6_freecam.h" /* runtime Mods-page freecam override (shim/include/mp6_freecam.h) */
+@@ -150,0 +155,27 @@
 +/* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md): the title-wordmark
 + * draw census. M10's framescope census proved the three BootTitleCreate
 + * models (TITLE_HSF_PARTY/SIX/STAR) never load a single texture on the
@@ -31,7 +34,13 @@
 +           mp6_tick_count < mp6CensusTick + 2;
 +}
 +
-@@ -195,0 +225,33 @@
+@@ -195,0 +227,39 @@
++    /* MP6 native port -- freecam (shim/include/mp6_freecam.h): override the
++     * main camera at Hu3DExec entry, AFTER every game-side camera write this
++     * tick (HuPrcCall already returned) and BEFORE Hu3DCameraSet consumes
++     * the fields. One false-branch no-op while the Mods-page toggle is off,
++     * so automation/headless behavior is byte-identical. */
++    mp6_freecam_apply();
 +    if (mp6CensusActive()) { /* M11 census entry dump -- see mp6CensusActive above */
 +        HU3D_MODEL *cmP;
 +        s16 ci;
@@ -65,7 +74,8 @@
 +        }
 +        fflush(stdout);
 +    }
-@@ -277,0 +340,27 @@
+@@ -276,0 +347,27 @@
++                    }
 +                    /* M11 census verdict line -- evaluates the loop's own
 +                     * skip chain, in the loop's own order, once per live
 +                     * model on its own layer's pass (see mp6CensusActive's
@@ -92,8 +102,7 @@
 +                        printf("[CENSUS]  cam%d layer%d model%d -> %s (layerMdlNum=%d/%d)\n",
 +                               Hu3DCameraNo, layer, i, mp6Verdict, layerMdlNum, layerNum[layer]);
 +                        fflush(stdout);
-+                    }
-@@ -935,0 +1025,22 @@
+@@ -935,0 +1033,22 @@
 +/* MP6 native port -- docs/M2C_MENU_PATH.md. On real hardware this lookup
 + * always finds a real object -- a model's real HSF data always has the
 + * name callers ask for, so returning NULL here was pure defensive code,
@@ -116,14 +125,66 @@
 + * meaningful value back out of it, so there is no cross-talk to avoid. */
 +static HSF_OBJECT mp6_dummyObj;
 +
-@@ -952 +1063 @@
+@@ -952 +1071 @@
 -    return NULL;
 +    return &mp6_dummyObj;
-@@ -1294,0 +1406,3 @@
+@@ -1287,0 +1407 @@
++    defCamera.aspect = HU_DISP_ASPECT * mp6_widescreen_scale_factor(); /* WS2: see mp6_widescreen.h -- 1.0 (no-op) when disabled, reproducing the reference ROM hack's confirmed defCamera.aspect x4/3 widen (WS_REFERENCE_STUDY.md section 5) at the LIVE aspect instead of a fixed ratio */
+@@ -1294,0 +1415,3 @@
 +    printf("[MP6-DIAG-CAM] Hu3DCameraCreate(bit=%d) ran; Hu3DCameraExistF=%d Hu3DCamera[0].fov=%f\n",
 +           cameraBit, Hu3DCameraExistF, Hu3DCamera[0].fov);
 +    fflush(stdout);
-@@ -2611,0 +2726,21 @@
+@@ -1477 +1600,9 @@
+-        Hu3DCameraPerspectiveSet(cameraBit, obj->camera.fov, obj->camera.near, obj->camera.far, HU_DISP_ASPECT);
++        /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): this is an HSF-scene-
++         * authored (cutscene/cinematic) camera -- genuinely on-screen main
++         * viewport content, so it gets the same live-aspect treatment as
++         * defCamera.aspect above (Hu3DCameraCreate), not the shadow/
++         * reflection exclusion below (those stay at HU_DISP_ASPECT
++         * unchanged -- off-screen render-to-texture passes, not the main
++         * viewport). */
++        Hu3DCameraPerspectiveSet(cameraBit, obj->camera.fov, obj->camera.near, obj->camera.far,
++            HU_DISP_ASPECT * mp6_widescreen_scale_factor());
+@@ -2106,0 +2238,2 @@
++/* MP6 native port -- Mods-page Shadow Quality (shim/include/mp6_shadow_quality.h). */
++#include "mp6_shadow_quality.h"
+@@ -2114,0 +2248,11 @@
++            /* MP6 native port -- Mods-page Shadow Quality (shim/include/
++             * mp6_shadow_quality.h has the full contract). shadowP->size
++             * stays NATIVE: the render pass (viewport/scissor/copy-src)
++             * is EFB-unit-bounded (the pristine 240 cap IS the 480px EFB
++             * box divided by the 2x supersample) and aurora already
++             * renders it at window-scaled physical resolution. Only the
++             * COPY DESTINATION's texel count is raised -- see
++             * mp6_shadow_effective_size() at the GXSetTexCopyDst /
++             * GXInitTexObj sites -- so the map covers the SAME light
++             * frustum at any setting. The buffer holds the scaled dst
++             * texels (I8, 1 byte per texel). */
+@@ -2117 +2261,2 @@
+-                shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, SHADOW_DEFAULT_SIZE*SHADOW_DEFAULT_SIZE);
++                s32 allocSide = mp6_shadow_effective_size(SHADOW_DEFAULT_SIZE);
++                shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, allocSide*allocSide);
+@@ -2182,0 +2328,4 @@
++            /* MP6 native port -- Shadow Quality, same native-size +
++             * scaled-alloc treatment as Hu3DShadowMultiCreate above.
++             * Dormant in the shipped game (no caller). */
++            s32 allocSide = mp6_shadow_effective_size(size);
+@@ -2187 +2336 @@
+-            shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, size*size);
++            shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, allocSide*allocSide);
+@@ -2301,0 +2451,8 @@
++        /* [MP6 Shadow Quality] pristine pass, scaled DESTINATION: the src
++         * rect stays the native EFB-unit region (aurora maps it to window-
++         * scaled physical pixels), and only the dst texel count grows --
++         * capped at 2x by mp6_shadow_effective_size(), the point where dst
++         * texels equal the src region's own supersampled detail. World
++         * coverage is untouched by construction. Native setting emits the
++         * pristine values exactly. */
++        s32 effDst = mp6_shadow_effective_size(Hu3DShadow->size);
+@@ -2303 +2460 @@
+-        GXSetTexCopyDst(Hu3DShadow->size, Hu3DShadow->size, GX_CTF_R8, GX_TRUE);
++        GXSetTexCopyDst((u16)effDst, (u16)effDst, GX_CTF_R8, GX_TRUE);
+@@ -2611,0 +2769,21 @@
 +    /* MP6 native port -- M3 (docs/M3_HSF.md). Explicit GXEnd() -- a pure
 +     * no-op on real hardware (this function's own 4-vertex GXBegin count
 +     * already exactly matches the 4 GXPosition3f32 calls above; real GX

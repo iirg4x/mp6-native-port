@@ -1,4 +1,4 @@
-// MP6 native port -- Android app module.
+// MP6 native port : U-A2 (docs/UA2_ANDROID_GRAPHICS.md).
 // Gradle NEVER runs the NDK here: tools/build.py --target aarch64-android
 // --windowed builds libmp6game.so + libmain.so and stages them into
 // src/main/jniLibs/arm64-v8a (the decoupling the U1 design documents from
@@ -7,7 +7,7 @@ plugins {
     id 'com.android.application'
 }
 
-//  the RmlUi launcher's resources (res/rml
+// A4 (docs/A4_ANDROID_UI.md): the RmlUi launcher's resources (res/rml
 // stylesheets + res/fonts) ship as APK assets under assets/res/..., synced
 // from the repo's own res/ tree -- the MP4 port's exact gradle wiring
 // (their app/build.gradle syncPartyBoardAssets task). At runtime the
@@ -24,6 +24,20 @@ def syncMp6Assets = tasks.register('syncMp6Assets', Sync) {
     into mp6GeneratedAssetsDir
 }
 
+// Version derives from git so every sideloaded build force-updates on device
+// (a fixed versionCode makes Android silently keep the previous install) and
+// the running build is identifiable at Settings -> Apps -> MP6 -> version.
+def mp6GitOut = { List cmd ->
+    try {
+        def p = new ProcessBuilder(cmd).directory(mp6RepoDir).start()
+        def out = p.inputStream.getText('UTF-8').trim()
+        p.waitFor()
+        return out
+    } catch (ignored) { return '' }
+}
+def mp6GitHash = { def h = mp6GitOut(['git', 'rev-parse', '--short=7', 'HEAD']); h ? h : 'nogit' }()
+def mp6GitCount = { def c = mp6GitOut(['git', 'rev-list', '--count', 'HEAD']); c ==~ /\d+/ ? c.toInteger() : 1 }()
+
 android {
     namespace 'com.mp6.game'
     compileSdk 36
@@ -32,8 +46,8 @@ android {
         applicationId 'com.mp6.game'
         minSdk 28          // = ANDROID_PLATFORM=android-28, the U-A0 probe row
         targetSdk 36
-        versionCode 1
-        versionName '0.1.0-ua2'
+        versionCode mp6GitCount
+        versionName "0.1.0-${mp6GitHash}"
     }
 
     buildTypes {
@@ -64,8 +78,8 @@ android {
     // jniLibs default source dir (src/main/jniLibs) is used as-is; the .so
     // files there are 16KB-page-aligned AND release-style stripped already
     // (build.py links, strips at staging, and keeps the unstripped
-    // originals in build/android/aurora/ for symbolization).
-    // useLegacyPackaging=false stores them
+    // originals in build/android/aurora/ for symbolization -- A4,
+    // docs/A4_ANDROID_UI.md). useLegacyPackaging=false stores them
     // UNCOMPRESSED in the APK so the loader mmaps them in place: the
     // install-size-friendly choice (no extracted second copy on disk).
     packagingOptions {

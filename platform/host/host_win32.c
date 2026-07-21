@@ -23,6 +23,18 @@
 
 #include "mp6_boot.h" /* mp6_symbolize_addr's own declaration (crash section below) */
 
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+ * includes is load-bearing, not stylistic: it is a #pragma clang section that
+ * redirects every file-scope definition FOLLOWING it. As a -include (before all
+ * headers) it also captured the decomp headers' C TENTATIVE definitions --
+ * dolphin/os.h:27 `u32 __OSBusClock;` and friends -- turning those common
+ * symbols into strong per-TU definitions and breaking the link with duplicate
+ * symbol errors. Here, headers keep their normal linkage and only this file's
+ * own statics move. tools/build.py asserts this line exists in every TU listed
+ * in HOST_STATE_SECTION_SOURCES. */
+#include "mp6_host_section.h"
+
+
 #pragma comment(lib, "dbghelp.lib")
 
 /* =======================================================================
@@ -177,6 +189,73 @@ int mp6_host_image_below_4gb(void)
         return 0; /* cannot prove the invariant */
     }
     return ((uintptr_t)hMod + modInfo.SizeOfImage) <= 0xFFFFFFFFu;
+}
+
+/* Savestate (docs/SAVESTATE.md): enumerate this image's own WRITABLE
+ * sections -- the game's ordinary globals/BSS, which live in the binary's
+ * fixed, non-ASLR data segments rather than inside the game arena, and so
+ * have to be captured alongside it.
+ *
+ * Walks the in-memory PE headers rather than re-reading the file on disk:
+ * `GetModuleHandle(NULL)` already returns the mapped IMAGE_DOS_HEADER, and
+ * every struct/macro used below comes from the windows.h this file already
+ * includes (it is the only TU in the tree permitted to -- see this file's
+ * own header comment), so no new library or dependency is introduced.
+ *
+ * Two details that are easy to get wrong, stated explicitly:
+ *  - the extent is `Misc.VirtualSize`, NOT `SizeOfRawData`: an uninitialized
+ *    (.bss-style) tail exists only in memory and has VirtualSize >
+ *    SizeOfRawData, so using the raw size would silently truncate exactly
+ *    the zero-initialized globals a savestate most needs;
+ *  - DISCARDABLE sections are skipped -- they may already have been unmapped
+ *    by the loader, so touching them is a fault, not merely wasteful.
+ *
+ * The host-owned carve-out section (MP6_HOST_STATE_SECTION, see
+ * shim/include/mp6_savestate.h) is deliberately NOT filtered here: this
+ * function reports what the image contains, and the savestate module itself
+ * decides what to exclude by name, keeping that policy in one place.
+ *
+ * Contract matches mp6_host_disc_root/mp6_host_save_dir: returns the number
+ * of entries written (0 on query failure -- callers fail closed). */
+int mp6_host_image_writable_sections(Mp6HostImageSection *out, int maxOut)
+{
+    HMODULE hMod;
+    IMAGE_DOS_HEADER *dos;
+    IMAGE_NT_HEADERS *nt;
+    IMAGE_SECTION_HEADER *sec;
+    int i, n = 0;
+
+    if (out == NULL || maxOut <= 0) {
+        return 0;
+    }
+    hMod = GetModuleHandle(NULL);
+    if (hMod == NULL) {
+        return 0;
+    }
+    dos = (IMAGE_DOS_HEADER *)hMod;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return 0;
+    }
+    nt = (IMAGE_NT_HEADERS *)((BYTE *)hMod + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) {
+        return 0;
+    }
+    sec = IMAGE_FIRST_SECTION(nt);
+    for (i = 0; i < (int)nt->FileHeader.NumberOfSections && n < maxOut; i++) {
+        DWORD ch = sec[i].Characteristics;
+        if (!(ch & IMAGE_SCN_MEM_WRITE) || (ch & IMAGE_SCN_MEM_DISCARDABLE)) {
+            continue;
+        }
+        if (sec[i].Misc.VirtualSize == 0) {
+            continue;
+        }
+        memset(out[n].name, 0, sizeof(out[n].name));
+        memcpy(out[n].name, sec[i].Name, 8); /* PE names are 8 bytes, NOT NUL-terminated when exactly 8 */
+        out[n].addr = (void *)((BYTE *)hMod + sec[i].VirtualAddress);
+        out[n].size = (size_t)sec[i].Misc.VirtualSize;
+        n++;
+    }
+    return n;
 }
 
 /* =======================================================================
@@ -354,6 +433,21 @@ void mp6_coro_destroy(Mp6Coro *c)
     if (c->fiber) DeleteFiber(c->fiber);
     free(c);
 }
+
+/* Savestate accessors, fiber-backend edition: report "no capturable pool."
+ * Fiber stacks are OS-placed (that is exactly why this backend is not the
+ * default -- they are not guaranteed below 4 GB), so their addresses are
+ * not reproducible across runs and a cross-session savestate cannot be
+ * honest about them. Reporting an empty pool makes mp6_savestate_capture()
+ * refuse up front with a clear message, rather than writing a state file
+ * that would restore onto different stack addresses. Defined (not omitted)
+ * because host.h is a shared seam -- see the same rule in host_android.c. */
+void  *mp6_coro_pool_base(void) { return NULL; }
+size_t mp6_coro_pool_size(void) { return 0; }
+size_t mp6_coro_slot_size(void) { return 0; }
+int    mp6_coro_slot_count(void) { return 0; }
+int    mp6_coro_slot_in_use(int slot) { (void)slot; return 0; }
+void  *mp6_coro_slot_addr(int slot) { (void)slot; return NULL; }
 
 #endif /* MP6_CORO_FIBERS -- else platform/host/coro_arena.c provides mp6_coro_* */
 

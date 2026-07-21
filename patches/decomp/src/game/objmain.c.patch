@@ -1,11 +1,25 @@
 --- a/src/game/objmain.c
 +++ b/src/game/objmain.c
-@@ -16,0 +17,4 @@
+@@ -16,0 +17,18 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
 +
-@@ -18,0 +23,92 @@
++/* MP6 native port -- B2 (docs/B2_BONUS_SPRITE.md). game/sprman.c's
++ * mp6_animCache (its own M3 fix, docs/M3_HSF.md) is a persistent side
++ * table keyed by raw pointer value, with entries removed only via
++ * HuSprAnimKill (i.e. only for objects torn down one at a time, tracked by
++ * refcount). It has no way to notice a BULK, non-destructor reclaim of the
++ * memory it describes -- exactly what the two calls below are: real
++ * hardware's own "does this look like a real pointer or a small file
++ * offset" content check (the mechanism this cache replaced) was immune to
++ * this by construction (computed fresh from whatever bytes are AT an
++ * address, every call), but a persistent side-table keyed by address is
++ * not. Declared here (not in a shared header) to keep this a narrowly
++ * scoped, single-purpose hook. */
++extern void mp6_animCacheClear(void);
++
+@@ -18,0 +37,92 @@
 +/* MP6 native port -- M13 (docs/M13_MENUS_TO_REFERENCE.md): the om-object
 + * execution census. M11 proved (docs/M11_WORDMARK_STAR.md section 3,
 + * [CENSUS-CAM]) that at least one om object (bootDll's OutViewObj) is
@@ -98,14 +112,37 @@
 +    }
 +}
 +
-@@ -202,0 +299,6 @@
+@@ -157,0 +268,22 @@ void omOvlKill(s16 unlinkF)
++    /* MP6 native port -- B2 (docs/B2_BONUS_SPRITE.md). This bulk free just
++     * reclaimed every HEAP_MODEL block this overlay tagged HU_MEMNUM_OVL --
++     * including every game/sprman.c HuSprAnimRead raw-file buffer and any
++     * ANIMDATA skeleton that never went through a per-object HuSprAnimKill
++     * (e.g. the caller never balanced every Hu3DAnimCreate/AnimSet
++     * reference before this ran). Any mp6_animCache entry keyed by an
++     * address in that reclaimed range is now stale: the next overlay's own
++     * HuDataSelHeapReadNum calls are free to reuse those exact addresses,
++     * and a stale hit there returns someone else's parsed ANIMDATA (wrong
++     * format/dims/palette) instead of parsing the fresh, correct bytes now
++     * sitting there. Root-caused exactly this way for the Party Mode
++     * confirm screen's Bonus Star with/without-bonus icon (128x128 CI8,
++     * data/mdparty.bin file 0x49/0x4A): decompression and the ANIM parse
++     * formulas were both proven correct (offline ground truth + a live
++     * MP6_DECODE_GUARD checksum match), yet the bound texture's fmt/dims/
++     * palette were wrong -- only explainable by a stale cache hit. Clearing
++     * here, at the one choke point that performs this exact class of bulk
++     * reclaim, restores the memoryless, self-correcting property real
++     * hardware's own pointer-vs-offset check had (see sprman.c's own
++     * comment on mp6_animCache for that mechanism) without needing every
++     * caller of this function to remember to do it themselves. */
++    mp6_animCacheClear();
+@@ -202,0 +335,6 @@ OMOBJMAN *omInitObjMan(s16 objMax, s32 objManPrio)
 +    if (mp6OmCensusOn()) { /* M13 om census -- new obj manager, reset the verdict cache */
 +        memset(mp6OmcVerdict, 0, sizeof(mp6OmcVerdict));
 +        memset(mp6OmcStat, 0, sizeof(mp6OmcStat));
 +        printf("[OM-CENSUS] tick=%ld ovl=%d omInitObjMan objMax=%d prio=%d\n",
 +               mp6_tick_count, (int)omcurovl, (int)objMax, (int)objManPrio);
 +    }
-@@ -262,0 +365,7 @@
+@@ -262,0 +401,7 @@ OMOBJ *omAddObjEx(OMOBJMAN *objMan, s16 prio, u16 mdlcnt, u16 mtncnt, s16 grpNo,
 +        if (mp6OmCensusOn()) { /* M13 om census -- a silent NULL here loses a whole objFunc */
 +            char sym[256];
 +            mp6OmcSym((void *)objFunc, sym, sizeof(sym));
@@ -113,7 +150,7 @@
 +                   mp6_tick_count, (int)omcurovl, (int)objWork->objMax,
 +                   (unsigned)(u16)prio, sym);
 +        }
-@@ -301,0 +411,11 @@
+@@ -301,0 +447,11 @@ OMOBJ *omAddObjEx(OMOBJMAN *objMan, s16 prio, u16 mdlcnt, u16 mtncnt, s16 grpNo,
 +    if (mp6OmCensusOn()) { /* M13 om census -- record every creation */
 +        char sym[256];
 +        mp6OmcSym((void *)objFunc, sym, sizeof(sym));
@@ -125,7 +162,7 @@
 +            mp6OmcStat[objNext] = obj->stat;
 +        }
 +    }
-@@ -365,0 +486,7 @@
+@@ -365,0 +522,7 @@ void omDelObjEx(OMOBJMAN *objMan, OMOBJ *obj)
 +    if (mp6OmCensusOn()) { /* M13 om census -- record every deletion */
 +        char sym[256];
 +        mp6OmcSym((void *)obj->objFunc, sym, sizeof(sym));
@@ -133,7 +170,7 @@
 +               mp6_tick_count, (int)omcurovl, (int)objNext, (unsigned)(u16)obj->prio,
 +               (unsigned)obj->stat, sym);
 +    }
-@@ -446,0 +574,8 @@
+@@ -446,0 +610,8 @@ void omSetStatBit(OMOBJ *obj, u16 bit)
 +    if (mp6OmCensusOn() && (u16)(obj->stat | bit) != obj->stat) {
 +        /* M13 om census -- who set which gate bit on which object */
 +        char sym[256];
@@ -142,7 +179,7 @@
 +               mp6_tick_count, (int)omcurovl, (int)obj->objNext, (unsigned)obj->stat,
 +               (unsigned)(u16)(obj->stat | bit), (unsigned)bit, sym);
 +    }
-@@ -451,0 +587,8 @@
+@@ -451,0 +623,8 @@ void omResetStatBit(OMOBJ *obj, u16 bit)
 +    if (mp6OmCensusOn() && (u16)(obj->stat & ~bit) != obj->stat) {
 +        /* M13 om census -- who cleared which gate bit on which object */
 +        char sym[256];
@@ -151,27 +188,27 @@
 +               mp6_tick_count, (int)omcurovl, (int)obj->objNext, (unsigned)obj->stat,
 +               (unsigned)(u16)(obj->stat & ~bit), (unsigned)bit, sym);
 +    }
-@@ -502,0 +646,5 @@
+@@ -502,0 +682,5 @@ static void omMain(void)
 +            if (mp6OmCensusOn() && !mp6OmcLoadGateOn) { /* M13 om census -- whole-walk gate */
 +                mp6OmcLoadGateOn = 1;
 +                printf("[OM-CENSUS] tick=%ld ovl=%d omMain GATED by HuLoadProcMode\n",
 +                       mp6_tick_count, (int)omcurovl);
 +            }
-@@ -505,0 +654,6 @@
+@@ -505,0 +690,6 @@ static void omMain(void)
 +        if (mp6OmCensusOn() && mp6OmcLoadGateOn) { /* M13 om census */
 +            mp6OmcLoadGateOn = 0;
 +            printf("[OM-CENSUS] tick=%ld ovl=%d omMain UNGATED (HuLoadProcMode off)\n",
 +                   mp6_tick_count, (int)omcurovl);
 +        }
 +        mp6OmcRan = mp6OmcFuncNull = mp6OmcGated = mp6OmcDead = 0;
-@@ -511,0 +666,6 @@
+@@ -511,0 +702,6 @@ static void omMain(void)
 +                    if (mp6OmCensusOn()) { /* M13 om census -- verdict BEFORE the call: the
 +                                            * objFunc may delete its own object or null its
 +                                            * own func (the one-shot creator idiom) */
 +                        mp6OmcRan++;
 +                        mp6OmcNote(obj, MP6_OMC_RUN);
 +                    }
-@@ -512,0 +673,8 @@
+@@ -512,0 +709,8 @@ static void omMain(void)
 +                } else if (mp6OmCensusOn()) {
 +                    if (obj->objFunc == NULL) {
 +                        mp6OmcFuncNull++;
@@ -180,7 +217,7 @@
 +                        mp6OmcGated++;
 +                        mp6OmcNote(obj, MP6_OMC_GATED);
 +                    }
-@@ -526,0 +695,15 @@
+@@ -526,0 +731,15 @@ static void omMain(void)
 +            } else if (mp6OmCensusOn()) {
 +                mp6OmcDead++;
 +                mp6OmcNote(obj, MP6_OMC_DEADLISTED);

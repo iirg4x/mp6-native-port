@@ -1,0 +1,144 @@
+diff --git a/lib/dolphin/vi/vi.cpp b/lib/dolphin/vi/vi.cpp
+index 4c8dddc..eee949b 100644
+--- a/lib/dolphin/vi/vi.cpp
++++ b/lib/dolphin/vi/vi.cpp
+@@ -6,6 +6,21 @@
+
+ #include <optional>
+
++namespace aurora::gx {
++/* WS16 (mp6-native port, black-bar/boxing live-resize fix): declared here
++ * (rather than pulling in the full gx.hpp, which transitively drags in
++ * <webgpu/webgpu_cpp.h> et al. via gfx/common.hpp -- headers the aurora_vi
++ * CMake target, unlike aurora_gx, was never configured with an include
++ * path for) purely to call it from configure() below. Defined in
++ * lib/gx/gx.cpp, which also declares it (identically) in gx.hpp for every
++ * OTHER caller in that translation unit's own namespace -- both
++ * declarations describe the exact same real symbol, resolved at final-link
++ * time exactly like this file's own existing call into
++ * aurora::window::request_frame_buffer_resize() (a different library
++ * again) already is. */
++void rescale_logical_viewport_scissor(Vec2<uint32_t> oldLogicalSize, Vec2<uint32_t> newLogicalSize) noexcept;
++} // namespace aurora::gx
++
+ namespace aurora::vi {
+ std::optional<GXRenderModeObj> g_renderMode;
+
+@@ -23,7 +38,16 @@ void configure(const GXRenderModeObj* rm) noexcept {
+   } else {
+     g_renderMode = *rm;
+   }
+-  if (render_mode_size() != oldSize) {
++  const auto newSize = render_mode_size();
++  if (newSize != oldSize) {
++    /* WS16 (mp6-native port, black-bar/boxing live-resize fix): a port
++     * feature (dynamic widescreen) can change what this function's OWN
++     * render_mode_size() returns on every live window resize, independent
++     * of whether the game ever re-issues GXSetViewport/GXSetScissor again
++     * -- see lib/gx/gx.cpp's rescale_logical_viewport_scissor() for the
++     * full story (confirmed root cause of a live-resize black-bar/boxing
++     * bug, not present on real hardware where this size never changes). */
++    gx::rescale_logical_viewport_scissor(oldSize, newSize);
+     window::request_frame_buffer_resize();
+   }
+ }
+diff --git a/lib/gx/gx.cpp b/lib/gx/gx.cpp
+index 1cf3ecf..000fd2a 100644
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -338,6 +338,79 @@ gfx::ClipRect map_logical_scissor(const gfx::ClipRect& logicalScissor) noexcept
+   };
+ }
+
++/* WS16 (mp6-native port, black-bar/boxing live-resize fix).
++ *
++ * g_gxState.logicalViewport/logicalScissor are the RAW arguments from the
++ * game's own last GXSetViewport/GXSetScissor call, expressed in units of
++ * "the logical framebuffer size AT THAT CALL" (every widened camera/2D
++ * setup in this port passes mp6_widescreen_render_width() as this exact
++ * width, by construction, matching whatever RenderMode->fbWidth was at
++ * that moment). On real hardware that size is a process-lifetime constant,
++ * so this is a non-issue there: GXSetViewport is set once and its effect
++ * stays valid forever, matching a real HW register that never needs
++ * resubmitting. This port's own dynamic-widescreen feature intentionally
++ * breaks that invariant: RenderMode->fbWidth changes on every live window
++ * resize (via VIConfigure, see vi.cpp's configure() below), independent of
++ * whether the game ever re-issues GXSetViewport/GXSetScissor again -- and
++ * several scene/camera/UI setups in this game run their OWN GXSetViewport
++ * call exactly ONCE, matching the real-hardware idiom.
++ *
++ * map_logical_viewport()/map_logical_scissor() already recompute their
++ * scale ratio every single frame (gfx::begin_frame(), lib/gfx/common.cpp:
++ * "Refresh render viewport/scissor from logical in case FB size changed")
++ * from a FRESH logical_fb_size() denominator -- but a STALE numerator
++ * (this cached logicalViewport/logicalScissor, left over from whichever
++ * GXSetViewport call happened before the resize) still maps to the WRONG
++ * absolute rectangle even so: scaleX = newTargetWidth/newLogicalWidth,
++ * applied to an old-logical-width-shaped rect, undershoots the new target.
++ * Confirmed by direct capture + math: a live 1280x720->2560x1180 resize
++ * left content filling only ~2085 of 2560px -- exactly
++ * 2560*(848/1040), the ratio between the OLD (1280x720-derived, 848) and
++ * NEW (2560x1180-derived, 1040) logical widths this port computes, i.e.
++ * the frame was mapped using the NEW denominator against the STALE
++ * numerator instead of a numerator that agrees with it.
++ *
++ * Fix: whenever vi::configure() (VIConfigure) actually changes
++ * logical_fb_size()'s own non-offscreen source (vi::configured_fb_size()),
++ * proportionally rescale the CACHED logicalViewport/logicalScissor from
++ * the OLD size to the NEW one -- preserving whatever fraction of the
++ * logical frame they covered (a full-frame viewport stays full-frame; a
++ * genuine sub-rect, e.g. a split-screen half, stays the same fraction
++ * too), so the very next map_logical_viewport()/map_logical_scissor() call
++ * (already running every frame, see above) maps a numerator that once
++ * again agrees with the fresh denominator -- with no dependency on the
++ * game ever re-issuing GXSetViewport/GXSetScissor. Deliberately NOT hooked
++ * inside logical_fb_size()/map_logical_viewport() themselves, since those
++ * also run for OFFSCREEN targets (gfx::is_offscreen()) whose size
++ * legitimately changes on every EFB-copy call for unrelated reasons (a
++ * texture-copy destination's own size, nothing to do with this port's
++ * live-resize tracking) -- rescaling on THOSE changes would corrupt a
++ * viewport/scissor the game just correctly set for that specific copy.
++ * vi::configure() is the one and only place logical_fb_size()'s onscreen
++ * source actually changes, so hooking there has no such risk. A true
++ * no-op whenever oldLogicalSize/newLogicalSize actually match (true every
++ * tick except the rare one where a live resize -- or any other
++ * VIConfigure call that changes size -- just happened) or either old axis
++ * is zero (nothing sane to rescale against, e.g. a never-yet-configured
++ * RenderMode). */
++void rescale_logical_viewport_scissor(Vec2<uint32_t> oldLogicalSize, Vec2<uint32_t> newLogicalSize) noexcept {
++  if (oldLogicalSize.x == 0 || oldLogicalSize.y == 0 || oldLogicalSize == newLogicalSize) {
++    return;
++  }
++  const float scaleX = static_cast<float>(newLogicalSize.x) / static_cast<float>(oldLogicalSize.x);
++  const float scaleY = static_cast<float>(newLogicalSize.y) / static_cast<float>(oldLogicalSize.y);
++  auto& vp = g_gxState.logicalViewport;
++  vp.left *= scaleX;
++  vp.width *= scaleX;
++  vp.top *= scaleY;
++  vp.height *= scaleY;
++  auto& sc = g_gxState.logicalScissor;
++  sc.x = round_away_from_zero<int32_t>(static_cast<float>(sc.x) * scaleX);
++  sc.width = round_away_from_zero<int32_t>(static_cast<float>(sc.width) * scaleX);
++  sc.y = round_away_from_zero<int32_t>(static_cast<float>(sc.y) * scaleY);
++  sc.height = round_away_from_zero<int32_t>(static_cast<float>(sc.height) * scaleY);
++}
++
+ void set_logical_viewport(const gfx::Viewport& viewport) noexcept {
+   g_gxState.logicalViewport = viewport;
+   set_render_viewport(map_logical_viewport(viewport));
+diff --git a/lib/gx/gx.hpp b/lib/gx/gx.hpp
+index e73841a..539901b 100644
+--- a/lib/gx/gx.hpp
++++ b/lib/gx/gx.hpp
+@@ -404,6 +404,11 @@ void evict_tlut_object(u32 tlutObjId) noexcept;
+ Vec2<uint32_t> logical_fb_size() noexcept;
+ gfx::Viewport map_logical_viewport(const gfx::Viewport& logicalViewport) noexcept;
+ gfx::ClipRect map_logical_scissor(const gfx::ClipRect& logicalScissor) noexcept;
++/* WS16 (mp6-native port, black-bar/boxing live-resize fix): proportionally
++ * rescales g_gxState.logicalViewport/logicalScissor from oldLogicalSize to
++ * newLogicalSize -- see lib/dolphin/vi/vi.cpp's configure() (the sole
++ * caller) and this function's own definition in gx.cpp for the full story. */
++void rescale_logical_viewport_scissor(Vec2<uint32_t> oldLogicalSize, Vec2<uint32_t> newLogicalSize) noexcept;
+ void set_logical_viewport(const gfx::Viewport& viewport) noexcept;
+ void set_render_viewport(const gfx::Viewport& viewport) noexcept;
+ void set_logical_scissor(const gfx::ClipRect& scissor) noexcept;

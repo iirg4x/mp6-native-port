@@ -30,7 +30,11 @@ window {
     border: 2dp #009dda;
     backdrop-filter: blur(5dp);
     box-shadow: 0 0 25dp 5dp;
-    background-color: rgba(37, 59, 156, 90%);
+    /* [MP6] was rgba(37, 59, 156, 90%) near-opaque blue, then 35% translucent
+     * ("can't see shit"), then rgba(16,24,64,82%) -- still let bright scenes
+     * (the WARNING screen) bleed through the panel. Now near-opaque and
+     * darker still: the game only ghosts faintly through the blur. */
+    background-color: rgba(8, 12, 32, 96%);
     filter: opacity(0);
     transform: scale(0.9);
     transform-origin: center;
@@ -204,6 +208,18 @@ button:not(:disabled):active {
 button.modal-btn {
     flex: 1 1 0;
     text-align: center;
+}
+
+/* [MP6] option lists (the right-pane Off / Top Left / ... choices) read as
+ * the same family as the settings rows: left-aligned bold uppercase key
+ * type instead of the upstream centered pill label. Scoped to DIRECT pane
+ * children so modal/preset/achievement buttons keep their own look. */
+window content pane > button {
+    text-align: left;
+    font-family: "Inter";
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 14dp;
 }
 
 select-button {

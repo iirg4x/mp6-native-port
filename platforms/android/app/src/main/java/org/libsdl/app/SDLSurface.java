@@ -45,7 +45,7 @@ public class SDLSurface extends SurfaceView implements SurfaceHolder.Callback,
     // Is SurfaceView ready for rendering
     protected boolean mIsSurfaceReady;
 
-    /* MP6 native port (U-A2, ): aurora's android
+    /* MP6 native port (U-A2, docs/UA2_ANDROID_GRAPHICS.md): aurora's android
      * lifecycle hook -- lib/window.cpp exports
      * Java_org_libsdl_app_SDLSurface_auroraNativeSetSurfaceReady and gates
      * every frame on it (is_presentable(): g_surfaceReady). Stock SDL glue

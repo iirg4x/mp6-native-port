@@ -523,7 +523,7 @@ body.animate-in .intro-item {
     color: #FFFFFF;
 }
 
-/* [MP6] A5: mobile counterpart for .watermark .
+/* [MP6] A5: mobile counterpart for .watermark (docs/A5_LAUNCHER_ASPECT.md).
  * partyboard's own "Mobile layout" query above (verbatim, untouched) gives
  * every one of ITS elements a mobile rule -- .eyebrow drops out entirely,
  * disc-info/version-info/hero/menu/#menu-list all reflow -- but .watermark

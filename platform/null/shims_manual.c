@@ -7,6 +7,8 @@
 #include "dolphin/mic.h" /* MICProbeEx/MICMount, see their own comment below */
 #include "mp6_shim_log.h"
 #include "mp6_boot.h"
+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): headless has no window --
+                             * fixed-native stand-ins, see below */
 #include "host.h" /* mp6_host_monotonic_ns/mp6_host_wallclock (the OSGetTime
                    * timebase below) + mp6_host_rss_bytes (RSS watchdog +
                    * [LEAKHUNT]) */
@@ -18,6 +20,7 @@
 #include <stdint.h>
 #include <math.h>
 #include "zlib.h"
+#include "mp6_savestate.h" /* mp6_savestate_tick() -- per-tick hook below */
 #ifdef MP6_LEAKHUNT_DEBUG
 #include "game/memory.h"
 #endif
@@ -52,7 +55,12 @@ void PPCHalt(void)
 {
     fprintf(stdout, "[PANIC] PPCHalt() -- game-side OSPanic (src/game/fault.c) halted the system\n");
     fflush(stdout);
-    exit(1);
+    /* C15 (review): a restored process must not run static destructors over
+     * restored third-party state -- an OSPanic AFTER a savestate load used
+     * to die 0xC0000005 in teardown instead of exiting 1, misattributing the
+     * failure. The guarded exit preserves this path's "clean, distinguishable
+     * non-zero exit" contract in both cases. */
+    mp6_savestate_guarded_exit(1);
 }
 
 /* -------------------------------------------------------------------
@@ -295,9 +303,71 @@ static void mp6_rss_watchdog_check(void)
         printf("[RSS-WATCHDOG] FATAL: working set %.1f MB exceeded the %.1f MB cap (tick=%ld) "
                "-- exiting 1\n", rssMb, capMb, mp6_tick_count);
         fflush(stdout);
-        exit(1);
+        mp6_savestate_guarded_exit(1); /* C15: teardown over restored state is not safe */
     }
 }
+
+#ifdef MP6_HEADLESS_BUILD
+/* C13 (review): MP6_AUTO_START_TICKS used to be consumed ONLY by
+ * aurora-only TUs, so the headless build -- the one the savestate
+ * regression gate runs -- silently ignored it and never left the
+ * boot/title phase. The gate's oracle therefore covered nothing past boot,
+ * recreating the exact false-PASS its own docstring warns about. This
+ * strong PADRead (overriding shims_generated.c's weak stub) gives headless
+ * the same tick-scheduled START injection the windowed build has.
+ *
+ * Contract with the log-diff gates: with the env UNSET this behaves
+ * byte-identically to the weak stub -- same MP6_LOG_ONCE, same return,
+ * status untouched. Only an explicitly-set MP6_AUTO_START_TICKS changes
+ * behavior, and then only on pad 0. */
+static int g_hlAutoStartTicks[32];
+static int g_hlAutoStartCount = -1; /* -1 = not yet parsed */
+
+u32 PADRead(PADStatus *status)
+{
+    MP6_LOG_ONCE("PAD", "PADRead");
+    if (g_hlAutoStartCount < 0) {
+        const char *env = getenv("MP6_AUTO_START_TICKS");
+        g_hlAutoStartCount = 0;
+        if (env) {
+            const char *p = env;
+            while (*p && g_hlAutoStartCount < (int)(sizeof(g_hlAutoStartTicks) / sizeof(g_hlAutoStartTicks[0]))) {
+                char *end;
+                long v = strtol(p, &end, 10);
+                if (end == p) break;
+                g_hlAutoStartTicks[g_hlAutoStartCount++] = (int)v;
+                p = end;
+                while (*p == ',' || *p == ' ') p++;
+            }
+            if (g_hlAutoStartCount > 0) {
+                printf("[MP6-INPUT] MP6_AUTO_START_TICKS active (headless), %d scheduled press(es)\n",
+                       g_hlAutoStartCount);
+                fflush(stdout);
+            }
+        }
+    }
+    if (g_hlAutoStartCount > 0 && status != NULL) {
+        int i, due = 0;
+        for (i = 0; i < g_hlAutoStartCount; i++) {
+            if (g_hlAutoStartTicks[i] == (int)mp6_tick_count) {
+                due = 1;
+                break;
+            }
+        }
+        /* A stable released-baseline every tick (not just due ones) so
+         * game/pad.c's PADButtonDown edge detector sees clean 0->1->0
+         * transitions; the weak stub left the buffer untouched, which is
+         * fine only when nothing ever injects. */
+        memset(&status[0], 0, sizeof(status[0]));
+        if (due) {
+            status[0].button = PAD_BUTTON_START;
+            printf("[MP6-INPUT] auto-injecting PAD_BUTTON_START at tick %ld (headless)\n", mp6_tick_count);
+            fflush(stdout);
+        }
+    }
+    return 0;
+}
+#endif /* MP6_HEADLESS_BUILD */
 
 int mp6_tick_advance(void)
 {
@@ -308,6 +378,15 @@ int mp6_tick_advance(void)
      * init has already run in both build modes (see mp6_boot.h's own
      * comment on this function). No-op unless MP6_TEST_LOAD_DLL is set. */
     mp6_dll_bridge_selftest_check_env();
+    /* Savestate (docs/SAVESTATE.md): the one per-tick hook BOTH build modes
+     * already call, so the scripted MP6_SAVESTATE_*_AT_TICK levers behave
+     * identically headless (where the regression gate runs -- it needs a
+     * byte-identical log) and windowed. The interactive hotkey is handled
+     * separately in aurora_bridge.c, at a strictly quieter point in the
+     * tick; see that call site's own comment for why this one is fine for
+     * the scripted path but not for the hotkey. Silent no-op unless a
+     * savestate was actually requested. */
+    mp6_savestate_tick();
     if (mp6_ticks_unlimited) return 0;
     return mp6_tick_count >= mp6_max_ticks;
 }
@@ -339,9 +418,45 @@ void VIInit(void)
     MP6_LOG_ONCE("VI", "VIInit");
 }
 
+/* C13 (review): real VI fires the registered pre/post retrace callbacks at
+ * every retrace, and game/pad.c reads the controllers exclusively from its
+ * post-retrace callback (PadReadVSync, pad.c:78). The weak
+ * VISetPostRetraceCallback stub DISCARDED the registration, so headless
+ * input was structurally dead -- MP6_AUTO_START_TICKS parsed, PADRead's
+ * injection existed, and none of it ever ran, which capped the savestate
+ * gate's oracle at the boot phase. Storing and invoking the callbacks makes
+ * headless faithful to the VI contract the game actually programs against.
+ * NOTE: this legitimately extends the headless boot log (pad.c's callback
+ * path now runs), so the committed ua1 baseline was regenerated in the same
+ * commit -- see docs/ua1/. */
+static VIRetraceCallback g_hlPreRetraceCB;
+static VIRetraceCallback g_hlPostRetraceCB;
+
+VIRetraceCallback VISetPreRetraceCallback(VIRetraceCallback callback)
+{
+    VIRetraceCallback prev = g_hlPreRetraceCB;
+    MP6_LOG_ONCE("VI", "VISetPreRetraceCallback");
+    g_hlPreRetraceCB = callback;
+    return prev;
+}
+
+VIRetraceCallback VISetPostRetraceCallback(VIRetraceCallback callback)
+{
+    VIRetraceCallback prev = g_hlPostRetraceCB;
+    MP6_LOG_ONCE("VI", "VISetPostRetraceCallback");
+    g_hlPostRetraceCB = callback;
+    return prev;
+}
+
 void VIWaitForRetrace(void)
 {
     MP6_LOG_ONCE("VI", "VIWaitForRetrace");
+    if (g_hlPreRetraceCB) {
+        g_hlPreRetraceCB((u32)mp6_tick_count);
+    }
+    if (g_hlPostRetraceCB) {
+        g_hlPostRetraceCB((u32)mp6_tick_count);
+    }
 #ifdef MP6_LEAKHUNT_DEBUG
     if (mp6_tick_count > 0 && mp6_tick_count % 300000 == 0) {
         /* mp6_host_rss_bytes returns 0 on a failed sample, so this prints
@@ -366,6 +481,51 @@ u32 VIGetNextField(void)
 {
     MP6_LOG_ONCE("VI", "VIGetNextField");
     return (u32)(mp6_tick_count & 1);
+}
+
+/* -------------------------------------------------------------------
+ * WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) -- fixed-native stand-ins.
+ *
+ * --headless has no window, no SDL, and no widescreen setting at all
+ * (mp6_widescreen_set_enabled() is only ever called from
+ * platform/main_native.c's non-headless branch) -- these four always
+ * report "disabled, native size", so patches/decomp/src/game/init.c.patch's
+ * ONE new call site (mp6_widescreen_apply_render_width(
+ * mp6_widescreen_render_width())), which game/init.c calls
+ * UNCONDITIONALLY in BOTH build modes, is a provable no-op here: 640
+ * always equals RenderMode->fbWidth's own compiled-in 640
+ * (GXNtsc480IntDf), so the decomp-side setter's early-return fires
+ * immediately every time. This is the same dual-build-definition pattern
+ * VIGetRetraceCount/VIGetNextField above already use. mp6_widescreen_
+ * apply_render_width() itself has no headless-specific stand-in here --
+ * it is defined exactly once, decomp-side, in game/init.c (shared by both
+ * build modes), never in this file.
+ * ------------------------------------------------------------------- */
+void mp6_widescreen_set_enabled(int enabled)
+{
+    (void)enabled; /* never called in this build; kept only so any future
+                    * headless-side caller links cleanly rather than
+                    * silently doing nothing forever by omission. */
+}
+
+int mp6_widescreen_enabled(void)
+{
+    return 0;
+}
+
+int mp6_widescreen_render_width(void)
+{
+    return 640;
+}
+
+float mp6_widescreen_scale_factor(void)
+{
+    return 1.0f;
+}
+
+float mp6_widescreen_half_width_delta(void)
+{
+    return 0.0f;
 }
 
 /* GXInit -- needs to hand back a plausible non-null GXFifoObj* (game/
@@ -470,6 +630,55 @@ static u8 *mp6_aram_buf(void)
         g_fakeAram = (u8 *)calloc(1, MP6_FAKE_ARAM_SIZE);
     }
     return g_fakeAram;
+}
+
+/* Savestate support (docs/SAVESTATE.md). This buffer is the one piece of
+ * genuinely load-bearing GAME data that lives on the C runtime heap rather
+ * than in the arena, so the savestate has to capture it as its own region
+ * kind and hand it back afterwards.
+ *
+ * Why the CONTENTS matter and not just the pointer: game/armem.c's residency
+ * table (ARInfo/ARBase) is ordinary decomp .bss and IS restored, while these
+ * 16 MB are not. HuAR_DVDtoARAM early-outs when HuARDirCheck reports a
+ * directory already resident, so after a rewind the restored table claims
+ * assets are cached that this process's buffer never received -- and the DMA
+ * that would refill them never runs again. Restoring only the pointer would
+ * convert a loud crash into silent asset corruption on exactly the
+ * HuSprAnimRead path this file's comment below already documents.
+ *
+ * Forces the lazy allocation, so a capture taken before the game's first
+ * ARAM traffic still records a correctly-sized (all-zero) region rather than
+ * silently omitting it -- keeping the region set identical for every capture
+ * point, which the restore path's size check relies on. */
+void *mp6_aram_savestate_buffer(size_t *sizeOut)
+{
+    u8 *buf = mp6_aram_buf();
+    if (sizeOut) {
+        *sizeOut = (size_t)MP6_FAKE_ARAM_SIZE;
+    }
+    return buf;
+}
+
+/* Post-restore: the image .bss restore just overwrote g_fakeAram with the
+ * CAPTURING process's heap pointer. Put this process's own buffer back.
+ * (The bytes themselves were already copied into it by the commit loop's
+ * MP6_SS_REGION_ARAM branch, which is why this only has to fix the pointer.)
+ * Safe if ARAM was never touched: mp6_aram_buf() allocates on demand. */
+void mp6_aram_savestate_rehydrate(void *liveBuf)
+{
+    /* `liveBuf` is the buffer the restore's commit loop copied the captured
+     * ARAM bytes INTO -- latched before the loop began, because g_fakeAram
+     * itself lives in ordinary .bss and the loop overwrites it with the
+     * capturing process's pointer partway through. Adopting that exact
+     * buffer is the whole point: allocating a fresh one here would discard
+     * the restored contents and leave ARAM zeroed while game/armem.c's
+     * restored residency table still claimed every directory was cached. */
+    if (liveBuf != NULL) {
+        g_fakeAram = (u8 *)liveBuf;
+        return;
+    }
+    g_fakeAram = NULL;      /* no latched buffer -- drop the foreign pointer */
+    (void)mp6_aram_buf();   /* and let this process allocate its own */
 }
 
 /* Real hardware's ARAM is a second RAM bank reachable only via DMA
@@ -809,7 +1018,7 @@ s32 MICMount(s32 chan, s16 *buffer, s32 size, MICCallback detachCallback)
     return MIC_RESULT_NOCARD;
 }
 
-/*  the ANDROID builds rename decomp's
+/* U-A3 (docs/UA3_DEVICE_PARITY.md): the ANDROID builds rename decomp's
  * PADControlMotor call sites to mp6_PADControlMotor (dolphin_compat.h,
  * #ifdef __ANDROID__ -- see the rationale there: motor commands must not
  * execute on HuPrc coroutine stacks because the Android path can reach a

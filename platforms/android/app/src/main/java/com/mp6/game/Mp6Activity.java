@@ -1,4 +1,4 @@
-/* MP6 native port --  the one activity.
+/* MP6 native port -- U-A2 (docs/UA2_ANDROID_GRAPHICS.md): the one activity.
  *
  * Follows the shape the U1 design documents for the MP4 port's shell (stock
  * SDL3 Java glue + a single subclass), written for this port's own loader
@@ -21,7 +21,7 @@
  * scanner (tick budgets, --input-script).
  *   adb shell am start -n com.mp6.game/.Mp6Activity --es args "MP6_TICK_RATE_LOG=1"
  *
- * A4  additions:
+ * A4 (docs/A4_ANDROID_UI.md) additions:
  *
  *   - straight_boot extra: `-e straight_boot 1` prepends MP6_LAUNCHER=0,
  *     the documented automation-skip lever -- the RmlUi launcher menu is

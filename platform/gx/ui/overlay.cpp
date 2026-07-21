@@ -15,6 +15,14 @@
 #include <dolphin/pad.h>
 #include "launcher_state.hpp" /* [MP6] replaces <port/settings.h> */
 
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): host-owned statics (RmlUi document
+ * sources, UI framework state, debug-tool latches) must not be captured or
+ * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
+ * LEVEL (build.py rejects a conditionally-nested include -- a platform
+ * branch would silently uncarve the TU). See mp6_host_section.h. */
+#include "mp6_host_section.h"
+
+
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
@@ -155,10 +163,13 @@ namespace {
         return "Back";
     }
 
-#if defined(TARGET_ANDROID) || (defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_MACCATALYST)
-    constexpr auto kMenuNotificationPrefix = "3-finger tap or";
+/* [MP6] desktop: F10 is the documented in-game menu hotkey (F1 and the
+ * R+Start chord also work -- the ripped partyboard bindings); Android: the
+ * gear button on the touch overlay or a 3-finger tap. */
+#if defined(__ANDROID__) || defined(TARGET_ANDROID) || (defined(__APPLE__) && TARGET_OS_IOS && !TARGET_OS_MACCATALYST)
+    constexpr auto kMenuNotificationPrefix = "Gear button, 3-finger tap or";
 #else
-    constexpr auto kMenuNotificationPrefix = "Press F1 or";
+    constexpr auto kMenuNotificationPrefix = "Press F10 or";
 #endif
 
     Rml::Element *create_menu_notification(Rml::Element *parent)

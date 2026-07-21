@@ -36,6 +36,14 @@
 #include <memory>
 #include <string_view>
 
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): host-owned statics (RmlUi document
+ * sources, UI framework state, debug-tool latches) must not be captured or
+ * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
+ * LEVEL (build.py rejects a conditionally-nested include -- a platform
+ * branch would silently uncarve the TU). See mp6_host_section.h. */
+#include "mp6_host_section.h"
+
+
 namespace mp6::ui {
 namespace {
     aurora::Module PrelaunchLog { "mp6::ui::prelaunch" };

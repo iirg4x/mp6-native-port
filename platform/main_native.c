@@ -38,6 +38,7 @@
  *     lib/main.cpp, which does nothing beyond calling aurora_main.
  */
 #include "mp6_boot.h"
+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): mp6_widescreen_set_enabled */
 #include "host.h" /* mp6_host_crash_install, mp6_host_image_below_4gb */
 
 #include <stdio.h>
@@ -160,10 +161,46 @@ extern int mp6_launcher_decide_mode(int hasNumericArg, int hasInputScript, int *
 extern int mp6_launcher_cfg_backend(void);
 extern int mp6_launcher_cfg_vsync(void);
 extern int mp6_launcher_cfg_aspect_locked(void); /* A5: gameplay-time-only aspect policy */
+extern int mp6_launcher_cfg_widescreen(void); /* WS2: gameplay-time-only dynamic-widescreen policy (docs/WS2_DYNAMIC_WIDESCREEN.md) */
 extern void mp6_launcher_apply_display_settings(void *sdlWindow);
 extern int mp6_launcher_run_menu(void *sdlWindow);
 extern void mp6_launcher_apply_game_settings(void);
 extern int mp6_launcher_content_ready(void);
+
+/* WS6 (docs/WS6_OVERLAY_CAMERAS.md): captured out of Aurora's own startup
+ * log line (see mp6_boot.h's declaration comment for the full mechanism --
+ * this is what mp6_aurora_queried_max_texture_dimension_2d() below reads
+ * back). 0 = not seen yet. */
+static int g_mp6AuroraMaxTextureDimension2D = 0;
+
+/* WS6: scans one already-received log message for Aurora's own
+ * "maxTextureDimension2D: <N>" substring (lib/webgpu/gpu.cpp's
+ * Log.info("Using limits: ...") -- {fmt}-style formatting, so N is always
+ * plain decimal digits, no separators) and stashes N if found. Safe to
+ * call on every message (cheap strstr + bounded strtol); a message that
+ * doesn't contain the substring is a no-op. Only accepts a positive,
+ * sane-range value, so a truncated/garbled line can't poison the stashed
+ * value with 0 or something absurd. */
+static void mp6_aurora_scan_log_for_texture_limit(const char *message)
+{
+    static const char needle[] = "maxTextureDimension2D: ";
+    const char *hit = strstr(message, needle);
+    long parsed;
+    char *end;
+    if (hit == NULL) {
+        return;
+    }
+    hit += sizeof(needle) - 1;
+    parsed = strtol(hit, &end, 10);
+    if (end != hit && parsed > 0 && parsed <= 1000000L) {
+        g_mp6AuroraMaxTextureDimension2D = (int)parsed;
+    }
+}
+
+int mp6_aurora_queried_max_texture_dimension_2d(void)
+{
+    return g_mp6AuroraMaxTextureDimension2D;
+}
 
 static void mp6_aurora_log_callback(AuroraLogLevel level, const char *module, const char *message, unsigned int len)
 {
@@ -179,6 +216,7 @@ static void mp6_aurora_log_callback(AuroraLogLevel level, const char *module, co
     }
     printf("[AURORA %s: %s] %s\n", levelStr, module, message);
     fflush(stdout);
+    mp6_aurora_scan_log_for_texture_limit(message);
     if (level == LOG_FATAL) {
         fflush(stdout);
         abort();
@@ -263,6 +301,29 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     config.appName = "mp6native [mp6-native]";
     config.desiredBackend = BACKEND_AUTO;
     config.vsync = true;
+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) test lever: MP6_WINDOW_SIZE=WxH
+     * sets the INITIAL window size directly (AuroraConfig.windowWidth/
+     * windowHeight -- aurora lib/window.cpp create_window(), consumed only
+     * as the OS window's initial size). Exists so a scripted verification
+     * run (tools/vtest.sh + --input-script, which never touches
+     * mp6_config.json) can reliably land at an exact 4:3/16:9/21:9 shape
+     * to screenshot, the same automation-compatible-test-lever shape as
+     * MP6_AUTO_START_TICKS/MP6_FREE_ASPECT/MP6_WIDESCREEN. Unset (the
+     * default): zero effect -- Aurora's own create_window() default
+     * (1280x960) applies exactly as before this lever existed. */
+    {
+        const char *winSize = getenv("MP6_WINDOW_SIZE");
+        if (winSize != NULL && winSize[0] != '\0') {
+            unsigned w = 0, h = 0;
+            if (sscanf(winSize, "%ux%u", &w, &h) == 2 && w > 0 && h > 0) {
+                config.windowWidth = w;
+                config.windowHeight = h;
+                printf("[BOOT] MP6_WINDOW_SIZE=%ux%u -- initial window size overridden\n", w, h);
+            } else {
+                printf("[BOOT] MP6_WINDOW_SIZE=\"%s\" -- malformed (expected WxH), ignoring\n", winSize);
+            }
+        }
+    }
     /* backend/vsync are aurora_initialize-time parameters, so they are
      * the launcher config's two "take effect next launch" settings. In
      * automation mode both accessors return exactly the defaults above
@@ -270,6 +331,18 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     if (launcherMode) {
         config.desiredBackend = (AuroraBackend)mp6_launcher_cfg_backend();
         config.vsync = mp6_launcher_cfg_vsync() ? true : false;
+    } else {
+        /* Automation/straight-boot: default vsync OFF. A drive that only needs
+         * to REACH a screen shouldn't be paced down to the display refresh
+         * (~60Hz -> ~150s to mode-select). With vsync off AND the tick throttle
+         * off (its automation default, see mp6_tick_throttle_init), a scripted
+         * drive runs as fast as the machine allows (~30s). Real-time gates
+         * (leakgate) set MP6_TICK_HZ=60, which paces ticks via the throttle
+         * regardless of vsync, so their per-minute measurement is unaffected.
+         * MP6_VSYNC=1 forces vsync back on for the rare automation run wanting
+         * it (e.g. tearing-free capture of a moving scene). */
+        const char *vs = getenv("MP6_VSYNC");
+        config.vsync = (vs != NULL && vs[0] == '1') ? true : false;
     }
 #ifdef __ANDROID__
     /* A4: launcher resources ("res/rml/...", "res/fonts/...") ship as APK
@@ -337,6 +410,12 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
         if (showMenu && mp6_launcher_run_menu((void *)info.window)) {
             printf("[BOOT] launcher menu: quit before game boot -- shutting down Aurora, exiting 0\n");
             fflush(stdout);
+            { /* UI documents down BEFORE the RmlUi context dies -- else the
+               * CRT destroys them post-shutdown, an observed teardown UAF
+               * (mp6_launcher_ui_teardown's comment, launcher_core.cpp). */
+                extern void mp6_launcher_ui_teardown(void);
+                mp6_launcher_ui_teardown();
+            }
             aurora_shutdown();
             return 0;
         }
@@ -344,6 +423,20 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
          * root, volume) so `launcher.skip` boots honor the config too. */
         mp6_launcher_apply_game_settings();
     }
+
+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): decided once, right before
+     * GameMain(), on every boot path (automation, launcher.skip, and
+     * interactive Play alike) -- mp6_launcher_cfg_widescreen() returns
+     * g_cfg.widescreen in launcher mode or a fixed 0 (matching every
+     * existing automated gate's assumption, and this setting's own
+     * default) otherwise. MUST run BEFORE mp6_bridge_apply_content_aspect_
+     * policy() right below: that call reads mp6_widescreen_enabled() to
+     * decide FIT-at-native-4:3 vs FIT-at-the-live-wide-aspect, so the
+     * enabled/disabled state must already be set by the time it runs.
+     * Everything else downstream (render width, camera aspect, 2D shim)
+     * also reads mp6_widescreen_enabled() fresh on every call -- this is
+     * the only place the ON/OFF decision itself is made. */
+    mp6_widescreen_set_enabled(mp6_launcher_cfg_widescreen());
 
     /* A5: the CONTENT half of the fixed-aspect policy, engaged exactly
      * here -- right before GameMain(), on every boot path (automation,
@@ -354,7 +447,10 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * the real window/display surface instead of a phantom letterboxed
      * one. mp6_launcher_cfg_aspect_locked() returns g_cfg.aspectLocked in
      * launcher mode or a fixed 1 (today's automation default) otherwise --
-     * identical final gameplay-time state to pre-A5. */
+     * identical final gameplay-time state to pre-A5. WS2 extends this same
+     * call (mp6_bridge_apply_content_aspect_policy(), aurora_bridge.c) to
+     * also consult mp6_widescreen_enabled() (set immediately above) and
+     * stay on FIT -- never STRETCH -- at the live wide aspect when active. */
     mp6_bridge_apply_content_aspect_policy(mp6_launcher_cfg_aspect_locked());
 
     mp6_os_globals_init();

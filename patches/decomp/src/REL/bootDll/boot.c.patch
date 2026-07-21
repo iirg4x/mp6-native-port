@@ -2,10 +2,39 @@
 +++ b/src/REL/bootDll/boot.c
 @@ -14,0 +15 @@
 +#include "be.h"
-@@ -15,0 +17,2 @@
+@@ -15,0 +17,4 @@
 +#include <stdio.h>  /* M11 census diagnostics (CameraOutView below) */
 +#include <stdlib.h>
-@@ -327,0 +331,70 @@
++#include <string.h> /* WS15 (docs/WS15_SELECTIVE_EXTRUDE.md): strncmp/strcmp, mp6_title_star_is_background below */
++#include "mp6_widescreen.h" /* WS6 (docs/WS6_OVERLAY_CAMERAS.md) */
+@@ -113,2 +118,24 @@
+-    Hu3DCameraPerspectiveSet(1, 45.0f, 20.0f, 15000.0f, 1.2f);
+-    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
++    /* MP6 native port -- WS6 (docs/WS6_OVERLAY_CAMERAS.md): this overlay
++     * sets its OWN 3D camera (like hsfman.c's defCamera, WS2) instead of
++     * reusing the shared one -- WS2/WS4 deliberately left every REL's own
++     * camera native (640-wide, left-anchored at x=0) to match the reference
++     * widescreen ROM hack's scope (it never edits any .rel file at all --
++     * WS_REFERENCE_STUDY.md section 2.4), which is exactly why this boot/
++     * logo scene renders in only the left 640px of a wider render target,
++     * leaving a black band on the right. Widened the same proven way
++     * defCamera/opening.c's own camera already are: FOV aspect x
++     * scale_factor(), viewport width -> live render width. Confirmed by
++     * capture (a full-frame Dolby-logo screenshot, no band, no artifact --
++     * this camera's own backdrop is a plain solid-clear, not a size-limited
++     * 3D asset, unlike this same file's OWN BootTitleExec camera below,
++     * which needed the opposite treatment -- see that comment). 1.0f/640.0f
++     * (native) are exact no-ops when Widescreen is disabled -- byte-
++     * identical to the original call. */
++    /* MP6 native port -- WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): replaces the
++     * same two calls with ONE call that ALSO registers this camera so it
++     * re-derives live on a later window resize -- ObjectSetup only ever
++     * runs once, at overlay load; CameraOutView (this file's own per-frame
++     * camera-position updater) never touched Perspective/ViewportSet, so
++     * this camera stayed frozen at scene-load size without this. Same
++     * literals, same effect on THIS call. */
++    mp6_widescreen_camera_widen(1, 45.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
+@@ -327,0 +355,70 @@
 +        /* MP6 native port -- M4c (docs/NO_LEAK_POLICY.md's "headless creep"
 +         * entry). Real, unpatched original decomp code: this is the
 +         * attract-loop replay path (title screen's own input-wait timed out
@@ -76,7 +105,7 @@
 +         * survive until the overlay really ends. */
 +        HuMemDirectFreeNum(HEAP_DVD, HU_MEMNUM_OVL);
 +        HuMemDirectFreeNum(HEAP_MODEL, HU_MEMNUM_OVL);
-@@ -493,0 +567,23 @@
+@@ -493,0 +591,23 @@
 +    /* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md, open remainder):
 +     * the full-story title's residual zoom is camera pos z=500 (the
 +     * opening's last write) where this function should be re-aiming
@@ -100,7 +129,65 @@
 +        }
 +    }
 +
-@@ -627,0 +724,8 @@
+@@ -617,0 +738,57 @@
++/* MP6 native port -- WS19 (docs/WS19_SURGICAL_EXTRUDE.md): REPLACES WS15's
++ * own "match every grid*-prefixed name, plus hikari" predicate below --
++ * on-device report (after WS15/WS18 shipped): characters (Mario in
++ * particular) were STILL visibly stretched. Root-caused, not guessed: WS15's
++ * OWN diagnostic (mesh.attribute / mesh.material) is a WHOLE-ARRAY pointer
++ * artifact (hsf_load_native.c's LoadObjects(): `out[i].mesh.material =
++ * ctx->material` unconditionally -- always material[0], never THIS object's
++ * own bound texture; game/hsfdraw.c's own FaceDraw() resolves the REAL
++ * per-object material via `objPtr->mesh.material[face->mat & 0xFFF]`, the
++ * first face's own `.mat` index) -- so WS15's own name-prefix classification
++ * was never actually checked against what each "grid*" object really shows.
++ * Re-dumped this session with the REAL per-face material/attribute lookup
++ * (platform/hsf/mp6_widescreen_extrude.c's mp6_widescreen_debug_dump_verts(),
++ * extended this session to resolve it correctly) -- of the 12 "grid*"
++ * objects, only TWO are genuine full-frame backdrop art:
++ *   - "grid5": bound texture "back_ex" -- the day/night split panel itself
++ *     (yellow/day left half with balloons, dark-blue/night right half with
++ *     stars, baked together in ONE texture, jagged vertical seam) --
++ *     unrotated, dead-centered (base.pos=(0,0,-340)), the full "big template"
++ *     footprint (authored min=(-288,-387.55)/max=(288,440)).
++ *   - "grid14": bound texture "back_house" -- the town-silhouette strip
++ *     (a row of small houses on a beach, a strip of water below) -- SAME
++ *     footprint as grid5 but base.scale=(1,0.20,1), i.e. squashed to a wide,
++ *     short horizontal band, base.pos=(0,-230,10): the bottom edge of the
++ *     composition, matching a skyline strip exactly.
++ * EVERY other "grid*" object (grid2/7/8/9/10/11/12/13, all sharing ONE
++ * "RGBA8gokou2_ex" or "luluna_ex" confetti/glow-ray atlas texture) and
++ * "hikari" (its own "RGBA8ef" light-glint sprite) are each a SEPARATE
++ * sub-object with their OWN dedicated vertex buffer AND their OWN dedicated
++ * texture, distinct from grid5/grid14 -- per this mission's own explicit
++ * rule ("if they're separate sub-objects, leave them native"), these must
++ * NOT stretch. Most importantly: "grid3" -- previously matched and
++ * stretched by the old "grid*" prefix rule -- resolves to bound texture
++ * "mario_ex", i.e. grid3 IS Mario's own big hero-pose graphic, a dedicated
++ * foreground quad that merely happens to be named with a "grid" prefix
++ * (an authoring/export artifact, not a role indicator) -- THIS was the
++ * actual, confirmed cause of "Mario looks stretched": his own quad was being
++ * grown by the exact same k as the backdrop, empirically measured on-device
++ * via a temporary matrix-column-length diagnostic (removed again this
++ * session) to grow in lockstep with scale_factor(), while every chara*
++ * object's OWN rigid transform proved completely k-invariant, ruling out a
++ * camera/projection-level bug and confirming the classification (name
++ * prefix, not content) was the only thing wrong. Matched by exact name only
++ * (no prefix matching at all) -- "grid5" or "grid14" -- everything else
++ * in this model (all chara* + copy + rogo, every other grid*, hikari) is left
++ * completely untouched, matching TitleMdlId[0]/[1]'s own "no call site at
++ * all" treatment.
++ *
++ * MP6 native port -- WS27 (tools/mp6scene/WS_NATURAL_EXTENSION_SPEC.md):
++ * the `mp6_title_star_is_background` predicate that used to sit here
++ * (feeding the WS19 selective horizontal STRETCH of exactly those two
++ * objects) is REMOVED -- the stretch call is gone (see BootTitleCreate's
++ * own call-site comment) and mp6_widescreen_extend_mirror() takes each
++ * object NAME directly. The WS19 census above stays: it is still the
++ * evidence for why grid5/grid14, and ONLY those two, get a widescreen
++ * treatment at all. */
++
+@@ -627,0 +805,144 @@
 +    /* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md) diagnostic: the
 +     * wordmark census (patches/decomp/src/game/hsfman.c.patch's
 +     * MP6_DRAW_CENSUS) reports models by Hu3DData INDEX only -- this one
@@ -109,7 +196,164 @@
 +     * file's existing [MP6-DIAG-WARN] print. */
 +    OSReport("[MP6-DIAG-TITLE] BootTitleCreate: TitleMdlId PARTY=%d SIX=%d STAR=%d (tick=%u)\n",
 +             TitleMdlId[0], TitleMdlId[1], TitleMdlId[2], VIGetRetraceCount());
-@@ -660,2 +764,38 @@
++    /* MP6 native port -- WS10 (docs/WS10_BACKDROP_SCALE.md): the title
++     * screen's "MARIO PARTY 6" cast-collage backdrop is 3 separate HSF
++     * pieces (PARTY/SIX/STAR) that all share the same world-origin pivot
++     * (Hu3DModelCreate/Hu3DModelCreateData always reset pos to (0,0,0),
++     * game/hsfman.c) -- so scaling each uniformly about that SAME shared
++     * point grows the whole composite together, keeping it undistorted
++     * and correctly registered, instead of only the camera's own FOV
++     * widening past the art's native-authored edge (WS6/WS8's "accepted
++     * cutoff" tradeoff, superseded here per the user's refined directive:
++     * eliminate the cutoff, don't accept it). 1.0f (native) is an exact
++     * no-op when Widescreen is disabled. */
++    /* MP6 native port -- WS12 (docs/WS11_EXTRUDE_BACKDROPS.md): CONVERTED
++     * from WS10's plain uniform Hu3DModelScaleSet (above, this same spot)
++     * to the shared, bbox-center-aware extrude helper. WS10's plain scale
++     * was scale-about-LOCAL-(0,0,0) -- accidentally fine only if each
++     * model's own authored geometry happens to sit at local origin. HSF
++     * diagnostic dump (this session) found it does NOT for any of these
++     * three: TitleMdlId[0] ("gridzzz") has its single mesh sub-object's
++     * own base.pos=(0,-104,25) (a Y-offset LARGER than the object's own
++     * +-57.7 Y-extent); TitleMdlId[1] ("rogo1") base.pos=(0,-60,18);
++     * TitleMdlId[2] ("STAR", the 65-sub-object cast-collage) has a
++     * real, non-trivial composite center. Plain-scaling any of these
++     * would have grown them away from their own visual middle instead of
++     * in place around it -- the exact class of defect this whole
++     * mechanism exists to fix (docs/WS11_EXTRUDE_BACKDROPS.md), just not
++     * yet visibly exercised for Title specifically. Every texture on all
++     * three models is GX_CLAMP (HSF diagnostic dump), so the scale-about-
++     * center mechanism (not the mesh/UV-extrude one) is the right fit.
++     *
++     * MP6 native port -- WS13 (user feedback on WS12's own 2.17:1
++     * capture): that isotropic (x/y/z) extrude above visibly ZOOMED this
++     * composite -- every axis grows by the same scale_factor(), so the
++     * vertical extent grows exactly as much as the horizontal, cropping
++     * top/bottom (Mario's own hat clips the top edge at 2.17:1) instead of
++     * just widening. Wrong tool for this asset: re-investigated the HSF
++     * diagnostic dump (this session) and confirmed TitleMdlId[0..2]
++     * together are a single, genuinely FLAT "cutout collage" with no
++     * separable background layer -- TitleMdlId[2] ("STAR")'s 65
++     * sub-objects are ~33 real HSF_OBJ_MESH quads (18 character-portrait
++     * billboards "chara01..18"/"copy"/"rogo", each individually
++     * scaled/positioned, their own per-character texture swapped by the
++     * model's BAKED HSF motion/keyframe data -- confirmed by reading
++     * BootTitleCreate/BootTitleExec directly: neither touches any
++     * texture/attribute field in C -- plus ~12 "grid*"/"hikari" quads at
++     * assorted rotations/scales forming the diagonal yellow/blue
++     * color-split halves and confetti-scrap decorations visible behind the
++     * characters) plus 32 non-mesh group/joint nodes (invisible to the
++     * dump's own HSF_OBJ_MESH-only filter). Every one of these quads sits
++     * at a similar shallow Z (roughly -60..+25 local units) -- a true flat
++     * collage, not a layered 3D scene -- and every texture on all three
++     * models, TitleMdlId[0]/[1] included, is confirmed GX_CLAMP (no
++     * GX_REPEAT anywhere in this model's attribute pool), so there is no
++     * separable, tileable layer for the mesh+UV REPEAT path either: Mario,
++     * the characters, and the "PARTY"/"6" pieces are all baked into ONE
++     * flat composite with no distinct background plane to treat
++     * differently. (The area OUTSIDE this collage's own silhouette is a
++     * plain Hu3DBGColorSet(0,0,0) solid-black clear, ObjectSetup -- not a
++     * textured backdrop.) Per the user's own explicit direction ("just
++     * scale the backdrop horizontally"): switched all three models from
++     * the isotropic mp6_widescreen_extrude_model() to the new
++     * mp6_widescreen_extrude_model_horizontal() (same shared file/header,
++     * platform/hsf/mp6_widescreen_extrude.c / shim/include/
++     * mp6_widescreen.h) -- grows ONLY scale.x by scale_factor() (scale.y/z
++     * and the matching position compensation stay native/untouched), so
++     * the composite's own vertical framing is BYTE-FOR-BYTE what a native/
++     * 4:3 view already showed (no zoom, no new top/bottom crop) while its
++     * horizontal extent still grows exactly as before to track the
++     * camera's own aspect-widened FOV. The stretch is horizontal-only and
++     * intentional (the user's own accepted tradeoff for a flat 2D-style
++     * title image, not a bug). Confirmed safe to treat X as the pure
++     * "widen" axis: the title camera (BootTitleExec's own
++     * BootCameraRot[0]=(0,0,0)/BootCameraCenter[0]=(0,0,0)/
++     * BootCameraZoom[0]=1000 driving CameraOutView, boot.c:483) has NO
++     * rotation/roll at all (up stays exactly (0,1,0)), so world X maps to
++     * screen-horizontal and world Y to screen-vertical with no swap.
++     * 1.0f/native (no-op) when Widescreen is disabled, same contract as
++     * every other mp6_widescreen_* call in this file.
++     *
++     * MP6 native port -- WS15 (docs/WS15_SELECTIVE_EXTRUDE.md; on-device
++     * user report: "Title screen shouldn't be stretched aside from the
++     * unavoidable backdrop stretch, everything should be normal scale" --
++     * right now the WHOLE collage above stretches horizontally, so Mario,
++     * every character portrait, and the logo are all visibly wider than
++     * native, not just the background): WS13's own investigation (the
++     * comment above) correctly found this collage has "no separable
++     * background layer" AT THE MODEL LEVEL -- true, TitleMdlId[0]/[1]/[2]
++     * are each ONE flat composite with everything baked into shared model
++     * space, so no whole-MODEL mechanism can treat part of one differently.
++     * Re-investigated at the SUB-OBJECT level per the new directive (same
++     * HSF-diagnostic-dump method, re-run this session): TitleMdlId[0]
++     * ("gridzzz") is a SINGLE mesh object -- a wide/short banner quad at
++     * base.pos=(0,-104,25), base.scale=(1.46,0.26,0.30) -- confirmed by its
++     * own resource name (TITLE_HSF_PARTY) and its screen position (matches
++     * the "MARIO PARTY" wordmark's own lower-third placement in the
++     * reference capture, docs/history/reference_title_screen.jpg) to BE the
++     * wordmark logo itself, not a background layer -- foreground, full
++     * stop. TitleMdlId[1] ("rogo1", TITLE_HSF_SIX) is likewise ONE mesh
++     * object, base.pos=(0,-60,18) -- the green "6" numeral logo piece,
++     * also foreground. Both get NO widescreen treatment at all now (no
++     * call site below) -- they stay exactly native pos/scale, same as any
++     * model this project never touches.
++     *
++     * TitleMdlId[2] ("STAR") DOES mix foreground and background within its
++     * own 65 sub-objects (the WS19 census comment above BootTitleExec has
++     * the full per-object breakdown AND the WS19 content-based
++     * correction) -- WS19's fix here was
++     * mp6_widescreen_extrude_model_selective_horizontal(): grow ONLY
++     * grid5/grid14's own raw vertex data horizontally, leaving every
++     * other sub-object -- and the model's own top-level pos/scale --
++     * byte-identical to native.
++     *
++     * MP6 native port -- WS27 (tools/mp6scene/WS_NATURAL_EXTENSION_SPEC.md):
++     * that selective STRETCH is now REPLACED by the MIRROR extension --
++     * grid5 (the "back_ex" day/night balloon/star panel) and grid14 (the
++     * "back_house" town strip) keep their NATIVE vertices (round balloons
++     * and stars, native house proportions, at every window shape -- the
++     * stretch visibly widened both), and mp6_widescreen_extend_mirror()
++     * appends ONE border quad per side into each object's OWN buffers
++     * whose u runs backward from the fold (u=0 exactly at the native edge
++     * -- C0-continuous by construction; outer u=(k-1)/2). MIRROR, not
++     * tile, because neither texture has ANY measurable x-periodicity
++     * (autocorrelation < 0.20 in every half of both bitmaps -- spec
++     * section 1.2, there is no period to tile); the one visible artifact
++     * (a twinned balloon at grid5's day-side fold, judged acceptable) and
++     * the C0-exact folds are proven in the design A/B renders
++     * (tools/mp6scene/build/wsdesign_title_*.png). halfW=288.0f is each
++     * quad's own authored half extent (verts exactly +-288, re-validated
++     * against the live buffer at registration). Appended faces live in
++     * the objects' own buffers, so they ride `mesh.curr` under the
++     * title's baked reveal motion exactly like the native quads (the same
++     * WS15 finding that forced vertex-buffer mutation on the stretch
++     * forces buffer GROWTH -- not companion models -- here); k=1 appends
++     * zero-area quads only, and a disabled build never grows anything --
++     * default-off stays byte-identical. */
++    mp6_widescreen_extend_mirror(TitleMdlId[2], "grid5", 288.0f);
++    mp6_widescreen_extend_mirror(TitleMdlId[2], "grid14", 288.0f);
+@@ -634,3 +955,17 @@
+-    Hu3DCameraPerspectiveSet(1, 20.0f, 20.0f, 5000.0f, 1.2f);
+-    Hu3DCameraViewportSet(1, 0.0f, 0.0f,
+-                          640.0f, 480.0f, 0.0f, 1.0f);
++    /* WS6 centered this camera instead of widening: widening reveals plain
++     * black past the title screen's own "MARIO PARTY 6" cast-collage art
++     * (BootTitleCreate's TitleMdlId[0..2], a fixed-size 3D object) native-
++     * authored edge. WS8 (docs/WS8_2D_COHERENCE.md) reverts that to WIDEN,
++     * per the user's own explicit direction on this exact class of tradeoff
++     * (docs/WS8_2D_COHERENCE.md, mdpartydll's near-identical camera): a
++     * clean model-edge cutoff with clear color past it is an ACCEPTED
++     * result at wide/ultra-wide aspects, not a defect -- a filled scene is
++     * preferred over a 4:3 pillarbox. Widened the same proven way as every
++     * other overlay camera: aspect x scale_factor, viewport X=0/width=
++     * render_width. 20.0f/1.2f/640.0f -- byte-identical native call when
++     * Widescreen is disabled. */
++    /* MP6 native port -- WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): same fix as
++     * ObjectSetup's own camera above (this file's own per-frame
++     * CameraOutView still never touches Perspective/ViewportSet) -- see
++     * that comment. */
++    mp6_widescreen_camera_widen(1, 20.0f, 20.0f, 5000.0f, 1.2f, 480.0f);
+@@ -660,2 +995,38 @@
 -        while (Hu3DMotionTimeGet(TitleMdlId[2]) < 70.0f) {
 -            HuPrcVSleep();
 +        /* MP6 native port -- docs/M2E_MILESTONE.md. Real, unpatched original
@@ -150,35 +394,35 @@
 +                 mp6TitleMotionWaitFrame++) {
 +                HuPrcVSleep();
 +            }
-@@ -704 +844 @@
+@@ -704 +1075 @@
 -    size = *src++;
 +    size = be32(src); src++;
-@@ -706 +846 @@
+@@ -706 +1077 @@
 -    decodeType = *src++;
 +    decodeType = be32(src); src++;
-@@ -720 +860 @@
+@@ -720 +1091 @@
 -    size = *src++;
 +    size = be32(src); src++;
-@@ -722 +862 @@
+@@ -722 +1093 @@
 -    decodeType = *src++;
 +    decodeType = be32(src); src++;
-@@ -758 +898 @@
+@@ -758 +1129 @@
 -    warningSize = *warningPacked++;
 +    warningSize = be32(warningPacked); warningPacked++;
-@@ -760 +900,5 @@
+@@ -760 +1131,5 @@
 -    warningDecodeType = *warningPacked++;
 +    warningDecodeType = be32(warningPacked); warningPacked++;
 +#ifdef MP6_ANIM_DEBUG_DUMP
 +    OSReport("[ANIM] warningSize=%u warningDecodeType=%d warningRawData=%p\n",
 +              warningSize, warningDecodeType, warningRawData);
 +#endif
-@@ -772 +916 @@
+@@ -772 +1147 @@
 -    pressStartSize = *pressStartPacked++;
 +    pressStartSize = be32(pressStartPacked); pressStartPacked++;
-@@ -774 +918 @@
+@@ -774 +1149 @@
 -    pressStartDecodeType = *pressStartPacked++;
 +    pressStartDecodeType = be32(pressStartPacked); pressStartPacked++;
-@@ -793,0 +938,6 @@
+@@ -793,0 +1169,6 @@
 +    /* MP6 native port -- M3b (docs/M3B_VISIBILITY.md) TEMPORARY diagnostic:
 +     * prints the real VIGetRetraceCount() tick number right as the warning
 +     * screen starts accepting input, so a driving session can compute a

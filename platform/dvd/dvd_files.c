@@ -48,11 +48,24 @@
 #include "mp6_dvd_files.h"
 #include "be.h"
 #include "host.h" /* mp6_host_disc_root -- see mp6_resolve_dvd_paths() below */
+#include "mp6_savestate.h" /* W2: mp6_dvd_savestate_rehydrate() / open-handle count */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+ * includes is load-bearing, not stylistic: it is a #pragma clang section that
+ * redirects every file-scope definition FOLLOWING it. As a -include (before all
+ * headers) it also captured the decomp headers' C TENTATIVE definitions --
+ * dolphin/os.h:27 `u32 __OSBusClock;` and friends -- turning those common
+ * symbols into strong per-TU definitions and breaking the link with duplicate
+ * symbol errors. Here, headers keep their normal linkage and only this file's
+ * own statics move. tools/build.py asserts this line exists in every TU listed
+ * in HOST_STATE_SECTION_SOURCES. */
+#include "mp6_host_section.h"
+
 
 #ifndef MP6_DVD_FILES_ROOT
 #error "MP6_DVD_FILES_ROOT must be defined by tools/build.py (absolute path to orig/GP6E01/files)"
@@ -528,4 +541,61 @@ void mp6_dvd_close(DVDFileInfo *fileInfo)
     g_openReal[idx].key = NULL;
     g_openReal[idx].fp = NULL;
     g_openReal[idx].length = 0;
+}
+
+/* =======================================================================
+ * Savestate support (docs/SAVESTATE.md, W2)
+ * =======================================================================
+ * This whole TU's statics are carved out of the savestate (see
+ * HOST_STATE_SECTION_SOURCES in tools/build.py), because every one of them
+ * is host-owned: the FST blob and its string pool are CRT-heap pointers,
+ * g_entryPaths is a heap array of heap strings, and the resolved paths
+ * belong to the machine that is RUNNING, not the one that captured.
+ *
+ * The single thing the carve-out gives up is the identity of files that
+ * were open at capture time -- g_openReal[] records a DVDFileInfo* key and
+ * a FILE*, but no path or entrynum, so an open handle could not be
+ * re-established even in principle. That is acceptable ONLY because no
+ * compiled caller in this build holds a DVD file open across a frame
+ * boundary: every DVDOpen in game/dvd.c closes within the same call,
+ * msm_bridge.c reads through a stack-local DVDFileInfo, msmstream.c is not
+ * compiled, and THP -- the one caller that would hold a handle across
+ * HuPrcVSleep -- is gated off at THPInit (platform/null/shims_manual.c).
+ *
+ * That is an assumption about the rest of the tree, so it is CHECKED rather
+ * than trusted: mp6_dvd_open_handle_count() lets the capture path assert it
+ * and warn loudly if it ever stops holding (enabling THP or compiling
+ * msmstream.c would do it). When that day comes the fix is to split this
+ * table -- {key, entrynum} in restored memory, {FILE*} in a parallel
+ * carved-out array -- and re-fopen each slot from the rehydrate hook; the
+ * entrynum is a restore-stable identity because the FST is deterministically
+ * rebuilt from the resolved path. */
+int mp6_dvd_open_handle_count(void)
+{
+    int i, n = 0;
+    for (i = 0; i < MP6_MAX_OPEN_REAL; i++) {
+        if (g_openReal[i].fp != NULL) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Post-restore hook. The restored game state refers to no file this process
+ * has open, so any handle held here is now orphaned -- close it rather than
+ * leak it. Everything else this TU owns (FST blob, path cache, load latch)
+ * is carved out and therefore already correct for THIS process; that is the
+ * whole point of the carve-out, so there is deliberately nothing to rebuild
+ * here. Safe before any DVD path has been resolved: the table is zeroed. */
+void mp6_dvd_savestate_rehydrate(void)
+{
+    int i;
+    for (i = 0; i < MP6_MAX_OPEN_REAL; i++) {
+        if (g_openReal[i].fp != NULL) {
+            fclose(g_openReal[i].fp);
+            g_openReal[i].fp = NULL;
+        }
+        g_openReal[i].key = NULL;
+        g_openReal[i].length = 0;
+    }
 }

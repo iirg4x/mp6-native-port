@@ -1,0 +1,74 @@
+diff --git a/lib/aurora.cpp b/lib/aurora.cpp
+index 8843b7b..954095e 100644
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -237,6 +237,14 @@ bool begin_frame() noexcept {
+     }
+   }
+
++  // WS7: resolve the content-framebuffer fit unconditionally every frame
++  // (see window.cpp's own comment on refresh_frame_buffer_fit()) instead of
++  // relying solely on whichever discrete resize event happens to be
++  // processed -- guarantees a transient RenderMode/aspect desync (e.g. an
++  // ordinary VIConfigure() call unrelated to any widescreen/aspect feature)
++  // self-corrects within a single frame instead of possibly persisting.
++  window::refresh_frame_buffer_fit();
++
+   imgui::new_frame(window::get_window_size());
+   if (!gfx::begin_frame()) {
+     return false;
+diff --git a/lib/window.cpp b/lib/window.cpp
+index 3841205..0a82fbb 100644
+--- a/lib/window.cpp
++++ b/lib/window.cpp
+@@ -223,6 +223,38 @@ void process_event(SDL_Event& event) {
+ }
+ } // namespace
+
++/* WS7 (mp6-native port, ultra-wide fix): resize_swapchain()/get_window_size()
++ * are only invoked reactively, from three discrete SDL event types
++ * (WINDOW_DISPLAY_SCALE_CHANGED, WINDOW_PIXEL_SIZE_CHANGED, the FutureResize
++ * custom event). Each of those events independently queues a re-fit;
++ * whichever one actually gets *processed* (drained by poll_events(), on
++ * whatever later tick that happens to occur) commits a content-framebuffer
++ * size computed from WHATEVER vi::configured_fb_size()/g_frameBufferAspectFit
++ * are AT THAT MOMENT -- decoupled from the game-logic moment that pushed
++ * the event.
++ * A game (or a decomp boot/init routine that is not itself widescreen-aware
++ * -- e.g. an ordinary GXRenderModeObj VIConfigure() call unrelated to any
++ * aspect feature) can legally call VIConfigure() more than once within a
++ * single logical tick, transiently presenting a stale RenderMode to
++ * whichever FutureResize event happens to be drained first. There is
++ * currently no guarantee that the eventually-correct state ever gets
++ * re-applied to the actual content texture before a frame using the
++ * stale-fitted size is presented, nor that it is re-applied promptly if it
++ * is not the very next processed event.
++ *
++ * refresh_frame_buffer_fit() closes that gap by making the exact same
++ * (already fully idempotent -- get_window_size() is always computed fresh,
++ * and resize_swapchain() itself early-returns the instant nothing actually
++ * changed) fit resolution ALSO run unconditionally once per presented
++ * frame, from begin_frame() (aurora.cpp), instead of purely reactively.
++ * This guarantees that any transient desync -- regardless of its source,
++ * whether the specific one queued via a discrete SDL/FutureResize event or
++ * not -- self-corrects within a single frame, rather than depending on
++ * which specific event happens to be the one actually drained. Cheap: two
++ * SDL size queries plus a struct compare, no different from what every
++ * frame already pays inside get_window_size() for imgui::new_frame(). */
++void refresh_frame_buffer_fit() noexcept { resize_swapchain(); }
++
+ const AuroraEvent* poll_events() {
+   ZoneScoped;
+   g_events.clear();
+diff --git a/lib/window.hpp b/lib/window.hpp
+index 51257ea..9720a3b 100644
+--- a/lib/window.hpp
++++ b/lib/window.hpp
+@@ -48,6 +48,7 @@ void set_window_size(uint32_t width, uint32_t height);
+ void set_window_position(uint32_t x, uint32_t y);
+ void center_window();
+ void request_frame_buffer_resize();
++void refresh_frame_buffer_fit() noexcept;
+ void set_frame_buffer_scale(float scale);
+ void set_frame_buffer_aspect_fit(bool fit);
+ void set_background_input(bool value);

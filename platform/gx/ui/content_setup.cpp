@@ -17,12 +17,22 @@
 #ifdef __ANDROID__
 extern "C" {
 #include "../../android/saf_bridge.h"
+
 /* SDL3 SDL_system.h storage getters, declared by hand exactly like
  * platform/main_native.c does (keeps the include set unchanged). */
 const char *SDL_GetAndroidExternalStoragePath(void);
 const char *SDL_GetAndroidInternalStoragePath(void);
 }
 #endif
+
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): must sit AFTER this TU's own
+ * includes AND at preprocessor top level -- an earlier revision was inside
+ * the __ANDROID__ block above, leaving this TU uncarved on Windows, where
+ * sPickMutex/sPickedPath below would then be memcpy'd over by a restore
+ * (UB on the live mutex, dangling heap pointer in the string). See
+ * mp6_host_section.h for the full contract; build.py enforces top-level
+ * placement. */
+#include "mp6_host_section.h"
 
 namespace mp6::ui {
 namespace {

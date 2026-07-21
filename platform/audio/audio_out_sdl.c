@@ -34,6 +34,18 @@
 #include <stdio.h>
 #include <stdint.h>
 
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+ * includes is load-bearing, not stylistic: it is a #pragma clang section that
+ * redirects every file-scope definition FOLLOWING it. As a -include (before all
+ * headers) it also captured the decomp headers' C TENTATIVE definitions --
+ * dolphin/os.h:27 `u32 __OSBusClock;` and friends -- turning those common
+ * symbols into strong per-TU definitions and breaking the link with duplicate
+ * symbol errors. Here, headers keep their normal linkage and only this file's
+ * own statics move. tools/build.py asserts this line exists in every TU listed
+ * in HOST_STATE_SECTION_SOURCES. */
+#include "mp6_host_section.h"
+
+
 static SDL_AudioStream *g_stream;
 static int g_typicalAdditionalBytes;
 static uint32_t g_starvationCount;

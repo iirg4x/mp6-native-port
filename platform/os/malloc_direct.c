@@ -314,6 +314,33 @@ static void mp6_alloc_census_trace_free(const char *who, void *ptr, u32 num, u32
     fflush(stdout);
 }
 
+/* Bytes readable from `ptr` through the end of its OWN direct-malloc block,
+ * or 0 when `ptr` is not verifiably a live block base (wrong magic, outside
+ * every heap, or NULL). Read-only, and only via the same shadow-header
+ * convention the alloc census above already relies on.
+ *
+ * Purpose: lets a consumer that receives a bare buffer pointer with no
+ * length (the HSF loader's file buffers, allocated by game/data.c) bound
+ * its reads to the allocation instead of trusting in-file offsets -- see
+ * hsf_load_native.c's LoadBitmaps for the concrete case (2 real disc files
+ * are EOF-truncated mid-bitmap).
+ *
+ * block->size is game/memory.c's own MEM_ALLOC_SIZE(request), i.e. it
+ * INCLUDES the block header. We subtract sizeof(MP6ShadowMemBlock) -- the
+ * native header footprint -- which is a conservative (never over-reporting)
+ * bound regardless of the 32-vs-native-header-size wrinkle documented in
+ * the MP6_MEMBLOCK_HDR comment: worst case we under-report by 8 bytes. */
+uint32_t mp6_heap_block_data_size(const void *ptr)
+{
+    const MP6ShadowMemBlock *blk;
+    if (ptr == NULL) return 0;
+    if (mp6_heap_id_for_ptr(ptr) < 0) return 0;
+    blk = (const MP6ShadowMemBlock *)((const char *)ptr - sizeof(MP6ShadowMemBlock));
+    if (blk->magic != 165) return 0;
+    if (blk->size <= (int32_t)sizeof(MP6ShadowMemBlock)) return 0;
+    return (uint32_t)blk->size - (uint32_t)sizeof(MP6ShadowMemBlock);
+}
+
 void *HuMemDirectMalloc(HEAPID heap, s32 size)
 {
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);

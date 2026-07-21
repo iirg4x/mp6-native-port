@@ -22,6 +22,18 @@
 
 #include "launcher_state.hpp" /* [MP6] replaces <port/settings.h> */
 
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+ * includes is load-bearing, not stylistic: it is a #pragma clang section that
+ * redirects every file-scope definition FOLLOWING it. As a -include (before all
+ * headers) it also captured the decomp headers' C TENTATIVE definitions --
+ * dolphin/os.h:27 `u32 __OSBusClock;` and friends -- turning those common
+ * symbols into strong per-TU definitions and breaking the link with duplicate
+ * symbol errors. Here, headers keep their normal linkage and only this file's
+ * own statics move. tools/build.py asserts this line exists in every TU listed
+ * in HOST_STATE_SECTION_SOURCES. */
+#include "mp6_host_section.h"
+
+
 namespace mp6::ui {
 namespace {
 
@@ -57,8 +69,8 @@ bool initialize() noexcept
     /* [MP6] UI faces from res/fonts/. The body font is Inter (SIL OFL,
      * redistributable) in place of the commercial FOT-NewRodin Pro the
      * upstream UI used; the .rcss body rules were re-pointed to the "Inter"
-     * family to match. See docs/PARTYBOARD_PROVENANCE.md and
-     * res/fonts/LICENSES.txt for each font's license status. */
+     * family to match. See docs/PARTYBOARD_PROVENANCE.md for each font's
+     * license status. */
     load_font("fonts/AlegreyaSC-Regular.ttf");
     load_font("fonts/AlegreyaSC-Bold.ttf");
     load_font("fonts/MaterialSymbolsRounded-Regular.ttf");

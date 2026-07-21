@@ -83,7 +83,15 @@ typedef enum {
     TP_CTL_A,
     TP_CTL_B,
     TP_CTL_START,
+    TP_CTL_GEAR, /* in-game menu button: contributes NO pad bits; a tap
+                  * (down+up inside the circle) toggles the RmlUi settings
+                  * menu via mp6_launcher_toggle_menu() */
 } TPControl;
+
+/* In-game menu seam (platform/gx/ui/launcher_core.cpp). Both inert in
+ * automation mode by the launcher TU's own mode guard. */
+extern "C" void mp6_launcher_toggle_menu(void);
+extern "C" int mp6_launcher_menu_visible(void);
 
 typedef struct {
     bool active;
@@ -98,6 +106,7 @@ typedef struct {
     float aCx, aCy, aR;
     float bCx, bCy, bR;
     float stCx, stCy, stHw, stHh;
+    float gearCx, gearCy, gearR; /* persistent in-game menu (gear) button */
 } TPLayout;
 
 static TPLayout g_layout;   /* zero until the first drawn frame */
@@ -147,6 +156,11 @@ static void tp_layout_update(float w, float h)
     g_layout.stHh = TP_START_HH * h;
     g_layout.stCx = w - m - 0.190f * h;
     g_layout.stCy = 0.16f * h;
+    /* Gear: top-left corner band (START owns top-right), small and out of
+     * every gameplay control's reach. */
+    g_layout.gearR = 0.048f * h;
+    g_layout.gearCx = m + g_layout.gearR;
+    g_layout.gearCy = m + g_layout.gearR;
     if (!g_layoutLogged) {
         g_layoutLogged = true;
         printf("[TOUCH] overlay armed: window %.0fx%.0f -- dpad@(%.0f,%.0f r=%.0f) "
@@ -168,12 +182,26 @@ static float tp_dist(float x0, float y0, float x1, float y1)
 static TPControl tp_hit_test(float x, float y)
 {
     if (g_layout.w <= 0.0f) return TP_CTL_NONE;
+    if (tp_dist(x, y, g_layout.gearCx, g_layout.gearCy) <= g_layout.gearR * 1.5f) return TP_CTL_GEAR;
+    /* While the in-game menu is open the PAD controls are hidden (draw) and
+     * inert (PADBlockInput neutralizes the virtual status anyway) -- only
+     * the gear keeps accepting taps, as the close button. */
+    if (mp6_launcher_menu_visible()) return TP_CTL_NONE;
     if (tp_dist(x, y, g_layout.dpadCx, g_layout.dpadCy) <= g_layout.dpadHitR * 1.15f) return TP_CTL_DPAD;
     if (tp_dist(x, y, g_layout.aCx, g_layout.aCy) <= g_layout.aR * TP_BTN_HIT_SCALE) return TP_CTL_A;
     if (tp_dist(x, y, g_layout.bCx, g_layout.bCy) <= g_layout.bR * TP_BTN_HIT_SCALE) return TP_CTL_B;
     if (fabsf(x - g_layout.stCx) <= g_layout.stHw * TP_BTN_HIT_SCALE &&
         fabsf(y - g_layout.stCy) <= g_layout.stHh * 2.2f) return TP_CTL_START;
     return TP_CTL_NONE;
+}
+
+/* Freecam collector query (platform/gx/freecam_input.c): does a finger at
+ * NORMALIZED (nx,ny) land on any touch control (incl. the gear)? Such
+ * fingers keep driving the virtual pad, never the camera. */
+extern "C" int mp6_touch_pad_control_at(float nx, float ny)
+{
+    if (g_layout.w <= 0.0f) return 0;
+    return tp_hit_test(nx * g_layout.w, ny * g_layout.h) != TP_CTL_NONE;
 }
 
 static TPFinger *tp_find(SDL_FingerID id)
@@ -267,6 +295,7 @@ extern "C" void mp6_touch_pad_event(const SDL_Event *ev)
         /* Down-edge latch (see g_downLatchMask's comment) + the per-press
          * evidence line -- user-rate, not per-tick, so unthrottled. */
         switch (f->ctl) {
+        case TP_CTL_GEAR:  /* no pad bits; the toggle fires on FINGER_UP */ break;
         case TP_CTL_A:     g_downLatchMask |= PAD_BUTTON_A;     break;
         case TP_CTL_B:     g_downLatchMask |= PAD_BUTTON_B;     break;
         case TP_CTL_START: g_downLatchMask |= PAD_BUTTON_START; break;
@@ -295,7 +324,17 @@ extern "C" void mp6_touch_pad_event(const SDL_Event *ev)
     }
     case SDL_EVENT_FINGER_UP: {
         TPFinger *f = tp_find(ev->tfinger.fingerID);
-        if (f) f->active = false;
+        if (f) {
+            f->active = false;
+            /* Gear tap: toggle the in-game menu if the finger lifted while
+             * still on the button (slide-off cancels, like any button). */
+            if (f->ctl == TP_CTL_GEAR &&
+                tp_dist(f->x, f->y, g_layout.gearCx, g_layout.gearCy) <= g_layout.gearR * 1.9f) {
+                printf("[TOUCH] gear tap -- toggling in-game menu\n");
+                fflush(stdout);
+                mp6_launcher_toggle_menu();
+            }
+        }
         break;
     }
     case SDL_EVENT_FINGER_CANCELED: {
@@ -410,6 +449,30 @@ extern "C" void mp6_touch_pad_draw(void)
 
     dim = anyTouch ? 1.0f : 0.62f; /* idle overlay stays subtle; touching brightens it */
     dl = ImGui::GetForegroundDrawList();
+
+    /* --- gear (in-game menu toggle) -- always drawn, doubles as the close
+     * button while the menu is open --------------------------------------- */
+    {
+        const bool menuOpen = mp6_launcher_menu_visible() != 0;
+        float cx = g_layout.gearCx, cy = g_layout.gearCy, r = g_layout.gearR;
+        float a = menuOpen ? 0.85f : 0.45f * dim;
+        dl->AddCircleFilled(ImVec2(cx, cy), r, tp_col(30, 30, 30, 0.35f * (menuOpen ? 1.0f : dim)), 32);
+        dl->AddCircle(ImVec2(cx, cy), r * 0.55f, tp_col(255, 255, 255, a), 24, r * 0.16f);
+        for (int i = 0; i < 6; i++) {
+            float ang = (float)i * 1.047198f; /* 60 deg */
+            float c = cosf(ang), s = sinf(ang);
+            dl->AddLine(ImVec2(cx + c * r * 0.62f, cy + s * r * 0.62f),
+                        ImVec2(cx + c * r * 0.92f, cy + s * r * 0.92f),
+                        tp_col(255, 255, 255, a), r * 0.20f);
+        }
+        dl->AddCircle(ImVec2(cx, cy), r, tp_col(255, 255, 255, 0.30f * (menuOpen ? 1.0f : dim)), 32, 2.0f);
+        /* Menu open: the pad controls below are hidden (their input is
+         * PADBlockInput()ed; drawing them over the RmlUi menu would just
+         * be clutter) -- the gear alone stays, as the close button. */
+        if (menuOpen) {
+            return;
+        }
+    }
 
     /* --- d-pad: base disc + 4 direction wedges (triangles) ----------- */
     {

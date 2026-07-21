@@ -138,6 +138,46 @@ void *mp6_host_arena_reserve(size_t size);
  * assert. */
 int mp6_host_image_below_4gb(void);
 
+/* One writable PE/ELF section of the running image, as reported by
+ * mp6_host_image_writable_sections(). `name` is NUL-terminated (PE section
+ * names are 8 raw bytes and are NOT NUL-terminated when exactly 8 chars
+ * long, so the 9th byte here exists purely to guarantee termination). */
+typedef struct {
+    char   name[9];
+    void  *addr;
+    size_t size;
+} Mp6HostImageSection;
+
+/* Savestate support: fills `out` with this image's writable sections (the
+ * game's own globals/BSS, which live in the binary's fixed non-ASLR data
+ * segments, not in the game arena) and returns how many entries were
+ * written -- 0 on any query failure, so callers fail closed exactly like
+ * mp6_host_image_below_4gb above. Reports every writable section including
+ * the host-owned carve-out; excluding that one is the savestate module's
+ * own policy decision (shim/include/mp6_savestate.h). */
+int mp6_host_image_writable_sections(Mp6HostImageSection *out, int maxOut);
+
+/* Coroutine-pool introspection for savestates (platform/host/coro_arena.c).
+ * Suspended HuPrc coroutines are the one place this port holds genuinely
+ * resumable execution state, and their stacks live in this pool rather than
+ * in the game arena, so a savestate must capture them explicitly. Slots are
+ * captured whole -- see coro_arena.c's own comment for why a measured
+ * high-water mark is deliberately not used. */
+void  *mp6_coro_pool_base(void);
+size_t mp6_coro_pool_size(void);
+size_t mp6_coro_slot_size(void);
+int    mp6_coro_slot_count(void);
+int    mp6_coro_slot_in_use(int slot);
+void  *mp6_coro_slot_addr(int slot);
+/* NOTE (review C18): two further accessors (slot_of / from_slot) existed
+ * here with a comment claiming process_native.c serializes its coroutine
+ * handles as slot indices. It does not, and never needed to: the wrapper
+ * array is a pinned static, so raw Mp6Coro* pointers restore as-is. The
+ * dead exports were removed rather than left to mislead -- if the wrappers
+ * ever move off the static array (the fiber backend heap-allocates, for
+ * one), restored scheduler tables break and THAT design change must bring
+ * real index serialization with it. */
+
 /* ---------------------------------------------------------------------
  * Paths & filesystem (4)
  *

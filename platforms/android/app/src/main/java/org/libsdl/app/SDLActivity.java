@@ -861,7 +861,7 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
                     // Start up the C app thread and enable sensor input for the first time
                     // FIXME: Why aren't we enabling sensor input at start?
 
-                    // MP6 U-A3  -- the ONE other
+                    // MP6 U-A3 (docs/UA3_DEVICE_PARITY.md) -- the ONE other
                     // deliberate delta from stock SDL3 Java glue (see
                     // SDLSurface.java's auroraNativeSetSurfaceReady hook for
                     // the first): give the SDL thread an explicit 32MB stack.

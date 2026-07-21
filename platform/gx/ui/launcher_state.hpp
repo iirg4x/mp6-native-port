@@ -29,6 +29,28 @@ struct Mp6LauncherConfig {
     double tickHz;          /* game.tick_hz: 60 default; 0 = free-run */
     char contentRoot[1024]; /* game.content_root: "" = auto */
     int masterVolume;       /* audio.master_volume: 0..100 */
+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): video.widescreen, default OFF
+     * (= today's fixed 4:3 pillarboxed behavior, byte-unchanged). ON: the
+     * window unlocks to free-resize (aspectLocked's own 4:3 window-shape
+     * constraint is skipped regardless of aspectLocked's own value -- the
+     * two are independent keys, but "locked to 4:3" and "dynamically
+     * wide" are a contradiction if both were engaged at once), and the GX
+     * render target / 3D camera aspect / 2D HUD placement all track the
+     * LIVE window aspect continuously (platform/gx/aurora_bridge.c +
+     * shim/include/mp6_widescreen.h) -- never a fixed 16:9, unlike the
+     * reference ROM hack this generalizes. */
+    int widescreen;         /* video.widescreen */
+    /* Shadow Quality (Mods tab; shim/include/mp6_shadow_quality.h has the
+     * full contract): the real-time projected shadow map's LINEAR scale,
+     * applied at Hu3DShadowCreate time. 1 = native (byte-identical
+     * off -- the sacred contract); valid non-native values are 2/4/8/16.
+     * The tolerant load-time parser (launcher_core.cpp) maps anything else
+     * back to 1. The EFFECTIVE scale actually applied can be smaller than
+     * this if HEAP_MODEL doesn't have the headroom -- see
+     * mp6_shadow_quality_scale(); this field always stores the user's own
+     * last selection, not the clamped result, so re-selecting it after
+     * freeing memory some other way can pick up the full setting again. */
+    int shadowQuality;      /* video.shadow_quality */
 };
 
 namespace mp6::ui {

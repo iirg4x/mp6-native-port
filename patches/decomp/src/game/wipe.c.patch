@@ -1,0 +1,130 @@
+--- a/src/game/wipe.c
++++ b/src/game/wipe.c
+@@ -13,0 +14 @@
++#include "mp6_widescreen.h" /* WS6 (docs/WS6_OVERLAY_CAMERAS.md) */
+@@ -204,2 +205,17 @@
+-    GXPosition2u16(HU_FB_WIDTH, 0);
+-    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
++    /* MP6 native port -- WS6 (docs/WS6_OVERLAY_CAMERAS.md): this plain
++     * full-frame fade quad's own corners are hardcoded to HU_FB_WIDTH/
++     * HU_FB_HEIGHT (native 640x480) -- WipeGXInit's shared ortho/viewport/
++     * scissor (widened below, this same lane) sets up a WIDER coordinate
++     * space when Widescreen is on, but this quad's own vertex positions
++     * don't know that on their own, so they'd only cover the left 640 of
++     * the new wider frame, leaving the transition visibly incomplete on
++     * the right -- exactly the same class of bug as every native-camera-
++     * viewport site this lane fixes elsewhere, just for a 2D screen-
++     * covering quad instead of a 3D camera. This is the wipe style
++     * actually exercised end-to-end by this project's own boot->opening->
++     * title->file-select->mode-select drive (boot.c's own WipeCreate(...,
++     * WIPE_TYPE_NORMAL, ...) calls route here). Widened to
++     * mp6_widescreen_render_width() -- HU_FB_WIDTH (640, byte-identical)
++     * when Widescreen is disabled. */
++    GXPosition2u16(mp6_widescreen_render_width(), 0);
++    GXPosition2u16(mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -268 +284,5 @@
+-    GXPosition2u16(HU_FB_WIDTH, 0);
++    /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): same full-frame-quad widen as
++     * WipeNormalFade below -- see that comment. Deliberately NOT widening
++     * the screenshot capture/backing-texture size a few lines above (see
++     * inline note there). */
++    GXPosition2u16(mp6_widescreen_render_width(), 0);
+@@ -270 +290 @@
+-    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
++    GXPosition2u16(mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -297,0 +318,35 @@
++        /* MP6 native port -- WS8 (docs/WS8_2D_COHERENCE.md). WipeDissolve is
++         * WIPE_TYPE_DISSOLVE_IN/_OUT/_IN_BLUR's own draw (mdseldll/mdsel.c's
++         * fn_1_A310 uses WIPE_TYPE_DISSOLVE_IN_BLUR for confirming a chosen
++         * game mode -- e.g. mode-select -> Party Mode -- so this path is
++         * live, not merely theoretical: WS6's own doc (WS6_OVERLAY_CAMERAS.md
++         * section 4, "Deliberately NOT widened") flagged this exact
++         * function's downstream geometry as unconfirmed-exercised; it is
++         * exercised, and reproduces the same native-640 class of bug WS6
++         * already fixed for WipeGXInit/WipeNormalFade). WipeGXInit (called
++         * below) already sets up the correctly-widened shared ortho/
++         * viewport/scissor -- but this function's OWN quad vertices and its
++         * OWN Hu3DFbCopyExec calls use the literal HU_FB_WIDTH (640) macro
++         * directly instead of mp6_widescreen_render_width(), so the quad
++         * this actually draws only ever covered the frame's original
++         * left 640px, leaving the rest of a wider transition showing
++         * whatever's behind it -- the wipe fills correctly at native/16:9
++         * (where the gap is invisible or tiny) but leaves a real uncovered
++         * strip at the user's own wider aspects. Fixed: both FbCopyExec
++         * capture widths and both quad's X extents now track render_width;
++         * the rotation pivot (translate-to-origin/back pair) is re-centered
++         * on the new frame's own center so the brief spin during the
++         * dissolve stays visually centered instead of pivoting around the
++         * OLD native center (now off-center-left in a wider frame).
++         * Deliberately UNCHANGED: wipeData.image[0]'s own backing
++         * allocation and Hu3DTexLoad's declared texture size stay at their
++         * original fixed HU_FB_WIDTH/2 x HU_FB_HEIGHT/2 (320x240) -- same
++         * reasoning as WS6's own explicit WipeCrossFade precedent and this
++         * lane's stage.c fix: widening only the CAPTURE source changes the
++         * hardware downscale ratio, not this fixed destination's own byte
++         * size (no overflow risk), and since the quad sampling it is ALSO
++         * now drawn at the wider render_width, the extra squish from
++         * capturing more source pixels into the same fixed destination is
++         * exactly undone when that texture is stretched back across the
++         * (equally wider) quad. 0.0f-delta/native-640 byte-identical calls
++         * throughout when Widescreen is disabled. */
+@@ -299,3 +354,3 @@
+-            Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
+-        }
+-        
++            Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
++        }
++
+@@ -320 +375 @@
+-        MTXTrans(trans, -(HU_FB_WIDTH/2), -(HU_FB_HEIGHT/2), 0);
++        MTXTrans(trans, -(mp6_widescreen_render_width()/2.0f), -(HU_FB_HEIGHT/2), 0);
+@@ -323 +378 @@
+-        mtxTransCat(modelview, (HU_FB_WIDTH/2), (HU_FB_HEIGHT/2), 0);
++        mtxTransCat(modelview, (mp6_widescreen_render_width()/2.0f), (HU_FB_HEIGHT/2), 0);
+@@ -329 +384 @@
+-            GXPosition2s16(HU_FB_WIDTH+19, -14);
++            GXPosition2s16(mp6_widescreen_render_width()+19, -14);
+@@ -331 +386 @@
+-            GXPosition2s16(HU_FB_WIDTH+19, HU_FB_HEIGHT+14);
++            GXPosition2s16(mp6_widescreen_render_width()+19, HU_FB_HEIGHT+14);
+@@ -338 +393 @@
+-            GXPosition2s16(HU_FB_WIDTH-10, 10);
++            GXPosition2s16(mp6_widescreen_render_width()-10, 10);
+@@ -340 +395 @@
+-            GXPosition2s16(HU_FB_WIDTH-10, HU_FB_HEIGHT-10);
++            GXPosition2s16(mp6_widescreen_render_width()-10, HU_FB_HEIGHT-10);
+@@ -345 +400 @@
+-        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
++        Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
+@@ -405,2 +460,8 @@
+-        GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
+-        GXSetScissor(0, 0, 640, 480);
++    /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): the 6x6 grid-shatter wipe's own
++     * viewport/scissor + per-cell grid math -- widened the whole grid to
++     * mp6_widescreen_render_width() (cell width/X-origin scale with it;
++     * Y axis is untouched, height never changes) so it covers the full
++     * frame instead of only the native-640 left portion. HU_FB_WIDTH/640
++     * (byte-identical) when disabled. */
++        GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
++        GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
+@@ -448 +509 @@
+-                GXSetViewport((HU_FB_WIDTH/6.0)*i, (HU_FB_HEIGHT/6.0)*j, HU_FB_WIDTH/6.0, HU_FB_HEIGHT/6.0, 0, 1);
++                GXSetViewport((mp6_widescreen_render_width()/6.0)*i, (HU_FB_HEIGHT/6.0)*j, mp6_widescreen_render_width()/6.0, HU_FB_HEIGHT/6.0, 0, 1);
+@@ -708 +769,11 @@
+-    MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 10);
++    /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): WipeGXInit is the SHARED ortho/
++     * viewport/scissor setup for several wipe styles (WipeNormalFade/
++     * WipeCrossFade/WipeDissolve/WipeImage/WipeWave/WipeLoadDraw all call
++     * it) -- widened to mp6_widescreen_render_width() so the transition
++     * covers the full widescreen frame instead of only its native-640
++     * left portion. WipeDissolve/WipeImage/WipeWave/WipeLoadDraw's own
++     * downstream geometry beyond this shared setup was not separately
++     * widened here (not confirmed exercised by this lane's own test
++     * drive) -- flagged, not assumed fine. HU_FB_WIDTH (640, byte-
++     * identical) when Widescreen is disabled. */
++    MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, mp6_widescreen_render_width(), 0, 10);
+@@ -713,2 +784,2 @@
+-    GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
+-    GXSetScissor(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
++    GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
++    GXSetScissor(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);

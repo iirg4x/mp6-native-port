@@ -110,6 +110,8 @@
 #include "mp6_boot.h"
 #include "mp6_shim_log.h"
 #include "mp6_gxarray_registry.h"
+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): dynamic true-widescreen */
+#include "mp6_savestate.h"  /* F5/F8 hotkeys -> queued, serviced at the frame boundary */
 #include "host.h" /* mp6_host_monotonic_ns/mp6_host_sleep_ns/mp6_host_init
                    * -- the tick throttle's OS primitives
                    * (QPC/Sleep/timeBeginPeriod) live behind the host
@@ -139,6 +141,23 @@
 #else
 #include <sched.h> /* sched_yield for the throttle's non-aarch64 spin fallback */
 #endif /* _WIN32 */
+
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Two placement rules, BOTH
+ * load-bearing and both learned the hard way:
+ *  - AFTER this TU's own includes: it is a #pragma clang section redirecting
+ *    every file-scope definition that FOLLOWS it. As a -include (before all
+ *    headers) it also captured the decomp headers' C TENTATIVE definitions
+ *    (dolphin/os.h's `u32 __OSBusClock;` et al), turning those common symbols
+ *    into strong per-TU definitions and breaking the link.
+ *  - At PREPROCESSOR TOP LEVEL, never inside any #if/#ifdef branch: an
+ *    earlier revision sat inside the #else of the _WIN32 block above, so on
+ *    Windows -- the only platform savestates run on -- this TU silently
+ *    compiled UNCARVED and every static here (the SDL window cache, the
+ *    tick-throttle deadline, the input-script cursor) was captured and
+ *    restored like game state. tools/build.py's verify_host_section_sources()
+ *    now rejects a conditionally-nested include, but the rule belongs here
+ *    too, where the next editor will see it. */
+#include "mp6_host_section.h"
 
 /* GXTexObj/GXTlutObj ABI coherence: GXTexObj is the one member of the
  * "decomp shadow struct vs Aurora's real ABI" family (GXTlutObj,
@@ -830,6 +849,67 @@ static void mp6_latch_key_down_event(const SDL_Event *sdlEvent)
     }
 }
 
+/* Savestate hotkeys (docs/SAVESTATE.md): F5 saves, F8 loads -- the
+ * emulator-conventional pair, chosen so muscle memory transfers and so
+ * neither collides with g_keyBinds above (which is entirely letters/arrows
+ * mapped to real pad buttons).
+ *
+ * Uses the same KEY_DOWN EVENT latch as the pad binds rather than a
+ * SDL_GetKeyboardState poll, for the missed-edge reason this file already
+ * documents for pad input: a key pressed and released between two polls is
+ * invisible to a state poll but always produces an event. Here it matters
+ * more than for pad input, not less -- a dropped savestate keypress reads
+ * to the user as "the feature is broken," while a dropped pad frame just
+ * reads as input lag.
+ *
+ * The request is only QUEUED here. It is serviced later, from
+ * mp6_savestate_tick(), so that capture/restore happens at the frame
+ * boundary where no HuPrc coroutine is mid-instruction -- servicing it
+ * inside the event pump would capture whatever the SDL callback happened
+ * to interrupt. */
+static void mp6_latch_savestate_key_event(const SDL_Event *sdlEvent)
+{
+    if (sdlEvent->type != SDL_EVENT_KEY_DOWN) {
+        return;
+    }
+    if (sdlEvent->key.repeat) {
+        /* S4 (review): OS auto-repeat delivers a KEY_DOWN stream while the
+         * key is held, and each one used to queue a fresh multi-second
+         * capture/restore -- a one-second hold stacked ~30 of them and read
+         * as "savestates hard-froze the game". One request per physical
+         * press. */
+        return;
+    }
+    if (sdlEvent->key.scancode == SDL_SCANCODE_F5) {
+        printf("[SAVESTATE] F5 -- save queued for the next frame boundary\n");
+        fflush(stdout);
+        mp6_savestate_request_save();
+    } else if (sdlEvent->key.scancode == SDL_SCANCODE_F8) {
+        printf("[SAVESTATE] F8 -- load queued for the next frame boundary\n");
+        fflush(stdout);
+        mp6_savestate_request_load();
+    }
+}
+
+/* In-game menu hotkey: F10 toggles the persistent RmlUi settings window
+ * over the running game (docs/TESTING.md's launcher section; the ripped
+ * F1/gamepad-Back/R+Start/3-finger bindings route through the UI's own
+ * event path instead -- mp6_launcher_forward_sdl_event below). Same
+ * KEY_DOWN-event latch discipline as the savestate hotkeys above.
+ * mp6_launcher_toggle_menu() itself is inert in automation mode (launcher
+ * TU guards on its own mode flag), so a scripted/ticked run can never
+ * show UI -- the automation contract is untouched. */
+static void mp6_latch_menu_key_event(const SDL_Event *sdlEvent)
+{
+    if (sdlEvent->type != SDL_EVENT_KEY_DOWN || sdlEvent->key.repeat) {
+        return;
+    }
+    if (sdlEvent->key.scancode == SDL_SCANCODE_F10) {
+        extern void mp6_launcher_toggle_menu(void);
+        mp6_launcher_toggle_menu();
+    }
+}
+
 /* ---------------------------------------------------------------------
  * 6. Deterministic input-script bridge (test tooling).
  *
@@ -1027,6 +1107,36 @@ static void mp6_pump_keyboard_to_pad(void)
             status.stickX = touchSX;
             status.stickY = touchSY;
         }
+        /* U-A3: the touch overlay IS this device's controller -- a stock
+         * Android install has no Bluetooth/USB pad. The merge just above
+         * only feeds PADRead()'s per-tick BUTTON data (aurora's own
+         * merge_virtual_status, gated on g_virtualPadActive) -- a
+         * COMPLETELY SEPARATE signal from what platform/gx/ui/overlay.cpp's
+         * "No controller assigned" warning actually checks:
+         * PADGetIndexForPort()'s real-SDL-gamepad player index, OR'd with
+         * PADGetKeyButtonBindings()'s g_keyboardBindings[port].m_mappingsSet
+         * flag (aurora/lib/dolphin/pad/pad.cpp) -- neither of those two
+         * consults g_virtualPadActive at all. Without this, a fresh Android
+         * install (no persisted keyboard_bindings.dat, no real gamepad)
+         * shows "Configure controller port 1 in Settings." forever, even
+         * though every tap is already reaching the game correctly.
+         * PADSetKeyboardActive() is the exact, side-effect-free lever
+         * Aurora exposes for this: it only flips
+         * g_keyboardBindings[port].m_mappingsSet, never touching the real
+         * per-key scancode table (still 100% PAD_KEY_INVALID -- nothing
+         * here opts into Aurora's OWN scancode poll, which stays exactly as
+         * inert as it already is on Windows), so PADRead()'s own
+         * scancode-loop stays a true no-op and no new input path opens up
+         * -- this changes only whether the launcher considers the port
+         * "configured", never what reaches the game. One-time: the flag
+         * never needs re-arming once set. */
+        {
+            static bool touchPadMarkedConnected = false;
+            if (!touchPadMarkedConnected) {
+                PADSetKeyboardActive(PAD_CHAN0, TRUE);
+                touchPadMarkedConnected = true;
+            }
+        }
     }
 #endif
     if (mp6_auto_start_due_now()) {
@@ -1063,8 +1173,44 @@ static void mp6_pump_keyboard_to_pad(void)
  * teardown, which this port's log callback turns into an abort(). */
 static void mp6_clean_shutdown_exit(const char *reason)
 {
+    /* Savestate (docs/SAVESTATE.md): after a restore, third-party TEARDOWN
+     * state is not trustworthy, so do not run it.
+     *
+     * The savestate carve-out is a denylist -- it excludes the statics of
+     * every TU we know is host-owned, but it cannot reach the static C
+     * runtime's own globals, and each statically-linked third-party library
+     * has to be carved out explicitly as it is discovered. Every layer fixed
+     * so far revealed the next one at process exit: RmlUi's plugin registry,
+     * then sqlite's shared-memory node list, then a remaining unidentified
+     * static destructor -- all of them faulting in TEARDOWN, after the game
+     * itself had run correctly all the way to the tick budget.
+     *
+     * Running a graceful shutdown over restored third-party state is
+     * therefore doing unbounded work on data we already know may be stale,
+     * purely to reach exit(). A restored process is a short-lived debugging
+     * session; the honest move is to flush what the user cares about and let
+     * the OS reclaim everything else. _exit() skips atexit handlers and
+     * static destructors, which is exactly the code that was faulting.
+     *
+     * Deliberately scoped to restored processes ONLY: a normal run still
+     * takes the full aurora_shutdown() path above, so the ordinary exit
+     * behavior (and the benign "Device lost" WARNING it produces) is
+     * completely unchanged. */
+    if (mp6_savestate_was_restored()) {
+        printf("[BOOT] %s -- savestate was restored this run, skipping third-party "
+               "teardown (see docs/SAVESTATE.md), exiting 0\n", reason);
+        mp6_savestate_guarded_exit(0); /* C15: the ONE exit seam for restored processes */
+    }
     printf("[BOOT] %s -- shutting down Aurora, exiting 0\n", reason);
     fflush(stdout);
+    { /* Tear the RmlUi document stacks down while the context is still
+       * alive -- left to CRT static destructors they run AFTER
+       * aurora_shutdown() has freed the context, an observed teardown UAF
+       * (mp6_launcher_ui_teardown()'s comment, launcher_core.cpp has the
+       * stack walk). No-op in automation mode (UI never initialized). */
+        extern void mp6_launcher_ui_teardown(void);
+        mp6_launcher_ui_teardown();
+    }
     aurora_shutdown();
     exit(0);
 }
@@ -1161,24 +1307,40 @@ static double  g_tickHz = -1.0;          /* -1 = env not parsed yet; 0 = disable
 static int64_t g_tickPeriodNs = 0;       /* ns per tick at g_tickHz */
 static int64_t g_tickNextDeadline = 0;   /* ns; 0 = schedule not anchored yet */
 
+/* Defined in launcher_core.cpp -- 1 in automation/straight-boot mode. Used
+ * below to pick the no-env throttle default (automation = free-run). */
+extern int mp6_launcher_is_automation(void);
+
 static void mp6_tick_throttle_init(void)
 {
     const char *env = getenv("MP6_TICK_HZ");
-    double hz = MP6_TICK_HZ_DEFAULT;
-    if (env && *env) {
+    int fromEnv = (env != NULL && *env != '\0');
+    double hz;
+    if (fromEnv) {
         char *end = NULL;
         double v = strtod(env, &end);
         if (end != env && v >= 0.0) {
-            hz = v; /* explicit 0 means "disable" -- see the env contract above */
+            hz = v; /* explicit, incl. 0 = disable -- see the env contract above */
         } else {
             printf("[MP6-TICK] MP6_TICK_HZ='%s' is not a number >= 0 -- using the default %g Hz\n",
                    env, MP6_TICK_HZ_DEFAULT);
+            hz = MP6_TICK_HZ_DEFAULT;
+            fromEnv = 0;
         }
+    } else {
+        /* No explicit rate. Automation/straight-boot only needs to REACH a
+         * state, not run in real time, so default the throttle OFF: reaching
+         * mode-select drops from ~150s (60Hz, paced) to ~30s (free-run). Pairs
+         * with automation's vsync-off default (main_native.c) so neither cap
+         * applies. Interactive play keeps 60Hz for correct pacing; a real-time
+         * gate (leakgate) sets MP6_TICK_HZ=60 to opt back in. */
+        hz = mp6_launcher_is_automation() ? 0.0 : MP6_TICK_HZ_DEFAULT;
     }
     g_tickHz = hz;
     if (hz <= 0.0) {
-        printf("[MP6-TICK] tick throttle DISABLED (MP6_TICK_HZ=0) -- legacy free-run timing "
-               "(paced only by the display's vsync)\n");
+        printf("[MP6-TICK] tick throttle DISABLED (%s) -- free-run timing "
+               "(paced only by vsync, which automation also defaults off)\n",
+               fromEnv ? "MP6_TICK_HZ=0" : "automation default; MP6_TICK_HZ=60 forces real-time");
         fflush(stdout);
         return;
     }
@@ -1342,14 +1504,20 @@ static void mp6_dll_stub_draw_black_screen(void)
     Mtx44 proj;
     Mtx modelview;
     GXColor black = { 0, 0, 0, 255 };
+    /* WS4 (docs/WS4_WIDESCREEN_2D.md): this stub's own quad/viewport were
+     * hardcoded to native 640, so a wide (Widescreen-on) window showed an
+     * uncovered strip past pixel 640 on any still-undecompiled-minigame
+     * black-screen stub. mp6_widescreen_render_width() returns exactly 640
+     * (byte-identical) when disabled. */
+    int w = mp6_widescreen_render_width();
 
-    MTXOrtho(proj, 0, 480, 0, 640, 0, 10);
+    MTXOrtho(proj, 0, 480, 0, w, 0, 10);
     GXSetProjection(proj, GX_ORTHOGRAPHIC);
     MTXIdentity(modelview);
     GXLoadPosMtxImm(modelview, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
-    GXSetViewport(0, 0, 640, 480, 0, 1);
-    GXSetScissor(0, 0, 640, 480);
+    GXSetViewport(0, 0, w, 480, 0, 1);
+    GXSetScissor(0, 0, w, 480);
     GXSetCullMode(GX_CULL_NONE);
     GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     GXSetAlphaUpdate(GX_FALSE);
@@ -1373,8 +1541,8 @@ static void mp6_dll_stub_draw_black_screen(void)
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition2u16(0, 0);
-    GXPosition2u16(640, 0);
-    GXPosition2u16(640, 480);
+    GXPosition2u16(w, 0);
+    GXPosition2u16(w, 480);
     GXPosition2u16(0, 480);
     GXEnd();
 }
@@ -1417,6 +1585,15 @@ void VIWaitForRetrace(void)
         }
         if (event->type == AURORA_SDL_EVENT) {
             mp6_latch_key_down_event(&event->sdl);
+            mp6_latch_savestate_key_event(&event->sdl);
+            mp6_latch_menu_key_event(&event->sdl); /* F10 in-game menu toggle */
+            { /* in-game UI + freecam event forwards -- both inert unless the
+               * launcher/freecam actually armed them (launcher mode only). */
+                extern void mp6_launcher_forward_sdl_event(const SDL_Event *ev);
+                extern void mp6_freecam_input_event(const SDL_Event *ev);
+                mp6_launcher_forward_sdl_event(&event->sdl);
+                mp6_freecam_input_event(&event->sdl);
+            }
 #ifdef __ANDROID__
             mp6_touch_pad_event(&event->sdl); /* finger tracking (touch_pad.cpp) */
 #endif
@@ -1429,6 +1606,28 @@ void VIWaitForRetrace(void)
      * the thread's real stack, where a JNI-reaching rumble is legal. */
     mp6_pad_motor_apply_pending();
 #endif
+
+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): every tick (not just on a
+     * detected resize event) -- mp6_widescreen_render_width() re-reads the
+     * live window size fresh every call, and the decomp-side setter is a
+     * cheap no-op whenever nothing changed since the last tick, so this is
+     * the simplest robust way to converge a live interactive resize
+     * without any separate resize-event bookkeeping. A true no-op (both
+     * calls return 640 as a pure passthrough) when widescreen is disabled
+     * -- the default -- so this line does not perturb any existing gate. */
+    mp6_widescreen_apply_render_width(mp6_widescreen_render_width());
+
+    /* WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): the render-width/2D-layer sync
+     * above already converges every tick, but WS11-13's own 3D backdrop
+     * extrude + per-scene camera setup ran exactly ONCE, at scene load --
+     * frozen at whatever window size happened to be current then. This
+     * re-derives every REGISTERED 3D backdrop/camera from its own cached
+     * native baseline using the CURRENT scale_factor(), every tick, so a
+     * live interactive resize converges the 3D content too, not just the
+     * 2D/render-target layers. A true no-op (a for-loop over permanently-
+     * empty registries) when Widescreen is disabled -- see platform/hsf/
+     * mp6_widescreen_extrude.c's own file header for the full mechanism. */
+    mp6_widescreen_reapply();
 
     if (g_preRetraceCB) {
         g_preRetraceCB((u32)mp6_tick_count);
@@ -1476,6 +1675,12 @@ void VIWaitForRetrace(void)
      * normal run this returns true on every tick -- the frame loop
      * genuinely cycles. */
 
+    { /* freecam: sample keyboard/stick + drain event deltas ONCE per tick,
+       * at the same input-sampling point as the keyboard-PAD pump below
+       * (shim/include/mp6_freecam.h; inert unless the Mods toggle is on). */
+        extern void mp6_freecam_input_tick(void);
+        mp6_freecam_input_tick();
+    }
     mp6_pump_keyboard_to_pad();
     if (g_postRetraceCB) {
         g_postRetraceCB((u32)mp6_tick_count);
@@ -1932,7 +2137,7 @@ void mp6_GXCallDisplayList(const void *list, u32 nbytes)
  *     status text all rendered as if the screen were a narrow 4:3 box,
  *     leaving partyboard's own (verbatim, working-as-designed) `@media
  *     (max-height: 640dp)` mobile layout to reflow against the WRONG
- *     viewport metrics. Full story: .
+ *     viewport metrics. Full story: docs/A5_LAUNCHER_ASPECT.md.
  *
  * Belt and braces: (b) alone already guarantees an undistorted scene at
  * ANY window shape, but the window would still
@@ -1950,21 +2155,48 @@ void mp6_GXCallDisplayList(const void *list, u32 nbytes)
  * config-aware, by mp6_launcher_apply_display() (launcher_core.cpp) once
  * the user's saved aspectLocked setting is known.
  * --------------------------------------------------------------------- */
+
+/* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): stashed by mp6_bridge_window_policy_init
+ * below (the earliest point a real SDL_Window* is available), consumed by
+ * mp6_widescreen_render_width() further down to query the LIVE window
+ * size on every call -- interactive resizes must keep tracking, not just
+ * the size at boot, and this is the one place a real SDL_Window* is
+ * available this early with no extra plumbing (same stash WS1's own
+ * discarded mechanism used, for the same reason). */
+static SDL_Window *g_mp6AspectWindow = NULL;
+
 void mp6_bridge_window_policy_init(void *sdlWindowPtr)
 {
     SDL_Window *window = (SDL_Window *)sdlWindowPtr;
     const char *freeAspect = getenv("MP6_FREE_ASPECT");
     bool aspectLocked = !(freeAspect != NULL && freeAspect[0] != '\0' && freeAspect[0] != '0');
+    g_mp6AspectWindow = window; /* WS2: see the static's own comment above -- stash before the NULL check so later queries are consistent even if this call is ever a no-op below */
+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): this runs BEFORE config is ever
+     * loaded (right after aurora_initialize(), same as before WS2), so the
+     * only widescreen signal available this early is the MP6_WIDESCREEN
+     * env lever (mirroring MP6_FREE_ASPECT's own env-only early decision)
+     * -- mp6_widescreen_enabled() already consults it internally (see that
+     * function). A real config-driven Widescreen selection unlocks the
+     * window shape later too, via mp6_launcher_apply_display()
+     * (launcher_core.cpp) once the saved setting is actually known --
+     * exactly the same "early env-only guess, later config-aware
+     * re-apply" shape aspectLocked itself already has. */
+    bool widescreen = mp6_widescreen_enabled();
 
     if (window == NULL) {
         return; /* headless-ish/unexpected: nothing to police */
     }
 
     /* Window side only here: keep interactive resizes at 4:3 (or free,
-     * under MP6_FREE_ASPECT) from the very first frame. The CONTENT
-     * framebuffer fit (AuroraSetViewportPolicy) is applied separately and
-     * later -- see mp6_bridge_apply_content_aspect_policy() below. */
-    if (aspectLocked) {
+     * under MP6_FREE_ASPECT or Widescreen) from the very first frame. The
+     * CONTENT framebuffer fit (AuroraSetViewportPolicy) is applied
+     * separately and later -- see mp6_bridge_apply_content_aspect_policy()
+     * below. */
+    if (widescreen) {
+        SDL_SetWindowAspectRatio(window, 0.0f, 0.0f);
+        printf("[MP6-WINDOW] window resize policy: FREE (Widescreen active) -- "
+               "the render/camera/2D-HUD track whatever shape the window ends up\n");
+    } else if (aspectLocked) {
         if (!SDL_SetWindowAspectRatio(window, 4.0f / 3.0f, 4.0f / 3.0f)) {
             printf("[MP6-WINDOW] SDL_SetWindowAspectRatio failed (%s) -- "
                    "letterboxed present (once gameplay starts) still guarantees "
@@ -2017,7 +2249,7 @@ void mp6_bridge_window_policy_init(void *sdlWindowPtr)
 /* A5: the CONTENT half of (b) above -- AuroraSetViewportPolicy itself,
  * deferred from "before the launcher" to "right before GameMain()" so the
  * RmlUi launcher (menu + persistent overlay) always composes against the
- * real window/display surface, on every aspect .
+ * real window/display surface, on every aspect (docs/A5_LAUNCHER_ASPECT.md).
  *
  * aspectLockedCfg is the resolved user preference: g_cfg.aspectLocked in
  * launcher mode (mp6_launcher_cfg_aspect_locked(), launcher_core.cpp,
@@ -2037,8 +2269,42 @@ void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg)
     const char *freeAspect = getenv("MP6_FREE_ASPECT");
     bool envFree = freeAspect != NULL && freeAspect[0] != '\0' && freeAspect[0] != '0';
     bool aspectLocked = aspectLockedCfg != 0 && !envFree;
+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): mp6_widescreen_set_enabled()
+     * (platform/main_native.c) must run BEFORE this function for this to
+     * see the right value -- both are called back-to-back, right before
+     * GameMain(), same call-timing contract as every other setting in
+     * this file. MP6_FREE_ASPECT keeps absolute top priority over BOTH
+     * Widescreen and aspectLocked (unchanged escape hatch: raw anisotropic
+     * stretch, for A/B comparisons only). */
+    bool widescreen = mp6_widescreen_enabled() && !envFree;
 
-    if (aspectLocked) {
+    if (envFree) {
+        AuroraSetViewportPolicy(AURORA_VIEWPORT_STRETCH);
+        printf("[MP6-WINDOW] content aspect policy: FREE STRETCH (MP6_FREE_ASPECT) -- "
+               "non-4:3 window shapes will distort the scene\n");
+    } else if (widescreen) {
+        /* THE key trick (docs/WS2_DYNAMIC_WIDESCREEN.md section 2): stay
+         * on FIT, never switch to STRETCH. FIT letterboxes/pillarboxes
+         * the GX render target to match Aurora's own logical-fb aspect
+         * (aurora lib/gx/gx.cpp vi::configured_fb_size(), driven by
+         * whatever RenderMode the game's own VIConfigure call currently
+         * holds) inside the real window. WS2 widens THAT logical aspect
+         * itself (mp6_widescreen_apply_render_width(), called from the
+         * game's own HuSysInit and every tick thereafter) to track the
+         * live window aspect -- so FIT's fitted rectangle converges to
+         * the full window with no visible bars, because the thing being
+         * fit is already the right shape, not because fitting was
+         * disabled. This is what makes WS2 a TRUE-WIDE render (the GX
+         * viewport/scissor genuinely widen) rather than WS1's discarded
+         * approach (STRETCH + an anamorphic projection widen -- visibly
+         * distorts every 2D/HUD element, since STRETCH scales the whole
+         * already-composited frame non-uniformly). */
+        AuroraSetViewportPolicy(AURORA_VIEWPORT_FIT);
+        printf("[MP6-WINDOW] content aspect policy: WIDESCREEN (dynamic true-wide, "
+               "render_width=%d) -- 3D + 2D both track the live window aspect, no "
+               "stretch, no pillarbox bars\n",
+               mp6_widescreen_render_width());
+    } else if (aspectLocked) {
         /* Sets a plain state flag + requests a deferred swapchain refit;
          * no GX FIFO write, no frame needs to be open. */
         AuroraSetViewportPolicy(AURORA_VIEWPORT_FIT);
@@ -2051,6 +2317,190 @@ void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg)
     }
     fflush(stdout);
 }
+
+/* ---------------------------------------------------------------------
+ * WS2. Dynamic true-widescreen (docs/WS2_DYNAMIC_WIDESCREEN.md) --
+ * implementation of shim/include/mp6_widescreen.h's contract.
+ *
+ * Every accessor below is computed FRESH on every call. No field here is
+ * a cache that a resize event invalidates -- there IS no cache -- so
+ * "recomputed on resize" falls out for free: the very next call (the very
+ * next tick's HuSprDispInit/Hu3DCameraCreate/etc., or the per-tick
+ * mp6_widescreen_apply_render_width() refresh below) sees the new window
+ * shape.
+ * --------------------------------------------------------------------- */
+static bool g_mp6WidescreenEnabled = false;
+
+void mp6_widescreen_set_enabled(int enabled)
+{
+    g_mp6WidescreenEnabled = enabled != 0;
+}
+
+int mp6_widescreen_enabled(void)
+{
+    /* MP6_WIDESCREEN: automation-compatible test/verification lever, same
+     * shape as MP6_AUTO_START_TICKS/--input-script/MP6_FREE_ASPECT.
+     * Automation mode NEVER reads mp6_config.json (docs/TESTING.md's
+     * automation contract), so g_mp6WidescreenEnabled is always false on
+     * every automation boot regardless of anything a real user
+     * configured -- without this lever, a scripted/ticked verification
+     * run could never reach or screenshot Widescreen mode at all. Unset
+     * (the default): zero effect, every existing automated gate is
+     * byte-unchanged. Consulted here (not re-checked at every call site)
+     * so every consumer -- window-shape policy, content-aspect policy,
+     * render_width/scale_factor/half_width_delta, and every decomp-side
+     * patch that calls mp6_widescreen_enabled() directly -- agrees on one
+     * answer. */
+    if (g_mp6WidescreenEnabled) {
+        return 1;
+    }
+    {
+        const char *forceWide = getenv("MP6_WIDESCREEN");
+        return (forceWide != NULL && forceWide[0] != '\0' && forceWide[0] != '0') ? 1 : 0;
+    }
+}
+
+/* Rounds down to the nearest multiple of 16 -- matches the reference ROM
+ * hack's own texture/framebuffer-width-alignment constraint
+ * (WS_REFERENCE_STUDY.md section 7: 848 = round16(853.33)), generalized
+ * to any width instead of hardcoded to one. */
+static int mp6_align16_down(float v)
+{
+    int i = (int)v;
+    return i & ~15;
+}
+
+int mp6_widescreen_render_width(void)
+{
+    int w, h;
+    float liveAspect, raw;
+    if (!mp6_widescreen_enabled() || g_mp6AspectWindow == NULL ||
+        !SDL_GetWindowSizeInPixels(g_mp6AspectWindow, &w, &h) || w <= 0 || h <= 0) {
+        return 640; /* native/disabled, or can't read the window yet -- never guess wide */
+    }
+    liveAspect = (float)w / (float)h;
+    raw = 480.0f * liveAspect; /* == 640 * (liveAspect / (4/3)) -- see mp6_widescreen.h */
+    if (raw < 640.0f) {
+        raw = 640.0f; /* never narrower than native (a taller-than-4:3 window doesn't shrink the render) */
+    }
+    /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): this used to clamp at a hardcoded
+     * 1280.0f ("sane upper bound -- an extreme sliver window can't blow out
+     * a texture/array bound"), which silently pinned the render width at
+     * 32:9-class ultra-wide aspects (raw ~1707 at 2560x720) below what the
+     * live window actually needed -- the game then rendered narrower than
+     * the window, leaving a black band on the right even with every
+     * overlay camera widened. Investigated what that cap actually
+     * protected: nothing real. GXCopyDisp/GXSetDispCopySrc/GXSetDispCopyDst
+     * are literal no-op stubs under Aurora (aurora/lib/dolphin/gx/
+     * GXFrameBuffer.cpp -- there is no GameCube-style fixed EFB/XFB buffer
+     * here at all); the one real texture allocation in that file,
+     * copy_tex()'s scale_copy_dst(), sizes its destination texture against
+     * the REAL GPU render-target size (the window's own backing texture,
+     * gfx::get_render_target_size()) -- this "logical" fbWidth is only
+     * ever used as a ratio denominator (targetWidth/logicalFbWidth), never
+     * as an allocation size itself.
+     *
+     * The user asked for NO arbitrary policy cap -- the only bound should
+     * be the GPU's own real hardware limit. Aurora's public API
+     * (include/aurora/aurora.h) doesn't expose maxTextureDimension2D, and
+     * the value lives on an internal C++ wgpu::Device this port's plain-C
+     * bridge can't reach directly without patching + rebuilding the
+     * vendored Aurora library itself (a heavy, independent CMake/Ninja/Dawn
+     * step -- setup/lib/step_aurora.py's own docstring calls a from-scratch
+     * Aurora build "20-60 minutes", utterly unlike this project's other
+     * steps) -- a disproportionate, independently-risky lift for one
+     * accessor. Reached the same information WITHOUT touching Aurora's
+     * source at all: aurora/lib/webgpu/gpu.cpp already logs
+     * "Using limits:\n  maxTextureDimension2D: N" via Log.info() straight
+     * from the real adapter's negotiated device limits at startup, and
+     * this port already registers an AuroraLogCallback that sees every
+     * line (main_native.c's mp6_aurora_log_callback, config.logLevel =
+     * LOG_INFO) -- so that callback now also scans for this exact
+     * substring and stashes N (mp6_aurora_queried_max_texture_dimension_2d(),
+     * shim/include/mp6_boot.h). This IS the live device value, genuinely
+     * queried at this run's own startup, not a compile-time guess. Falls
+     * back to 8192 only if that line was somehow never seen (e.g. called
+     * before aurora_initialize() -- never happens in practice, since this
+     * function needs g_mp6AspectWindow, itself only set after aurora_
+     * initialize() returns) -- 8192 is the WebGPU specification's OWN
+     * guaranteed baseline default for maxTextureDimension2D (every
+     * conformant implementation must support at least this much), not an
+     * arbitrary number, so even the fallback path is spec-derived rather
+     * than a guess. */
+    {
+        int gpuMax = mp6_aurora_queried_max_texture_dimension_2d();
+        float clampF = (float)(gpuMax > 0 ? gpuMax : 8192);
+        if (raw > clampF) {
+            raw = clampF;
+        }
+    }
+    {
+        int aligned = mp6_align16_down(raw);
+        int result = aligned < 640 ? 640 : aligned;
+        /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): self-sync, closing a real
+         * early-boot race this lane found by testing at an extreme aspect
+         * (crash repro: MP6_WINDOW_SIZE=5120x480, "[AURORA FATAL] WebGPU
+         * error 2: Viewport width (40960.000000) exceeds the maximum
+         * (16384)" -- 40960 == 5120*8). Root cause: several decomp-side
+         * camera patches (this lane's own boot.c/opening.c/filesel.c/
+         * mdsel.c/actman.c/sequence.c widens, mirroring hsfman.c's own
+         * established WS2 pattern) pass THIS function's return value
+         * directly as a viewport width. Aurora's own map_logical_viewport
+         * (aurora/lib/gx/gx.cpp) independently rescales every viewport by
+         * targetWidth/logicalFbWidth, where logicalFbWidth comes from
+         * RenderMode->fbWidth (via VIConfigure) -- kept in sync with this
+         * function's own return value once per tick (aurora_bridge.c's
+         * VIWaitForRetrace) and once at boot (game/init.c.patch's
+         * HuSysInit). Both of those sync points can legitimately still be
+         * stale relative to THIS specific call: HuSysInit's own sync runs
+         * before g_mp6AspectWindow is guaranteed stashed (this function
+         * still reads native 640 then, a no-op sync) and the very first
+         * camera setup in the whole game (BootObjectSetup, bootDll's
+         * prolog) runs before even one VIWaitForRetrace tick has ever
+         * executed -- so RenderMode->fbWidth can still be native 640 at
+         * the exact moment a decomp camera patch asks this function for a
+         * viewport width and gets back the live (already-wide) value,
+         * which Aurora then scales AGAIN by (targetWidth=5120)/
+         * (logicalFbWidth=640, stale) = 8x, doubling the widen. Fully
+         * idempotent and cheap to call unconditionally on every query (not
+         * just once per tick): mp6_widescreen_apply_render_width() itself
+         * early-returns the instant RenderMode->fbWidth already matches
+         * (the normal case, every call after the first this tick), so this
+         * adds one integer comparison to the steady-state path and a
+         * real (rare, boot-only) VIConfigure() call exactly when it's
+         * needed. Guarantees any camera/viewport call that just asked
+         * "how wide?" gets an answer Aurora's own scaling math already
+         * agrees with, at the exact moment it asks, regardless of tick
+         * boundaries. A true no-op when Widescreen is disabled (this
+         * whole function already early-returned 640 above in that case,
+         * never reaching here). */
+        mp6_widescreen_apply_render_width(result);
+        return result;
+    }
+}
+
+float mp6_widescreen_scale_factor(void)
+{
+    if (!mp6_widescreen_enabled()) {
+        return 1.0f;
+    }
+    return (float)mp6_widescreen_render_width() / 640.0f;
+}
+
+float mp6_widescreen_half_width_delta(void)
+{
+    if (!mp6_widescreen_enabled()) {
+        return 0.0f;
+    }
+    return (576.0f * mp6_widescreen_scale_factor() - 576.0f) / 2.0f;
+}
+
+/* Called every tick (VIWaitForRetrace below) so a live interactive resize
+ * converges: mp6_widescreen_render_width() re-reads the CURRENT window
+ * size every time, and mp6_widescreen_apply_render_width() (decomp-side,
+ * patches/decomp/src/game/init.c.patch) is a cheap no-op whenever nothing
+ * actually changed since the last tick. */
+extern void mp6_widescreen_apply_render_width(int newFbWidth);
 
 /* ---------------------------------------------------------------------
  * 6. Debug-console placement.

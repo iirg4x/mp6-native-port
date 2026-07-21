@@ -154,6 +154,20 @@
 #include <stdint.h>
 #include <math.h>
 
+/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+ * includes is load-bearing, not stylistic: it is a #pragma clang section that
+ * redirects every file-scope definition FOLLOWING it. As a -include (before all
+ * headers) it also captured the decomp headers' C TENTATIVE definitions --
+ * dolphin/os.h:27 `u32 __OSBusClock;` and friends -- turning those common
+ * symbols into strong per-TU definitions and breaking the link with duplicate
+ * symbol errors. Here, headers keep their normal linkage and only this file's
+ * own statics move. tools/build.py asserts this line exists in every TU listed
+ * in HOST_STATE_SECTION_SOURCES. */
+#include "mp6_savestate.h" /* W3: Mp6SsAudioShadow -- the audio re-sync shadow */
+#include "mp6_boot.h"      /* mp6_tick_count -- the regular-proc diag keys off the GAME tick (see its comment) */
+#include "mp6_host_section.h"
+
+
 /* ---- error codes not visible via this file's own preamble (top-level
  * "msm.h", the SAME header tools/gen_shims.py's probe resolves for these
  * symbols -- see this file's own header comment on why matching that
@@ -2135,9 +2149,18 @@ void msmSysRegularProc(void)
     if (!g_pdtReady) return;
 
     s_ticks++;
-    if (s_ticks == 1 || (s_ticks % 500) == 0) {
+    if (s_ticks == 1 || (mp6_tick_count > 0 && (mp6_tick_count % 500) == 0)) {
+        /* Both the CONTENT and the PACING of this line key off the GAME's
+         * tick counter, not s_ticks: this TU is carved out of the savestate,
+         * so s_ticks does not rewind with a restore -- and this line goes to
+         * stdout, where the savestate gate's byte-exact replay oracle reads
+         * it. mp6_tick_count is restored (same cadence -- one regular-proc
+         * call per game tick), so after a rewind the line reappears at the
+         * same game ticks with the same numbers the straight-through
+         * baseline has. Pacing on s_ticks instead would fire at the wrong
+         * game ticks after a rewind and permanently desync the oracle. */
         printf("[AUDIO-DIAG] msmSysRegularProc tick #%llu, g_wavArmed=%d\n",
-               (unsigned long long)s_ticks, g_wavArmed);
+               (unsigned long long)mp6_tick_count, g_wavArmed);
         fflush(stdout);
     }
     /* Exact (no fixed-point drift) 60Hz-tick -> MP6_MSM_OUT_RATE-Hz-audio
@@ -3022,4 +3045,177 @@ void AISetStreamVolRight(u8 vol)
 void AIStartDMA(void)
 {
     printf("[AUDIO] AIStartDMA() -- THP path, unreachable on this port's boot-to-menu scope\n");
+}
+
+/* =======================================================================
+ * Savestate audio shadow (docs/SAVESTATE.md, W3)
+ * =======================================================================
+ * Everything in this file is carved out of the savestate, because it is
+ * owned by the SDL audio callback thread -- restoring it would race a
+ * thread that is running right now, and would install the capturing
+ * process's host-malloc'd PCM pointers. The consequence is that after a
+ * restore the mixer keeps playing whatever the LIVE process was playing,
+ * while the restored game state believes something else entirely.
+ *
+ * The fix is to re-establish, not to byte-restore. These two functions are
+ * that: capture the mixer's own view alongside the state file, and replay
+ * it afterwards.
+ *
+ * WHY CAPTURE THE MIXER'S VIEW RATHER THAN THE GAME'S. The playing BGM
+ * stream id has no game-visible home at all -- game/audio.c's
+ * HuAudSStreamChanPlay passes streamId straight into msmStreamPlay and
+ * records only the channel number, so g_chan[].streamId below is the only
+ * copy in the process. Capturing from here also means the restore never has
+ * to read (or defeat the equality guard on) game/audio.c's file-static
+ * sndGroupBak, which would have required a new decomp patch. The mixer view
+ * and the restored game state agree by construction: both are snapshots of
+ * the same instant. */
+
+void mp6_msm_savestate_capture(Mp6SsAudioShadow *out)
+{
+    int i, n;
+
+    if (out == NULL) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    out->seNoCounter = g_seNoCounter;
+    out->masterVol = g_masterVol;
+    out->seMasterVol = g_seMasterVol;
+
+    mp6_lock();
+    n = g_chanMax;
+    if (n > MP6_SS_AUDIO_MAX_CHAN) {
+        n = MP6_SS_AUDIO_MAX_CHAN;
+    }
+    out->chanCount = n;
+    for (i = 0; i < n; i++) {
+        out->chan[i].active     = g_chan[i].active;
+        out->chan[i].paused     = g_chan[i].paused;
+        out->chan[i].streamId   = g_chan[i].streamId;
+        out->chan[i].posFrac    = g_chan[i].posFrac;
+        out->chan[i].vol        = g_chan[i].vol;
+        out->chan[i].fadeMul    = g_chan[i].fadeMul;
+        out->chan[i].fadeStep   = g_chan[i].fadeStep; /* C14: a fade is (mul, step, action) -- all three or the fade can never complete */
+        out->chan[i].fadeAction = g_chan[i].fadeAction;
+    }
+    mp6_unlock();
+
+    /* Only the NON-base groups are worth recording: base groups are
+     * permanently resident in this port (see msmSysDelGroupAll), so the
+     * restoring process already has them and re-loading them would be a
+     * no-op at best. */
+    mp6_grp_lock();
+    for (i = 0; i < MP6_MSM_MAX_SE_GROUPS; i++) {
+        if (g_seGroups[i].inUse && !g_seGroups[i].baseGrpF) {
+            if (out->groupCount >= MP6_SS_AUDIO_MAX_GROUPS) {
+                /* Review finding: the shadow used to drop groups past the cap
+                 * SILENTLY -- restored scenes then resolved SEs against banks
+                 * that were never reloaded, with nothing saying why. The cap
+                 * is smaller than MP6_MSM_MAX_SE_GROUPS, so this CAN happen;
+                 * losing groups may be tolerable, losing them silently is
+                 * not. */
+                fprintf(stderr, "[SAVESTATE] WARNING: more than %d non-base SE groups resident; "
+                                "groups beyond the shadow cap will NOT be re-synced on restore\n",
+                        MP6_SS_AUDIO_MAX_GROUPS);
+                fflush(stderr);
+                break;
+            }
+            out->groupIdx[out->groupCount++] = g_seGroups[i].grpIdx;
+        }
+    }
+    mp6_grp_unlock();
+}
+
+void mp6_msm_savestate_apply(const Mp6SsAudioShadow *in)
+{
+    int i;
+    /* msmSysLoadGroup rejects a NULL staging buffer (mirroring the real
+     * engine, whose game-side malloc really can fail) but never dereferences
+     * it -- this port reads the .msm directly. A non-NULL dummy is therefore
+     * sufficient and avoids allocating a real staging buffer here. */
+    static int dummyStagingBuf;
+
+    if (in == NULL || !g_msmReady) {
+        return; /* audio never came up in this process -- nothing to re-sync */
+    }
+
+    /* 1-2. Silence everything the LIVE process had going. speed 0 takes the
+     * immediate path (frees each channel's pcm, clears in-flight fades)
+     * rather than starting a ramp we would then fight. checkGrp=FALSE so
+     * base-group SE voices are cut too, instead of being left ringing. */
+    msmStreamStopAll(0);
+    msmSeStopAll(FALSE, 0);
+
+    /* 3. SE banks: drop the live process's dynamic groups and load the ones
+     * that were resident at capture, so a restored scene's sound effects
+     * resolve against the bank the captured moment actually had. */
+    msmSysDelGroupAll();
+    /* C5 (review): clamp -- groupCount arrives from the file header, and an
+     * unclamped corrupt value walked this loop gigabytes past the 16-entry
+     * array on the caller's stack. The restore path validates the shadow
+     * too; this bound keeps the function safe on its own terms. */
+    for (i = 0; i < in->groupCount && i < MP6_SS_AUDIO_MAX_GROUPS; i++) {
+        if (in->groupIdx[i] > 0) {
+            msmSysLoadGroup(in->groupIdx[i], &dummyStagingBuf, FALSE);
+        }
+    }
+
+    /* 4. Master volumes (plain scalars here with no game-side mirror). */
+    msmStreamSetMasterVolume(in->masterVol);
+    msmSeSetMasterVolume(in->seMasterVol);
+
+    /* 5. Replay each captured stream, then SEEK it back to where it was.
+     * msmStreamPlay unconditionally resets posFrac to 0, so replay alone
+     * would restart every track from the top -- audible as the BGM jumping
+     * to its intro on every load. Writing the captured position back under
+     * the mixer lock resumes mid-phrase instead.
+     *
+     * C20 (review): the stream is replayed PAUSED (MSM_STREAMPARAM_PAUSE),
+     * then unpaused inside the write-back lock below. Without that, the SDL
+     * callback could run in the window between msmStreamPlay's own locked
+     * publish (active, pos 0, full volume) and this write-back -- rendering
+     * an audible intro-blip at full volume, worst for a channel that was
+     * captured paused or mid-fade-out. Paused publish renders silence for
+     * that window instead.
+     *
+     * The counts are clamped defensively even though the restore path
+     * validates the shadow before calling here (C5): this function's
+     * contract must not depend on every caller re-checking. */
+    for (i = 0; i < in->chanCount && i < g_chanMax && i < MP6_SS_AUDIO_MAX_CHAN; i++) {
+        MSM_STREAMPARAM param;
+        if (!in->chan[i].active) {
+            continue;
+        }
+        memset(&param, 0, sizeof(param));
+        param.flag = MSM_STREAMPARAM_CHAN | MSM_STREAMPARAM_VOL | MSM_STREAMPARAM_PAUSE;
+        param.chan = i;
+        param.vol = in->chan[i].vol;
+        if (msmStreamPlay(in->chan[i].streamId, &param) < 0) {
+            continue; /* stream id no longer resolvable -- silence beats a crash */
+        }
+        mp6_lock();
+        if (g_chan[i].active) {
+            g_chan[i].posFrac    = in->chan[i].posFrac;
+            g_chan[i].paused     = in->chan[i].paused;
+            g_chan[i].fadeMul    = in->chan[i].fadeMul;
+            g_chan[i].fadeStep   = in->chan[i].fadeStep; /* C14: without the step, a captured fade never completes */
+            g_chan[i].fadeAction = in->chan[i].fadeAction;
+        }
+        mp6_unlock();
+    }
+
+    /* 6. Bias the SE handle counter past anything the restored game state
+     * could still be holding. Restored coroutine stacks and game structs
+     * carry `seNo` values minted by the CAPTURING process; if this process's
+     * counter is lower, a later msmSeStop against one of those stale handles
+     * would match and cut an unrelated live voice. Biasing makes every stale
+     * handle miss cleanly instead. */
+    if (g_seNoCounter <= in->seNoCounter) {
+        g_seNoCounter = in->seNoCounter + 4096;
+    }
+
+    printf("[SAVESTATE] audio re-synced: %d channel(s), %d SE group(s)\n",
+           (int)in->chanCount, (int)in->groupCount);
+    fflush(stdout);
 }
