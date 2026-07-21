@@ -27,8 +27,11 @@ and import your disc's content on-device on first launch.
 native ports, e.g. Ship of Harkinian): this project's GitHub Releases carry
 **content-free engine binaries only** — on Windows that's `mp6native.exe`
 plus its handful of DLLs and a small resource folder (fonts, UI
-stylesheets); on Android, a clean APK. Neither one contains a single byte of
-Mario Party 6's code or assets. **Game data is never distributed here, by
+stylesheets); on Android, a clean APK. Neither one contains any game
+asset -- not a byte of models, textures, audio, or text from the disc. The
+engine code itself is compiled from this project's decompiled/reimplemented
+source; that recompiled-code posture is exactly the Ship of Harkinian model
+named above, stated here plainly rather than papered over. **Game data is never distributed here, by
 this project, in any form, anywhere** — you need your own legally owned
 Mario Party 6 (USA) disc, and every install this project helps you produce
 (the web packager, the setup tool below, or the Android app's own import) is
@@ -42,7 +45,8 @@ built and what they do and don't contain.
 
 **You supply your own Mario Party 6 (USA) disc. No game data is distributed
 here, ever, in any form.** Prebuilt engine binaries are available via
-[Get it](#get-it) above, but they're content-free (no game code, no assets)
+[Get it](#get-it) above, but they're content-free (no game assets; the code is this
+project's own decompiled/reimplemented source)
 — turning them into something playable always assembles a runnable build on
 your own machine from your own disc plus the decompiled source, so nothing
 containing game code or assets is ever redistributed by this project. The

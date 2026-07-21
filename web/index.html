@@ -72,8 +72,10 @@
       repository, not in a Release, not anywhere this site touches. What the project's GitHub
       Releases page carries is a content-free <strong>engine build</strong>: on Windows, that's
       <code>mp6native.exe</code> plus a handful of DLLs and a small resource folder (fonts and
-      UI stylesheets) -- no game code, no assets. On Android, it's a clean APK of roughly 30MB,
-      same story. Neither contains one byte of Mario Party 6.
+      UI stylesheets) -- no game assets of any kind. On Android, it's a clean APK of roughly
+      30MB, same story. The engine code is compiled from this project's own decompiled/
+      reimplemented source; not one byte of game data (models, textures, audio, text) ships
+      in either binary.
     </p>
     <p>
       To actually play, you combine that engine with game content extracted from
