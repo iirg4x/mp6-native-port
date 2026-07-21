@@ -1,0 +1,440 @@
+/* MP6 web packager -- shared styles. Plain CSS, no build step, no
+ * external fonts/CDNs (self-contained; CSP-friendly): the system font
+ * stack only, so nothing ever leaves the page to render text. */
+
+:root {
+    --bg: #0d1013;
+    --bg-raised: #14181d;
+    --bg-inset: #0a0c0e;
+    --border: #262c33;
+    --text: #e8ecef;
+    --text-dim: #9aa4ad;
+    --text-faint: #6b747c;
+    --accent: #e3a53d;
+    --accent-strong: #f4bb5a;
+    --accent-text: #1a1305;
+    --ok: #5fb87a;
+    --warn: #e3a53d;
+    --error: #e0645a;
+    --focus: #6cb6e8;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+    --radius: 8px;
+    --max-width: 880px;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: #f6f7f8;
+        --bg-raised: #ffffff;
+        --bg-inset: #eef0f2;
+        --border: #dde1e5;
+        --text: #14181d;
+        --text-dim: #4b545c;
+        --text-faint: #767f87;
+        --accent: #b5790a;
+        --accent-strong: #96650a;
+        --accent-text: #ffffff;
+        --focus: #1f6fb2;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+/* The `hidden` attribute's UA-stylesheet `display:none` has the same
+ * specificity as a class selector, so any component class below that sets
+ * its own `display` (`.status-line`, `.btn`, ...) would otherwise silently
+ * win and keep a "hidden" element visible. Force it here, once, for every
+ * element regardless of which class it also carries. */
+[hidden] {
+    display: none !important;
+}
+
+html {
+    color-scheme: dark light;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.55;
+    font-size: 16px;
+}
+
+a {
+    color: var(--accent-strong);
+}
+a:hover {
+    color: var(--accent);
+}
+
+.wrap {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+/* ---- header / nav ---- */
+
+.site-header {
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-raised);
+}
+.site-header .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 16px;
+    padding-bottom: 16px;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.site-title {
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--text);
+    text-decoration: none;
+    letter-spacing: 0.01em;
+}
+.site-title small {
+    display: block;
+    font-weight: 400;
+    font-size: 0.72rem;
+    color: var(--text-faint);
+    letter-spacing: 0.02em;
+}
+.site-nav {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.site-nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    font-size: 0.92rem;
+}
+.site-nav a:hover {
+    background: var(--bg-inset);
+    color: var(--text);
+}
+.site-nav a[aria-current="page"] {
+    color: var(--text);
+    background: var(--bg-inset);
+}
+
+/* ---- privacy banner (packager page) ---- */
+
+.privacy-banner {
+    background: color-mix(in srgb, var(--ok) 14%, var(--bg));
+    border-bottom: 1px solid color-mix(in srgb, var(--ok) 35%, var(--border));
+    color: var(--text);
+    font-size: 0.92rem;
+    text-align: center;
+    padding: 10px 16px;
+}
+.privacy-banner strong {
+    color: var(--ok);
+}
+
+/* ---- layout basics ---- */
+
+main {
+    padding: 40px 0 80px;
+}
+h1 {
+    font-size: 1.9rem;
+    margin: 0.2em 0 0.5em;
+}
+h2 {
+    font-size: 1.3rem;
+    margin: 1.8em 0 0.6em;
+}
+h3 {
+    font-size: 1.05rem;
+    margin: 1.4em 0 0.5em;
+}
+p {
+    color: var(--text-dim);
+}
+.lede {
+    font-size: 1.15rem;
+    color: var(--text);
+}
+code {
+    font-family: var(--mono);
+    background: var(--bg-inset);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+pre {
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    overflow-x: auto;
+}
+pre code {
+    background: none;
+    padding: 0;
+}
+ul,
+ol {
+    color: var(--text-dim);
+}
+hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5em 0;
+}
+
+/* ---- cards / panels ---- */
+
+.card {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin: 20px 0;
+}
+.card.legal {
+    background: var(--bg-inset);
+}
+.card h2,
+.card h3 {
+    margin-top: 0;
+}
+
+.grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+@media (max-width: 640px) {
+    .grid-2 {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ---- buttons / inputs ---- */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--accent);
+    color: var(--accent-text);
+    border: none;
+    border-radius: var(--radius);
+    padding: 10px 18px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    font-family: var(--font);
+}
+.btn:hover {
+    background: var(--accent-strong);
+}
+.btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.btn.secondary {
+    background: var(--bg-inset);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+.btn.secondary:hover {
+    background: var(--bg-raised);
+    border-color: var(--text-faint);
+}
+.btn.danger {
+    background: var(--bg-inset);
+    color: var(--error);
+    border: 1px solid var(--border);
+}
+.btn:focus-visible,
+a:focus-visible,
+input:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+}
+
+.file-drop {
+    border: 1.5px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 22px;
+    text-align: center;
+    color: var(--text-dim);
+    background: var(--bg-inset);
+}
+.file-drop.dragover {
+    border-color: var(--accent);
+    color: var(--text);
+}
+.file-drop input[type="file"] {
+    display: block;
+    margin: 10px auto 0;
+    color: var(--text-dim);
+    max-width: 100%;
+}
+
+/* ---- packager steps ---- */
+
+.step {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    margin: 14px 0;
+    overflow: hidden;
+}
+.step-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+}
+.step-num {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--bg-inset);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+.step.active .step-num {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+}
+.step.done .step-num {
+    background: var(--ok);
+    border-color: var(--ok);
+    color: #05170a;
+}
+.step-title {
+    font-weight: 600;
+}
+.step-sub {
+    color: var(--text-faint);
+    font-size: 0.85rem;
+}
+.step-body {
+    padding: 0 18px 18px;
+}
+.step[data-collapsed="true"] .step-body {
+    display: none;
+}
+
+.choice-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 10px 0;
+}
+.choice-row .choice-item {
+    flex: 1 1 220px;
+}
+
+.noscript-wrap {
+    padding-top: 20px;
+}
+
+.status-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    margin: 10px 0;
+}
+.status-line.ok {
+    background: color-mix(in srgb, var(--ok) 16%, var(--bg));
+    color: var(--ok);
+}
+.status-line.error {
+    background: color-mix(in srgb, var(--error) 16%, var(--bg));
+    color: var(--error);
+}
+.status-line.info {
+    background: var(--bg-inset);
+    color: var(--text-dim);
+}
+
+.progress-wrap {
+    margin: 14px 0;
+}
+progress {
+    width: 100%;
+    height: 12px;
+    accent-color: var(--accent);
+}
+.progress-detail {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.82rem;
+    color: var(--text-faint);
+    margin-top: 6px;
+    font-family: var(--mono);
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.progress-file {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    word-break: break-all;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.92rem;
+}
+th,
+td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+}
+th {
+    color: var(--text-faint);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+footer.site-footer {
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 0.85rem;
+    padding: 28px 0 60px;
+    text-align: center;
+}
+footer.site-footer a {
+    color: var(--text-faint);
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}

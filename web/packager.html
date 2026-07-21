@@ -1,0 +1,178 @@
+<!-- MP6 web packager -- the tool. Static shell; all behavior is in
+     js/ui-packager.js (a module script) driving js/packager.js and
+     friends. No build step, no external resources. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mario Party 6 native port -- packager</title>
+<meta name="description" content="Build a runnable Mario Party 6 native port install from your own disc, entirely in your browser.">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-title" href="index.html">Mario Party 6 native port
+      <small>unofficial, not affiliated with Nintendo or Hudson</small>
+    </a>
+    <nav class="site-nav">
+      <a href="index.html">Home</a>
+      <a href="packager.html" aria-current="page">Packager</a>
+      <a href="android.html">Android</a>
+      <a href="https://github.com/iirg4x/mp6-native-port">Source</a>
+    </nav>
+  </div>
+</header>
+
+<div class="privacy-banner">
+  <strong>Your disc is read locally in this tab.</strong> Nothing uploads -- ever.
+</div>
+
+<noscript>
+  <div class="wrap noscript-wrap">
+    <div class="status-line error">This tool needs JavaScript enabled to run.</div>
+  </div>
+</noscript>
+
+<main class="wrap">
+  <h1>Build your install</h1>
+  <p class="lede">
+    Four steps: point this at your disc, get the engine, choose where the result goes, then
+    build. Everything below runs in this tab -- see
+    <a href="index.html#legal">the legal section</a> if you haven't already.
+  </p>
+
+  <div id="unsupported-warning" class="status-line error" hidden>
+    Your browser is missing some of the File APIs this tool needs (File System Access and/or
+    chunked Blob reads). Try a recent Chrome, Edge, or Firefox.
+  </div>
+
+  <!-- Step 1: disc source -->
+  <section class="step active" id="step-source">
+    <div class="step-head">
+      <div class="step-num">1</div>
+      <div>
+        <div class="step-title">Your disc</div>
+        <div class="step-sub">A Mario Party 6 (USA) disc image, or an already-extracted folder</div>
+      </div>
+    </div>
+    <div class="step-body">
+      <div class="choice-row">
+        <div class="file-drop choice-item" id="iso-drop">
+          <div>Disc image (<code>.iso</code> / <code>.gcm</code>)</div>
+          <input type="file" id="iso-input" accept=".iso,.gcm">
+        </div>
+        <div class="file-drop choice-item" id="folder-drop">
+          <div>Already-extracted disc folder</div>
+          <input type="file" id="folder-input" webkitdirectory>
+        </div>
+      </div>
+      <div id="source-status"></div>
+    </div>
+  </section>
+
+  <!-- Step 2: engine -->
+  <section class="step" id="step-engine">
+    <div class="step-head">
+      <div class="step-num">2</div>
+      <div>
+        <div class="step-title">Engine build</div>
+        <div class="step-sub">The content-free mp6native.exe + DLLs from this project's latest release</div>
+      </div>
+    </div>
+    <div class="step-body">
+      <div class="choice-row">
+        <button class="btn" id="engine-fetch-btn" type="button">Fetch latest release automatically</button>
+        <button class="btn secondary" id="engine-skip-btn" type="button">Continue without an engine (content only)</button>
+      </div>
+      <div id="engine-status"></div>
+      <div id="engine-manual" hidden>
+        <p>
+          Automatic fetch didn't work (often a CORS restriction on the release host, or no
+          release has been published yet). Download the engine zip yourself, then drop it below:
+        </p>
+        <p><a class="btn secondary" id="engine-manual-link" href="https://github.com/iirg4x/mp6-native-port/releases/latest" target="_blank" rel="noopener">Open the Releases page &rarr;</a></p>
+        <div class="file-drop" id="engine-drop">
+          <div>Drop the engine <code>.zip</code> here, or choose it</div>
+          <input type="file" id="engine-input" accept=".zip">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 3: output -->
+  <section class="step" id="step-output">
+    <div class="step-head">
+      <div class="step-num">3</div>
+      <div>
+        <div class="step-title">Where it goes</div>
+        <div class="step-sub" id="output-tier-sub">Checking what your browser supports&hellip;</div>
+      </div>
+    </div>
+    <div class="step-body">
+      <div id="output-tier-a" hidden>
+        <p>Your browser can write straight to a folder you choose -- no intermediate ZIP.</p>
+        <button class="btn" id="choose-folder-btn" type="button">Choose output folder&hellip;</button>
+        <div id="output-folder-status"></div>
+      </div>
+      <div id="output-tier-b" hidden>
+        <p>
+          Your browser doesn't support writing directly to a folder, so this will stream a
+          single ZIP download instead (you'll extract it yourself afterward). Modern Chrome or
+          Edge can skip the ZIP step entirely, if that matters to you.
+        </p>
+        <div id="output-tier-b-mode" class="status-line info"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 4: build -->
+  <section class="step" id="step-build">
+    <div class="step-head">
+      <div class="step-num">4</div>
+      <div>
+        <div class="step-title">Build</div>
+        <div class="step-sub">Reads your disc, streams everything to the destination above</div>
+      </div>
+    </div>
+    <div class="step-body">
+      <div class="choice-row">
+        <button class="btn" id="start-btn" type="button" disabled>Start</button>
+        <button class="btn danger" id="cancel-btn" type="button" hidden>Cancel</button>
+      </div>
+      <div class="progress-wrap" id="progress-wrap" hidden>
+        <progress id="progress-bar" value="0" max="1"></progress>
+        <div class="progress-detail">
+          <span id="progress-bytes"></span>
+          <span id="progress-files"></span>
+        </div>
+        <div class="progress-file" id="progress-file"></div>
+      </div>
+      <div id="build-status"></div>
+      <div id="done-panel" hidden>
+        <div class="status-line ok">Done.</div>
+        <div id="done-message"></div>
+        <p>
+          <strong>Reminder:</strong> this install was built from your own disc. Please don't
+          share or rehost the produced folder/ZIP/APK-content -- see
+          <a href="index.html#legal">the legal section</a>.
+        </p>
+        <p>Reload this page to build another install.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    Mario Party 6 native port &mdash; unofficial fan project, not affiliated with Nintendo or
+    Hudson &middot; <a href="https://github.com/iirg4x/mp6-native-port">source on GitHub</a>
+  </div>
+</footer>
+
+<script type="module" src="js/ui-packager.js"></script>
+</body>
+</html>

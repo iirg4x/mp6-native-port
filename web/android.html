@@ -1,0 +1,120 @@
+<!-- MP6 web packager -- Android guide. Static, no build step. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mario Party 6 native port -- Android</title>
+<meta name="description" content="Install the Mario Party 6 native port on Android and import your own disc's game content on-device.">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-title" href="index.html">Mario Party 6 native port
+      <small>unofficial, not affiliated with Nintendo or Hudson</small>
+    </a>
+    <nav class="site-nav">
+      <a href="index.html">Home</a>
+      <a href="packager.html">Packager</a>
+      <a href="android.html" aria-current="page">Android</a>
+      <a href="https://github.com/iirg4x/mp6-native-port">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>Android</h1>
+  <p class="lede">
+    The Android build doesn't need this site's packager at all -- it imports your disc's game
+    content itself, on-device, the first time you open it. This page is just the APK link and
+    the exact steps.
+  </p>
+
+  <div class="card">
+    <h2>1. Get the APK</h2>
+    <p>
+      Grab the latest <code>arm64</code> APK from the project's
+      <a href="https://github.com/iirg4x/mp6-native-port/releases/latest">GitHub Releases</a>
+      page (look for the <code>.apk</code> asset, roughly 30MB). It's a clean build: no game
+      code or assets are in it, same policy as the Windows build -- see
+      <a href="index.html#legal">the legal section</a> on the home page.
+    </p>
+    <p>
+      Your device will warn you about installing from outside the Play Store ("unknown
+      sources") -- that's expected for a small unsigned/independently-signed fan project, not a
+      sign anything's wrong. Enable it for the browser or file manager you're installing from,
+      install the APK, then you can turn that setting back off.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>2. Open the app and select your disc image</h2>
+    <p>
+      On first launch the app shows a <strong>Game Content Setup</strong> screen -- it looks for
+      Mario Party 6 content and, not finding any yet, offers two buttons:
+      <strong>Select Disc Image</strong> and <strong>Select Folder</strong>.
+    </p>
+    <ul>
+      <li>
+        <strong>Select Disc Image</strong> opens the system file picker -- point it at a
+        <code>.iso</code>/<code>.gcm</code> (or another disc-image format your dump happens to
+        be in) copied onto your device or reachable through it (cloud storage, a USB drive,
+        etc).
+      </li>
+      <li>
+        <strong>Select Folder</strong> opens Android's document-tree picker -- use this if you
+        already have the disc <em>extracted</em> to a folder (Dolphin's "Extract Entire
+        Disc...") rather than as a single image file.
+      </li>
+    </ul>
+    <p>
+      Either way, the app is doing the same job this site's packager does for Windows, just
+      on-device instead of in a browser tab: it verifies the disc is really Mario Party 6 (USA),
+      then imports the roughly 400MB subset of files the port actually needs (everything under
+      <code>data/</code>, <code>mess/</code> and <code>mic/</code>, plus the opening banner and
+      the two streamed-audio containers -- movies and the rest are skipped, they're not needed
+      past the menu). A progress bar tracks bytes and file count as it copies.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>3. Play</h2>
+    <p>
+      Once the import finishes, the content is kept on your device (under the app's own storage
+      area) and every later launch finds it automatically -- you only do this once per disc. As
+      with the Windows build, gameplay currently stops at the mode-select menu; see the
+      project's <a href="https://github.com/iirg4x/mp6-native-port#status">README</a> for
+      what's implemented so far.
+    </p>
+  </div>
+
+  <h2>Notes</h2>
+  <ul>
+    <li>
+      Everything above runs entirely on your device. Nothing about your disc or its contents is
+      ever sent anywhere.
+    </li>
+    <li>
+      The imported content lives in the app's own storage; uninstalling the app removes it too
+      (you'd import again from your disc after reinstalling).
+    </li>
+    <li>
+      Please don't rehost or redistribute the imported content -- see
+      <a href="index.html#legal">the legal section</a> for why.
+    </li>
+  </ul>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    Mario Party 6 native port &mdash; unofficial fan project, not affiliated with Nintendo or
+    Hudson &middot; <a href="https://github.com/iirg4x/mp6-native-port">source on GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -10,12 +10,44 @@ layer they call into (GX/OS/VI/PAD/DVD/CARD/MSM) is reimplemented on top of
 seam. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
 breakdown.
 
+## Get it
+
+The easiest way to play doesn't require building anything yourself. This
+repo's **web packager** (`web/`, served from GitHub Pages) runs entirely in
+your browser: point it at your own Mario Party 6 (USA) disc image, or a
+folder [Dolphin](https://dolphin-emu.org/) already extracted, and it
+combines your disc's game content with this project's prebuilt engine build
+into a folder (or, on browsers without the File System Access API, a single
+zip) you can run right away. Nothing about your disc leaves your machine —
+there's no upload, no server involved, just the File API reading your disc
+locally in the tab. On Android, skip the packager entirely — install the APK
+and import your disc's content on-device on first launch.
+
+**Policy, stated plainly** (the same posture as other decompilation-based
+native ports, e.g. Ship of Harkinian): this project's GitHub Releases carry
+**content-free engine binaries only** — on Windows that's `mp6native.exe`
+plus its handful of DLLs and a small resource folder (fonts, UI
+stylesheets); on Android, a clean APK. Neither one contains a single byte of
+Mario Party 6's code or assets. **Game data is never distributed here, by
+this project, in any form, anywhere** — you need your own legally owned
+Mario Party 6 (USA) disc, and every install this project helps you produce
+(the web packager, the setup tool below, or the Android app's own import) is
+assembled locally, on your own machine, from that disc. Please don't rehost
+or redistribute the folder/zip/APK-content this produces — it contains
+copyrighted assets pulled from your disc, not this project's own work; see
+[docs/RELEASING.md](docs/RELEASING.md) for how release assets themselves are
+built and what they do and don't contain.
+
 ## Quick start — build and play from your own disc
 
-**You supply your own Mario Party 6 (USA) disc. No game data or prebuilt game
-binaries are distributed here** — a runnable build is assembled on your machine
-from your own disc plus the decompiled source, so nothing containing game code
-or assets is ever redistributed.
+**You supply your own Mario Party 6 (USA) disc. No game data is distributed
+here, ever, in any form.** Prebuilt engine binaries are available via
+[Get it](#get-it) above, but they're content-free (no game code, no assets)
+— turning them into something playable always assembles a runnable build on
+your own machine from your own disc plus the decompiled source, so nothing
+containing game code or assets is ever redistributed by this project. The
+rest of this section builds that same result from source instead of via the
+prebuilt engine.
 
 The easiest path is the setup tool. It checks prerequisites, fetches the
 toolchain and the decompilation, extracts the assets it needs from your disc

@@ -1,0 +1,56 @@
+# MP6 native port -- deploys web/ (the static packager site) to GitHub
+# Pages on push to the default branch.
+#
+# Scope, on purpose: this workflow only ever reads the `web/` directory --
+# it uploads exactly that folder as the Pages artifact and touches nothing
+# else in the repo. There is no disc image, no game data, and no build step
+# anywhere in this job; `web/` is already plain static files (vanilla
+# JS/HTML/CSS, no bundler). See web/README-equivalent docs (the site's own
+# `index.html` "Legal / policy" section) and docs/RELEASING.md for what
+# does and doesn't get published for this project.
+#
+# This workflow is INERT until GitHub Pages is enabled for this repository
+# (Settings -> Pages -> Source -> GitHub Actions). Do not enable that here --
+# see docs/RELEASING.md's "After publishing" checklist for when that switch
+# should actually be flipped.
+
+name: Deploy packager site to Pages
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload web/ as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

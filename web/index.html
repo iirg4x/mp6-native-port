@@ -1,0 +1,118 @@
+<!-- MP6 web packager -- landing page. Static, no build step, no external
+     resources: everything this page needs ships in this repo. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mario Party 6 native port -- get it</title>
+<meta name="description" content="A client-side tool that builds a runnable Mario Party 6 native port install from your own disc. Nothing uploads.">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="site-title" href="index.html">Mario Party 6 native port
+      <small>unofficial, not affiliated with Nintendo or Hudson</small>
+    </a>
+    <nav class="site-nav">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="packager.html">Packager</a>
+      <a href="android.html">Android</a>
+      <a href="https://github.com/iirg4x/mp6-native-port">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>Play Mario Party 6, natively, from your own disc</h1>
+  <p class="lede">
+    This is the companion site for the <a href="https://github.com/iirg4x/mp6-native-port">mp6-native-port</a>
+    project: a native Windows and Android port of the Mario Party 6 decompilation. It doesn't
+    emulate anything -- the game's own decompiled source runs directly on your machine. This
+    page turns your own legally-owned disc plus the project's engine build into a folder (or
+    APK) you can run, entirely in your browser.
+  </p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h2>Get the packager</h2>
+      <p>
+        Point it at your Mario Party 6 (USA) disc image or an extracted disc folder, and it
+        assembles a playable install for you. Runs entirely client-side.
+      </p>
+      <p><a class="btn" href="packager.html">Open the packager &rarr;</a></p>
+    </div>
+    <div class="card">
+      <h2>On Android?</h2>
+      <p>
+        The Android app imports your disc's game content directly on-device -- no desktop
+        packager needed. Get the APK and see the exact steps.
+      </p>
+      <p><a class="btn secondary" href="android.html">Android guide &rarr;</a></p>
+    </div>
+  </div>
+
+  <h2>What this actually does</h2>
+  <p>
+    Everything happens in your browser tab, locally. There is no server component and no
+    upload: your disc image is read with the File API directly off your own disk, parsed,
+    filtered down to the ~400MB subset of files the port actually needs, and written straight
+    to a folder you choose (or, on browsers without that capability, streamed into a single
+    ZIP download) alongside the project's own prebuilt engine. Close the tab and nothing of
+    yours is left anywhere but your own disk.
+  </p>
+
+  <h2 id="legal">Legal / policy</h2>
+  <div class="card legal">
+    <p>
+      This project ships <strong>no game data, ever, in any form</strong> -- not in this
+      repository, not in a Release, not anywhere this site touches. What the project's GitHub
+      Releases page carries is a content-free <strong>engine build</strong>: on Windows, that's
+      <code>mp6native.exe</code> plus a handful of DLLs and a small resource folder (fonts and
+      UI stylesheets) -- no game code, no assets. On Android, it's a clean APK of roughly 30MB,
+      same story. Neither contains one byte of Mario Party 6.
+    </p>
+    <p>
+      To actually play, you combine that engine with game content extracted from
+      <strong>your own, legally owned Mario Party 6 (USA) disc</strong> -- either through this
+      site's packager (Windows) or the app's own on-device import (Android). That extraction
+      happens locally, using this project's decompiled understanding of the disc's file layout;
+      your disc image or its bytes never leave your machine, and this site cannot see them.
+    </p>
+    <p>
+      The install this produces is for your own personal use. <strong>Please don't rehost or
+      redistribute the folder, ZIP, or APK-imported content this tool produces</strong> -- it
+      contains copyrighted game assets decoded from your disc, and redistributing it would be
+      redistributing Nintendo/Hudson's copyrighted work, not this project's. Share the engine
+      (that part's fine, it's already public in Releases) and point people at their own disc for
+      the rest.
+    </p>
+    <p>
+      This is an unofficial fan project. It is not affiliated with, endorsed by, or connected to
+      Nintendo, Hudson Soft, or any of their successors or affiliates in any way.
+    </p>
+  </div>
+
+  <h2>How it's built</h2>
+  <p>
+    Read the source, file an issue, or see what's actually running: everything here -- the site,
+    the packager, the native port itself -- is on
+    <a href="https://github.com/iirg4x/mp6-native-port">GitHub</a>. The main
+    <a href="https://github.com/iirg4x/mp6-native-port#readme">README</a> covers the port's
+    current status and how it's built from source, if you'd rather do that instead.
+  </p>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    Mario Party 6 native port &mdash; unofficial fan project, not affiliated with Nintendo or
+    Hudson &middot; <a href="https://github.com/iirg4x/mp6-native-port">source on GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
