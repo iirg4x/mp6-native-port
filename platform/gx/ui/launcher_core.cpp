@@ -425,6 +425,55 @@ static float mp6_aa_to_ssaa(int aa)
 
 static float g_initialSsaa = 1.0f;
 
+/* Anti-Aliasing: what aurora was ACTUALLY initialized with this session, as
+ * reported by main_native.c once it has resolved config + env levers. Not the
+ * same thing as the saved config: an MP6_MSAA/MP6_SSAA/MP6_FXAA env lever wins
+ * over the config in both modes, so only main_native.c knows the truth.
+ *
+ * This is what makes the AA modes mutually exclusive AT RUNTIME. MSAA and SSAA
+ * are aurora_initialize-time (restart-pending); FXAA is a live post-process. So
+ * launching under MSAA/SSAA and then selecting FXAA used to STACK the two until
+ * the next restart. mp6_launcher_aa_apply_live() below refuses that: FXAA only
+ * goes live when this session has no init-time AA, otherwise the selection is
+ * saved and deferred -- which is exactly what the row's "takes effect next
+ * launch" text already claims. */
+static int   g_sessionMsaa = 1;
+static float g_sessionSsaa = 1.0f;
+static int   g_sessionPostAa = 0; /* 1 = FXAA is live right now */
+
+extern "C" void mp6_launcher_note_session_aa(int msaa, float ssaa, int postAa)
+{
+    g_sessionMsaa = msaa;
+    g_sessionSsaa = ssaa;
+    g_sessionPostAa = postAa ? 1 : 0;
+}
+
+/* 1 when this session came up with an init-time AA mechanism (MSAA or SSAA)
+ * already active -- i.e. FXAA cannot also be turned on without stacking. */
+extern "C" int mp6_launcher_session_init_aa_active(void)
+{
+    return (g_sessionMsaa > 1 || g_sessionSsaa > 1.0f) ? 1 : 0;
+}
+
+/* Decides whether selecting `aa` can take effect live, and records what the
+ * session's post-process AA will be as a result. Returns 1 when the caller
+ * should push the change to aurora now, 0 when it is deferred to next launch.
+ *
+ * Turning FXAA OFF is always live (clearing a post-process can never stack);
+ * turning it ON is live only when no init-time AA is running this session. */
+extern "C" int mp6_launcher_aa_apply_live(int aa)
+{
+    if (aa != MP6_AA_FXAA) {
+        g_sessionPostAa = 0;
+        return 1;
+    }
+    if (mp6_launcher_session_init_aa_active()) {
+        return 0; /* MSAA/SSAA owns this session -- restart-pending, not stacked */
+    }
+    g_sessionPostAa = 1;
+    return 1;
+}
+
 static void mp6_launcher_capture_initials(void)
 {
     snprintf(g_initialBackend, sizeof(g_initialBackend), "%s", g_cfg.backend);
@@ -1049,7 +1098,11 @@ void format_document_source(const char *raw, char *out, size_t n)
 
 Mp6LauncherConfig &cfg() { return g_cfg; }
 void cfg_save() { mp6_launcher_config_save(); }
-bool restart_pending() { return strcmp(g_cfg.backend, g_initialBackend) != 0 || g_cfg.vsync != g_initialVsync || mp6_aa_to_msaa(g_cfg.aa) != g_initialMsaa || mp6_aa_to_ssaa(g_cfg.aa) != g_initialSsaa; }
+/* The trailing post-AA term covers the case mp6_launcher_aa_apply_live() now
+ * DEFERS: picking FXAA while MSAA/SSAA owns the session leaves the config
+ * asking for FXAA that isn't live, which is a restart-pending state exactly
+ * like a changed sample count. */
+bool restart_pending() { return strcmp(g_cfg.backend, g_initialBackend) != 0 || g_cfg.vsync != g_initialVsync || mp6_aa_to_msaa(g_cfg.aa) != g_initialMsaa || mp6_aa_to_ssaa(g_cfg.aa) != g_initialSsaa || (g_cfg.aa == MP6_AA_FXAA ? 1 : 0) != g_sessionPostAa; }
 void apply_display() { mp6_launcher_apply_display(); }
 void apply_volume() { mp6_launcher_apply_volume(); }
 int validate_root(const char *root, char *err, size_t errn) { return mp6_launcher_validate_root(root, err, errn); }

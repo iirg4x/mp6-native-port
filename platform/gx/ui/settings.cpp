@@ -38,6 +38,11 @@
 extern "C" void mp6_widescreen_set_enabled(int enabled);
 extern "C" void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg);
 
+/* [MP6] Anti-Aliasing: 1 = the selected mode may be pushed to aurora NOW,
+ * 0 = it is restart-pending because an init-time mechanism (MSAA/SSAA) already
+ * owns this session. See launcher_core.cpp for the full contract. */
+extern "C" int mp6_launcher_aa_apply_live(int aa);
+
 /* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
  * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
@@ -469,18 +474,35 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
                         })
                         .on_pressed([mode = preset.mode] {
                             cfg().aa = mode;
-                            /* FXAA is a post-process -> apply LIVE the instant
-                             * it is (de)selected; selecting any non-FXAA mode
-                             * clears a previously-live FXAA immediately. MSAA
-                             * still takes effect next launch (restart-pending,
-                             * mp6_launcher_cfg_msaa). */
-                            aurora_set_post_aa(mode == MP6_AA_FXAA ? AURORA_POST_AA_FXAA : AURORA_POST_AA_NONE);
+                            /* One AA mechanism at a time. Selecting any
+                             * non-FXAA mode clears a previously-live FXAA
+                             * immediately (that direction can never stack).
+                             * Selecting FXAA applies live ONLY when this
+                             * session did not initialize with MSAA/SSAA --
+                             * those latch at aurora_initialize, so turning
+                             * FXAA on over them would run both until restart.
+                             * mp6_launcher_aa_apply_live() makes that call and
+                             * records the result; when it defers, the row's
+                             * own "takes effect next launch" promise (and the
+                             * prelaunch restart prompt, via restart_pending())
+                             * is what the user gets. */
+                            if (mp6_launcher_aa_apply_live(mode)) {
+                                aurora_set_post_aa(mode == MP6_AA_FXAA ? AURORA_POST_AA_FXAA
+                                                                       : AURORA_POST_AA_NONE);
+                            }
                             cfg_save();
                         });
                 }
-                pane.add_rml("<br/>Anti-aliasing smooths jagged edges. <b>MSAA 4x</b> multisamples "
-                             "polygon edges (takes effect next launch). <b>FXAA</b> is a fast "
-                             "post-process that applies immediately, with near-zero cost."
+                pane.add_rml("<br/>Anti-aliasing smooths jagged edges. Only one mode runs at a "
+                             "time. <b>MSAA 4x</b> multisamples polygon edges (takes effect next "
+                             "launch). <b>FXAA</b> is a fast post-process with near-zero cost; it "
+                             "applies immediately, except when this session started with "
+#ifndef __ANDROID__
+                             "MSAA/SSAA"
+#else
+                             "MSAA"
+#endif
+                             " -- then it too takes effect next launch, rather than stacking."
 #ifndef __ANDROID__
                              " <b>SSAA 1.5x/2x</b> supersample the whole scene -- the strongest "
                              "quality, the highest cost (takes effect next launch)."

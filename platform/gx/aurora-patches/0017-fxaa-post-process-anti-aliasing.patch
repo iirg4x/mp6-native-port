@@ -49,14 +49,23 @@ diff --git a/lib/webgpu/gpu.cpp b/lib/webgpu/gpu.cpp
 index a1f2f4f..ec5db54 100644
 --- a/lib/webgpu/gpu.cpp
 +++ b/lib/webgpu/gpu.cpp
-@@ -53,6 +53,10 @@ wgpu::RenderPipeline g_CopyPipeline;
+@@ -4,0 +4,1 @@
++#include <atomic>
+@@ -53,6 +53,17 @@ wgpu::RenderPipeline g_CopyPipeline;
  wgpu::RenderPipeline g_CopyPremultipliedAlphaPipeline;
  wgpu::BindGroup g_CopyBindGroup;
  static AuroraSampler g_Resampler = SAMPLER_BILINEAR;
 +// Anti-Aliasing P2 (aurora-patches/0017): live post-process AA mode fed into
 +// the present resample fragment shader. Toggled by aurora_set_post_aa without
 +// recreating any pipeline (mirrors g_Resampler), so it applies immediately.
-+static AuroraPostAA g_PostAa = AURORA_POST_AA_NONE;
++// ATOMIC because the two ends live on different threads: aurora_set_post_aa is
++// called from the game/UI thread (the launcher's Anti-Aliasing row, and once at
++// boot), while resample_present_source reads it on the render worker (that
++// function ASSERTs is_worker_thread()). Relaxed ordering is sufficient -- the
++// value is self-contained and is republished into the resample uniform every
++// present, so no other state is ordered against it; all the atomic buys (and
++// all that is needed) is that a live toggle can never be read half-written.
++static std::atomic<AuroraPostAA> g_PostAa{AURORA_POST_AA_NONE};
  static wgpu::BindGroupLayout g_ResampleBindGroupLayout;
  static wgpu::RenderPipeline g_ResamplePipeline;
  static wgpu::Buffer g_ResampleUniformBuffer;
@@ -179,15 +188,15 @@ index a1f2f4f..ec5db54 100644
 +  switch (mode) {
 +  case AURORA_POST_AA_NONE:
 +  case AURORA_POST_AA_FXAA:
-+    g_PostAa = mode;
++    g_PostAa.store(mode, std::memory_order_relaxed);
 +    return;
 +  default:
-+    g_PostAa = AURORA_POST_AA_NONE;
++    g_PostAa.store(AURORA_POST_AA_NONE, std::memory_order_relaxed);
 +    return;
 +  }
 +}
 +
-+AuroraPostAA get_post_aa() noexcept { return g_PostAa; }
++AuroraPostAA get_post_aa() noexcept { return g_PostAa.load(std::memory_order_relaxed); }
 +
  Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_height, uint32_t content_width,
                                      uint32_t content_height) noexcept {
@@ -196,7 +205,7 @@ index a1f2f4f..ec5db54 100644
        .samplerMode = sampler_mode(g_Resampler),
        .frameWidth = static_cast<float>(width),
        .frameHeight = static_cast<float>(height),
-+      .postAaMode = post_aa_mode(g_PostAa),
++      .postAaMode = post_aa_mode(g_PostAa.load(std::memory_order_relaxed)),
    };
    ASSERT(gfx::render_worker::is_worker_thread(), "Present resample queue write must run on the render worker");
    g_queue.WriteBuffer(g_ResampleUniformBuffer, 0, &uniform, sizeof(uniform));

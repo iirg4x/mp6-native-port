@@ -159,6 +159,30 @@ index 0000000..c469b49
 +}
 +
 +} // extern "C"
+diff --git a/lib/gfx/texture.cpp b/lib/gfx/texture.cpp
+--- a/lib/gfx/texture.cpp
++++ b/lib/gfx/texture.cpp
+@@ -160,3 +160,9 @@
+       .label = label,
+-      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::RenderAttachment,
++      // CopySrc (aurora-patches/0016): lets a debug tool (MP6 shadow-map
++      // dump, lib/gfx/debug_readback.cpp) read a resolved EFB/offscreen copy
++      // back to CPU via CopyTextureToBuffer. Aurora itself never reads one of
++      // these back, so this is a pure capability addition -- it changes
++      // nothing about how the texture is bound/sampled/rendered into.
++      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst |
++               wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc,
+       .dimension = wgpu::TextureDimension::e2D,
+@@ -207,3 +213,8 @@
+       .label = label,
+-      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment,
++      // CopySrc (aurora-patches/0016): see new_render_texture's identical
++      // comment above -- lets a debug tool read a resolved copy back to CPU;
++      // a pure capability addition, nothing about existing behavior changes.
++      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment |
++               wgpu::TextureUsage::CopySrc,
+       .dimension = wgpu::TextureDimension::e2D,
+
 diff --git a/lib/gfx/png_io.cpp b/lib/gfx/png_io.cpp
 index 0aa8703..97f20e2 100644
 --- a/lib/gfx/png_io.cpp

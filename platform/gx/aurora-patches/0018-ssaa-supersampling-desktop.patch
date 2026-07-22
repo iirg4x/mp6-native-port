@@ -20,7 +20,7 @@ diff --git a/lib/webgpu/gpu.cpp b/lib/webgpu/gpu.cpp
 index ec5db54..3e0d0fc 100644
 --- a/lib/webgpu/gpu.cpp
 +++ b/lib/webgpu/gpu.cpp
-@@ -71,6 +71,13 @@ bool g_bcTexturesSupported = false;
+@@ -79,6 +79,13 @@ bool g_bcTexturesSupported = false;
  bool g_astcTexturesSupported = false;
  bool g_textureComponentSwizzleSupported = false;
  static std::atomic_bool g_initialized = false;
@@ -34,33 +34,54 @@ index ec5db54..3e0d0fc 100644
  
  namespace {
  
-@@ -328,6 +335,25 @@ uint32_t viewport_extent(float value) noexcept {
+@@ -336,6 +343,43 @@ uint32_t viewport_extent(float value) noexcept {
    return std::max(1u, static_cast<uint32_t>(std::lround(std::max(value, 1.f))));
  }
  
 +#ifndef __ANDROID__
-+// Anti-Aliasing P3 (aurora-patches/0018): scale a content-framebuffer extent by
-+// the SSAA factor, clamped to the device's max 2D texture dimension so an
++// Anti-Aliasing P3 (aurora-patches/0018): scale the content framebuffer by the
++// SSAA factor, clamped to the device's max 2D texture dimension so an
 +// aggressive factor on a high-res window can never request a texture the device
-+// rejects. Factor <= 1 returns the extent unchanged (exact native -> the SSAA-
-+// off path is byte-identical). Desktop-only (compiled out under __ANDROID__).
-+uint32_t apply_ssaa_scale(uint32_t dim) noexcept {
-+  if (g_ssaaFactor <= 1.f || dim == 0) {
-+    return dim;
++// rejects. Factor <= 1 leaves both extents unchanged (exact native -> the
++// SSAA-off path is byte-identical). Desktop-only (compiled out under
++// __ANDROID__).
++//
++// BOTH axes share ONE effective scale. Clamping each dimension independently
++// (as this did originally) silently changes the framebuffer's aspect ratio the
++// moment either axis hits the cap: 5120x2880 at 2x with an 8192 limit became
++// 8192x5760 -- 1.42:1 instead of the window's 16:9, i.e. a stretched image.
++// Taking the tightest of the requested factor and what each axis can afford,
++// then applying that one number to both, keeps the content framebuffer exactly
++// the window's shape at every resolution and every limit.
++void apply_ssaa_scale(uint32_t width, uint32_t height, uint32_t& outWidth, uint32_t& outHeight) noexcept {
++  outWidth = width;
++  outHeight = height;
++  if (g_ssaaFactor <= 1.f || width == 0 || height == 0) {
++    return;
 +  }
-+  auto scaled = static_cast<uint32_t>(
-+      std::max<double>(1.0, std::lround(static_cast<double>(dim) * static_cast<double>(g_ssaaFactor))));
-+  if (g_maxTextureDimension2D != 0 && scaled > g_maxTextureDimension2D) {
-+    scaled = g_maxTextureDimension2D;
++  double scale = static_cast<double>(g_ssaaFactor);
++  if (g_maxTextureDimension2D != 0) {
++    const auto limit = static_cast<double>(g_maxTextureDimension2D);
++    scale = std::min(scale, limit / static_cast<double>(width));
++    scale = std::min(scale, limit / static_cast<double>(height));
 +  }
-+  return scaled;
++  if (scale <= 1.0) {
++    return; // the window is already at/over the limit: native, undistorted
++  }
++  outWidth = static_cast<uint32_t>(std::max<double>(1.0, std::lround(static_cast<double>(width) * scale)));
++  outHeight = static_cast<uint32_t>(std::max<double>(1.0, std::lround(static_cast<double>(height) * scale)));
++  if (g_maxTextureDimension2D != 0) {
++    // Rounding can land one past the cap on the axis that set the scale.
++    outWidth = std::min(outWidth, g_maxTextureDimension2D);
++    outHeight = std::min(outHeight, g_maxTextureDimension2D);
++  }
 +}
 +#endif
 +
  } // namespace
  
  TextureWithSampler create_render_texture(uint32_t width, uint32_t height, bool multisampled) {
-@@ -962,6 +988,9 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+@@ -970,6 +996,9 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
    {
      wgpu::Limits supportedLimits{};
      g_adapter.GetLimits(&supportedLimits);
@@ -70,7 +91,7 @@ index ec5db54..3e0d0fc 100644
      wgpu::CompatibilityModeLimits compatibilityModeLimits{wgpu::CompatibilityModeLimits::Init{
          .maxStorageBuffersInVertexStage = 2,
          .maxStorageBuffersInFragmentStage = 2,
-@@ -1146,6 +1175,13 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+@@ -1154,6 +1183,13 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
        .msaaSamples = g_config.msaa,
        .textureAnisotropy = g_config.maxTextureAnisotropy,
    };
@@ -84,7 +105,7 @@ index ec5db54..3e0d0fc 100644
    create_copy_pipeline();
    create_resample_pipeline();
    gpu_prof::initialize();
-@@ -1190,9 +1226,21 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t
+@@ -1198,9 +1234,20 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t
    if (!g_surface || !g_device || width == 0 || height == 0 || nativeHeight == 0 || nativeWidth == 0) {
      return;
    }
@@ -97,8 +118,7 @@ index ec5db54..3e0d0fc 100644
 +  uint32_t fbWidth = width;
 +  uint32_t fbHeight = height;
 +#ifndef __ANDROID__
-+  fbWidth = apply_ssaa_scale(width);
-+  fbHeight = apply_ssaa_scale(height);
++  apply_ssaa_scale(width, height, fbWidth, fbHeight);
 +#endif
    const bool sizeChanged = g_graphicsConfig.surfaceConfiguration.width != nativeWidth ||
                             g_graphicsConfig.surfaceConfiguration.height != nativeHeight ||
@@ -107,7 +127,7 @@ index ec5db54..3e0d0fc 100644
    if (!force && !sizeChanged) {
      return;
    }
-@@ -1208,9 +1256,9 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t
+@@ -1216,9 +1264,9 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t
      window::SurfaceLock surfaceLock;
      g_surface.Configure(&surfaceConfiguration);
    }

@@ -136,22 +136,30 @@ def main(argv=None):
         common.step(6, total_steps, "Building mp6native + assembling dist/")
         windowed = not args.headless_only
         headless = not args.windowed_only
-        step_build.build(common.NATIVE_ROOT, headless=headless, windowed=windowed,
-                          jobs=args.jobs, coro_fibers=args.coro_fibers)
-        dist_dir = step_build.assemble_dist(common.NATIVE_ROOT, dist_dir=args.dist_dir)
+        built_after = step_build.build(common.NATIVE_ROOT, headless=headless, windowed=windowed,
+                                        jobs=args.jobs, coro_fibers=args.coro_fibers)
+        # assemble_dist() raises unless the full artifact manifest for the
+        # selected mode is present and freshly built -- "Done" below is only
+        # ever printed over something that actually runs.
+        dist_dir = step_build.assemble_dist(common.NATIVE_ROOT, dist_dir=args.dist_dir,
+                                            headless=headless, windowed=windowed,
+                                            coro_fibers=args.coro_fibers, built_after=built_after)
 
+        android = None
         if args.android:
             common.step(7, total_steps, "Android lane (SDK/NDK, .so rows, APK)")
-            step_android.run_android_lane(common.NATIVE_ROOT, jobs=args.jobs, assume_yes=args.yes,
-                                          skip_apk=args.skip_apk)
+            android = step_android.run_android_lane(common.NATIVE_ROOT, jobs=args.jobs,
+                                                    assume_yes=args.yes, skip_apk=args.skip_apk)
 
         common.banner("Done")
-        exe = os.path.join(dist_dir, "mp6native.exe")
-        headless_exe = os.path.join(dist_dir, "mp6native_headless.exe")
+        exe = os.path.join(dist_dir, step_build.exe_name(False, args.coro_fibers))
+        headless_exe = os.path.join(dist_dir, step_build.exe_name(True, args.coro_fibers))
         if os.path.exists(exe):
             print(f"  Run this:  {exe}")
         if os.path.exists(headless_exe):
             print(f"  (headless/CI build also available: {headless_exe})")
+        if android and android.get("apk"):
+            print(f"  Android APK: {android['apk']}")
         print(f"\n  Everything needed to play now lives under: {dist_dir}")
         print("  Settings persist to mp6_config.json next to the executable.")
         return 0

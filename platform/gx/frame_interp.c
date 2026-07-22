@@ -128,6 +128,42 @@ static long s_statReplays, s_statSkippedWindows;
  * (it is drawn outside Hu3DExec), so each one is a strobe frame -- the BUG-2
  * verdict is replaysDuringWipe == 0. */
 static long s_statWipeTicks, s_statReplaysDuringWipe;
+static long s_statBudgetDeclines;  /* windows a replay was refused for not fitting */
+
+/* Admission budget: the measured wall-clock cost of a WHOLE replay --
+ * aurora_begin_frame() (which BLOCKS in aurora's frame-slot admission until one
+ * of its two in-flight slots frees, for as long as the GPU/vsync takes), the
+ * re-run body, and aurora_end_frame(). A replay is only started when the slack
+ * still left before the next tick deadline covers this plus the safety margin,
+ * so entering that blocking admission can never push the next simulation tick
+ * late. Seeded at 0 (the first replay of a run is admitted on the margin alone,
+ * which is what measures it).
+ *
+ * It cannot LATCH the feature off -- the failure mode of the replay-cost EMA
+ * this file used to carry. Every refusal decays the budget by 1/8, so even a
+ * one-off multi-millisecond stall (a compositor hitch, a driver hiccup) is
+ * forgotten within a handful of windows and replays resume on their own; no
+ * successful replay is needed to recover, which is exactly what the EMA got
+ * wrong (its estimate only refreshed on success, so an inflated estimate
+ * blocked the very replays that would have corrected it). Growth is immediate
+ * (a cost above budget replaces it), shrink is gradual, so the common case
+ * tracks the real cost without chasing noise. */
+static int64_t s_replayBudgetNs;
+
+static void fi_budget_observe(int64_t costNs)
+{
+    if (costNs > s_replayBudgetNs) {
+        s_replayBudgetNs = costNs;
+    } else {
+        s_replayBudgetNs -= (s_replayBudgetNs - costNs) / 4;
+    }
+}
+
+static void fi_budget_decay(void)
+{
+    s_replayBudgetNs -= s_replayBudgetNs / 8;
+    if (s_replayBudgetNs < 0) s_replayBudgetNs = 0;
+}
 
 /* =======================================================================
  * Frame-boundary hooks (called from aurora_bridge.c).
@@ -179,8 +215,10 @@ void mp6_fi_note_frame_end(void)
     if (fi_diag()) {
         static long s_tick;
         if ((++s_tick % 300) == 0) {
-            fprintf(stderr, "[FI-MODEL] tick=%ld replays=%ld skippedWindows=%ld | wipe: ticks=%ld replaysDuringWipe=%ld\n",
-                    s_tick, s_statReplays, s_statSkippedWindows,
+            fprintf(stderr, "[FI-MODEL] tick=%ld replays=%ld skippedWindows=%ld budgetDeclines=%ld "
+                            "budget=%.3f ms | wipe: ticks=%ld replaysDuringWipe=%ld\n",
+                    s_tick, s_statReplays, s_statSkippedWindows, s_statBudgetDeclines,
+                    (double)s_replayBudgetNs / 1e6,
                     s_statWipeTicks, s_statReplaysDuringWipe);
             fflush(stderr);
         }
@@ -193,7 +231,7 @@ void mp6_fi_note_frame_end(void)
 
 int mp6_fi_idle_present(int64_t remainNs, int64_t periodNs)
 {
-    int64_t t0, margin;
+    int64_t t0, margin, deadline, need;
     double alpha;
 
     if (!mp6_unlocked_fps_enabled() || periodNs <= 0) return 0;
@@ -223,6 +261,12 @@ int mp6_fi_idle_present(int64_t remainNs, int64_t periodNs)
      * that trap). A pure wall-clock budget cannot latch by construction. */
     margin = periodNs / 8; /* ~2ms at 60Hz -- one present's worth of headroom */
     if (remainNs < margin) return 0;
+    /* The caller's remainNs is a sample taken before this call; everything below
+     * re-derives its slack from an ABSOLUTE deadline instead, because the two
+     * steps in between (the spacing sleep, and the wait inside aurora's frame
+     * admission) both consume unknown amounts of it. */
+    deadline = (int64_t)mp6_host_monotonic_ns() + remainNs;
+    need = margin + s_replayBudgetNs;
 
     /* Spread replays across the window instead of bursting them at its start:
      * with vsync OFF (Mailbox/immediate) a present returns in microseconds, so
@@ -239,12 +283,25 @@ int mp6_fi_idle_present(int64_t remainNs, int64_t periodNs)
         int64_t now = (int64_t)mp6_host_monotonic_ns();
         int64_t wait = (s_lastPresentNs + spacing) - now;
         if (wait > 0) {
-            if (remainNs - wait < margin) return 0; /* no slack left after the wait */
+            if ((deadline - now) - wait < need) return 0; /* no slack left after the wait */
             mp6_host_sleep_ns((uint64_t)wait);
         }
     }
 
+    /* RE-CHECK the clock after the sleep. mp6_host_sleep_ns is a request, not a
+     * promise -- OS timer granularity routinely overshoots it -- and the check
+     * above was only a prediction. Without this, an oversleep walked straight
+     * into the blocking frame admission below and pushed the next tick late.
+     * The budget term is what keeps that admission itself from overrunning:
+     * a replay is started only while the REMAINING slack still covers a whole
+     * measured replay, so the next simulation deadline is never at its mercy. */
     t0 = (int64_t)mp6_host_monotonic_ns();
+    if (deadline - t0 < need) {
+        fi_budget_decay();
+        if (fi_diag()) s_statBudgetDeclines++;
+        return 0;
+    }
+
     alpha = (double)(t0 - s_lastSealNs) / (double)periodNs;
     if (alpha < 0.0) alpha = 0.0;
     if (alpha > 1.0) alpha = 1.0;
@@ -300,6 +357,10 @@ int mp6_fi_idle_present(int64_t remainNs, int64_t periodNs)
     mp6_present_counters_add(1, 1);
     s_replaysThisWindow++;
     s_statReplays++;
+    /* Feed the admission budget with what a WHOLE replay actually cost from
+     * here (t0, immediately before aurora_begin_frame's blocking admission)
+     * to now -- the exact quantity the next window has to fit. */
+    fi_budget_observe((int64_t)mp6_host_monotonic_ns() - t0);
     /* BUG-2 verdict counter: a replay frame that reached the screen while the
      * wipe was drawing is a strobe frame (the wipe quad is missing from it).
      * With the gate on this is unreachable and must stay 0. */
@@ -328,5 +389,6 @@ void mp6_fi_savestate_reset(void)
     s_replaysThisWindow = 0;
     s_lastSealNs = 0;
     s_lastPresentNs = 0;
+    s_replayBudgetNs = 0; /* pre-restore costs describe a different scene */
     mp6_fi_model_reset();
 }

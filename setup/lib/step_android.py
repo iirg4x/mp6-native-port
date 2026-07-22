@@ -109,17 +109,23 @@ def windowed_ready():
 
 
 def build_windowed(native_root, jobs=None):
+    """Raises rather than returning None when the graphics deps are absent: the
+    user asked for --android, and without this row there is no APK to install,
+    so a "skip" here is a FAILURE of the requested target, not a success."""
     ready, aurora_tree, nod_lib = windowed_ready()
     if not ready:
-        common.warn("Android windowed (aurora/SDL3/Dawn) graphics build is not available here:")
+        missing = []
         if not os.path.isdir(aurora_tree):
-            common.hint(f"missing {aurora_tree} -- see setup/README.md "
-                        "for the cmake recipe (same shape as the Windows Aurora trees, NDK-toolchained)")
+            missing.append(f"{aurora_tree} -- see setup/README.md for the cmake recipe "
+                           "(same shape as the Windows Aurora trees, NDK-toolchained)")
         if not os.path.exists(nod_lib):
-            common.hint(f"missing {nod_lib} -- run `python tools/fetch_nod.py --android` "
-                        "(needs the self-contained rust toolchain; see that script's docstring)")
-        common.info("skipping the windowed Android graphics build; the headless row above still stands")
-        return None
+            missing.append(f"{nod_lib} -- run `python tools/fetch_nod.py --android` "
+                           "(needs the self-contained rust toolchain; see that script's docstring)")
+        raise common.SetupError(
+            "the Android windowed (aurora/SDL3/Dawn) graphics build can't run here, so no APK can be "
+            "produced:\n    " + "\n    ".join(missing),
+            hint="provision the above and re-run with --android (the headless row that already built "
+                 "is still in build/android/)")
 
     common.info("building the Android windowed row: libmp6game.so (aurora/SDL3/Dawn) -> build/android/aurora/, "
                 "staging jniLibs for platforms/android")
@@ -177,16 +183,22 @@ def print_onboarding_note():
 
 
 def run_android_lane(native_root, jobs=None, assume_yes=False, skip_apk=False):
+    """--android was explicitly asked for, so every row it implies is REQUIRED:
+    a missing SDK/NDK or missing graphics deps raises instead of quietly
+    returning an empty result the caller then prints "Done" over."""
     sdk, ndk = ensure_android_toolchain()
     if not sdk or not ndk:
         print_onboarding_note()
-        return {"headless": None, "windowed": None, "apk": None}
+        raise common.SetupError(
+            "--android: no Android SDK/NDK found, so the Android lane produced nothing",
+            hint="follow the SDK/NDK recipe printed above, then re-run with --android "
+                 "(drop --android to build the desktop rows only)")
     _ensure_local_properties(sdk)
 
     result = {"headless": None, "windowed": None, "apk": None}
     result["headless"] = build_headless(native_root, jobs=jobs)
     result["windowed"] = build_windowed(native_root, jobs=jobs)
-    if result["windowed"] and not skip_apk:
+    if not skip_apk:
         result["apk"] = build_apk(native_root)
     print_onboarding_note()
     return result

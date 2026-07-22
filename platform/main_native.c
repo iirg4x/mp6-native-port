@@ -163,6 +163,7 @@ extern int mp6_launcher_cfg_vsync(void);
 extern int mp6_launcher_cfg_msaa(void); /* Anti-Aliasing (MSAA): aurora_initialize-time, restart-pending like backend/vsync */
 extern int mp6_launcher_cfg_post_aa(void); /* Anti-Aliasing P2 (FXAA): AuroraPostAA value, applied LIVE (not restart-pending) */
 extern float mp6_launcher_cfg_ssaa(void);  /* Anti-Aliasing P3 (SSAA): AuroraConfig.ssaa factor, aurora_initialize-time, restart-pending (desktop-only) */
+extern void mp6_launcher_note_session_aa(int msaa, float ssaa, int postAa); /* Anti-Aliasing: what aurora ACTUALLY got this session (config + env levers resolved) */
 extern int mp6_launcher_cfg_aspect_locked(void); /* A5: gameplay-time-only aspect policy */
 extern int mp6_launcher_cfg_widescreen(void); /* gameplay-time-only dynamic-widescreen policy */
 extern void mp6_launcher_apply_display_settings(void *sdlWindow);
@@ -334,12 +335,6 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     if (launcherMode) {
         config.desiredBackend = (AuroraBackend)mp6_launcher_cfg_backend();
         config.vsync = mp6_launcher_cfg_vsync() ? true : false;
-        /* Anti-Aliasing P1 (docs history: MSAA 4x): aurora_initialize-time
-         * parameter like backend/vsync above -- aurora already builds the
-         * multisampled targets/resolve/per-pipeline sampleCount off this
-         * one value; the port previously never set it (zero-init default,
-         * which aurora itself clamps to 1/off). */
-        config.msaa = (uint32_t)mp6_launcher_cfg_msaa();
     } else {
         /* Automation/straight-boot: default vsync OFF. A drive that only needs
          * to REACH a screen shouldn't be paced down to the display refresh
@@ -352,31 +347,39 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
          * it (e.g. tearing-free capture of a moving scene). */
         const char *vs = getenv("MP6_VSYNC");
         config.vsync = (vs != NULL && vs[0] == '1') ? true : false;
-        /* MP6_MSAA env lever, mirroring MP6_VSYNC just above: automation
-         * mode never reads mp6_config.json, so a scripted MSAA hazard/
-         * verification drive (tools/vtest.sh + --input-script) needs its
-         * own lever to force it on, same automation-compatible-test-lever
-         * shape as MP6_VSYNC/MP6_WIDESCREEN/MP6_SHADOW_QUALITY. Tolerant:
-         * only "4" turns it on; anything else (unset included) is 1 (off),
-         * matching the config parser's own tolerant clamp. */
+    }
+    /* Anti-Aliasing (MSAA 4x / SSAA 1.5x-2x): aurora_initialize-time parameters
+     * like backend/vsync above -- aurora builds the multisampled targets/resolve/
+     * per-pipeline sampleCount and the scaled content framebuffer off these two
+     * values at that call, which is why the UI calls them restart-pending.
+     *
+     * ENV WINS, IN BOTH MODES. MP6_MSAA / MP6_SSAA are checked FIRST and beat the
+     * saved config, exactly like MP6_SHADOW_QUALITY, MP6_UNLOCKED_FPS and
+     * MP6_WIDESCREEN document themselves ("env lever set: it wins outright").
+     * They used to be read only OUTSIDE launcher mode, which made the launcher's
+     * Anti-Aliasing row grey itself out (settings.cpp isDisabled) for levers that
+     * were then ignored -- the control was locked for no reason. Tolerant parsing
+     * either way: only "4" turns MSAA on, only "1.5"/"2" set an SSAA factor;
+     * anything else (unset included) is off, matching the config parser's own
+     * tolerant clamp, so an unset lever leaves the byte-identical native path. */
+    {
         const char *ms = getenv("MP6_MSAA");
-        config.msaa = (ms != NULL && strcmp(ms, "4") == 0) ? 4 : 1;
+        if (ms != NULL) {
+            config.msaa = (strcmp(ms, "4") == 0) ? 4 : 1;
+        } else {
+            config.msaa = launcherMode ? (uint32_t)mp6_launcher_cfg_msaa() : 1;
+        }
     }
 #ifndef __ANDROID__
-    /* Anti-Aliasing P3 (SSAA, DESKTOP-ONLY): supersample factor for the content
-     * framebuffer (aurora scales it, downsamples via the present resampler;
-     * aurora ignores the field on __ANDROID__ too, but the port never even
-     * sends it there). Launcher mode reads the unified video.aa enum; automation
-     * uses the MP6_SSAA lever (mirrors MP6_MSAA), tolerant: only "1.5"/"2" set a
-     * factor, anything else (unset included) is 1.0 (off -> content fb built at
-     * exactly native, byte-identical). Restart-pending like msaa. */
-    if (launcherMode) {
-        config.ssaa = mp6_launcher_cfg_ssaa();
-    } else {
+    /* SSAA is DESKTOP-ONLY: aurora ignores the field on __ANDROID__ too, but the
+     * port never even sends it there. */
+    {
         const char *ss = getenv("MP6_SSAA");
-        config.ssaa = (ss != NULL && strcmp(ss, "2") == 0)   ? 2.0f
-                      : (ss != NULL && strcmp(ss, "1.5") == 0) ? 1.5f
-                                                               : 1.0f;
+        if (ss != NULL) {
+            config.ssaa = (strcmp(ss, "2") == 0) ? 2.0f : (strcmp(ss, "1.5") == 0) ? 1.5f : 1.0f;
+        } else {
+            config.ssaa = launcherMode ? mp6_launcher_cfg_ssaa() : 1.0f;
+        }
     }
 #endif
 #ifdef __ANDROID__
@@ -405,22 +408,52 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     printf("[BOOT] calling aurora_initialize() before GameMain() reaches the game's GXInit\n");
     fflush(stdout);
     AuroraInfo info = aurora_initialize(argc, argv, &config);
-    /* Anti-Aliasing P2 (FXAA): a live post-process, applied here right after
-     * aurora is up rather than through AuroraConfig (unlike msaa) -- so it is
-     * NOT restart-pending. Launcher mode reads the unified video.aa enum; a
-     * later in-menu change re-applies itself live via settings.cpp. Automation
-     * uses the MP6_FXAA lever (mirrors MP6_MSAA), tolerant: only "1" turns it
-     * on, anything else (unset included) is off. Off is a no-op -- the shader's
-     * post_aa_mode stays 0, the present path byte-identical. */
+    /* Anti-Aliasing (FXAA): a live post-process, applied here right after aurora
+     * is up rather than through AuroraConfig (unlike msaa) -- so it is NOT
+     * restart-pending. MP6_FXAA is checked FIRST and wins in BOTH modes, same
+     * "env wins outright" contract as MP6_MSAA/MP6_SSAA above; tolerant, only
+     * "1" turns it on. Off is a no-op -- the shader's post_aa_mode stays 0, the
+     * present path byte-identical.
+     *
+     * The resolved trio is then reported to the launcher: it is the only place
+     * that knows what aurora ACTUALLY got (config after env override), and the
+     * settings row needs it to keep the modes mutually exclusive at runtime --
+     * see mp6_launcher_aa_apply_live() (launcher_core.cpp). */
     {
+        const char *fx = getenv("MP6_FXAA");
         int fxaaOn;
-        if (launcherMode) {
-            fxaaOn = mp6_launcher_cfg_post_aa();
+        if (fx != NULL) {
+            fxaaOn = (fx[0] == '1') ? 1 : 0;
         } else {
-            const char *fx = getenv("MP6_FXAA");
-            fxaaOn = (fx != NULL && fx[0] == '1') ? 1 : 0;
+            fxaaOn = launcherMode ? mp6_launcher_cfg_post_aa() : 0;
+        }
+        /* Mutually exclusive at boot too: an init-time mechanism (MSAA/SSAA)
+         * already owns this session's image, so FXAA on top would double-AA. */
+        if (fxaaOn && (config.msaa > 1
+#ifndef __ANDROID__
+                       || config.ssaa > 1.0f
+#endif
+                       )) {
+            printf("[BOOT] AA: FXAA suppressed -- this session initialized with "
+                   "MSAA %ux / SSAA %.2fx (one AA mechanism at a time)\n",
+                   (unsigned)config.msaa,
+#ifndef __ANDROID__
+                   (double)config.ssaa
+#else
+                   1.0
+#endif
+            );
+            fflush(stdout);
+            fxaaOn = 0;
         }
         aurora_set_post_aa(fxaaOn ? AURORA_POST_AA_FXAA : AURORA_POST_AA_NONE);
+        mp6_launcher_note_session_aa((int)config.msaa,
+#ifndef __ANDROID__
+                                     config.ssaa,
+#else
+                                     1.0f,
+#endif
+                                     fxaaOn);
     }
     /* Normal-window placement + the WINDOW half of the fixed-aspect policy
      * (bordered windowed window, interactive resizes constrained to 4:3).

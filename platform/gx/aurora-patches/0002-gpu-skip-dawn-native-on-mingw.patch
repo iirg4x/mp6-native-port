@@ -51,7 +51,7 @@ else in initialize() is untouched and still runs.
 
 --- a/lib/webgpu/gpu.cpp
 +++ b/lib/webgpu/gpu.cpp
-@@ -21,7 +21,9 @@
+@@ -23,5 +23,7 @@
  #ifdef WEBGPU_DAWN
  #include "../dawn/BackendBinding.hpp"
  #include "../dawn/TracyPlatform.hpp"
@@ -62,9 +62,9 @@ else in initialize() is untouched and still runs.
  #endif
 
 @@ -760,7 +762,16 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
-         wgpu::InstanceFeatureName::TimedWaitAny,
+         .requiredFeatureCount = requiredInstanceFeatures.size(),
+         .requiredFeatures = requiredInstanceFeatures.data(),
      };
-     wgpu::InstanceDescriptor instanceDescriptor{...};
 -#ifdef WEBGPU_DAWN
 +#if defined(WEBGPU_DAWN) && !defined(__MINGW32__)
 +    // dawn::native::DawnInstanceDescriptor is Dawn's C++ "native" extension API
