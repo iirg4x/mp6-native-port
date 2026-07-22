@@ -26,6 +26,7 @@ await import("./path-safe.test.js");
 await import("./zip-roundtrip.test.js");
 await import("./folder-source.test.js");
 await import("./directory-sink.test.js");
+await import("./zip-stream-sink.test.js");
 await import("./iso-source.test.js");
 await import("./packager.test.js");
 await import("./integration/real-iso.test.js");
