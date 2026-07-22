@@ -8,7 +8,8 @@ overlays are compiled directly from the decompiled source (see
 layer they call into (GX/OS/VI/PAD/DVD/CARD/MSM) is reimplemented on top of
 [Aurora](https://github.com/encounter/aurora), SDL3, and a small host-OS
 seam. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
-breakdown.
+breakdown, or [docs/CODE_MAP.md](docs/CODE_MAP.md) for where everything
+lives in this repo.
 
 ## Get it
 
@@ -41,19 +42,15 @@ copyrighted assets pulled from your disc, not this project's own work; see
 [docs/RELEASING.md](docs/RELEASING.md) for how release assets themselves are
 built and what they do and don't contain.
 
-## Quick start — build and play from your own disc
+## Quick start — build from your own disc
 
 **You supply your own Mario Party 6 (USA) disc. No game data is distributed
-here, ever, in any form.** Prebuilt engine binaries are available via
-[Get it](#get-it) above, but they're content-free (no game assets; the code is this
-project's own decompiled/reimplemented source)
-— turning them into something playable always assembles a runnable build on
-your own machine from your own disc plus the decompiled source, so nothing
-containing game code or assets is ever redistributed by this project. The
-rest of this section builds that same result from source instead of via the
-prebuilt engine.
+here, ever, in any form.** (Prebuilt, content-free engine binaries are also
+available via [Get it](#get-it) above -- both paths converge on the same
+runnable-build-from-your-own-disc result; this section builds it from
+source instead.)
 
-The easiest path is the setup tool. It checks prerequisites, fetches the
+**Recommended: the setup tool.** It checks prerequisites, fetches the
 toolchain and the decompilation, extracts the assets it needs from your disc
 locally, and builds a playable `dist/`:
 
@@ -64,21 +61,10 @@ setup.bat --disc "path\to\Mario Party 6 (USA).iso"
 (or double-click `setup.bat` / run `python setup/setup.py`; add `--android` to
 also build the APK). Accepts `.iso` / `.rvz` / `.gcm` or an already-extracted
 folder. See [`setup/README.md`](setup/README.md) and
-[`docs/SETUP_TOOL.md`](docs/SETUP_TOOL.md); to build by hand instead, see
-[`docs/BUILDING.md`](docs/BUILDING.md).
+[`docs/SETUP_TOOL.md`](docs/SETUP_TOOL.md).
 
-## Status
-
-Boots to a fully navigable title screen, file-select, and mode-select, with
-real audio (streamed music and sound effects) and working save/load against
-Dolphin-compatible memory card images. Windows ships a pre-boot settings
-launcher; Android runs the same game logic touch-driven on device. Gameplay
-past the menu (the board and minigames) is out of scope for now -- see
-"Non-goals" below.
-
-## Quick start
-
-**Windows**, from this directory:
+**Manual build**, if you already have the toolchain and decompilation set up
+yourself -- **Windows**, from this directory:
 
 ```
 python tools/build.py                    # windowed build -> build/mp6native.exe
@@ -93,8 +79,18 @@ cd platforms/android && gradlew.bat assembleDebug
 ```
 
 Install the resulting APK and launch it; first run walks through picking the
-game's disc files on-device. See [docs/BUILDING.md](docs/BUILDING.md) for
-prerequisites, the headless/CI build rows, and troubleshooting.
+game's disc files on-device. Either path: see
+[docs/BUILDING.md](docs/BUILDING.md) for prerequisites, the headless/CI
+build rows, and troubleshooting.
+
+## Status
+
+Boots to a fully navigable title screen, file-select, and mode-select, with
+real audio (streamed music and sound effects) and working save/load against
+Dolphin-compatible memory card images. Windows ships a pre-boot settings
+launcher; Android runs the same game logic touch-driven on device. Gameplay
+past the menu (the board and minigames) is out of scope for now -- see
+"Non-goals" below.
 
 ## Launcher and settings
 
