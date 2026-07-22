@@ -5,16 +5,16 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 @@ -173,0 +177,20 @@
-+/* MP6 native port -- M13 (docs/M13_MENUS_TO_REFERENCE.md): decode guard.
-+ * The menu-scene "vertices all over the place" hunt traced corrupt HSF face
-+ * indices to the DECODED DATA BLOB (bad already at parse time, float-flavored
-+ * garbage, nondeterministic between runs). This choke point logs, for
-+ * MP6_DECODE_GUARD=1, every decompression: type, dst range, expected size,
-+ * BYTES ACTUALLY WRITTEN (an overrun writes into neighboring heap blocks --
-+ * the prime stomp suspect), leftover size counter (u32 underflow detector),
-+ * and a djb2 checksum of the output (two runs diff run-to-run
-+ * nondeterminism per decode). Zero output and one cached getenv when unset.
-+ * PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++/* Decode guard. The menu-scene "vertices all over the place" hunt traced
++ * corrupt HSF face indices to the DECODED DATA BLOB (bad already at parse
++ * time, float-flavored garbage, nondeterministic between runs). This
++ * choke point logs, for MP6_DECODE_GUARD=1, every decompression: type,
++ * dst range, expected size, BYTES ACTUALLY WRITTEN (an overrun writes
++ * into neighboring heap blocks -- the prime stomp suspect), leftover size
++ * counter (u32 underflow detector), and a djb2 checksum of the output
++ * (two runs diff run-to-run nondeterminism per decode). Zero output and
++ * one cached getenv when unset. Diagnostic only: prints state, never
++ * changes behavior. */
 +static int mp6DecodeGuardFlag = -1;
 +static int mp6DecodeGuardOn(void)
 +{
@@ -26,7 +26,7 @@
 +}
 +
 @@ -213,0 +237,15 @@
-+    if (mp6DecodeGuardOn()) { /* M13 decode guard -- see mp6DecodeGuardOn above */
++    if (mp6DecodeGuardOn()) { /* decode guard -- see mp6DecodeGuardOn above */
 +        unsigned char *d0 = (unsigned char *)dst;
 +        long long wrote = (long long)(decodeP->dst - d0); /* dst-advancing decoders only */
 +        unsigned int sum = 5381u;

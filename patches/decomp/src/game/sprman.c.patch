@@ -6,57 +6,44 @@
 +#include <stdio.h>
 @@ -8,0 +12,37 @@
 +
-+/* MP6 native port -- docs/M2E_MILESTONE.md. This TU calls mtxTransCat
-+ * (HuSprBegin, below) with NO prototype anywhere in its own #include chain
-+ * in scope (confirmed by direct check: game/sprite.h/game/memory.h/
-+ * game/init.h -- this file's only includes -- neither declare it nor
-+ * transitively pull in game/hu3d.h, the ONE header in the whole decomp
-+ * tree that does, at line 545; game/sprput.c, whose own mtxTransCat calls
-+ * this bug does NOT affect, has its own local prototype 4 lines into that
-+ * file for exactly this reason). Calling a function taking `float`
-+ * parameters with no visible prototype is genuinely undefined behavior in
-+ * C -- the call site, having no prototype, applies the default argument
-+ * promotions (float -> double) to gp->pos.x/gp->pos.y, while
-+ * mtxTransCat's real definition (game/hsfdraw.c) declares plain `float x,
-+ * float y, float z` parameters, expecting the FLOAT (not promoted-double)
-+ * calling convention. Real PowerPC/MWCC's own float-argument ABI passes
-+ * the first several floating-point arguments in dedicated float registers
-+ * (f1-f13) that a callee reads back at its OWN declared width regardless
-+ * of what width the (unprototyped) caller assumed it was sending -- this
-+ * exact mismatch is harmless there, so it shipped unnoticed. This port's
-+ * x86-64 target does NOT tolerate the same mismatch (confirmed
-+ * empirically, not just theoretically: a temporary debug print at the
-+ * exact call site showed gp->pos correctly read as (16.0,364.0)
-+ * immediately before the call, yet the resulting gp->mtx translation came
-+ * back as exactly gp->center with gp->pos's own contribution silently
-+ * dropped entirely -- the signature of corrupted/misrouted float
-+ * arguments, not a logic bug). Confirmed as the root cause of every
-+ * message window rendering pinned to a fixed top-left-ish position
-+ * (matching gp->center alone) instead of its own real, requested
-+ * HuWinCreate position: adding this prototype (the EXACT signature
-+ * game/hu3d.h already establishes elsewhere in this same codebase)
-+ * restores the correct float-argument ABI at this call site and fixed it,
-+ * verified by screenshot. Same bug SHAPE (real, latent, PowerPC-ABI-
-+ * tolerant UB exposed by this port's different architecture) as
-+ * docs/M2A_ENDIANNESS.md's frsqrte fix and docs/M2D_MENUS.md's frandmod
-+ * divide-by-zero fix -- not a decompilation error, nothing to "fix" in
-+ * the sense of changing observable behavior on real hardware. */
++/* This TU calls mtxTransCat (HuSprBegin, below) with no prototype anywhere
++ * in its own #include chain (game/hu3d.h, the one header in the decomp
++ * tree that declares it, is never pulled in here). Calling a function that
++ * takes float parameters with no visible prototype is undefined behavior
++ * in C: the call site applies default argument promotion (float->double)
++ * to gp->pos.x/gp->pos.y, while mtxTransCat's real definition
++ * (game/hsfdraw.c) declares plain float parameters. Real PowerPC/MWCC's
++ * float-argument ABI passes floating-point arguments in dedicated float
++ * registers that a callee reads back at its own declared width regardless
++ * of what the (unprototyped) caller assumed, so this exact mismatch was
++ * harmless there and shipped unnoticed. This port's x86-64 target does NOT
++ * tolerate the same mismatch -- confirmed empirically: gp->pos read
++ * correctly as (16.0,364.0) immediately before the call, yet the resulting
++ * translation came back as exactly gp->center with gp->pos's own
++ * contribution silently dropped, the signature of corrupted/misrouted
++ * float arguments. This was the root cause of every message window
++ * rendering pinned to a fixed position instead of its own requested
++ * HuWinCreate position; adding this prototype (the exact signature
++ * game/hu3d.h already establishes) restores the correct float-argument ABI
++ * and fixes it. Same bug shape (real, latent, PowerPC-ABI-tolerant UB
++ * exposed by this port's different architecture) as two other fixes in
++ * this codebase (an frsqrte unsigned-shift issue and an frandmod
++ * divide-by-zero) -- not a decompilation error, nothing that changes
++ * observable behavior on real hardware. */
 +void mtxTransCat(Mtx dst, float x, float y, float z);
 @@ -142,0 +183,20 @@
 +            return sp;
 +        }
-+        /* MP6 native port -- M3 (docs/M3_HSF.md). Defensive net kept even
-+         * after root-causing and fixing the real bug (mp6_animCacheRemove(),
-+         * this file's own HuSprAnimKill, below): a stale mp6_animCache[]
-+         * entry surviving past its ANIMDATA's own free was traced (via a
-+         * temporary per-call diagnostic dump, ~14,600 clean calls then one
-+         * genuine access violation) to a bank->frame field reading back as
-+         * exactly address -1 -- not a real pointer, just whatever bytes now
-+         * occupy memory that was freed and reused for something else,
-+         * because the cache never purged its entry on free. Left in place,
-+         * logged once, as a last-resort safety net -- cheap, and correct
-+         * behavior (skip this sprite's frame/pat lookup for one call rather
-+         * than fault) even if some future change reopens a similar gap. */
++        /* Defensive net kept even after root-causing and fixing the real
++         * bug (mp6_animCacheRemove(), this file's own HuSprAnimKill,
++         * below): a stale mp6_animCache[] entry surviving past its
++         * ANIMDATA's own free was traced to a bank->frame field reading
++         * back as whatever bytes now occupy freed-and-reused memory,
++         * because the cache never purged its entry on free. Left in
++         * place, logged once, as a last-resort safety net -- cheap, and
++         * correct behavior (skip this sprite's frame/pat lookup for one
++         * call rather than fault) even if some future change reopens a
++         * similar gap. */
 +        if (!sp->data || sp->bank < 0 || sp->bank >= sp->data->bankNum ||
 +            sp->data->bank[sp->bank].frame == NULL ||
 +            sp->animNo < 0 || sp->animNo >= sp->data->bank[sp->bank].timeNum) {
@@ -64,9 +51,8 @@
 +            sp->frameP = NULL;
 +            sp->patP = NULL;
 @@ -217,0 +278,210 @@
-+/* MP6 native port -- BE fixup + 32-on-64-bit pointer relayout.
-+ * See docs/M2A_ENDIANNESS.md. Two independent problems live in this one
-+ * chokepoint:
++/* BE fixup + 32-on-64-bit pointer relayout. Two independent problems live
++ * in this one chokepoint:
 + *
 + * 1. Every multi-byte field in the packed ANIM blob (produced by the
 + *    original big-endian PowerPC toolchain) is big-endian; a plain
@@ -74,11 +60,11 @@
 + * 2. ANIMDATA/ANIMBANK/ANIMPAT/ANIMBMP each embed one or more real
 + *    pointer-typed fields (bank/pat/bmp, frame, layer, palData/data).
 + *    Those fields are 4 bytes on the original 32-bit target but 8 bytes in
-+ *    this native 64-bit build (docs/PLAN.md A1), so the record STRIDES
-+ *    differ from what the packed blob actually contains -- walking this
-+ *    data through the native struct types in place (as the original code
-+ *    did, relying on real hardware's matching 32-bit ABI) reads the wrong
-+ *    bytes entirely, a separate bug from pure byte order.
++ *    this native 64-bit build, so the record STRIDES differ from what the
++ *    packed blob actually contains -- walking this data through the
++ *    native struct types in place (as the original code did, relying on
++ *    real hardware's matching 32-bit ABI) reads the wrong bytes entirely,
++ *    a separate bug from pure byte order.
 + *
 + * Fixed by treating `data` as an opaque byte blob laid out per the
 + * ORIGINAL (32-bit, big-endian) ANIM format -- read explicitly via be16()/
@@ -89,86 +75,68 @@
 + * layout byte-for-byte; only their s16 fields need swapping. Raw texture/
 + * palette PIXEL bytes (ANIMBMP.data/.palData) are deliberately NOT copied
 + * or byte-swapped -- they stay exactly where the decoder put them and are
-+ * consumed as opaque GameCube-native tiled/paletted texture data
-+ * (docs/PLAN.md A3 point 1); only the CPU-parsed container fields above
-+ * them are converted here.
++ * consumed as opaque GameCube-native tiled/paletted texture data; only the
++ * CPU-parsed container fields above them are converted here.
 + *
 + * A small side-table cache (mirroring platform/os/dll_bridge.c's own
-+ * open-file side table) reproduces the original's "already fixed up,
-+ * just bump the refcount" fast path -- the original detected that case by
++ * open-file side table) reproduces the original's "already fixed up, just
++ * bump the refcount" fast path -- the original detected that case by
 + * testing the high bits of the still-packed `bank` OFFSET against a real
 + * pointer's high bits, a test that doesn't transfer once fixed-up data no
 + * longer lives at the same address as its own packed source. */
-+/* M3 (docs/M3_HSF.md), round 3: 64 was already tight for a full boot's
-+ worth of ANIM objects (79 character anims alone in one opening.c loop);
-+ the two self-registration fixes above double the fill rate (each
-+ HuSprAnimRead/HuSprAnimMake call can now add TWO entries, input and
-+ output identity, instead of one). A linear scan over a few thousand
-+ pointer-sized slots costs nothing measurable at this call frequency
-+ (load-time, not per-frame), so there's no real downside to a generous
-+ budget here. */
++/* This cache's budget: 64 was already tight for a full boot's worth of
++ * ANIM objects (79 character anims alone in one loop); the two
++ * self-registration fixes below double the fill rate (each
++ * HuSprAnimRead/HuSprAnimMake call can now add TWO entries, input and
++ * output identity, instead of one). A linear scan over a few thousand
++ * pointer-sized slots costs nothing measurable at this call frequency
++ * (load-time, not per-frame). */
 +#define MP6_ANIM_CACHE_MAX 4096
 +static struct { void *rawData; ANIMDATA *anim; u32 fingerprint; } mp6_animCache[MP6_ANIM_CACHE_MAX];
 +
-+/* MP6 native port -- B2 (docs/B2_BONUS_SPRITE.md). The cache above assumes
-+ * a cached entry's key address can only be reused once HuSprAnimKill has
-+ * removed it (mp6_animCacheRemove, below) -- true for per-object teardown,
-+ * but NOT for the engine's own BULK, tag-based frees (game/objmain.c /
-+ * REL/bootDll/boot.c: `HuMemDirectFreeNum(HEAP_MODEL, HU_MEMNUM_OVL)`,
-+ * fired wholesale on every overlay transition). That call reclaims a whole
-+ * heap region in one shot without walking individual objects, so it never
-+ * runs HuSprAnimKill/mp6_animCacheRemove for anything it frees -- every
++/* The cache above assumes a cached entry's key address can only be reused
++ * once HuSprAnimKill has removed it (mp6_animCacheRemove, below) -- true
++ * for per-object teardown, but NOT for the engine's own BULK, tag-based
++ * frees (game/objmain.c / REL/bootDll/boot.c:
++ * `HuMemDirectFreeNum(HEAP_MODEL, HU_MEMNUM_OVL)`, fired wholesale on
++ * every overlay transition). That call reclaims a whole heap region in
++ * one shot without walking individual objects, so it never runs
++ * HuSprAnimKill/mp6_animCacheRemove for anything it frees -- every
 + * mp6_animCache entry keyed by an address inside that region survives,
 + * silently describing memory that no longer holds what it used to. The
-+ * NEXT overlay's own HuDataSelHeapReadNum calls are free to reuse those
-+ * same addresses. Confirmed concretely: Party Mode's mdpartydll loads 41
-+ * same-shaped icon ANIM files into freshly decompressed HU_MEMNUM_OVL/
-+ * HEAP_MODEL buffers, and the Bonus Star with/without-bonus icon (dataNo
-+ * 36/37, `data/mdparty.bin` file 0x49/0x4A, genuinely 128x128 CI8/GX_TF_C8
-+ * with a 160-entry RGB5A3 TLUT -- confirmed via tools/gc_tex_decode.py
-+ * against the disc file's own offline-decompressed bytes, which decode to
-+ * a clean "With Bonus"/"Without Bonus" hexagon) landed on an address a
-+ * stale entry from an earlier overlay's own icon table still claimed.
-+ * mp6_animCacheFind then returned that stale, unrelated ANIMDATA (a
-+ * genuinely RGB565-format icon: dataFmt=1, palNum=0) instead of parsing
-+ * the fresh, correct C8 bytes -- and because its own bmp->data/palData
-+ * were computed relative to ITS OWN (also address-reused) raw buffer, they
-+ * still resolved INTO the new resource's real pixel data, just at the old
-+ * asset's relative offset (+0x80, the true palOff, instead of the correct
-+ * +0x1C0 dataOff) -- so the port read real C8 index bytes as RGB5A3 color
-+ * pairs (a smeared top) and then overran 16KB past the resource's own
-+ * pixel data into whatever followed (pure noise below): exactly the
-+ * reported "jumble of colored blocks". MP6_DECODE_GUARD proved the live
-+ * zlib decompress (decodeType 7) produced byte-identical output to the
-+ * offline reference (checksum match); MP6_DRAW_CENSUS_OBJ caught the live
-+ * parse's dataFmt=1/palNum=0/data==palData red-handed -- decompression and
-+ * the parsing FORMULAS are both innocent; only a stale cache HIT explains
-+ * a correct buffer's bytes being described by someone else's format.
++ * next overlay's own loads are free to reuse those same addresses.
++ *
++ * Confirmed concretely: Party Mode loads dozens of same-shaped icon ANIM
++ * files into freshly decompressed buffers, and the Bonus Star icon landed
++ * on an address a stale entry from an earlier overlay's own icon table
++ * still claimed. The cache then returned that stale, unrelated ANIMDATA
++ * (a different pixel format) instead of parsing the fresh bytes -- and
++ * because its own data/palette pointers were computed relative to its own
++ * (also address-reused) raw buffer, they still resolved into the new
++ * resource's real pixel data, just at the old asset's relative offset --
++ * so the port read real index bytes as differently-formatted color pairs
++ * (a smeared image) and then overran past the resource's own pixel data
++ * into whatever followed: exactly a reported "jumble of colored blocks".
 + *
 + * Fix (this check): store a small content FINGERPRINT alongside each cache
-+ * entry at add-time (a cheap hash over a couple of STABLE header bytes at
-+ * the key address -- [0,6) and [8,16), deliberately skipping ANIMDATA's
-+ * own useNum field at [6,8), which legitimately changes across repeat
-+ * lookups of a genuinely still-valid self-registered entry). On a hit,
-+ * recompute the SAME fingerprint over what's actually at that address
++ * entry at add-time (a cheap hash over a couple of STABLE header bytes,
++ * deliberately skipping ANIMDATA's own useNum field, which legitimately
++ * changes across repeat lookups of a genuinely still-valid entry). On a
++ * hit, recompute the SAME fingerprint over what's actually at that address
 + * RIGHT NOW; a mismatch means the bytes underneath changed since this
 + * entry was added -- i.e. the address was reclaimed and reused without
-+ * ever going through mp6_animCacheRemove -- so treat it as a MISS (clear
-+ * the stale slot, keep scanning, fall through to a fresh, correct parse)
-+ * instead of trusting a pointer match against memory that may no longer
-+ * hold what it once did.
++ * ever going through mp6_animCacheRemove -- so treat it as a MISS instead
++ * of trusting a pointer match against memory that may no longer hold what
++ * it once did.
 + *
-+ * NOTE, recorded honestly: this check alone measured as a no-op in-game
-+ * for the exact Bonus Star repro (rebuilt, re-ran, byte-identical output)
-+ * -- because this game ships many same-sized, same-shape single-image
-+ * ANIM icons (every simple confirm-screen badge shares byte-identical
-+ * bankNum/patNum/bmpNum/bankOff/patOff), a stale entry from any OTHER
++ * NOTE, recorded honestly: this check alone measured as a no-op for the
++ * exact Bonus Star repro, because this game ships many same-sized,
++ * same-shape single-image ANIM icons -- a stale entry from any OTHER
 + * same-shaped icon fingerprints identically to the correct one. Kept as a
 + * second, narrower defense (it does catch a collision against a
-+ * DIFFERENTLY shaped stale object); the real fix is
-+ * mp6_animCacheClear(), below, called from the one place that actually
-+ * performs this class of bulk reclaim (docs/B2_BONUS_SPRITE.md section 5
-+ * has the full writeup of why this check alone wasn't sufficient). */
++ * differently-shaped stale object); the real fix is mp6_animCacheClear(),
++ * below, called from the one place that actually performs this class of
++ * bulk reclaim. */
 +static u32 mp6_animFingerprint(const void *p)
 +{
 +    const u8 *b = (const u8 *)p;
@@ -192,7 +160,7 @@
 +                return mp6_animCache[i].anim;
 +            }
 +            /* Stale: this address no longer holds what was cached (see the
-+             * B2 comment above). Drop it and keep looking -- a duplicate,
++             * comment above). Drop it and keep looking -- a duplicate,
 +             * still-valid entry could exist further along -- rather than
 +             * trusting it or giving up early. */
 +            mp6_animCache[i].rawData = NULL;
@@ -218,20 +186,18 @@
 +     * instead of sharing/refcounting one. */
 +}
 +
-+/* MP6 native port -- M3 (docs/M3_HSF.md). Real root-cause fix: this table
-+ * has no expiry, but the ANIMDATA objects it references DO get freed
-+ * (HuSprAnimKill, below, once useNum drops to 0) -- called from here right
-+ * before the real HuMemDirectFree(anim), so no stale entry can ever
-+ * outlive the memory it points at. Purges EVERY slot whose key OR value
-+ * matches `anim`: a self-registered entry (this file's own
-+ * HuSprAnimRead/HuSprAnimMake fixes, above) has rawData==anim==this exact
-+ * pointer; an original raw-packed-data-keyed entry has anim==this pointer
-+ * but a DIFFERENT rawData key (the still-packed source blob) -- both need
-+ * to go, since either one, left stale, lets a future allocation that
-+ * happens to reuse this exact freed address get a false-positive cache
-+ * hit against semantically unrelated (or simply no-longer-valid) data.
-+ * A linear scan over a few thousand slots costs nothing measurable at
-+ * this call frequency (once per sprite/model teardown, not per-frame). */
++/* Real root-cause fix: this table has no expiry, but the ANIMDATA objects
++ * it references DO get freed (HuSprAnimKill, below, once useNum drops to
++ * 0) -- called from here right before the real HuMemDirectFree(anim), so
++ * no stale entry can ever outlive the memory it points at. Purges EVERY
++ * slot whose key OR value matches `anim`: a self-registered entry has
++ * rawData==anim==this exact pointer; an original raw-packed-data-keyed
++ * entry has anim==this pointer but a DIFFERENT rawData key (the still-
++ * packed source blob) -- both need to go, since either one, left stale,
++ * lets a future allocation that happens to reuse this exact freed address
++ * get a false-positive cache hit against unrelated data. A linear scan
++ * over a few thousand slots costs nothing measurable at this call
++ * frequency (once per sprite/model teardown, not per-frame). */
 +static void mp6_animCacheRemove(ANIMDATA *anim)
 +{
 +    s16 i;
@@ -243,27 +209,23 @@
 +    }
 +}
 +
-+/* MP6 native port -- B2 (docs/B2_BONUS_SPRITE.md). Companion to the
-+ * fingerprint check above: that check only catches a stale hit whose
-+ * cached CONTENT fingerprint no longer matches what is now at the same
-+ * address -- it cannot catch a collision between two objects that
-+ * legitimately share the SAME header shape (see that check's own comment).
-+ * The real, deterministic fix is not "detect staleness harder", it's
-+ * "don't let a stale entry exist across the one event that actually
-+ * invalidates a whole batch of them at once": game/objmain.c's
-+ * omOvlKill() calls this right after its own `HuMemDirectFreeNum
-+ * (HEAP_MODEL, HU_MEMNUM_OVL)` bulk reclaim -- see that call site's own
-+ * comment for the full mechanism. A flat wipe (not a range-aware partial
-+ * purge) is deliberate: every entry this cache can hold was added by an
-+ * HuSprAnimRead/HuSprAnimMake call, and every one of those is reached
-+ * (directly or via Hu3DAnimCreate) from game code that runs inside SOME
-+ * overlay's own lifetime -- HU_MEMNUM_OVL is, by this engine's own
-+ * convention, exactly "freed in bulk when that overlay unloads", so
-+ * anything meant to survive past that point would need a different
-+ * heap/tag already, independent of this cache. A handful of needless
-+ * re-parses of still-valid data on the next overlay's own first frame
-+ * (the only cost of over-clearing) is cheap load-time work, not a
-+ * per-frame one. */
++/* Companion to the fingerprint check above: that check only catches a
++ * stale hit whose cached CONTENT fingerprint no longer matches what is
++ * now at the same address -- it cannot catch a collision between two
++ * objects that legitimately share the SAME header shape. The real,
++ * deterministic fix is not "detect staleness harder", it's "don't let a
++ * stale entry exist across the one event that actually invalidates a
++ * whole batch of them at once": game/objmain.c's omOvlKill() calls this
++ * right after its own bulk HEAP_MODEL/HU_MEMNUM_OVL reclaim -- see that
++ * call site's own comment for the full mechanism. A flat wipe (not a
++ * range-aware partial purge) is deliberate: every entry this cache can
++ * hold is reached from game code that runs inside some overlay's own
++ * lifetime, and HU_MEMNUM_OVL is, by this engine's own convention, exactly
++ * "freed in bulk when that overlay unloads" -- anything meant to survive
++ * past that point would need a different heap/tag already, independent of
++ * this cache. A handful of needless re-parses of still-valid data on the
++ * next overlay's own first frame is cheap load-time work, not a per-frame
++ * one. */
 +void mp6_animCacheClear(void)
 +{
 +    s16 i;
@@ -420,10 +382,10 @@
 +    }
 +
 +#ifdef MP6_ANIM_DEBUG_DUMP
-+    /* Instrument-first verification (docs/M2A_ENDIANNESS.md) -- parsed-vs-
-+     * expected header fields, kept behind a build flag rather than ripped
-+     * out, since it's cheap and a real aid if a future asset trips this
-+     * parser differently than the boot-warning sprite did. */
++    /* Instrument-first verification -- parsed-vs-expected header fields,
++     * kept behind a build flag rather than ripped out, since it's cheap
++     * and a real aid if a future asset trips this parser differently than
++     * the boot-warning sprite did. */
 +    OSReport("[ANIM] data=%p bankNum=%d patNum=%d bmpNum=%d skeletonSize=%u\n",
 +              data, bankNum, patNum, bmpNum, skeletonSize);
 +    for(i=0; i<bmpNum; i++) {
@@ -446,48 +408,38 @@
 +#endif
 +
 +    mp6_animCacheAdd(data, anim);
-+    /* MP6 native port -- M3 (docs/M3_HSF.md), round 2 of this same gap.
-+     * Also register the OUTPUT under its OWN identity, not just the INPUT
-+     * it was parsed from: REL/bootDll/opening.c's OpeningCreate() passes
-+     * OpeningCharAnim[0] (itself a prior HuSprAnimRead() result -- real
-+     * DVD-sourced ANIM data, read via HuDataSelHeapReadNum) into
-+     * Hu3DAnimCreate(), which re-calls HuSprAnimRead(dataP) on it whenever
-+     * it finds a bitmap-name match -- a second, independent way (alongside
-+     * HuSprAnimMake's own output, fixed above) that an ALREADY-VALID
-+     * native ANIMDATA* reaches this function as if it were still-packed
-+     * bytes. Real hardware's own high-bit check on `anim->bank` (see this
-+     * function's own header comment) caught this shape transparently too,
-+     * for the same reason: this function's OWN result has a real heap
-+     * pointer in that slot. Self-registering the output here closes the
-+     * gap generally (any object this function either recognizes as input
-+     * OR produces as output becomes a valid future lookup key), rather
-+     * than patching each new call shape as it's discovered. */
++    /* Also register the OUTPUT under its OWN identity, not just the INPUT
++     * it was parsed from: REL/bootDll/opening.c's OpeningCreate() passes a
++     * prior HuSprAnimRead() result into Hu3DAnimCreate(), which re-calls
++     * HuSprAnimRead() on it whenever it finds a bitmap-name match -- a
++     * second, independent way (alongside HuSprAnimMake's own output, fixed
++     * above) that an already-valid native ANIMDATA* reaches this function
++     * as if it were still-packed bytes. Real hardware's own high-bit check
++     * on `anim->bank` caught this shape transparently too, for the same
++     * reason: this function's OWN result has a real heap pointer in that
++     * slot. Self-registering the output here closes the gap generally
++     * (any object this function either recognizes as input OR produces as
++     * output becomes a valid future lookup key), rather than patching each
++     * new call shape as it's discovered. */
 +    mp6_animCacheAdd(anim, anim);
 @@ -420,0 +836 @@
-+        mp6_animCacheRemove(anim); /* MP6 native port -- M3 (docs/M3_HSF.md); see mp6_animCacheRemove's own comment. */
++        mp6_animCacheRemove(anim); /* frees this entry before the real free below, see mp6_animCacheRemove's own comment. */
 @@ -685,0 +1102,22 @@
-+    /* MP6 native port -- docs/M2C_MENU_PATH.md. Same fix SHAPE as this
-+     * file's own HuSprAnimRead relayout above (docs/M2A_ENDIANNESS.md):
-+     * ANIMBANK/ANIMPAT/ANIMBMP each embed a real pointer field, so their
-+     * native sizeof() is guaranteed a multiple of 8 (the C standard ties a
-+     * struct's size to its own alignment, and an 8-byte pointer member
-+     * forces 8-byte alignment) -- laying all THREE of them out back-to-
-+     * back keeps every cursor position 8-aligned by construction.
++    /* ANIMBANK/ANIMPAT/ANIMBMP each embed a real pointer field, so their
++     * native sizeof() is guaranteed a multiple of 8 (an 8-byte pointer
++     * member forces 8-byte alignment) -- laying all three of them out
++     * back-to-back keeps every cursor position 8-aligned by construction.
 +     * ANIMFRAME/ANIMLAYER have no pointer fields at all (2-byte alignment
-+     * only) and go LAST, where laxer alignment can't break anything
-+     * (nothing else is carved out after them). The ORIGINAL code
-+     * positionally interleaved ANIMDATA/ANIMBANK/ANIMFRAME/ANIMPAT/
-+     * ANIMLAYER/ANIMBMP (one of each, immediately following) -- harmless
-+     * on the 32-bit original (every one of these structs is a multiple of
-+     * 4 bytes there, and nothing ever needs more than 4-byte alignment),
-+     * but ANIMFRAME sitting between two pointer-bearing structs breaks
-+     * 8-byte alignment here -- caught directly: a real "misaligned
-+     * address ... for type 'ANIMPAT', which requires 8 byte alignment"
-+     * crash, not a guess, the first time OpeningCreate() (the boot flow's
-+     * own frame-buffer-copy sprite, downstream of the M2c HSF stub
-+     * finally letting BootTitleCreate() return) called this function.
-+     * Total allocation size is unchanged -- same 6 sizeof()s summed, just
-+     * carved out in a different order. */
++     * only) and go LAST, where laxer alignment can't break anything. The
++     * ORIGINAL code positionally interleaved ANIMDATA/ANIMBANK/ANIMFRAME/
++     * ANIMPAT/ANIMLAYER/ANIMBMP (one of each, immediately following) --
++     * harmless on the 32-bit original (every one of these structs is a
++     * multiple of 4 bytes there), but ANIMFRAME sitting between two
++     * pointer-bearing structs breaks 8-byte alignment here -- caught
++     * directly via a real misaligned-address crash, the first time a
++     * frame-buffer-copy sprite downstream of the HSF stub called this
++     * function. Total allocation size is unchanged -- same 6 sizeof()s
++     * summed, just carved out in a different order. */
 @@ -688 +1126,5 @@
 -    frame = temp = ((char *)temp+sizeof(ANIMBANK));
 +    pat = temp = ((char *)temp+sizeof(ANIMBANK));
@@ -505,32 +457,24 @@
 -    anim->bmp = bmp;
 @@ -731,0 +1170,30 @@
 +
-+    /* MP6 native port -- M3 (docs/M3_HSF.md). HuSprAnimRead's own
-+     * "already fixed up, just bump the refcount" fast path (this same
-+     * patch queue, above) is a cache keyed by exact pointer identity --
-+     * added to replace real hardware's own check (`(u32)anim->bank &
-+     * 0xFFFF0000`, true for any real heap pointer, false for a small
-+     * packed-file offset) once this port's fixed-up data stopped living at
-+     * its packed source's own address. That replacement covers "the same
-+     * packed blob passed to HuSprAnimRead twice" but NOT this function's
-+     * own output being handed to HuSprAnimRead: game/hsfanim.c's
-+     * Hu3DAnimCreate does exactly that (`texAnimP->anim =
-+     * HuSprAnimRead(dataP)` where `dataP` is a HuSprAnimMake() result, not
-+     * raw packed bytes -- REL/bootDll/opening.c's own BookFrameBufAnim[0/1]
-+     * is the concrete call site) -- real hardware's own high-bit check
-+     * caught this transparently too (a fresh HuMemDirectMalloc'd pointer's
-+     * high bits are always set on real GC RAM), so this is the same class
-+     * of "replacement heuristic doesn't cover a case the original one
-+     * happened to also cover" gap, not a new bug in this function itself.
-+     * Confirmed by direct crash evidence: unreachable before M3 (nothing
-+     * upstream of Hu3DAnimCreate ever found a real bitmap-name match while
-+     * every model's own object/attribute list was still the M2-era HSF
-+     * stub's intentionally-empty one), and reproduced directly once real
-+     * HSF attribute data let that lookup succeed for the first time --
++    /* HuSprAnimRead's own "already fixed up, just bump the refcount" fast
++     * path (this same patch queue, above) is a cache keyed by exact
++     * pointer identity -- added to replace real hardware's own check
++     * (`(u32)anim->bank & 0xFFFF0000`, true for any real heap pointer,
++     * false for a small packed-file offset) once this port's fixed-up
++     * data stopped living at its packed source's own address. That
++     * replacement covers "the same packed blob passed to HuSprAnimRead
++     * twice" but NOT this function's own output being handed back to
++     * HuSprAnimRead: game/hsfanim.c's Hu3DAnimCreate does exactly that,
++     * and real hardware's own high-bit check caught this transparently
++     * too (a fresh heap pointer's high bits are always set on real GC
++     * RAM), so this is the same class of "replacement heuristic doesn't
++     * cover a case the original one happened to also cover" gap, not a
++     * new bug in this function itself. Unreachable until real HSF
++     * attribute data let that lookup succeed for the first time --
 +     * HuSprAnimRead's cache-miss path then misread this native ANIMDATA's
 +     * own bytes as a packed BE header, computing garbage offsets and
 +     * eventually dereferencing an invalid pointer. Self-registering here
-+     * (this function's own freshly-built object, keyed by its own
-+     * identity) closes the gap the same way the original hardware's check
-+     * did, with no change to HuSprAnimRead itself. */
++     * closes the gap the same way the original hardware's check did, with
++     * no change to HuSprAnimRead itself. */
 +    mp6_animCacheAdd(anim, anim);

@@ -54,19 +54,67 @@ extern "C" {
 
 int mp6_shadow_quality_scale(int baseSize);
 
-/* The one number the mod actually changes: the shadow map's COPY-
- * DESTINATION texel count (GXSetTexCopyDst + SetShadowTex's GXInitTexObj +
- * the buffer alloc). The render pass itself stays pristine -- it is
- * EFB-unit-bounded (the pristine 240 size cap IS the 480px EFB box over
- * the 2x supersample) and aurora already renders AND resolves it at
- * window-scaled physical resolution, so the pass needs no help; growing
- * its viewport/scissor/copy-src past the EFB box just gets clamped to the
- * window and copies stale scene pixels back as shadow garbage (the giant-
- * blob failure). Returns size * min(heap-clamped requested scale, 2): 2x
- * is where dst texels equal the supersampled src region pixel-for-pixel;
- * higher settings clamp there (one [SHADOW] line) until the renderer
- * grows an offscreen shadow pass. Exact pass-through at native. */
+/* The shadow map's COPY-DESTINATION texel count (GXSetTexCopyDst +
+ * SetShadowTex's GXInitTexObj + the buffer alloc). At 1x this is an exact
+ * pass-through (byte-identical contract); at 2x only the dst texel count
+ * grows -- the render pass stays pristine and EFB-bounded (the pristine
+ * 240 size cap IS the 480px EFB box over the 2x supersample, and aurora
+ * renders + resolves it window-scaled), 2x being exactly where dst texels
+ * equal the supersampled src pixel-for-pixel. Above 2x the windowed
+ * (aurora) build renders the pass into a DEDICATED OFFSCREEN target
+ * instead (Hu3DShadowExec brackets the pristine viewport/scissor/copy
+ * blocks -- scaled to offscreen units -- with mp6_shadow_offscreen_begin/
+ * end below), so the returned size*scale is real detail there, resolved
+ * through aurora's GX_AURORA_SET_COPY_MIP_GEN mip chain and sampled with
+ * trilinear minification. Headless has no renderer at all, so its scale
+ * is structurally 1 (native) and the old 2x EFB-detail clamp is kept
+ * there purely as the documented fallback shape. */
 int mp6_shadow_effective_size(int size);
+
+/* Offscreen shadow-pass bracket, engaged by Hu3DShadowExec only when the
+ * effective scale exceeds 2 (never at 1x/2x -- those keep the pristine
+ * in-EFB pass exactly as before). Windowed build: begin emits aurora's
+ * GXCreateFrameBuffer(sidePx, sidePx) (GX_AURORA_BEGIN_OFFSCREEN --
+ * inside it GXSetViewport/GXSetScissor/GXSetTexCopySrc map 1:1 to
+ * offscreen pixels, and GXSetTexCopyDst's texel count is honored
+ * unscaled) plus GXSetTexCopyMipGen(1) so the resolve carries a full mip
+ * chain; end reverses both and resumes the EFB pass with its prior
+ * content and viewport/scissor. Headless build: both are no-ops (the
+ * scale is fixed 1 there, so the bracket is unreachable -- these exist
+ * so the shared hsfman.c patch links in both build modes). */
+void mp6_shadow_offscreen_begin(int sidePx);
+void mp6_shadow_offscreen_end(void);
+
+/* Offscreen shadow-pass scissor, in the offscreen target's own physical
+ * pixels. Sets aurora's RENDER scissor directly (GXSetScissorRender /
+ * GX_AURORA_LOAD_SCISSOR_RENDER) instead of the logical GXSetScissor.
+ *
+ * Why this exists: GXSetScissor packs its rect into the GameCube's 11-bit
+ * SU_SCIS register fields (max 2047, with GX's +342 guard-band offset), and
+ * aurora reads them back the same 11-bit way (lib/gx/command_processor.cpp,
+ * BP regs 0x20/0x21). That is faithful to real hardware -- where the EFB is
+ * at most 640x528 so the register never overflows -- but the offscreen
+ * shadow pass scales the scissor to (size*scale*2) units, and above 4x that
+ * exceeds 2047: the 8x box (top-left+3040, max coord 3397) truncates to a
+ * ~992px corner, and the 16x box (max coord 6453) wraps BELOW its own top
+ * edge, collapsing to an empty rect -- the exact "8x corner sliver / 16x
+ * empty" buffer-dump symptom. The render scissor is expressed in physical
+ * target pixels and is NOT packed, so the full offscreen box survives at any
+ * scale. Only the offscreen (>2x) branch uses this; 1x/2x keep the pristine
+ * GXSetScissor byte-for-byte. Headless build: no-op (the offscreen bracket
+ * is unreachable there, scale is fixed 1). */
+void mp6_shadow_offscreen_scissor(int x, int y, int w, int h);
+
+/* Per-shadow-lifetime effective-size latch (mp6_shadow_quality.c). The
+ * hsfman.c create sites call mp6_shadow_latch_size() with the shadow's copy-
+ * destination buffer and the effective size its allocation was sized for; the
+ * Hu3DShadowExec / hsfdraw bind sites call mp6_shadow_latched_size() instead
+ * of mp6_shadow_effective_size(), so a mid-run Shadow Quality change neither
+ * resizes a live shadow (matching the "next scene" UI contract) nor resolves
+ * more copy-dst texels than that buffer holds. An unlatched buffer falls back
+ * to the live effective size. */
+void mp6_shadow_latch_size(const void *buf, int effSize);
+int mp6_shadow_latched_size(const void *buf, int nativeSize);
 
 #ifdef __cplusplus
 }

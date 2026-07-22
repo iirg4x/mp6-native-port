@@ -1,4 +1,4 @@
-// MP6 native port : U-A2 (docs/UA2_ANDROID_GRAPHICS.md).
+// MP6 native port : Android graphics support.
 // Gradle NEVER runs the NDK here: tools/build.py --target aarch64-android
 // --windowed builds libmp6game.so + libmain.so and stages them into
 // src/main/jniLibs/arm64-v8a (the decoupling the U1 design documents from
@@ -7,7 +7,7 @@ plugins {
     id 'com.android.application'
 }
 
-// A4 (docs/A4_ANDROID_UI.md): the RmlUi launcher's resources (res/rml
+// The RmlUi launcher's resources (res/rml
 // stylesheets + res/fonts) ship as APK assets under assets/res/..., synced
 // from the repo's own res/ tree -- the MP4 port's exact gradle wiring
 // (their app/build.gradle syncPartyBoardAssets task). At runtime the
@@ -79,7 +79,7 @@ android {
     // files there are 16KB-page-aligned AND release-style stripped already
     // (build.py links, strips at staging, and keeps the unstripped
     // originals in build/android/aurora/ for symbolization -- A4,
-    // docs/A4_ANDROID_UI.md). useLegacyPackaging=false stores them
+    // ). useLegacyPackaging=false stores them
     // UNCOMPRESSED in the APK so the loader mmaps them in place: the
     // install-size-friendly choice (no extracted second copy on disk).
     packagingOptions {

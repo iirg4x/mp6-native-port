@@ -2,27 +2,24 @@
 +++ b/src/game/charman.c
 @@ -102 +102,24 @@
 -static u16 dustFlags[CHAR_NPC_MAX];
-+/* MP6 native port -- docs/M2E_MILESTONE.md. Real, unpatched original decomp
-+ * bug (not a decompilation error -- charman.c is independently confirmed
-+ * byte-identical/Matching against the real compiled REL, per this repo's
-+ * own decomp recovery notes): CharModelKill's own CHARNO_NONE case (below
-+ * in this same file) loops `for(i=0; i<CHAR_NPC_NO_BASE; i++)
-+ * dustFlags[i] = 0;` -- CHAR_NPC_NO_BASE is 15 (game/charman.h), one MORE
-+ * than CHAR_NPC_MAX's 14 this array was sized with, so that loop's last
-+ * iteration (i=14) writes one u16 past the end of a 14-element array. Real
-+ * hardware has no bounds checking at all, so this silently overwrote
-+ * whatever static global happens to sit immediately after dustFlags in
-+ * memory (harmless enough in practice to ship unnoticed); this port's
-+ * toolchain traps it as a hard "index 14 out of bounds" panic instead --
-+ * caught directly (not guessed), the first time this port's own boot flow
-+ * ever got far enough to call omOvlCallEx(DLL_fileseldll, ...) (REL/
-+ * bootDll/boot.c), which tears down the outgoing bootDll overlay's own
-+ * character models (game/objmain.c's omOvlKill -> CharModelKill(
-+ * GW_CHARA_NULL)) before the new overlay loads. Fixed by sizing the array
-+ * to match what its own clearing loop actually needs (CHAR_NPC_NO_BASE,
-+ * not CHAR_NPC_MAX) -- changes nothing observable on real hardware (every
-+ * index this file ever uses into dustFlags, elsewhere, is already <
-+ * CHAR_NPC_MAX <= CHAR_NPC_NO_BASE, so widening the backing storage cannot
-+ * change any existing read/write's target), just gives this one loop the
-+ * storage it was already assuming it had. */
++/* Real, unpatched original decomp bug (not a decompilation error --
++ * charman.c is independently confirmed byte-identical against the real
++ * compiled REL): CharModelKill's own CHARNO_NONE case (below in this same
++ * file) loops `for(i=0; i<CHAR_NPC_NO_BASE; i++) dustFlags[i] = 0;` --
++ * CHAR_NPC_NO_BASE is 15 (game/charman.h), one MORE than CHAR_NPC_MAX's 14
++ * this array was sized with, so that loop's last iteration (i=14) writes
++ * one u16 past the end of a 14-element array. Real hardware has no bounds
++ * checking at all, so this silently overwrote whatever static global
++ * happens to sit immediately after dustFlags in memory (harmless enough
++ * in practice to ship unnoticed); this port's toolchain traps it as a
++ * hard "index 14 out of bounds" panic instead -- caught directly, the
++ * first time this port's own boot flow ever got far enough to tear down
++ * the outgoing bootDll overlay's own character models before the new
++ * overlay loads. Fixed by sizing the array to match what its own clearing
++ * loop actually needs (CHAR_NPC_NO_BASE, not CHAR_NPC_MAX) -- changes
++ * nothing observable on real hardware (every index this file ever uses
++ * into dustFlags, elsewhere, is already < CHAR_NPC_MAX <= CHAR_NPC_NO_BASE,
++ * so widening the backing storage cannot change any existing read/write's
++ * target), just gives this one loop the storage it was already assuming
++ * it had. */
 +static u16 dustFlags[CHAR_NPC_NO_BASE];

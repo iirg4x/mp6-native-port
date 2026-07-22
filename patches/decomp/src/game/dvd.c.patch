@@ -2,25 +2,25 @@
 +++ b/src/game/dvd.c
 @@ -15 +15,23 @@
 -static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async)
-+/* MP6 native port -- docs/M2B_TITLE_PATH.md. `outBufP`, when non-NULL, is
-+ * written with `buf` immediately after allocation, before either read path
-+ * below starts -- NOT a behavior change on real hardware (where nothing
-+ * else could possibly run before this function returns anyway, since
-+ * DVDReadAsyncPrio's callback only ever fires later, off a real DMA-
-+ * complete interrupt), but load-bearing on this port, where DVDReadAsyncPrio
-+ * completes -- and fires its callback -- SYNCHRONOUSLY (see platform/dvd/
-+ * dvd_files.c's own header comment for why: no real async I/O to wait on).
-+ * HuDvdDataFastReadAsync's caller (game/data.c's HuDataDirReadAsync) only
-+ * assigns its own readStat->dirP = <this function's return value> AFTER
-+ * this whole call (recursive callback chain included) returns -- so on this
-+ * port, by the time the FIRST synchronous callback fires, readStat->dirP is
-+ * still whatever it was before (NULL, freshly zeroed by HuDataInit()), and
-+ * HuDataDirReadAsyncCallBack's own `((u8 *)readStat->dirP)+readStat->readOfs`
-+ * dereferences that -- caught directly: a real null-pointer-arithmetic
-+ * panic on the exact expression above, tracing back to this exact gap,
-+ * once data/title.bin's async, multi-block (2MB+, several HU_DVD_BLOCKSIZE
-+ * chunks) read was the first case in this milestone big enough to actually
-+ * chain a second callback. Passing `buf`'s own address through here so it's
++/* `outBufP`, when non-NULL, is written with `buf` immediately after
++ * allocation, before either read path below starts -- NOT a behavior
++ * change on real hardware (where nothing else could possibly run before
++ * this function returns anyway, since DVDReadAsyncPrio's callback only
++ * ever fires later, off a real DMA-complete interrupt), but load-bearing
++ * on this port, where DVDReadAsyncPrio completes -- and fires its
++ * callback -- SYNCHRONOUSLY (see platform/dvd/dvd_files.c's own header
++ * comment for why: no real async I/O to wait on). HuDvdDataFastReadAsync's
++ * caller (game/data.c's HuDataDirReadAsync) only assigns its own
++ * readStat->dirP = <this function's return value> AFTER this whole call
++ * (recursive callback chain included) returns -- so on this port, by the
++ * time the FIRST synchronous callback fires, readStat->dirP is still
++ * whatever it was before (NULL, freshly zeroed by HuDataInit()), and
++ * HuDataDirReadAsyncCallBack's own
++ * `((u8 *)readStat->dirP)+readStat->readOfs` dereferences that -- caught
++ * directly: a real null-pointer-arithmetic panic on the exact expression
++ * above, tracing back to this exact gap, once data/title.bin's async,
++ * multi-block (2MB+) read was the first case big enough to actually chain
++ * a second callback. Passing `buf`'s own address through here so it's
 + * published before any callback can possibly run closes the gap at its
 + * true root, for both this port and real hardware alike (a strict no-op
 + * there). */

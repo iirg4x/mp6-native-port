@@ -12,6 +12,7 @@
  * cargo-built staticlib on Android (tools/fetch_nod.py).
  */
 #include "content_import.h"
+#include "content_path_safe.h" /* SECURITY: FST-name traversal gate (see below) */
 
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_iostream.h>
@@ -25,7 +26,7 @@
 #include <thread>
 #include <vector>
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+/* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
  * redirects every file-scope definition FOLLOWING it. As a -include (before all
  * headers) it also captured the decomp headers' C TENTATIVE definitions --
@@ -243,6 +244,15 @@ uint32_t fst_callback(uint32_t index, enum NodNodeKind kind, const char *name, u
     }
     std::string rel = prefix.empty() ? std::string(name ? name : "") : prefix + "/" + (name ? name : "");
     if (kind == NOD_NODE_KIND_DIRECTORY) {
+        /* SECURITY: the name came straight from the disc's FST string table.
+         * A crafted directory named "..", or one carrying a separator/drive
+         * qualifier, would steer the path prefix (and every child written
+         * under it) outside the extraction root -- prune the whole subtree. */
+        if (!mp6_content_path_is_safe_rel(rel.c_str())) {
+            printf("[CONTENT] skipping unsafe disc directory entry: %s\n", rel.c_str());
+            fflush(stdout);
+            return size; /* child-end index: skip the subtree */
+        }
         /* Prune subtrees we can never want (movie/, dll/, ...) so a full
          * FST walk stays cheap; wanted_file() remains the single filter
          * authority for files. */
@@ -256,6 +266,13 @@ uint32_t fst_callback(uint32_t index, enum NodNodeKind kind, const char *name, u
         return index + 1;
     }
     if (wanted_file(rel.c_str())) {
+        /* SECURITY: reject a traversal/absolute/drive-qualified FST file
+         * name before it becomes a write destination (dest/files/<rel>). */
+        if (!mp6_content_path_is_safe_rel(rel.c_str())) {
+            printf("[CONTENT] skipping unsafe disc file entry: %s\n", rel.c_str());
+            fflush(stdout);
+            return index + 1;
+        }
         walk->files.push_back({ index, size, rel });
     }
     return index + 1;
@@ -401,6 +418,14 @@ void folder_collect(const std::string &filesRoot, const std::string &relDir, std
             Ctx *c = (Ctx *)ud;
             (void)dirname;
             std::string rel = c->relDir->empty() ? std::string(fname) : *c->relDir + "/" + fname;
+            /* SECURITY: mirror the disc-image path gate for the folder source.
+             * A directory entry should never be "." / ".." / drive-qualified,
+             * but validate defensively so the destination join stays rooted. */
+            if (!mp6_content_path_is_safe_rel(rel.c_str())) {
+                printf("[CONTENT] skipping unsafe folder entry: %s\n", rel.c_str());
+                fflush(stdout);
+                return SDL_ENUM_CONTINUE;
+            }
             std::string full = *c->filesRoot + "/" + rel;
             SDL_PathInfo info {};
             if (!SDL_GetPathInfo(full.c_str(), &info)) return SDL_ENUM_CONTINUE;

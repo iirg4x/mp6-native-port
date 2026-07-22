@@ -11,7 +11,7 @@ user-confirmed step: see _ensure_sdk_licenses()'s docstring).
 
 On-device asset import (the user's disc, picked/streamed on the phone
 itself) is handled entirely by the APK's own first-run onboarding dialog
-(platform/gx/ui/content_setup.cpp, docs/A4_ANDROID_UI.md) -- this setup
+(platform/gx/ui/content_setup.cpp) -- this setup
 tool's job stops at producing an installable APK.
 """
 import os
@@ -113,7 +113,7 @@ def build_windowed(native_root, jobs=None):
     if not ready:
         common.warn("Android windowed (aurora/SDL3/Dawn) graphics build is not available here:")
         if not os.path.isdir(aurora_tree):
-            common.hint(f"missing {aurora_tree} -- see docs/A4_ANDROID_UI.md / docs/UA2_ANDROID_GRAPHICS.md "
+            common.hint(f"missing {aurora_tree} -- see setup/README.md "
                         "for the cmake recipe (same shape as the Windows Aurora trees, NDK-toolchained)")
         if not os.path.exists(nod_lib):
             common.hint(f"missing {nod_lib} -- run `python tools/fetch_nod.py --android` "
@@ -170,7 +170,6 @@ def print_onboarding_note():
     platform/gx/ui/content_setup.cpp / .hpp   (the onboarding dialog + import
                                                 trigger, reusing the same nod
                                                 library this tool used for Windows)
-    docs/A4_ANDROID_UI.md                     (full design + on-device proof)
 
   Install the APK, launch it, and follow the on-device prompt to pick your
   disc image (or an already-extracted folder via Android's document picker).

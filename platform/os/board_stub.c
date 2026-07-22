@@ -1,7 +1,7 @@
 /* MP6 native port -- explicit placeholder bridge for src/board/board.c's
  * mbSaveInit/mbSavePartyInit entry points, discovered as the real
  * undefined-symbol closure when wiring the fully-recovered mdpartydll
- * overlay in (docs/M14_MDPARTY_INTEGRATION.md).
+ * overlay in.
  *
  * WHY THIS FILE EXISTS, NOT gen_shims.py: these two symbols are NOT
  * Nintendo SDK surface (dolphin/msm) -- they are ordinary MP6 GAME code,
@@ -22,9 +22,9 @@
  * of its own, e.g. mbSaveInit calls mbPlayerHandicapGet/
  * mbMasuPlayerPrizeReset, themselves more board.c surface). Pulling any
  * of that in is integrating a DIFFERENT, much larger, ongoing recovery
- * effort -- explicitly out of scope for M14, whose mandate is mdpartydll
- * only ("do NOT try to recover downstream overlays -- that's the decomp
- * worker's job"). board.c is not in tools/build.py's game_sources() (it
+ * effort -- explicitly out of scope for this file, whose mandate is
+ * mdpartydll only ("do NOT try to recover downstream overlays -- that's
+ * the decomp worker's job"). board.c is not in tools/build.py's game_sources() (it
  * only walks src/game/*.c, never src/board/) or any REL_SOURCES entry;
  * integrating it for real is future work for whichever lane owns
  * board.c (see the project's board-recover history).
@@ -67,8 +67,7 @@
 void mbSaveInit(s32 boardNo)
 {
     printf("[STUB] mbSaveInit(boardNo=%d) -- src/board/board.c is not yet integrated into this "
-           "port (separate recovery lane; see platform/os/board_stub.c and "
-           "docs/M14_MDPARTY_INTEGRATION.md) -- no-op.\n", (int)boardNo);
+           "port (separate recovery lane; see platform/os/board_stub.c) -- no-op.\n", (int)boardNo);
     fflush(stdout);
 }
 

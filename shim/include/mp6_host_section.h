@@ -1,4 +1,9 @@
-/* MP6 native port -- host-owned-statics section marker (docs/SAVESTATE.md).
+/* MP6 native port -- host-owned-statics section marker. The rule: any TU
+ * whose file-scope statics are owned by a non-game thread or an OS/driver
+ * handle (rather than by the deterministic game simulation) force-includes
+ * this header, which routes every subsequent static in that TU into the
+ * `.mp6hbss`/`.mp6hdat` sections savestate capture/restore excludes by name
+ * -- see platform/os/savestate.c for the full carve-out contract.
  *
  * FORCE-INCLUDED (-include) into exactly the TUs whose file-scope state is
  * owned by something other than the game thread: the SDL audio callback

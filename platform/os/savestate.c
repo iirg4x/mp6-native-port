@@ -1,7 +1,6 @@
 /* MP6 native port -- cross-session savestate capture/restore.
  * See shim/include/mp6_savestate.h for the design rationale and the
- * carve-out contract, and docs/SAVESTATE.md for the spike measurements
- * this rests on.
+ * carve-out contract.
  *
  * FILE LAYOUT
  *   [Mp6SavestateHeader]            fixed-size, uncompressed, validated first
@@ -31,9 +30,9 @@
 
 #include "host.h"
 #include "zlib.h"
-#include "mp6_boot.h" /* mp6_max_ticks/mp6_ticks_unlimited -- latched across restore (C8) */
+#include "mp6_boot.h" /* mp6_max_ticks/mp6_ticks_unlimited -- latched across restore */
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+/* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
  * redirects every file-scope definition FOLLOWING it. As a -include (before all
  * headers) it also captured the decomp headers' C TENTATIVE definitions --
@@ -88,7 +87,7 @@ void mp6_savestate_guarded_exit(int code)
         /* Third-party teardown over restored state is the one crash class the
          * denylist carve-out cannot fully close (static CRT globals are
          * un-annotatable) -- so a restored process does not run it at all.
-         * See mp6_savestate.h's guarded-exit comment and docs/SAVESTATE.md. */
+         * See mp6_savestate.h's guarded-exit comment. */
         _exit(code);
     }
     exit(code);
@@ -132,10 +131,10 @@ typedef struct {
     uint64_t compressedBytes; /* deflate stream length that follows the table --
                                * ALSO the offset key for the widescreen blob
                                * below (blob = header + table + this many bytes) */
-    uint64_t wsNativeBytes;   /* C4: widescreen native-snapshot blob, stored
+    uint64_t wsNativeBytes;   /* widescreen native-snapshot blob, stored
                                * UNCOMPRESSED after the deflate stream (small --
                                * KBs of vertex floats) */
-    /* W3: the mixer's own view at capture time. Carried in the header rather
+    /* the mixer's own view at capture time. Carried in the header rather
      * than as a region because it is small, fixed-size, and -- unlike every
      * region -- has no address to be restored TO; it is replayed through the
      * msm API instead. See mp6_savestate.h for why it must be captured at
@@ -295,14 +294,14 @@ int mp6_savestate_capture(const char *path)
     if (mp6_coro_pool_base() == NULL) {
         return MP6_SAVESTATE_ERR_UNSUPPORTED;
     }
-    /* C11 (review): zero the table before filling. collect fills name[16]
+    /* zero the table before filling. collect fills name[16]
      * via snprintf, which writes only the chars + NUL -- without this memset
      * the tails are uninitialized stack bytes, fwritten into a file users
      * hand to other people (nondeterministic artifacts + a small info leak). */
     memset(regions, 0, sizeof(regions));
     nRegion = mp6_ss_collect_regions(regions, MP6_SAVESTATE_MAX_REGIONS, &rawBytes);
     if (nRegion <= 0) {
-        /* C17 (review): collect failing means the platform cannot enumerate
+        /* collect failing means the platform cannot enumerate
          * its regions (Android's writable-section walk returns 0 by design)
          * -- that is "unsupported here", not "corrupt file". ERR_FORMAT's
          * message ("not a savestate, or truncated") sent users chasing file
@@ -310,7 +309,7 @@ int mp6_savestate_capture(const char *path)
         return MP6_SAVESTATE_ERR_UNSUPPORTED;
     }
 
-    /* W2's load-bearing assumption, checked instead of trusted: the DVD
+    /* A load-bearing assumption, checked instead of trusted: the DVD
      * layer's open-handle table must be empty at any capture point, because
      * that table is carved out and records no path/entrynum, so an open file
      * cannot be re-established on restore. It is empty in this build (no
@@ -321,8 +320,8 @@ int mp6_savestate_capture(const char *path)
     if (mp6_dvd_open_handle_count() != 0) {
         fprintf(stderr,
                 "[SAVESTATE] WARNING: %d DVD file handle(s) open at capture. Restored state "
-                "will refer to files this savestate cannot reopen -- see docs/SAVESTATE.md W2 "
-                "(the table needs splitting into {key,entrynum} + a carved-out {FILE*}).\n",
+                "will refer to files this savestate cannot reopen (the table needs splitting "
+                "into {key,entrynum} + a carved-out {FILE*}).\n",
                 mp6_dvd_open_handle_count());
         fflush(stderr);
     }
@@ -418,7 +417,7 @@ int mp6_savestate_capture(const char *path)
 
     hdr.compressedBytes = (uint64_t)zs.total_out;
 
-    /* C4: append the widescreen native-snapshot blob (see
+    /* append the widescreen native-snapshot blob (see
      * mp6_widescreen_savestate_blob_size's comment for why these host-heap
      * buffers are game state that must travel in the file). Uncompressed --
      * it is KBs against a multi-MB file. */
@@ -444,7 +443,7 @@ int mp6_savestate_capture(const char *path)
         goto done;
     }
 
-    /* C10 (review): the final buffered chunk (and the rewritten header)
+    /* the final buffered chunk (and the rewritten header)
      * only reach the disk at flush/close -- check BOTH before claiming
      * success, or a disk-full/AV-lock truncation ships as a "captured"
      * file that fails on the recipient's machine with a corruption error. */
@@ -544,8 +543,8 @@ int mp6_savestate_restore(const char *path)
         rc = MP6_SAVESTATE_ERR_FORMAT;
         goto done;
     }
-    /* Validate the WHOLE region table against the live process (review
-     * finding C2). The table is uncompressed and sits OUTSIDE the
+    /* Validate the WHOLE region table against the live process. The
+     * table is uncompressed and sits OUTSIDE the
      * adler-protected deflate stream, so a bit-flip or hand-truncation here
      * could survive every header check -- and each non-CORO entry is a
      * memcpy DESTINATION. The earlier revision checked only CORO addresses
@@ -641,7 +640,7 @@ int mp6_savestate_restore(const char *path)
         }
     }
 
-    /* C5 (review): the audio shadow is header data no other check covers --
+    /* the audio shadow is header data no other check covers --
      * clamp its counts before anything iterates them. Capture clamps on
      * write, so an out-of-range value here can only mean corruption. */
     if (hdr.audio.chanCount < 0 || hdr.audio.chanCount > MP6_SS_AUDIO_MAX_CHAN ||
@@ -657,14 +656,14 @@ int mp6_savestate_restore(const char *path)
      * that is what makes a corrupt file a clean error instead of a
      * half-restored process.
      *
-     * C9 (review): the single-shot inflate hands rawBytes to zlib's 32-bit
+     * the single-shot inflate hands rawBytes to zlib's 32-bit
      * avail_out, so the guard must be UINT32_MAX -- the earlier >SIZE_MAX
      * test was vacuous on win64 and a >4GB state would have truncated the
      * window and failed with a misleading ERR_FORMAT. Latent today
      * (~300MB), but the failure it names is a size threshold, so name it. */
     if (hdr.rawBytes == 0 || hdr.rawBytes > 0xFFFFFFFFull) {
         fprintf(stderr, "[SAVESTATE] refusing: rawBytes %llu exceeds the 4GB single-shot "
-                        "inflate limit (see savestate.c C9)\n",
+                        "inflate limit\n",
                 (unsigned long long)hdr.rawBytes);
         rc = MP6_SAVESTATE_ERR_FORMAT;
         goto done;
@@ -722,7 +721,7 @@ int mp6_savestate_restore(const char *path)
     {
         size_t latchedAramSize = 0;
         void *latchedAram = mp6_aram_savestate_buffer(&latchedAramSize);
-        /* C8 (review): the tick BUDGET is a host run-parameter, not game
+        /* the tick BUDGET is a host run-parameter, not game
          * state -- it describes how long THIS invocation was asked to run
          * (a CLI arg, or "unlimited" for a double-click session). It lives
          * in restored .data, so without this latch a restore imports the
@@ -736,7 +735,7 @@ int mp6_savestate_restore(const char *path)
         int latchedMaxTicks = mp6_max_ticks;
         int latchedUnlimited = mp6_ticks_unlimited;
 
-    /* C4/S5: free THIS process's widescreen native snapshots while the live
+    /* free THIS process's widescreen native snapshots while the live
      * registry pointers are still valid -- the commit loop is about to
      * overwrite them with the capturing process's (foreign) pointers, after
      * which the memory is unreachable and leaks on every load. */
@@ -775,14 +774,28 @@ int mp6_savestate_restore(const char *path)
      * ARAM zeroed while the restored residency table insisted it was full. */
     mp6_aram_savestate_rehydrate(latchedAram);
 
-    /* C8: put the RUNNING invocation's tick budget back (latched above). */
+    /* put the RUNNING invocation's tick budget back (latched above). */
     mp6_max_ticks = latchedMaxTicks;
     mp6_ticks_unlimited = latchedUnlimited;
     }
 
     mp6_dvd_savestate_rehydrate();
 
-    /* C4: rebuild the widescreen native snapshots from the file's blob
+#ifndef MP6_HEADLESS_BUILD
+    /* FINDING #1 (savestate-x1): drop the Unlocked FPS interpolation state on
+     * restore. frame_interp.c's pacing statics are carved out of the image (so
+     * the commit loop above did NOT clobber them), but the retained N-1/N model
+     * snapshots still describe PRE-restore frames -- clear them so the first
+     * post-restore window starts clean instead of interpolating across the
+     * state discontinuity. Windowed build only (frame_interp.c is aurora-only;
+     * nothing to reset headless -- the model module never replays there). */
+    {
+        extern void mp6_fi_savestate_reset(void);
+        mp6_fi_savestate_reset();
+    }
+#endif
+
+    /* rebuild the widescreen native snapshots from the file's blob
      * (offset = header + table + deflate stream; hdr.compressedBytes is the
      * key -- its first real consumer). Every entry the blob cannot cover
      * fails soft to the apply early-out: frozen geometry, never corruption
@@ -947,7 +960,7 @@ int mp6_savestate_take_last_result(int *wasSave, int *result)
 
 unsigned int mp6_savestate_ui_generation(void) { return g_uiGeneration; }
 
-/* C12 (review): parse a tick lever strictly, or refuse LOUDLY and stay
+/* parse a tick lever strictly, or refuse LOUDLY and stay
  * unarmed. Bare strtol let "3OO" parse as 3 and a fully non-numeric value
  * parse as 0 -- and 0 passes the >=0 arming test, capturing at the first
  * tick, which (save and load sharing one slot path) could overwrite the
@@ -984,7 +997,7 @@ void mp6_savestate_tick(void)
 
     /* Scripted levers (the regression gate uses these -- they work in the
      * headless build too, where there is no window to press a key in).
-     * C19 (review): only arm a lever when no request is already queued --
+     * only arm a lever when no request is already queued --
      * the levers used to overwrite g_pending unconditionally, silently
      * discarding an F5/F8 the user pressed on the same tick. The >= trigger
      * plus the fire-once latch means a deferred lever simply fires on the

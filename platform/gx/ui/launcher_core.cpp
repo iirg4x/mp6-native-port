@@ -46,7 +46,7 @@ extern "C" {
 #include "host.h" /* mp6_host_monotonic_ns / mp6_host_sleep_ns / mp6_host_save_dir */
 #include "mp6_savestate.h" /* in-game menu: savestate result toasts (section 9) */
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+/* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
  * redirects every file-scope definition FOLLOWING it. As a -include (before all
  * headers) it also captured the decomp headers' C TENTATIVE definitions --
@@ -85,13 +85,15 @@ static void mp6_launcher_defaults(void)
     g_cfg.aspectLocked = 1;
     g_cfg.vsync = 1;
     snprintf(g_cfg.backend, sizeof(g_cfg.backend), "auto");
+    g_cfg.aa = MP6_AA_OFF; /* Anti-Aliasing: default off -- byte-identical, the sacred contract */
     g_cfg.showFps = 0;
     g_cfg.fpsCorner = 0;
     g_cfg.tickHz = 60.0;
     g_cfg.contentRoot[0] = '\0';
     g_cfg.masterVolume = 100;
-    g_cfg.widescreen = 0; /* WS2: default OFF -- existing 4:3 pillarboxed behavior, byte-unchanged */
+    g_cfg.widescreen = 0; /* default OFF -- existing 4:3 pillarboxed behavior, byte-unchanged */
     g_cfg.shadowQuality = 1; /* Shadow Quality: default native -- byte-identical, the sacred contract */
+    g_cfg.unlockedFps = 0; /* Unlocked FPS: default OFF -- presentation stays 1:1 with the 60Hz tick */
 }
 
 /* =======================================================================
@@ -162,7 +164,8 @@ static void mp6_launcher_parse_config(const char *text)
             if      (strcmp(key, "launcher.skip") == 0)       g_cfg.skipLauncher = v;
             else if (strcmp(key, "video.vsync") == 0)         g_cfg.vsync = v;
             else if (strcmp(key, "video.show_fps") == 0)      g_cfg.showFps = v;
-            else if (strcmp(key, "video.widescreen") == 0)    g_cfg.widescreen = v; /* WS2: additive, backward-compatible -- absent in any pre-WS2 config.json, tolerant parser default (0) applies */
+            else if (strcmp(key, "video.widescreen") == 0)    g_cfg.widescreen = v; /* additive, backward-compatible -- absent in any older config.json, tolerant parser default (0) applies */
+            else if (strcmp(key, "video.unlocked_fps") == 0)  g_cfg.unlockedFps = v; /* Unlocked FPS: additive, same tolerant-absent-defaults-off shape as widescreen */
         } else { /* number */
             char *end = NULL;
             double v = strtod(p, &end);
@@ -188,6 +191,31 @@ static void mp6_launcher_parse_config(const char *text)
                 int sq = (int)v;
                 if (sq != 1 && sq != 2 && sq != 4 && sq != 8 && sq != 16) sq = 1;
                 g_cfg.shadowQuality = sq;
+            }
+            /* "video.fi_mode" is deliberately NOT read anymore (the "FPS
+             * Smoothing Mode" row was removed -- model-level interpolation is
+             * the one and only mechanism Unlocked FPS uses). An old config's
+             * key falls through to the tolerant unknown-key ignore at the end
+             * of this chain, exactly like the retired "video.aspect_locked"
+             * above: the value is consumed by strtod and discarded, no error,
+             * no parse stop. */
+            else if (strcmp(key, "video.aa") == 0) {
+                /* Anti-Aliasing (Mp6AaMode): tolerant by construction, same
+                 * shape as shadow_quality just above -- anything outside the
+                 * known modes (missing key, a future value, hand-edited JSON)
+                 * falls back to OFF, never a bogus mechanism downstream. */
+                int a = (int)v;
+                if (a != MP6_AA_OFF && a != MP6_AA_MSAA4X && a != MP6_AA_FXAA &&
+                    a != MP6_AA_SSAA15 && a != MP6_AA_SSAA2X) a = MP6_AA_OFF;
+                g_cfg.aa = a;
+            }
+            else if (strcmp(key, "video.msaa") == 0) {
+                /* Backward-compat migration: P1 shipped a standalone
+                 * video.msaa key; an existing pre-unification config carries
+                 * msaa=4 and no video.aa. Map that onto the unified enum.
+                 * Upgrade-only (never clobbers a video.aa the same file might
+                 * also carry); new configs write video.aa exclusively. */
+                if ((int)v == 4) g_cfg.aa = MP6_AA_MSAA4X;
             }
         }
         p = js_skip_ws(p);
@@ -230,7 +258,9 @@ static void mp6_launcher_config_save(void)
             "    \"game.content_root\": \"%s\",\n"
             "    \"audio.master_volume\": %d,\n"
             "    \"video.widescreen\": %s,\n"
-            "    \"video.shadow_quality\": %d\n"
+            "    \"video.shadow_quality\": %d,\n"
+            "    \"video.unlocked_fps\": %s,\n"
+            "    \"video.aa\": %d\n"
             "}\n",
             g_cfg.skipLauncher ? "true" : "false",
             g_cfg.windowMode == MP6_WINMODE_FULLSCREEN ? "fullscreen" : "windowed",
@@ -242,8 +272,10 @@ static void mp6_launcher_config_save(void)
             g_cfg.tickHz,
             rootEsc,
             g_cfg.masterVolume,
-            g_cfg.widescreen ? "true" : "false", /* WS2: additive key */
-            g_cfg.shadowQuality); /* Shadow Quality: additive key, appended last so any external tooling scraping the first N keys positionally (none known) is unaffected */
+            g_cfg.widescreen ? "true" : "false", /* additive key */
+            g_cfg.shadowQuality, /* Shadow Quality: additive key */
+            g_cfg.unlockedFps ? "true" : "false", /* Unlocked FPS: additive key */
+            g_cfg.aa); /* Anti-Aliasing: unified video.aa enum, appended last so any external tooling scraping the first N keys positionally (none known) is unaffected */
     fclose(f);
 }
 
@@ -254,7 +286,7 @@ static void mp6_launcher_config_save(void)
 static void mp6_launcher_resolve_paths(void)
 {
 #ifdef __ANDROID__
-    /* A4 (docs/A4_ANDROID_UI.md): SDL_GetBasePath() is "./" on Android
+    /* SDL_GetBasePath() is "./" on Android
      * (the app has no exe directory and cwd is "/", unwritable) -- the
      * config lives under the same base dir mp6_android_main publishes for
      * disc/save data (external files dir preferred), which is exported as
@@ -279,7 +311,7 @@ static void mp6_launcher_resolve_paths(void)
         if (mp6_host_save_dir(rel, sizeof(rel)) != 0) snprintf(rel, sizeof(rel), "saves");
 #if defined(__ANDROID__)
         /* Display-only: saves resolve under MP6_HOST_BASE on device
-         * (docs/UA2_ANDROID_GRAPHICS.md section 7). */
+         * (see aurora_bridge.c's own section-6 console-repositioning note). */
         const char *saveBase = getenv("MP6_HOST_BASE");
         if (saveBase != NULL && saveBase[0] != '\0') {
             snprintf(g_saveDirAbs, sizeof(g_saveDirAbs), "%s/%s", saveBase, rel);
@@ -367,11 +399,38 @@ extern "C" int mp6_launcher_is_automation(void)
  * these differ from the current config). */
 static char g_initialBackend[24];
 static int g_initialVsync = 1;
+static int g_initialMsaa = 1;
+
+/* Anti-Aliasing: the aurora_initialize-time (restart-pending) projection of
+ * the unified video.aa enum. Only MSAA is an init-time value in P2 -- FXAA is
+ * a live post-process (never restart-pending), so Off and FXAA both project
+ * to a sample count of 1. This is the single mapping P1's cfg_msaa accessor,
+ * the initials snapshot and restart_pending() all share, keeping the MSAA
+ * behavior byte-identical to P1 while the field that feeds it is unified. */
+static int mp6_aa_to_msaa(int aa)
+{
+    return aa == MP6_AA_MSAA4X ? 4 : 1;
+}
+
+/* Anti-Aliasing P3 (SSAA): the aurora_initialize-time supersampling factor for
+ * the unified video.aa enum. 1.0 = off/native (Off/MSAA/FXAA all project here);
+ * SSAA is a restart-pending init value like MSAA, so it is snapshotted at
+ * launch and compared in restart_pending(). */
+static float mp6_aa_to_ssaa(int aa)
+{
+    if (aa == MP6_AA_SSAA15) return 1.5f;
+    if (aa == MP6_AA_SSAA2X) return 2.0f;
+    return 1.0f;
+}
+
+static float g_initialSsaa = 1.0f;
 
 static void mp6_launcher_capture_initials(void)
 {
     snprintf(g_initialBackend, sizeof(g_initialBackend), "%s", g_cfg.backend);
     g_initialVsync = g_cfg.vsync;
+    g_initialMsaa = mp6_aa_to_msaa(g_cfg.aa);
+    g_initialSsaa = mp6_aa_to_ssaa(g_cfg.aa);
 }
 
 static AuroraBackend mp6_backend_from_id(const char *id)
@@ -407,14 +466,14 @@ extern "C" int mp6_launcher_cfg_aspect_locked(void)
     return g_launcherMode ? g_cfg.aspectLocked : 1;
 }
 
-/* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): resolved "dynamic true-widescreen"
+/* Resolved "dynamic true-widescreen"
  * preference for mp6_widescreen_set_enabled() (aurora_bridge.c), called
  * once right before GameMain() alongside mp6_bridge_apply_content_aspect_
  * policy() above -- same launcher-mode-vs-automation-default shape as
  * every other accessor in this section. Automation's fixed 0 matches this
  * config key's own default (mp6_launcher_defaults() above) and is what
  * every existing automated gate already assumes (a widescreen-ON gate is
- * a new, additional scenario -- docs/WS2_DYNAMIC_WIDESCREEN.md -- not a
+ * a new, additional scenario -- not a
  * change to what automation mode has always done). */
 extern "C" int mp6_launcher_cfg_widescreen(void)
 {
@@ -432,6 +491,52 @@ extern "C" int mp6_launcher_cfg_widescreen(void)
 extern "C" int mp6_launcher_cfg_shadow_quality(void)
 {
     return g_launcherMode ? g_cfg.shadowQuality : 1;
+}
+
+/* Anti-Aliasing P1 (aurora/include/aurora/aurora.h AuroraConfig.msaa): the
+ * configured MSAA sample count in launcher mode, or a fixed 1 (off) in
+ * automation/pre-launcher-init -- same "automation never sees a non-
+ * default value" contract as every other accessor in this section. Read
+ * once at aurora_initialize time (main_native.c), like backend/vsync --
+ * it is a restart-pending setting for the same reason (the multisampled
+ * targets are created at that call, not re-created live). */
+extern "C" int mp6_launcher_cfg_msaa(void)
+{
+    return g_launcherMode ? mp6_aa_to_msaa(g_cfg.aa) : 1;
+}
+
+/* Anti-Aliasing P2 (FXAA): the live post-process AA mode for the current
+ * config, as an AuroraPostAA value (aurora/include/aurora/aurora.h) --
+ * AURORA_POST_AA_FXAA (1) when video.aa selects FXAA, else AURORA_POST_AA_NONE
+ * (0). Applied via aurora_set_post_aa the moment it is selected AND once at
+ * boot (main_native.c), so unlike msaa it is NOT restart-pending. Same
+ * "automation never sees a non-default value" contract as cfg_msaa above. */
+extern "C" int mp6_launcher_cfg_post_aa(void)
+{
+    return (g_launcherMode && g_cfg.aa == MP6_AA_FXAA) ? 1 : 0;
+}
+
+/* Anti-Aliasing P3 (SSAA): the configured supersampling factor (AuroraConfig.
+ * ssaa) in launcher mode, or 1.0 (native) in automation. Restart-pending like
+ * msaa -- read once at aurora_initialize (main_native.c). Desktop-only: the
+ * SSAA rows never appear on Android, so g_cfg.aa is never an SSAA value there,
+ * and main_native.c only forwards this off __ANDROID__ anyway. */
+extern "C" float mp6_launcher_cfg_ssaa(void)
+{
+    return g_launcherMode ? mp6_aa_to_ssaa(g_cfg.aa) : 1.0f;
+}
+
+/* Unlocked FPS (shim/include/mp6_unlocked_fps.h): the configured
+ * tick-decoupled-presentation preference in launcher mode, or a fixed 0
+ * (off -- present-count == tick-count exactly) in automation/pre-
+ * launcher-init -- the same "automation never sees a non-default value"
+ * contract as mp6_launcher_cfg_shadow_quality() above. Read LIVE every
+ * tick by frame_interp.c, so the Mods toggle applies immediately; the
+ * MP6_UNLOCKED_FPS env lever is resolved (and wins) inside
+ * mp6_unlocked_fps_enabled(), not here. */
+extern "C" int mp6_launcher_cfg_unlocked_fps(void)
+{
+    return g_launcherMode ? g_cfg.unlockedFps : 0;
 }
 
 /* =======================================================================
@@ -464,9 +569,9 @@ static void mp6_launcher_apply_display(void)
      * also flipped AuroraSetViewportPolicy live, which quietly
      * letterboxed the RmlUi launcher itself (menu/wordmark/watermark/
      * disc-info/version-info) for its ENTIRE lifetime on any non-4:3
-     * display -- docs/A5_LAUNCHER_ASPECT.md. The MP6_FREE_ASPECT env
+     * display. The MP6_FREE_ASPECT env
      * lever keeps absolute priority in BOTH directions. */
-    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): widescreen ON means "the window
+    /* Widescreen ON means "the window
      * is freely resizable to any shape, and the render/camera/2D-shim all
      * track whatever shape it ends up" -- the exact opposite of
      * aspectLocked's 4:3 window-shape constraint, so widescreen wins
@@ -475,7 +580,7 @@ static void mp6_launcher_apply_display(void)
      * value is untouched in the saved config either way, so turning
      * Widescreen back off later restores whatever aspectLocked preference
      * was already there). MP6_FREE_ASPECT keeps absolute top priority in
-     * both directions, unchanged from before WS2. */
+     * both directions, unchanged from before widescreen support existed. */
     if (getenv("MP6_FREE_ASPECT") == NULL) {
         /* WS: the MP6_WIDESCREEN env lever forces the free/widescreen window
          * shape here too -- same inline getenv semantics as
@@ -585,7 +690,7 @@ static void mp6_refresh_content_state(void)
     }
 }
 
-/* A4 (docs/A4_ANDROID_UI.md): C-side probe for main_native.c's onboarding
+/* C-side probe for main_native.c's onboarding
  * decision -- "is bootable game content actually present right now?".
  * Launcher mode only by contract (call after mp6_launcher_decide_mode said
  * launcher); automation boots never consult it, so the L1 zero-[LAUNCHER]
@@ -881,7 +986,7 @@ static const char *mp6_resource_base(void)
     if (g_resBase[0] != '\0') return g_resBase;
 
 #ifdef __ANDROID__
-    /* A4 (docs/A4_ANDROID_UI.md): res/ ships INSIDE the APK as assets
+    /* res/ ships INSIDE the APK as assets
      * (gradle syncs the repo's res/ tree -- platforms/android/app/
      * build.gradle). A bare relative "res" base keeps every resource path
      * relative ("res/rml/...", "res/fonts/..."), which SDL_IOFromFile
@@ -944,7 +1049,7 @@ void format_document_source(const char *raw, char *out, size_t n)
 
 Mp6LauncherConfig &cfg() { return g_cfg; }
 void cfg_save() { mp6_launcher_config_save(); }
-bool restart_pending() { return strcmp(g_cfg.backend, g_initialBackend) != 0 || g_cfg.vsync != g_initialVsync; }
+bool restart_pending() { return strcmp(g_cfg.backend, g_initialBackend) != 0 || g_cfg.vsync != g_initialVsync || mp6_aa_to_msaa(g_cfg.aa) != g_initialMsaa || mp6_aa_to_ssaa(g_cfg.aa) != g_initialSsaa; }
 void apply_display() { mp6_launcher_apply_display(); }
 void apply_volume() { mp6_launcher_apply_volume(); }
 int validate_root(const char *root, char *err, size_t errn) { return mp6_launcher_validate_root(root, err, errn); }

@@ -1,49 +1,34 @@
 --- a/src/REL/mdseldll/mdsel.c
 +++ b/src/REL/mdseldll/mdsel.c
 @@ -16,0 +17 @@
-+#include "mp6_widescreen.h" /* WS6 (docs/WS6_OVERLAY_CAMERAS.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -521,2 +522,16 @@
 -    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f, 10000.0f, 1.2f);
 -    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
-+    /* MP6 native port -- WS6 (docs/WS6_OVERLAY_CAMERAS.md): mode-select's
-+     * own 3D camera has the same native-640, left-anchored own-camera bug as
-+     * the other overlay screens this lane fixes -- WS2/WS4 deliberately left
-+     * every REL's own camera native (reference-hack scope match,
-+     * WS_REFERENCE_STUDY.md section 2.4), leaving a black band on the right.
-+     * Widened the same proven way as hsfman.c's defCamera/opening.c's camera:
-+     * FOV aspect x scale_factor(), viewport width -> live render width.
-+     * No-op when Widescreen is disabled. */
-+    /* MP6 native port -- WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): replaces the
-+     * same two calls with ONE call that ALSO registers this camera so it
-+     * re-derives live on a later window resize -- fn_1_1734 only ever runs
-+     * once per scene entry; its own per-frame companion (fn_1_1370, the
-+     * camera-position updater below) never touched Perspective/
-+     * ViewportSet, so this camera stayed frozen at scene-load size without
-+     * this. Same literals, same effect on THIS call. */
++    /* Mode-select's own 3D camera has the same native-640, left-anchored
++     * framing as the other overlay screens, left native to match the
++     * reference widescreen hack's own scope (it never edits a .rel file),
++     * which leaves a black band on the right. Widened the same way as
++     * hsfman.c's defCamera/opening.c's camera: FOV aspect x scale_factor(),
++     * viewport width -> live render width. No-op when widescreen is
++     * disabled. */
++    /* Replaces the two calls above with one that also registers this
++     * camera so it re-derives live on a later window resize -- fn_1_1734
++     * only runs once per scene entry; its own per-frame companion
++     * (fn_1_1370, the camera-position updater below) never touches
++     * Perspective/ViewportSet, so this camera stayed frozen at scene-load
++     * size without this. Same literals, same effect on this call. */
 +    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
 @@ -1540,0 +1556,32 @@
-+/* MP6 native port -- WS19 (docs/WS19_SURGICAL_EXTRUDE.md) HAD a
-+ * `mp6_mdsel_sky_is_split` predicate here matching ONLY the checkered
-+ * day/night split plane ("sora") for the selective horizontal stretch --
-+ * REMOVED by WS27 (tools/mp6scene/WS_NATURAL_EXTENSION_SPEC.md): the
-+ * stretch call it fed is gone (sora now stays pixel-native and the wide
-+ * margins are generated tile strips -- see fn_1_6F40's own call-site
-+ * comment below); mp6_widescreen_extend_tiles() takes the object NAME
-+ * directly, so no predicate remains to define. */
-+
-+/* MP6 native port -- WS19: matches every decoration sub-object that must
-+ * REPOSITION (never resize) alongside "sora"'s own widening -- all 6
-+ * "cloud*" and 7 "star*" objects (name PREFIX match, confirmed by the full
-+ * per-object census: cloud1..cloud6/star1..star7, no other names in this
-+ * model share either prefix).
-+ *
-+ * MP6 native port -- WS25 (docs/WS25_TWEAKS.md; on-device report: the
-+ * day-side clouds still sit too far right of the stretched checkered
-+ * split, not spread evenly across the widened day region -- the night-side
-+ * stars were not reported wrong): split into two separate predicates so
-+ * the call site below can bias clouds and stars independently through the
-+ * same mechanism's new `bias` parameter, instead of one combined predicate
-+ * that could only apply one shared amount to both. */
++/* Matches every decoration sub-object that must REPOSITION (never resize)
++ * alongside "sora"'s own widening -- all 6 "cloud*" and 7 "star*" objects
++ * (name-prefix match; confirmed against the model's full per-object
++ * census that no other names share either prefix). Split into two
++ * predicates (clouds vs. stars) so the call site can bias each
++ * independently: an on-device report found day-side clouds still sitting
++ * too far right of the stretched checkered split, not spread evenly
++ * across the widened day region, while the night-side stars looked
++ * correct -- one shared predicate could only apply one amount to both. */
 +static int mp6_mdsel_sky_is_cloud(const char *name)
 +{
 +    return strncmp(name, "cloud", 5) == 0;
@@ -56,212 +41,103 @@
 +
 @@ -1550,0 +1598,212 @@
 +    }
-+    /* MP6 native port -- WS19 (docs/WS19_SURGICAL_EXTRUDE.md): name predicate
-+     * for mp6_widescreen_extrude_model_selective_horizontal() below, mode-
-+     * select's own sky model (mdlId[2]) equivalent of boot.c's title-STAR
-+     * fix. On-device report: only the checkered day/night split should
-+     * scale, not the clouds/stars -- re-dumped this session with the REAL
-+     * per-face material lookup (mesh.attribute/mesh.material are WHOLE-ARRAY
-+     * pointer artifacts, always index 0 -- see boot.c.patch's own WS19
-+     * comment for the full mechanism): "sora"'s own bound texture is
-+     * literally named "sora" (its own dedicated checkered day/night image);
-+     * every "cloud1".."cloud6"/"star1".."star7" object instead shares ONE
-+     * "cloudstar" decoration atlas, a texture "sora" never references --
-+     * confirming clouds/stars are genuinely separate sub-objects (their own
-+     * vertex buffers, their own distinct texture) sitting in front of (Z=
-+     * -1600 vs sora's Z=-2000) the checkered plane, not baked into it. Per
-+     * this mission's own rule ("if they're separate sub-objects, leave them
-+     * native"), only "sora" is matched -- clouds/stars keep their own
-+     * native scale/position, same treatment as title's chara* + copy + rogo. */
-+    /* MP6 native port -- WS12 (docs/WS11_EXTRUDE_BACKDROPS.md): mode-
-+     * select's plaza scene is 3 models from one DATANUM block, the exact
-+     * same shape as mdpartydll's own fn_1_861C trio (pillar/floor/props)
-+     * -- but NOT the same roles. HSF diagnostic dump (this session):
-+     * mdlId[0] (60 sub-objects: "ground", "Mt1-3" mountains, "shima1-6"
-+     * islands, "bridge1-4", "wood1-29" deco, "haiK*" hedge/rope, "flower
-+     * 1-3") is the real 3D island TERRAIN the plaza sits on -- ground/prop
-+     * content, exactly like mdpartydll's own "yuka" floor, and stays
-+     * UNTOUCHED per that same precedent (confirmed by capture too: no
-+     * edge-cutoff traced to this model -- the visible corner gaps are the
-+     * sky and ocean pieces below). mdlId[2] ("sora" sky panel + "cloud1-6"
-+     * + "star1-7") is the checkered day/night sky backdrop -- confirmed
-+     * GX_CLAMP ("cloudstar"/"sora" bitmaps), so it gets the scale-about-
-+     * center mechanism.
++    /* Mode-select's plaza scene is 3 models from one data block, the same
++     * shape as mdpartydll's own terrain/floor/props trio but different
++     * roles: mdlId[0] (ground, mountains, islands, bridges, hedges/rope,
++     * flowers) is the real 3D island terrain the plaza sits on and stays
++     * untouched, same as mdpartydll's own floor precedent. mdlId[2]
++     * ("sora" sky panel + 6 "cloud*" + 7 "star*" decorations) is the
++     * checkered day/night sky backdrop, confirmed GX_CLAMP, so it gets the
++     * scale-about-center mechanism.
 +     *
-+     * MP6 native port -- WS15 (docs/WS15_SELECTIVE_EXTRUDE.md; on-device
-+     * user report: "the water is [messed] up, there's no water foam and
-+     * the model isn't properly adjusted for clipping" -- red-circled
-+     * bottom-left/bottom-right corners of this exact scene): mdlId[1]
-+     * ("sea"/"sea1", 2 geometrically-identical overlapping wave layers,
-+     * both material "sea"/attribute "ocean") IS attribute-flagged
-+     * wrapS=wrapT=1 (GX_REPEAT) -- WS12's own original reading of that flag
-+     * was accurate, and its own mesh+UV edge-extrude
-+     * (mp6_widescreen_extrude_model_repeat(), still below in this file)
-+     * was a reasonable reading of it. Re-investigated this session (raw
-+     * vertex+ST dump, not just the wrap-mode flag) because the user's own
-+     * on-device testing found it visibly wrong: every one of both
-+     * "sea"/"sea1"'s own 176 authored ST (UV) coordinates sampled in the
-+     * dump stays inside plain [0,1] -- this mesh's texture is unwrapped
-+     * ONCE across its own surface, never actually re-tiled, so the REPEAT
-+     * flag is not functionally exercised by this asset's own authored UV
-+     * data (same "flag set but not actually used for tiling" wrinkle
-+     * WS12's own doc already flagged for file-select's unrelated orphaned
-+     * REPEAT attribute). mp6_widescreen_extrude_model_repeat()'s own
-+     * mesh+UV scale-together math is the WRONG tool for a UV layout that
-+     * was never meant to re-tile at all: scaling ST coordinates that are
-+     * meant to stay FIXED (a one-time unwrap, not a repeat unit) shifts
-+     * which part of the "ocean" texture image lands on which vertex --
-+     * plausibly harmful, though NOT confirmed as the foam's actual root
-+     * cause (see below). Switched to mp6_widescreen_extrude_model_xz()
-+     * (this file already uses this exact function for mdpartydll's own
-+     * analogous flat, near-zero-Y-extent ground-plane case, "yuka") -- a
-+     * whole-piece scale-about-center that NEVER touches vertex or ST data
-+     * at all, so this mesh's own native UV-to-geometry registration stays
-+     * byte-identical to native while the whole plane grows about its own
-+     * true center; X+Z only (Y left untouched -- this plane's own Y-extent
-+     * is a near-flat +-20 units, negligible against its 1799/3000-unit X/Z
-+     * extents, so there is no real "vertical coverage" need, matching the
-+     * Party floor's own established reasoning for choosing XZ over
-+     * isotropic). "sea"/"sea1" share IDENTICAL geometry/base-transform, so
-+     * growing the MODEL's own shared top-level transform keeps them
-+     * perfectly overlapping afterward, exactly as they were natively. This
-+     * DOES directly fix the reported corner-clipping (re-confirmed by
-+     * direct corner-pixel sampling at 2560x1180, docs/
-+     * WS15_SELECTIVE_EXTRUDE.md section 3.2): reuses the SAME
-+     * mp6_ws_model_center()-based bbox-center growth every other CLAMP
-+     * backdrop in this project already relies on to close a corner gap,
-+     * rather than the REPEAT mechanism's own separate per-object local-
-+     * center math.
++     * mdlId[1] ("sea"/"sea1", 2 geometrically-identical overlapping wave
++     * layers) is attribute-flagged GX_REPEAT, which first read as calling
++     * for the mesh+UV edge-extrude mechanism. Re-investigated after an
++     * on-device report that the water looked wrong at wide aspect (a raw
++     * vertex+ST dump, not just the wrap-mode flag): every one of this
++     * mesh's own authored UV coordinates stays inside plain [0,1] -- the
++     * texture is unwrapped once across the surface and never actually
++     * re-tiled, so the REPEAT flag is set but not functionally exercised
++     * by this asset's own UV data. Scaling ST coordinates that were meant
++     * to stay fixed would shift which part of the texture lands on which
++     * vertex, so switched to a whole-piece XZ scale-about-center (the same
++     * function used for mdpartydll's own flat, near-zero-Y-extent floor)
++     * that never touches vertex or ST data at all -- both wave layers
++     * share identical geometry/transform, so growing the model's shared
++     * top-level transform keeps them perfectly overlapping, exactly as
++     * natively. This directly fixed the reported corner-clipping.
 +     *
-+     * FOAM IS NOT RESTORED BY THIS CHANGE -- investigated, not guessed:
-+     * a fresh, fully NATIVE capture (Widescreen disabled entirely) of this
-+     * exact "Welcome to the Party!" scene ALSO shows no foam decal at
-+     * "sea"/"sea1"'s own shoreline, compared against a genuine pre-
-+     * widescreen port-native reference
-+     * (docs/history/screenshots/uw1_02_modeselect_plaza.png) that shows it
-+     * clearly. Since the absence reproduces with Widescreen fully off, it
-+     * is independent of which extrude mechanism this call site uses --
-+     * a pre-existing rendering gap, not something this line's own choice
-+     * of _repeat vs _xz caused or can fix. See docs/
-+     * WS15_SELECTIVE_EXTRUDE.md section 3.3 for the full comparison and a
-+     * concrete next lead (this model's own "sea"/"sea1" are exactly
-+     * coincident geometry -- plausible Z-test/draw-order occlusion, or a
-+     * baked HSF motion-driven bitmap swap onto the currently-unbound
-+     * "ocean_D" attribute that isn't completing) for whoever picks this up
-+     * next; not root-caused further here, out of this lane's own mandate. */
++     * Foam is NOT restored by this change -- investigated, not guessed: a
++     * fully native capture (widescreen disabled entirely) of this same
++     * scene also shows no foam decal at the shoreline, compared against an
++     * older port-native reference screenshot that shows it clearly. Since
++     * the absence reproduces with widescreen fully off, it is a
++     * pre-existing rendering gap independent of which extrude mechanism
++     * this call site uses (a plausible lead for whoever picks it up next:
++     * the two wave layers are exactly coincident geometry, so a Z-test/
++     * draw-order occlusion or an unbound animated texture swap are both
++     * plausible causes) -- not root-caused further here.
++     */
 +    mp6_widescreen_extrude_model_xz(obj->mdlId[1]);
-+    /* MP6 native port -- WS19 (docs/WS19_SURGICAL_EXTRUDE.md; on-device
-+     * report: "only the checkered day/night split should scale, not the
-+     * clouds and stars"): mdlId[2] mixes the checkered sky plane ("sora")
-+     * with 6 "cloud*" and 7 "star*" decoration sub-objects in ONE model,
-+     * exactly the same shape of defect WS15 found (and WS19 then corrected)
-+     * for boot.c's title collage. Switched from the WHOLE-MODEL isotropic
-+     * mp6_widescreen_extrude_model() (grew clouds/stars right along with the
-+     * sky) to mp6_widescreen_extrude_model_selective_horizontal() with
-+     * mp6_mdsel_sky_is_split() (above) -- grows ONLY "sora"'s own raw vertex
-+     * data horizontally about the model's shared bbox center; every cloud/
-+     * star sub-object's vertex data, and the model's OWN top-level pos/
-+     * scale, are left completely untouched (no call site touches them at
-+     * all now). A side effect worth recording: the OLD isotropic mechanism
-+     * also scaled Y (and Z), shifting the sky's own bottom edge (where it
-+     * meets the water/terrain horizon) vertically by (1-k)*scale.y*center.y
-+     * -- a plausible contributor to the user's own circled left/right
-+     * water-line seam. The new mechanism touches ONLY sora's local X, so its
-+     * Y/Z framing is now byte-identical to native at every window shape --
-+     * verified at 2560x1180 (docs/ws19/*mdsel*) alongside this fix.
++    /* mdlId[2] mixes the checkered sky plane ("sora") with 6 "cloud*" and 7
++     * "star*" decoration sub-objects in one model. Per-face material
++     * lookup confirmed "sora" has its own dedicated texture while the
++     * clouds/stars share a different, unrelated decoration atlas -- they
++     * are genuinely separate sub-objects layered in front of the sky
++     * plane, not baked into it. Grows only "sora"'s own raw vertex data
++     * horizontally about the model's shared bbox center (selective
++     * stretch); every cloud/star sub-object, and the model's own top-level
++     * pos/scale, are left untouched. The earlier whole-model isotropic
++     * scale also scaled Y (and Z), shifting the sky's own bottom edge
++     * (where it meets the water/terrain horizon) vertically -- a plausible
++     * contributor to a previously reported water-line seam; the selective
++     * mechanism touches only local X, so Y/Z framing is now byte-identical
++     * to native at every window shape.
 +     *
-+     * MP6 native port -- WS19 refinement (on-device report, watching this
-+     * fix's own first cut in progress): leaving clouds/stars at a FIXED
-+     * native position (the first cut's own behavior) left them visibly
-+     * mismatched once "sora"'s own checkered boundary widened out from
-+     * center without them -- a day-side cloud could end up over the
-+     * (now-wider) night half, and vice versa for a night-side star. Added
-+     * mp6_widescreen_extrude_model_selective_reposition_x() (platform/hsf/
-+     * mp6_widescreen_extrude.c / shim/include/mp6_widescreen.h) with
-+     * mp6_mdsel_sky_is_decoration() (above, matches "cloud*"/"star*"):
-+     * scales ONLY each matched object's own POSITION outward from the SAME
-+     * shared bbox center by the SAME scale_factor() "sora" itself grows by
-+     * (so a decoration that started on one side of the boundary stays on
-+     * that side as the boundary widens to match) -- but copies its own
-+     * vertex data through as a pure rigid translation, no per-vertex scale
-+     * term at all, so every cloud/star stays byte-identical in its own
-+     * size/shape to native, only relocated.
++     * Leaving clouds/stars at a fixed native position (the first cut of
++     * this fix) left them visibly mismatched once "sora"'s own checkered
++     * boundary widened out from center without them -- a day-side cloud
++     * could end up over the now-wider night half, and vice versa for a
++     * night-side star. Fixed with a position-only reposition: each matched
++     * decoration's position (never its vertex data) scales outward from
++     * the same shared bbox center by the same factor "sora" itself grows
++     * by, so a decoration that started on one side of the boundary stays
++     * on that side as the boundary widens -- every cloud/star stays
++     * byte-identical in size/shape to native, only relocated. Clouds and
++     * stars use different bias factors (stars keep the original 1:1
++     * formula; clouds move twice as far) because clouds still looked
++     * bunched up near the day/night boundary at the 1:1 rate.
 +     *
-+     * MP6 native port -- WS25 (docs/WS25_TWEAKS.md; on-device report:
-+     * clouds still sit too far right of the stretched split, not spread
-+     * across the full widened day region -- stars were not reported
-+     * wrong): the single combined `mp6_mdsel_sky_is_decoration` call above
-+     * applied the identical `bias=1.0f` (implicit) formula to clouds AND
-+     * stars alike, which cannot express "push clouds further than stars".
-+     * Split into two calls against `mp6_widescreen_extrude_model_selective_
-+     * reposition_x()`'s new `bias` parameter (platform/hsf/
-+     * mp6_widescreen_extrude.c / shim/include/mp6_widescreen.h): stars keep
-+     * `bias=1.0f`, the exact original formula, byte-identical to before this
-+     * lane; clouds get `bias=2.0f`, DOUBLING their departure from native
-+     * (relative to the plain scale_factor() treatment) about the shared bbox
-+     * center (i.e. the SAME direction WS19's own formula already moves them,
-+     * just a bigger step -- `1.5f` was tried first and on-device capture
-+     * showed it too small a step to read as a real difference from `1.0f`
-+     * once the per-cloud independent drift animation's own noise is
-+     * accounted for), so they stay spread across the day region as it
-+     * stretches instead of bunching up near the day/night boundary.
++     * A repositioning bug was caught and fixed before landing: an early
++     * version let each of the two reposition calls compute its own shared
++     * center independently, but that center reads every matched-or-not
++     * object's current position, so the star call's own writes were
++     * visible to the cloud call's later, separate recomputation -- the two
++     * calls silently used different centers (measured ~550 units apart),
++     * enough to flip the sign of the correction for the cloud sitting
++     * closest to center. Fixed by snapshotting the center once, right
++     * after "sora"'s own widen, and passing that same frozen value to both
++     * calls.
 +     *
-+     * MP6 native port -- WS25 own on-device pitfall, caught and fixed
-+     * before landing (docs/WS25_TWEAKS.md): a first cut called
-+     * mp6_widescreen_extrude_model_selective_reposition_x() letting it
-+     * compute its OWN shared center internally on BOTH calls (as it used to
-+     * for the single combined call) -- but that function's center comes
-+     * from `mp6_ws_model_center()`, which reads every matched-or-not
-+     * object's CURRENT `mesh.base.pos` (the star call's own writes are
-+     * therefore visible to the cloud call's later, independent
-+     * recomputation). Confirmed on-device via a temporary diagnostic dump:
-+     * this silently handed the cloud call a DIFFERENT center than the star
-+     * call used (measured ~550 units apart at 2560x1180) -- enough to flip
-+     * the sign of the correction for the cloud sitting closest to center,
-+     * moving it the WRONG way (toward the boundary instead of away from
-+     * it), which is exactly the bug the first on-device capture caught.
-+     * Fixed by snapshotting the center ONCE via the new
-+     * `mp6_widescreen_model_center_x()` (right after "sora"'s own widen
-+     * call, the same point in the sequence the ORIGINAL single combined
-+     * call used to compute its own center) and passing that SAME frozen
-+     * value to BOTH calls below -- stars are therefore still using the
-+     * IDENTICAL center they always have (byte-identical to pre-WS25), and
-+     * clouds are now measured from that SAME true reference instead of one
-+     * already skewed by the star call's own writes. Tuned on-device against
-+     * the checkered split at 2560x1180 (docs/WS25_TWEAKS.md).
++     * The selective horizontal STRETCH of "sora"'s own vertices was later
++     * replaced by a periodic-tile extension instead: stretching visibly
++     * widened the hand-painted checker pattern, so now "sora"'s own
++     * vertices stay pixel-native and border strips are appended into its
++     * buffers that continue the checker outward at native scale, sampling
++     * period-aligned windows of the same texture (measured empirically:
++     * day 93px / night 95px of the 512-wide texture) so the tile seam is
++     * invisible. Reach matches the old stretch's own extent exactly, so
++     * this is a visual swap, not a size change.
 +     *
-+     * MP6 native port -- WS27 (tools/mp6scene/WS_NATURAL_EXTENSION_SPEC.md):
-+     * the WS19 selective horizontal STRETCH of "sora"'s own vertices that
-+     * used to lead this sequence is REPLACED by the periodic-TILE
-+     * extension: sora's own verts now stay pixel-native (native diamond
-+     * proportions at every window shape -- the stretch visibly widened
-+     * the hand-painted checker) and mp6_widescreen_extend_tiles() appends
-+     * per-side border strips into sora's OWN buffers that continue the
-+     * checker outward at native scale, sampling the measured
-+     * period-aligned windows of the same bitmap (day 93 px / night 95 px
-+     * of the 512-wide texture -- exhaustive shift search, spec section
-+     * 1.1; the CLAMP sampler needs no override, all strip UVs stay inside
-+     * [0,1]). Reach matches the shipped stretch's own +-3000k exactly
-+     * (k=1.625 -> 2+2 strips, 1.775 -> 3+3, k=1 -> zero -- default-off
-+     * byte-identical); kCap=4.0f sizes the fixed appended capacity
-+     * (covers ~5.3:1, far past any real display). Design A/B proof:
-+     * tools/mp6scene/build/wsdesign_modeselect_*.png.
-+     *
-+     * THE LOAD-BEARING ORDER (spec section 2, "skyCenterX"): the shipped
-+     * pipeline snapshotted model_center_x AFTER the stretch had widened
-+     * sora about the model's hierarchical centre (+702.95 -- clouds and
-+     * stars pull it off axis), so the value the star/cloud repositions
-+     * consumed was k-DEPENDENT (-439.35 at k=1.625, -544.79 at 1.775).
-+     * Sora no longer widens, so that snapshot is reproduced in CLOSED
-+     * FORM by mp6_widescreen_model_center_x_widened(mdlId, "sora") --
-+     * verified bit-equal against the shipped-order computation on this
-+     * exact model's data at k=1/1.625/1.775 -- and the repositions below
-+     * are UNCHANGED, consuming the identical value they always did:
-+     * clouds and stars land pixel-identically to the shipped build. The
-+     * snapshot is taken FIRST (the closed form mutates nothing, but the
-+     * tile registration extends sora's live mesh.min/max, which any LATER
-+     * bbox read would see -- order pinned by the spec), the tiles are
-+     * registered LAST. */
++     * Since "sora" no longer widens, the shared center the star/cloud
++     * repositions consume can no longer be read directly off its live
++     * bbox after the (now nonexistent) stretch -- it's reproduced in
++     * closed form instead (mp6_widescreen_model_center_x_widened()),
++     * verified bit-equal against the old stretch-then-read computation at
++     * several k values, so clouds and stars still land pixel-identically
++     * to the original shipped build. That snapshot is taken FIRST, before
++     * the tile registration extends sora's own live bbox, since a later
++     * bbox read would see the extended (not the original) extent. */
 +    {
 +        float skyCenterX = mp6_widescreen_model_center_x_widened(obj->mdlId[2], "sora");
 +        mp6_widescreen_extrude_model_selective_reposition_x(obj->mdlId[2], mp6_mdsel_sky_is_star, 1.0f, skyCenterX);

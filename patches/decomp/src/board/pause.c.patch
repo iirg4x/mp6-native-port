@@ -1,28 +1,24 @@
 --- a/src/board/pause.c
 +++ b/src/board/pause.c
 @@ -13,0 +14 @@
-+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -750,2 +751,21 @@
 -        mbWinSizeSet(work->mgWin[i], 268, winSize.y);
 -        mbWinPosSet(work->mgWin[i], winPos.x + ((i & 1) ? 268 : 0), winPos.y);
-+        /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): reference ROM hack sites
-+         * #10/#11 (WS_REFERENCE_STUDY.md section 4) -- these two side-by-
-+         * side minigame-description windows' WIDTH (the 268 below) and the
-+         * horizontal OFFSET placing the SECOND window flush against the
-+         * first (the OTHER 268, in mbWinPosSet) are the same conceptual
-+         * quantity used twice in two different function calls -- the
-+         * study's own port-native plan explicitly flags these as needing
-+         * to "move in lockstep" (#11 depends on #10's value), which is
-+         * why this is an individual, targeted fix (both derived from the
-+         * SAME literal via the SAME factor, right here) rather than
-+         * something the generic position-shift shim (sprman.c's
-+         * HuSprGrpPosSet) could keep synchronized on its own --
-+         * mbWinSizeSet itself is deliberately NOT globally wrapped (a
-+         * window's on-screen centering is often computed by its OWN
-+         * caller from its own local, unscaled size variable elsewhere in
-+         * this codebase; scaling sizes globally would desync those call
-+         * sites' own half-width math from the actual rendered size).
-+         * 1.0f (no-op) when disabled. */
++        /* These two side-by-side minigame-description windows' WIDTH (the
++         * 268 below) and the horizontal OFFSET placing the SECOND window
++         * flush against the first (the OTHER 268, in mbWinPosSet) are the
++         * same conceptual quantity used twice in two different function
++         * calls that must move in lockstep, which is why this is an
++         * individual, targeted fix (both derived from the SAME literal via
++         * the SAME factor, right here) rather than something the generic
++         * position-shift shim (sprman.c's HuSprGrpPosSet) could keep
++         * synchronized on its own -- mbWinSizeSet itself is deliberately
++         * NOT globally wrapped (a window's on-screen centering is often
++         * computed by its OWN caller from its own local, unscaled size
++         * variable elsewhere in this codebase; scaling sizes globally
++         * would desync those call sites' own half-width math from the
++         * actual rendered size). No-op when disabled. */
 +        mbWinSizeSet(work->mgWin[i], 268 * mp6_widescreen_scale_factor(), winSize.y);
 +        mbWinPosSet(work->mgWin[i],
 +            winPos.x + ((i & 1) ? (268 * mp6_widescreen_scale_factor()) : 0), winPos.y);

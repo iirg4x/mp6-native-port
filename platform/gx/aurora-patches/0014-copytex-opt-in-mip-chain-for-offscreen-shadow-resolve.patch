@@ -1,0 +1,523 @@
+diff --git a/include/dolphin/gx/GXAurora.h b/include/dolphin/gx/GXAurora.h
+index 3ee2cd4..75f380e 100644
+--- a/include/dolphin/gx/GXAurora.h
++++ b/include/dolphin/gx/GXAurora.h
+@@ -79,6 +79,15 @@ extern "C" {
+ 
+ #define GX_AURORA_END_OFFSCREEN 0x003A
+ 
++/**
++ * Enables/disables renderer-generated mip chains for subsequent GXCopyTex
++ * resolves. Must be followed by one u8 (0 = off, nonzero = on). Sticky state,
++ * default off; while on, each resolved copy texture is created with a full
++ * mip chain that is regenerated (downsample blit chain) after every resolve,
++ * and GX_LINEAR-filtered binds of that texture sample it trilinearly.
++ */
++#define GX_AURORA_SET_COPY_MIP_GEN 0x003B
++
+ /**
+  * Draw primitives with the vertex count derived from a byte length, as written by
+  * GXBegin(prim, fmt, GX_AUTO). Must be followed by a u8 draw opcode (vtxfmt|prim),
+@@ -168,6 +177,13 @@ void GXCreateFrameBuffer(u32 width, u32 height);
+  */
+ void GXRestoreFrameBuffer(void);
+ 
++/**
++ * Opt subsequent GXCopyTex resolves in/out of renderer-generated mip chains
++ * (see GX_AURORA_SET_COPY_MIP_GEN). Default off; copies made while off keep
++ * their existing single-level behavior bit-for-bit.
++ */
++void GXSetTexCopyMipGen(u32 enable);
++
+ #if __cplusplus
+ }
+ #endif
+diff --git a/lib/dolphin/gx/GXAurora.cpp b/lib/dolphin/gx/GXAurora.cpp
+index af3c4cb..10f66a4 100644
+--- a/lib/dolphin/gx/GXAurora.cpp
++++ b/lib/dolphin/gx/GXAurora.cpp
+@@ -92,3 +92,8 @@ void GXCreateFrameBuffer(u32 width, u32 height) {
+ void GXRestoreFrameBuffer() {
+   GX_WRITE_AURORA(GX_AURORA_END_OFFSCREEN);
+ }
++
++void GXSetTexCopyMipGen(u32 enable) {
++  GX_WRITE_AURORA(GX_AURORA_SET_COPY_MIP_GEN);
++  GX_WRITE_U8(enable != 0);
++}
+diff --git a/lib/dolphin/gx/GXFrameBuffer.cpp b/lib/dolphin/gx/GXFrameBuffer.cpp
+index f8b45b5..6798df3 100644
+--- a/lib/dolphin/gx/GXFrameBuffer.cpp
++++ b/lib/dolphin/gx/GXFrameBuffer.cpp
+@@ -9,6 +9,7 @@
+ #include "../vi/vi_internal.hpp"
+ 
+ #include <algorithm>
++#include <bit>
+ #include <cmath>
+ 
+ namespace {
+@@ -36,25 +37,34 @@ void copy_tex(const void* dest, GXBool clear) noexcept {
+   const auto rect = map_logical_scissor(g_gxState.texCopySrc);
+   const auto [dstWidth, dstHeight] = scale_copy_dst(g_gxState.texCopyDstWidth, g_gxState.texCopyDstHeight);
+   const auto texCopyFmt = g_gxState.texCopyFmt;
++  // GX_AURORA_SET_COPY_MIP_GEN: opt-in full mip chain on the resolve target,
++  // regenerated after every resolve (see render() in gfx/common.cpp). Off
++  // (the default) keeps the existing single-level path untouched.
++  const uint32_t mips =
++      g_gxState.texCopyMipGen ? static_cast<uint32_t>(std::bit_width(std::max(dstWidth, dstHeight))) : 1;
+ 
+   const GXState::CopyTextureKey key{
+       .dest = dest,
+       .width = dstWidth,
+       .height = dstHeight,
+       .format = texCopyFmt,
++      .mips = mips,
+   };
+   auto it = g_gxState.copyTextureCache.find(key);
+   if (it == g_gxState.copyTextureCache.end()) {
+     gfx::TextureHandle handle;
+     if (gfx::tex_copy_conv::needs_conversion(texCopyFmt)) {
+-      handle = gfx::new_conv_texture(dstWidth, dstHeight, texCopyFmt, "Copy Conv Texture");
++      handle = gfx::new_conv_texture(dstWidth, dstHeight, texCopyFmt, "Copy Conv Texture", mips);
+     } else {
+       // Configure the texture swizzle to use alpha 1.0 if targeting RGB565 or EFB doesn't have alpha
+       const auto fmt = texCopyFmt == GX_TF_RGB565 || g_gxState.pixelFmt == GX_PF_RGB8_Z24 ||
+                                g_gxState.pixelFmt == GX_PF_RGB565_Z16
+                            ? GX_TF_RGB565
+                            : GX_TF_RGBA8;
+-      handle = gfx::new_render_texture(dstWidth, dstHeight, fmt, "Resolved Texture");
++      handle = gfx::new_render_texture(dstWidth, dstHeight, fmt, "Resolved Texture", mips);
++    }
++    if (mips > 1) {
++      handle->generatedMips = true;
+     }
+     it = g_gxState.copyTextureCache.emplace(key, GXState::CopyTextureRef{.handle = handle, .revision = 0}).first;
+   }
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+index 7862182..4a45c99 100644
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -1942,6 +1942,12 @@ static void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& pa
+       };
+       cmd.CopyTextureToTexture(&src, &dst, &size);
+     }
++    if (passInfo.resolveTarget->mipCount > 1) {
++      // Renderer-generated mip chain (GX_AURORA_SET_COPY_MIP_GEN): refresh
++      // levels 1..N from the just-resolved level 0. Single-level targets (the
++      // default) never reach this.
++      tex_copy_conv::generate_mips(cmd, *passInfo.resolveTarget);
++    }
+   }
+ 
+   if (passInfo.snapshotColorDst) {
+diff --git a/lib/gfx/tex_copy_conv.cpp b/lib/gfx/tex_copy_conv.cpp
+index c6038f3..6510662 100644
+--- a/lib/gfx/tex_copy_conv.cpp
++++ b/lib/gfx/tex_copy_conv.cpp
+@@ -321,6 +321,116 @@ static wgpu::BindGroupLayout g_depthSnapshotBindGroupLayout;
+ static wgpu::BindGroupLayout g_depthSnapshotBindGroupLayoutMS;
+ static wgpu::RenderPipeline g_depthSnapshotPipeline;
+ static wgpu::RenderPipeline g_depthSnapshotPipelineMS;
++static wgpu::BindGroupLayout g_mipBindGroupLayout;
++static absl::flat_hash_map<wgpu::TextureFormat, wgpu::RenderPipeline> g_mipPipelines;
++
++// Mip downsample blit: fullscreen triangle, linear sample of the previous
++// level, no uniforms (identity UV). Self-contained so it needs no per-frame
++// uniform range, unlike the resolve shaders above.
++static constexpr std::string_view MipGenShader = R"(
++@group(0) @binding(0) var src_samp: sampler;
++@group(0) @binding(1) var src: texture_2d<f32>;
++
++struct VertexOutput {
++    @builtin(position) pos: vec4f,
++    @location(0) uv: vec2f,
++};
++
++var<private> positions: array<vec2f, 3> = array(
++    vec2f(-1.0, 1.0),
++    vec2f(-1.0, -3.0),
++    vec2f(3.0, 1.0),
++);
++var<private> uvs: array<vec2f, 3> = array(
++    vec2f(0.0, 0.0),
++    vec2f(0.0, 2.0),
++    vec2f(2.0, 0.0),
++);
++
++@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
++    var out: VertexOutput;
++    out.pos = vec4f(positions[vi], 0.0, 1.0);
++    out.uv = uvs[vi];
++    return out;
++}
++
++@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
++    return textureSample(src, src_samp, in.uv);
++}
++)"sv;
++
++static const wgpu::RenderPipeline& get_mip_pipeline(wgpu::TextureFormat format) {
++  if (const auto it = g_mipPipelines.find(format); it != g_mipPipelines.end()) {
++    return it->second;
++  }
++  if (!g_mipBindGroupLayout) {
++    static constexpr std::array mipBindGroupLayoutEntries{
++        wgpu::BindGroupLayoutEntry{
++            .binding = 0,
++            .visibility = wgpu::ShaderStage::Fragment,
++            .sampler =
++                wgpu::SamplerBindingLayout{
++                    .type = wgpu::SamplerBindingType::Filtering,
++                },
++        },
++        wgpu::BindGroupLayoutEntry{
++            .binding = 1,
++            .visibility = wgpu::ShaderStage::Fragment,
++            .texture =
++                wgpu::TextureBindingLayout{
++                    .sampleType = wgpu::TextureSampleType::Float,
++                    .viewDimension = wgpu::TextureViewDimension::e2D,
++                },
++        },
++    };
++    static constexpr wgpu::BindGroupLayoutDescriptor mipBindGroupLayoutDescriptor{
++        .label = "TexCopyConv MipGen Bind Group Layout",
++        .entryCount = mipBindGroupLayoutEntries.size(),
++        .entries = mipBindGroupLayoutEntries.data(),
++    };
++    g_mipBindGroupLayout = g_device.CreateBindGroupLayout(&mipBindGroupLayoutDescriptor);
++  }
++
++  const wgpu::ShaderSourceWGSL wgslSource{wgpu::ShaderSourceWGSL::Init{
++      .code = MipGenShader.data(),
++  }};
++  const wgpu::ShaderModuleDescriptor moduleDescriptor{
++      .nextInChain = &wgslSource,
++      .label = "TexCopyConv MipGen",
++  };
++  const auto module = g_device.CreateShaderModule(&moduleDescriptor);
++
++  const std::array colorTargets{wgpu::ColorTargetState{
++      .format = format,
++  }};
++  const wgpu::FragmentState fragmentState{
++      .module = module,
++      .entryPoint = "fs_main",
++      .targetCount = colorTargets.size(),
++      .targets = colorTargets.data(),
++  };
++  const wgpu::PipelineLayoutDescriptor layoutDescriptor{
++      .bindGroupLayoutCount = 1,
++      .bindGroupLayouts = &g_mipBindGroupLayout,
++  };
++  const auto pipelineLayout = g_device.CreatePipelineLayout(&layoutDescriptor);
++  const wgpu::RenderPipelineDescriptor pipelineDescriptor{
++      .label = "TexCopyConv MipGen",
++      .layout = pipelineLayout,
++      .vertex =
++          wgpu::VertexState{
++              .module = module,
++              .entryPoint = "vs_main",
++          },
++      .primitive =
++          wgpu::PrimitiveState{
++              .topology = wgpu::PrimitiveTopology::TriangleList,
++          },
++      .fragment = &fragmentState,
++  };
++  auto [insertIt, _] = g_mipPipelines.emplace(format, g_device.CreateRenderPipeline(&pipelineDescriptor));
++  return insertIt->second;
++}
+ 
+ static wgpu::BindGroupLayout create_depth_snapshot_layout(bool multisampled, const char* label) {
+   const std::array entries{
+@@ -550,6 +660,8 @@ void shutdown() {
+   g_depthSnapshotBindGroupLayoutMS = {};
+   g_depthSnapshotPipeline = {};
+   g_depthSnapshotPipelineMS = {};
++  g_mipBindGroupLayout = {};
++  g_mipPipelines.clear();
+ }
+ 
+ static void execute(const wgpu::CommandEncoder& cmd, const ConvRequest& req, const wgpu::RenderPipeline& pipeline) {
+@@ -637,6 +749,71 @@ void run(const wgpu::CommandEncoder& cmd, const ConvRequest& req) {
+ 
+ void blit(const wgpu::CommandEncoder& cmd, const ConvRequest& req) { execute(cmd, req, g_blitPipeline); }
+ 
++void generate_mips(const wgpu::CommandEncoder& cmd, const TextureRef& ref) {
++  if (ref.mipCount <= 1) {
++    return;
++  }
++  const auto& pipeline = get_mip_pipeline(ref.format);
++  if (!pipeline) {
++    return;
++  }
++  const webgpu::gpu_prof::Zone zone{cmd, "EFB copy mipgen"};
++  for (uint32_t mip = 1; mip < ref.mipCount; ++mip) {
++    const wgpu::TextureViewDescriptor srcViewDescriptor{
++        .label = "MipGen src view",
++        .format = ref.format,
++        .dimension = wgpu::TextureViewDimension::e2D,
++        .baseMipLevel = mip - 1,
++        .mipLevelCount = 1,
++    };
++    const auto srcView = ref.texture.CreateView(&srcViewDescriptor);
++    const wgpu::TextureViewDescriptor dstViewDescriptor{
++        .label = "MipGen dst view",
++        .format = ref.format,
++        .dimension = wgpu::TextureViewDimension::e2D,
++        .baseMipLevel = mip,
++        .mipLevelCount = 1,
++    };
++    const auto dstView = ref.texture.CreateView(&dstViewDescriptor);
++
++    const std::array bindGroupEntries{
++        wgpu::BindGroupEntry{
++            .binding = 0,
++            .sampler = g_linearSampler,
++        },
++        wgpu::BindGroupEntry{
++            .binding = 1,
++            .textureView = srcView,
++        },
++    };
++    const wgpu::BindGroupDescriptor bindGroupDescriptor{
++        .layout = g_mipBindGroupLayout,
++        .entryCount = bindGroupEntries.size(),
++        .entries = bindGroupEntries.data(),
++    };
++    const auto bindGroup = g_device.CreateBindGroup(&bindGroupDescriptor);
++
++    const std::array colorAttachments{
++        wgpu::RenderPassColorAttachment{
++            .view = dstView,
++            .loadOp = wgpu::LoadOp::Clear,
++            .storeOp = wgpu::StoreOp::Store,
++            .clearValue = {0.0, 0.0, 0.0, 0.0},
++        },
++    };
++    const wgpu::RenderPassDescriptor renderPassDescriptor{
++        .label = "TexCopyConv MipGen Pass",
++        .colorAttachmentCount = colorAttachments.size(),
++        .colorAttachments = colorAttachments.data(),
++    };
++    const auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
++    pass.SetPipeline(pipeline);
++    pass.SetBindGroup(0, bindGroup);
++    pass.Draw(3);
++    pass.End();
++  }
++}
++
+ bool snapshot_depth_supported() noexcept { return static_cast<bool>(g_depthSnapshotPipeline); }
+ 
+ void snapshot_depth(const wgpu::CommandEncoder& cmd, const wgpu::TextureView& srcDepth, uint32_t msaaSamples,
+diff --git a/lib/gfx/tex_copy_conv.hpp b/lib/gfx/tex_copy_conv.hpp
+index 8fb9f7b..2a43228 100644
+--- a/lib/gfx/tex_copy_conv.hpp
++++ b/lib/gfx/tex_copy_conv.hpp
+@@ -26,6 +26,11 @@ void shutdown();
+ void run(const wgpu::CommandEncoder& cmd, const ConvRequest& req);
+ void blit(const wgpu::CommandEncoder& cmd, const ConvRequest& req);
+ 
++// Regenerate mip levels 1..N of a texture from its level 0 (linear 2x2
++// downsample blit chain). Used after resolving an EFB/offscreen copy into a
++// texture created with a mip chain (GX_AURORA_SET_COPY_MIP_GEN).
++void generate_mips(const wgpu::CommandEncoder& cmd, const TextureRef& ref);
++
+ bool snapshot_depth_supported() noexcept;
+ void snapshot_depth(const wgpu::CommandEncoder& cmd, const wgpu::TextureView& srcDepth, uint32_t msaaSamples,
+                     const wgpu::TextureView& dst);
+diff --git a/lib/gfx/texture.cpp b/lib/gfx/texture.cpp
+index d6d9b2f..edcaf5d 100644
+--- a/lib/gfx/texture.cpp
++++ b/lib/gfx/texture.cpp
+@@ -146,7 +146,8 @@ TextureHandle new_dynamic_texture_2d(uint32_t width, uint32_t height, uint32_t m
+                                       mips, gxFormat);
+ }
+ 
+-TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label) noexcept {
++TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label,
++                                 uint32_t mips) noexcept {
+   ZoneScoped;
+ 
+   const auto wgpuFormat = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+@@ -161,25 +162,39 @@ TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat,
+       .dimension = wgpu::TextureDimension::e2D,
+       .size = size,
+       .format = wgpuFormat,
+-      .mipLevelCount = 1,
++      .mipLevelCount = mips,
+       .sampleCount = 1,
+   };
+   auto texture = g_device.CreateTexture(&textureDescriptor);
+ 
+-  // Create texture view for color attachments
++  // Create texture view for color attachments. A render attachment view must
++  // cover exactly one mip level, so with a mip chain the attachment view pins
++  // level 0 while the sample view spans the whole chain.
+   const auto viewLabel = fmt::format("{} view", label);
+   wgpu::TextureViewDescriptor textureViewDescriptor{
+       .label = viewLabel.c_str(),
+       .format = wgpuFormat,
+       .dimension = wgpu::TextureViewDimension::e2D,
++      .baseMipLevel = 0,
++      .mipLevelCount = 1,
+   };
+   auto attachmentTextureView = texture.CreateView(&textureViewDescriptor);
+   wgpu::TextureView sampleTextureView = attachmentTextureView;
++  if (mips > 1) {
++    wgpu::TextureViewDescriptor sampleViewDescriptor{
++        .label = viewLabel.c_str(),
++        .format = wgpuFormat,
++        .dimension = wgpu::TextureViewDimension::e2D,
++        .mipLevelCount = mips,
++    };
++    sampleTextureView = texture.CreateView(&sampleViewDescriptor);
++  }
+   return std::make_shared<TextureRef>(std::move(texture), std::move(sampleTextureView),
+-                                      std::move(attachmentTextureView), size, wgpuFormat, 1, gxFormat);
++                                      std::move(attachmentTextureView), size, wgpuFormat, mips, gxFormat);
+ }
+ 
+-TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label) noexcept {
++TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label,
++                               uint32_t mips) noexcept {
+   ZoneScoped;
+ 
+   const auto wgpuFormat = to_wgpu(gxFormat);
+@@ -194,22 +209,34 @@ TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, co
+       .dimension = wgpu::TextureDimension::e2D,
+       .size = size,
+       .format = wgpuFormat,
+-      .mipLevelCount = 1,
++      .mipLevelCount = mips,
+       .sampleCount = 1,
+   };
+   auto texture = g_device.CreateTexture(&textureDescriptor);
+ 
+-  // Create texture view for color attachments
++  // Create texture view for color attachments (single-mip; see
++  // new_render_texture above for the mip-chain split).
+   const auto viewLabel = fmt::format("{} view", label);
+   wgpu::TextureViewDescriptor textureViewDescriptor{
+       .label = viewLabel.c_str(),
+       .format = wgpuFormat,
+       .dimension = wgpu::TextureViewDimension::e2D,
++      .baseMipLevel = 0,
++      .mipLevelCount = 1,
+   };
+   auto attachmentTextureView = texture.CreateView(&textureViewDescriptor);
+   wgpu::TextureView sampleTextureView = attachmentTextureView;
++  if (mips > 1) {
++    wgpu::TextureViewDescriptor sampleViewDescriptor{
++        .label = viewLabel.c_str(),
++        .format = wgpuFormat,
++        .dimension = wgpu::TextureViewDimension::e2D,
++        .mipLevelCount = mips,
++    };
++    sampleTextureView = texture.CreateView(&sampleViewDescriptor);
++  }
+   return std::make_shared<TextureRef>(std::move(texture), std::move(sampleTextureView),
+-                                      std::move(attachmentTextureView), size, wgpuFormat, 1, gxFormat);
++                                      std::move(attachmentTextureView), size, wgpuFormat, mips, gxFormat);
+ }
+ 
+ void write_texture(TextureRef& ref, ArrayRef<uint8_t> data) noexcept {
+diff --git a/lib/gfx/texture.hpp b/lib/gfx/texture.hpp
+index 18c2813..1b2d4b6 100644
+--- a/lib/gfx/texture.hpp
++++ b/lib/gfx/texture.hpp
+@@ -43,6 +43,10 @@ struct TextureRef {
+   u32 gxFormat;
+   bool hasArbitraryMips = false;
+   bool isReplacement = false;
++  // Renderer-generated mip chain (GX_AURORA_SET_COPY_MIP_GEN copy resolves):
++  // GX_LINEAR binds of this texture sample the chain trilinearly even though
++  // the guest texobj itself is single-level.
++  bool generatedMips = false;
+ 
+   TextureRef(wgpu::Texture texture, wgpu::TextureView sampleTextureView, wgpu::TextureView attachmentTextureView,
+              wgpu::Extent3D size, wgpu::TextureFormat format, uint32_t mipCount, u32 gxFormat)
+@@ -59,8 +63,10 @@ TextureHandle new_static_texture_2d(uint32_t width, uint32_t height, uint32_t mi
+                                     ArrayRef<uint8_t> data, bool tlut, const char* label) noexcept;
+ TextureHandle new_dynamic_texture_2d(uint32_t width, uint32_t height, uint32_t mips, u32 gxFormat,
+                                      const char* label) noexcept;
+-TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label) noexcept;
+-TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label) noexcept;
++TextureHandle new_render_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label,
++                                 uint32_t mips = 1) noexcept;
++TextureHandle new_conv_texture(uint32_t width, uint32_t height, u32 gxFormat, const char* label,
++                               uint32_t mips = 1) noexcept;
+ void write_texture(TextureRef& ref, ArrayRef<uint8_t> data) noexcept;
+ }; // namespace aurora::gfx
+ 
+diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
+index 16751d0..8f5fdbf 100644
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -1879,6 +1879,10 @@ void handle_aurora(const u8* data, u32& pos, u32 size, bool bigEndian) {
+     gfx::begin_offscreen(width, height);
+   } else if (subCmd == GX_AURORA_END_OFFSCREEN) {
+     gfx::end_offscreen();
++  } else if (subCmd == GX_AURORA_SET_COPY_MIP_GEN) {
++    CHECK(pos + 1 <= size, "GX_AURORA_SET_COPY_MIP_GEN read overrun");
++    g_gxState.texCopyMipGen = data[pos] != 0;
++    pos += 1;
+   } else if (subCmd == GX_AURORA_DESTROY_TEXOBJ) {
+     CHECK(pos + 4 <= size, "GX_AURORA_DESTROY_TEXOBJ read overrun");
+     evict_texture_object(read_u32(data + pos, bigEndian));
+diff --git a/lib/gx/gx.cpp b/lib/gx/gx.cpp
+index 000fd2a..25d0c3e 100644
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -1043,6 +1043,15 @@ wgpu::SamplerDescriptor aurora::gfx::TextureBind::get_descriptor() const noexcep
+     if (!mipsEnabled) {
+       mipFilter = wgpu::MipmapFilterMode::Nearest;
+     }
++  } else if (ref && ref->generatedMips) {
++    // Renderer-generated mip chain on an EFB-copy texture
++    // (GX_AURORA_SET_COPY_MIP_GEN): the guest texobj is single-level by
++    // construction, so honor its GX_LINEAR min filter with trilinear
++    // sampling across the generated chain instead of pinning LOD 0.
++    minLod = 0.f;
++    maxLod = 1000.f;
++    mipFilter = minFilter == wgpu::FilterMode::Linear ? wgpu::MipmapFilterMode::Linear
++                                                      : wgpu::MipmapFilterMode::Nearest;
+   } else if (mipFilter == wgpu::MipmapFilterMode::Undefined) {
+     minLod = 0.f;
+     maxLod = 0.f;
+diff --git a/lib/gx/gx.hpp b/lib/gx/gx.hpp
+index 539901b..9d3ef6d 100644
+--- a/lib/gx/gx.hpp
++++ b/lib/gx/gx.hpp
+@@ -348,20 +348,26 @@ struct GXState {
+   u32 texCopyDstWidth = 0;
+   u32 texCopyDstHeight = 0;
+   bool texCopyDstWide = false;
++  // GX_AURORA_SET_COPY_MIP_GEN: while set, copy_tex resolves into a texture
++  // that carries a renderer-generated full mip chain. Default off keeps every
++  // existing copy single-level, bit-for-bit.
++  bool texCopyMipGen = false;
+   const void* texCopyDest = nullptr;
+   struct CopyTextureKey {
+     const void* dest = nullptr;
+     u32 width = 0;
+     u32 height = 0;
+     GXTexFmt format = GX_TF_I4;
++    u32 mips = 1;
+ 
+     bool operator==(const CopyTextureKey& rhs) const {
+-      return dest == rhs.dest && width == rhs.width && height == rhs.height && format == rhs.format;
++      return dest == rhs.dest && width == rhs.width && height == rhs.height && format == rhs.format &&
++             mips == rhs.mips;
+     }
+ 
+     template <typename H>
+     friend H AbslHashValue(H h, const CopyTextureKey& key) {
+-      return H::combine(std::move(h), key.dest, key.width, key.height, key.format);
++      return H::combine(std::move(h), key.dest, key.width, key.height, key.format, key.mips);
+     }
+   };
+   absl::flat_hash_map<const void*, CopyTextureRef> copyTextures;

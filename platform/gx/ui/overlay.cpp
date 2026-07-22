@@ -15,7 +15,7 @@
 #include <dolphin/pad.h>
 #include "launcher_state.hpp" /* [MP6] replaces <port/settings.h> */
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): host-owned statics (RmlUi document
+/* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
  * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
  * LEVEL (build.py rejects a conditionally-nested include -- a platform
@@ -277,7 +277,19 @@ void Overlay::update()
         if (cfg().showFps) { /* [MP6] our flat config in place of their ConfigVar registry */
             const int idx = cfg().fpsCorner;
             mFpsCounter->SetAttribute("open", "");
-            mFpsCounter->SetAttribute("corner", kFpsCorners[idx]);
+            const char *corner = kFpsCorners[idx];
+#if defined(__ANDROID__)
+            /* Android touch build: the in-game gear button (platform/android/
+             * touch_pad.cpp) is pinned to the top-left corner and spans ~13% of
+             * the window height from the top. A top-left FPS counter overlaps
+             * it, so shift that one corner clear of the gear (overlay.rcss
+             * fps[corner=tl-gear]); the gear does not exist off Android, so
+             * every other build keeps the plain top-left placement unchanged. */
+            if (idx == 0) {
+                corner = "tl-gear";
+            }
+#endif
+            mFpsCounter->SetAttribute("corner", corner);
 
             const Uint64 perfFreq = SDL_GetPerformanceFrequency();
             float fps = 0.f;

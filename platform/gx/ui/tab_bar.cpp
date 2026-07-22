@@ -4,7 +4,7 @@
 
 #include "tab_bar.hpp"
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): host-owned statics (RmlUi document
+/* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
  * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
  * LEVEL (build.py rejects a conditionally-nested include -- a platform

@@ -35,22 +35,19 @@
 -    objtop = NULL;
 -    return hsf;
 -    
-+    /* MP6 native port -- M3 (docs/M3_HSF.md). Real HSF (3D model) loading
-+     * now goes through a from-scratch native deserializer
-+     * (platform/hsf/hsf_load_native.c) that reads this file's big-endian,
-+     * 32-bit-pointer-width bytes explicitly (never in-place, unlike every
-+     * *Load() function below) and builds a fresh, natively-laid-out
-+     * HSF_DATA graph -- see that file's own header comment for the full
-+     * architecture and docs/M3_HSF.md for the format derivation writeup.
-+     * This replaces the M2 milestone's own inert stub (docs/
-+     * M2B_TITLE_PATH.md's "HSF frontier" section): calling any of the
-+     * *Load() functions below directly on this port's raw (unswapped,
-+     * wrong-stride-on-64-bit) bytes is what produced that milestone's
-+     * genuine Windows access violation a few seconds after the Nintendo
-+     * logo. The functions below stay defined (never called anymore) only
-+     * because they double as this format's own documentation -- see
-+     * hsf_load_native.c's own header comment for exactly how each one's
-+     * logic was ported.
++    /* Real HSF (3D model) loading now goes through a from-scratch native
++     * deserializer (platform/hsf/hsf_load_native.c) that reads this
++     * file's big-endian, 32-bit-pointer-width bytes explicitly (never
++     * in-place, unlike every *Load() function below) and builds a fresh,
++     * natively-laid-out HSF_DATA graph -- see that file's own header
++     * comment for the full architecture. This replaces an earlier inert
++     * stub: calling any of the *Load() functions below directly on this
++     * port's raw (unswapped, wrong-stride-on-64-bit) bytes is what
++     * produced that stub's genuine Windows access violation a few
++     * seconds after the Nintendo logo. The functions below stay defined
++     * (never called anymore) only because they double as this format's
++     * own documentation -- see hsf_load_native.c's own header comment for
++     * exactly how each one's logic was ported.
 +     *
 +     * MP6_HSF_STUB=1 (checked once per call, negligible cost) selects the
 +     * OLD, always-empty, M2-era inert stub instead -- kept only so a
@@ -79,29 +76,28 @@
 +        }
 +        return hsf;
 +    }
-+    /* M12 (docs/M12_MDSEL_INTEGRATION.md): replicate the ONE global side
-+     * effect of the original FileLoad() that this body-replacement dropped:
-+     * `StringTable = (char *)((u32)fileptr + head.string.ofs);` (this
-+     * file's own original line ~140, run on EVERY HSF load). The native
-+     * deserializer keeps a MotionOnly (standalone joint-motion) file's
-+     * HSF_TRACK.target as the RAW 16-bit string offset -- deliberately and
-+     * faithfully, mirroring the original MotionLoadTransform's own
-+     * `if(objtop)` gate (see platform/hsf/hsf_load_native.c's LoadMotion,
-+     * HSF_TRACK_TRANSFORM case) -- expecting GAME code to resolve it
-+     * later: JointModel_Motion -> SearchObjectIndex -> SetName ->
-+     * GetString(`&StringTable[*strOfs]`), against this global, which on
-+     * hardware always points at the MOST RECENTLY loaded file's string
-+     * section -- and the most recent load when JointModel_Motion runs is
-+     * exactly the motion file itself (Hu3DJointMotionData loads it moments
-+     * before). First organically reached by mdseldll's fn_1_88D0 (mode
-+     * select is the first flow to use standalone joint-motion files);
-+     * with the global stuck NULL the checked build panics ("applying
-+     * non-zero offset 14 to null pointer", GetString, symbolized stack
-+     * through Hu3DJointMotion -> mdsel.c fn_1_88D0). Explicit big-endian
-+     * decode of head.string.ofs -- header layout: magic[8] + 21
-+     * HSF_SECTIONs of {s32 ofs; s32 num}, `string` is section index 20,
-+     * so its ofs field sits at byte 8 + 20*8 = 168 -- since unlike
-+     * hardware this build can't read the BE header through the struct. */
++    /* Replicates the ONE global side effect of the original FileLoad()
++     * that this body-replacement dropped: `StringTable = (char
++     * *)((u32)fileptr + head.string.ofs);` (this file's own original
++     * line, run on EVERY HSF load). The native deserializer keeps a
++     * MotionOnly (standalone joint-motion) file's HSF_TRACK.target as the
++     * RAW 16-bit string offset -- deliberately and faithfully, mirroring
++     * the original MotionLoadTransform's own `if(objtop)` gate (see
++     * platform/hsf/hsf_load_native.c's LoadMotion, HSF_TRACK_TRANSFORM
++     * case) -- expecting GAME code to resolve it later: JointModel_Motion
++     * -> SearchObjectIndex -> SetName -> GetString(`&StringTable[*strOfs]`),
++     * against this global, which on hardware always points at the MOST
++     * RECENTLY loaded file's string section -- and the most recent load
++     * when JointModel_Motion runs is exactly the motion file itself
++     * (Hu3DJointMotionData loads it moments before). First organically
++     * reached by mdseldll's fn_1_88D0 (mode select is the first flow to
++     * use standalone joint-motion files); with the global stuck NULL the
++     * checked build panics ("applying non-zero offset 14 to null
++     * pointer"). Explicit big-endian decode of head.string.ofs -- header
++     * layout: magic[8] + 21 HSF_SECTIONs of {s32 ofs; s32 num}, `string`
++     * is section index 20, so its ofs field sits at byte 8 + 20*8 = 168
++     * -- since unlike hardware this build can't read the BE header
++     * through the struct. */
 +    if (data != NULL) {
 +        const unsigned char *mp6Hdr = (const unsigned char *)data;
 +        u32 mp6StrOfs = ((u32)mp6Hdr[168] << 24) | ((u32)mp6Hdr[169] << 16)

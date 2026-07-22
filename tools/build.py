@@ -38,27 +38,27 @@ TARGET = "x86_64-windows-gnu"
 IMAGE_BASE = "0x10000000"  # see platform/os/arena.c: keeps code/static-data pointers <4GB
 
 # ---------------------------------------------------------------------------
-# U-A1 (docs/UA1_ANDROID_HEADLESS.md): the `--target aarch64-android` row --
-# the U1 design's section-4.2 target table, first row beyond Windows. Game
+# the `--target aarch64-android` row --
+# the design's own target-row table, first row beyond Windows. Game
 # TUs compile with NDK clang (r27d, port/android-sdk/ndk/<ver>; NOT
-# zig-android -- U1 section 4.2's cross-toolchain-ABI argument) into a
+# zig-android -- the design's own cross-toolchain-ABI argument) into a
 # SEPARATE build tree (build/android/) so the Windows build's objects,
 # generated headers and incremental state are bit-for-bit untouched by an
 # android build and vice versa (the MSL override headers genuinely differ
 # per target -- absolute paths into each toolchain's real libc -- so they
 # can never share a directory). Output: build/android/libmp6game.so (ALL
 # game/REL TUs + platform/os + platform/host with host_android.c -- the
-# headless TU set; -shared -fPIC, 16KB max-page-size per U1 risk-5) +
-# build/android/mp6launcher (the U-A0-probe-shaped loader exe, see
+# headless TU set; -shared -fPIC, 16KB max-page-size per the design's own risk analysis) +
+# build/android/mp6launcher (the probe-shaped loader exe, see
 # platform/android/mp6launcher.c). Headless-only by design: aurora/SDL for
-# Android is U-A2's row.
-ANDROID_API_LEVEL = 28  # matches the U-A0 probe row (U1 section 4.2: android28)
+# Android is the android row.
+ANDROID_API_LEVEL = 28  # matches the probe row used during Android bring-up
 ANDROID_TRIPLE = f"aarch64-linux-android{ANDROID_API_LEVEL}"
 ANDROID_BUILD_DIR = os.path.join(BUILD_DIR, "android")
 ANDROID_OBJ_DIR = os.path.join(ANDROID_BUILD_DIR, "obj")
 ANDROID_MSL_OVERRIDE = os.path.join(ANDROID_BUILD_DIR, "msl_override")
 ANDROID_PATCHED_INCLUDE = os.path.join(ANDROID_BUILD_DIR, "patched_include")
-# The on-device smoke layout (docs/UA1_ANDROID_HEADLESS.md): everything
+# The on-device smoke layout (everything
 # under /data/local/tmp/mp6. These bake the DEVICE-side fallback paths into
 # the .so the same way MP6_DVD_FILES_ROOT below bakes this repo's absolute
 # Windows paths into the exe; at runtime host_android.c's
@@ -72,7 +72,7 @@ ANDROID_DVD_FST_PATH = ANDROID_DEVICE_BASE + "/GP6E01/sys/fst.bin"
 
 def _find_ndk_root():
     """ANDROID_NDK_ROOT env override, else the newest ndk under
-    port/android-sdk/ndk/ (the U-A0 probe kit's own autodetection rule,
+    port/android-sdk/ndk/ (the probe kit's own autodetection rule,
     port/android-probe/build.bat)."""
     env = os.environ.get("ANDROID_NDK_ROOT")
     if env and os.path.isdir(env):
@@ -192,7 +192,7 @@ AURORA_DEPS = os.path.join(AURORA_BUILD, "_deps")
 #   cmake --build .../build-rmlui --target aurora_core aurora_gx aurora_main
 #     aurora_vi aurora_pad aurora_si aurora_card aurora_mtx
 #
-# THE LAST TWO FLAGS ARE THE SAVESTATE CARVE-OUT (W1, docs/SAVESTATE.md) and
+# THE LAST TWO FLAGS ARE THE SAVESTATE CARVE-OUT and
 # are NOT optional if savestates are to work in the windowed build. Aurora,
 # RmlUi, abseil et al are consumed as STATIC ARCHIVES from this out-of-band
 # tree, so their C++ globals -- the SDL_Window*, the WebGPU device/queue/
@@ -400,14 +400,14 @@ AURORA_RUNTIME_DLLS = [
     os.path.join(AURORA_DEPS_RMLUI, "sdl3_prebuilt-src", "bin", "SDL3.dll"),
     os.path.join(AURORA_DEPS_RMLUI, "png-build", "libpng16d.dll"),
     os.path.join(AURORA_DEPS_RMLUI, "zlib-build", "libzlib1.dll"),
-    # A4 (docs/A4_ANDROID_UI.md): nod runtime for the launcher's disc-image
+    # nod runtime for the launcher's disc-image
     # import (content_import.cpp links the import lib; the DLL is the
     # official prebuilt package fetched by tools/fetch_nod.py). NOD_WIN_DLL
     # is defined above -- inlined here to keep this list a plain constant.
     os.path.join(PORT_ROOT, "toolchain", "nod", "windows-x86_64", "bin", "nod.dll"),
 ]
 # ---------------------------------------------------------------------------
-# U-A2 (docs/UA2_ANDROID_GRAPHICS.md): aurora for Android -- the same
+# aurora for Android -- the same
 # consumption model as Windows (aurora is built in its OWN CMake tree; this
 # driver only reads the already-built artifacts), pointed at the
 # build-android/ sibling of the Windows build/ tree:
@@ -441,13 +441,13 @@ AURORA_DEPS_ANDROID = os.path.join(AURORA_BUILD_ANDROID, "_deps")
 ANDROID_AURORA_OUT_DIR = os.path.join(ANDROID_BUILD_DIR, "aurora")  # libmp6game.so + libmain.so
 
 # ---------------------------------------------------------------------------
-# A4 (docs/A4_ANDROID_UI.md): the RmlUi-ENABLED android aurora tree -- the
-# exact same tree-split L4 made for Windows (AURORA_BUILD_RMLUI beside
+# the RmlUi-ENABLED android aurora tree -- the
+# exact same tree-split made earlier for Windows (AURORA_BUILD_RMLUI beside
 # AURORA_BUILD): AURORA_ENABLE_RMLUI is a PUBLIC define that changes the
 # aurora_core/aurora_gx archive CONTENT, so the android windowed row now
 # consumes this sibling tree wholesale (mixing archives across trees would
-# be an ODR hazard) while build-android stays byte-untouched for the U-A2
-# milestone's re-runs. Same U-A2 recipe + the one flag:
+# be an ODR hazard) while build-android stays byte-untouched for future
+# re-runs. Same recipe + the one flag:
 #
 #   cmake -S external_refs/repos/aurora -B .../aurora/build-android-rmlui -G Ninja
 #     -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -464,7 +464,7 @@ ANDROID_AURORA_OUT_DIR = os.path.join(ANDROID_BUILD_DIR, "aurora")  # libmp6game
 AURORA_BUILD_ANDROID_RMLUI = os.path.join(AURORA_ROOT, "build-android-rmlui")
 AURORA_DEPS_ANDROID_RMLUI = os.path.join(AURORA_BUILD_ANDROID_RMLUI, "_deps")
 
-# A4: nod (encounter/nod v2.0.0-alpha.10 -- the exact version aurora's own
+# nod (encounter/nod v2.0.0-alpha.10 -- the exact version aurora's own
 # dependency table pins for AURORA_ENABLE_DVD; dual-licensed MIT OR
 # Apache-2.0) backs the launcher's disc-image import
 # (platform/content/content_import.cpp). Machine-local toolchain artifacts
@@ -479,11 +479,11 @@ NOD_INCLUDE = os.path.join(NOD_DIR, "include")
 NOD_WIN_LIB = os.path.join(NOD_DIR, "windows-x86_64", "lib", "nod.lib")
 NOD_WIN_DLL = os.path.join(NOD_DIR, "windows-x86_64", "bin", "nod.dll")
 NOD_ANDROID_LIB = os.path.join(NOD_DIR, "android-aarch64", "libnod.a")
-NOD_RECIPE_HINT = "run `python tools/fetch_nod.py` (docs/A4_ANDROID_UI.md)"
+NOD_RECIPE_HINT = "run `python tools/fetch_nod.py`"
 
 
 def android_aurora_flags():
-    """U-A2: the android row's AURORA_FLAGS -- same deliberate mirror
+    """The android row's AURORA_FLAGS -- same deliberate mirror
     discipline as android_common_flags() vs COMMON_FLAGS: identical include
     ORDER and AURORA_DEFINES, with only the target differences (NDK triple,
     -fPIC, plain -g DWARF) plus the include-dir differences that fall
@@ -495,10 +495,10 @@ def android_aurora_flags():
     sdl3_prebuilt-src/include), and Dawn is the prebuilt android package
     (dawn_prebuilt-src/include, same dir name as Windows).
 
-    A4: the _deps roots now come from the RmlUi-enabled android tree
+    The _deps roots now come from the RmlUi-enabled android tree
     (AURORA_DEPS_ANDROID_RMLUI) so every include stays tree-consistent with
     the archives the windowed link consumes -- the same wholesale switch
-    _resolve_aurora_link_items made for Windows at L4. Same third-party
+    _resolve_aurora_link_items made for Windows. Same third-party
     pins, so header content is identical; only the tree location moves."""
     return [
         "-target", ANDROID_TRIPLE,
@@ -517,7 +517,7 @@ def android_aurora_flags():
     ] + AURORA_DEFINES
 
 
-# U-A2: exact archive list + order from build-android/build.ninja's own link
+# Exact archive list + order from build-android/build.ninja's own link
 # line for examples/simple (the same verbatim-mirror rule AURORA_LINK_ITEMS
 # follows for Windows -- the android tree's RelWithDebInfo names drop the
 # Windows Debug 'd' suffixes), with exactly these deliberate deltas:
@@ -529,7 +529,7 @@ def android_aurora_flags():
 #   - aurora_pad/si/card/mtx PREPENDED, same reasoning+order as the Windows
 #     list (they are not part of simple's own link closure).
 #   - the sysroot's absolute libz.so path becomes plain -lz (bionic's public
-#     libz -- also what the U-A1 headless .so links for the game's zlib use).
+#     libz -- also what the headless .so links for the game's zlib use).
 ANDROID_AURORA_LINK_ITEMS = [
     "libaurora_pad.a", "libaurora_si.a",
     "libaurora_card.a",
@@ -538,7 +538,7 @@ ANDROID_AURORA_LINK_ITEMS = [
     "_deps/png-build/libpng16.a",
     "-lm",
     "libaurora_core.a",  # CMake emits aurora_core twice; kept to match exactly
-    # A4 (docs/A4_ANDROID_UI.md): the RmlUi module archives, same position
+    # the RmlUi module archives, same position
     # and ordering rationale as the Windows AURORA_LINK_ITEMS entries
     # (backends before core, after the aurora archives, before freetype).
     "extern/librmlui_backends.a",
@@ -604,10 +604,10 @@ ANDROID_AURORA_LINK_ITEMS = [
 
 def _resolve_android_aurora_link_items():
     """Same resolution rule as _resolve_aurora_link_items(), against the
-    android tree. A4: against the RmlUi-enabled android tree
-    (AURORA_BUILD_ANDROID_RMLUI) -- the wholesale-tree switch L4 made for
+    android tree, against the RmlUi-enabled android tree
+    (AURORA_BUILD_ANDROID_RMLUI) -- the wholesale-tree switch made for
     Windows, for the same PUBLIC-define/ODR reason; build-android stays
-    reserved for U-A2-milestone byte-compare re-runs."""
+    reserved for future byte-compare re-runs."""
     out = []
     for item in ANDROID_AURORA_LINK_ITEMS:
         if item.startswith("-"):
@@ -664,11 +664,11 @@ def _find_zig_libc_dir(name):
 
 
 def patch_msl_override(dst_dir=None, find_real=None, libc_desc="zig's bundled libc"):
-    # U-A1: parameterized for the android target row (dst_dir=
+    # Parameterized for the android target row (dst_dir=
     # ANDROID_MSL_OVERRIDE, find_real=_find_ndk_libc_dir) -- the shadow
     # files' CONTENT is an absolute path into the toolchain's real libc, so
     # each target needs its own generated set in its own build tree. The
-    # no-arg call is byte-for-byte the pre-U-A1 Windows behavior.
+    # no-arg call is byte-for-byte the original Windows behavior.
     if dst_dir is None:
         dst_dir = MSL_OVERRIDE
     if find_real is None:
@@ -860,7 +860,7 @@ HEADER_CONTENT_PATCHES = [
     ),
 ]
 
-# U-A1 (docs/UA1_ANDROID_HEADLESS.md): android-ONLY additions to the shadow-
+# android-ONLY additions to the shadow-
 # header set (applied on top of HEADER_CONTENT_PATCHES, into the android
 # tree's own patched_include -- the Windows tree never sees these).
 #
@@ -880,7 +880,7 @@ ANDROID_HEADER_CONTENT_PATCHES = [
     (
         "dolphin/types.h",
         re.compile(r"#if defined\(TARGET_PC\) && !defined\(_WIN32\)"),
-        "#if 0 /* MP6 native port (U-A1): forced OFF -- BOOL must stay the 4-byte int of "
+        "#if 0 /* MP6 native port : forced OFF -- BOOL must stay the 4-byte int of "
         "real hardware and the Windows anchor; see tools/build.py's "
         "ANDROID_HEADER_CONTENT_PATCHES */",
         "BOOL: 4-byte int on android too (decomp's TARGET_PC&&!_WIN32 branch would make it "
@@ -898,23 +898,23 @@ ANDROID_HEADER_CONTENT_PATCHES = [
     (
         "dolphin/types.h",
         re.compile(r"typedef int64_t s64;"),
-        "typedef signed long long s64; /* U-A1: 'long long' spelling, see build.py */",
+        "typedef signed long long s64; /* 'long long' spelling, see build.py */",
         "s64: long-long spelling so musyx.h's own s64/u64 typedefs stay compatible on LP64",
     ),
     (
         "dolphin/types.h",
         re.compile(r"typedef uint64_t u64;"),
-        "typedef unsigned long long u64; /* U-A1: 'long long' spelling, see build.py */",
+        "typedef unsigned long long u64; /* 'long long' spelling, see build.py */",
         "u64: long-long spelling so musyx.h's own s64/u64 typedefs stay compatible on LP64",
     ),
 ]
 
 
 def patch_abi_struct_headers(dst_root=None, extra_patches=()):
-    # U-A1: parameterized like patch_msl_override -- the android target row
+    # Parameterized like patch_msl_override -- the android target row
     # writes into its own tree AND appends ANDROID_HEADER_CONTENT_PATCHES
     # (dolphin/types.h, see that table's own comment). The no-arg call is
-    # byte-for-byte the pre-U-A1 Windows behavior (every Windows entry has
+    # byte-for-byte the original Windows behavior (every Windows entry has
     # a unique rel, so the per-file grouping below degenerates to the old
     # one-patch-one-write flow with an identical header note).
     if dst_root is None:
@@ -979,8 +979,8 @@ def apply_decomp_override_headers(dst_root=None):
 
 
 def patch_headers(dst_root=None):
-    # U-A1: parameterized like patch_abi_struct_headers; the no-arg call is
-    # byte-for-byte the pre-U-A1 Windows behavior.
+    # Parameterized like patch_abi_struct_headers; the no-arg call is
+    # byte-for-byte the original Windows behavior.
     if dst_root is None:
         dst_root = PATCHED_INCLUDE
     for rel in AT_ADDRESS_PATCH_FILES:
@@ -1104,12 +1104,12 @@ COMMON_FLAGS = [
 
 
 def android_common_flags():
-    """U-A1: the android row's COMMON_FLAGS -- a deliberate flag-for-flag
+    """The android row's COMMON_FLAGS -- a deliberate flag-for-flag
     mirror of COMMON_FLAGS above (same semantics flags, same -Wno-error
     set, same include order, same force-include; every entry's rationale
     lives with the Windows copy) with exactly these target differences:
       - `-target aarch64-linux-android28` (NDK clang; API level = the
-        U-A0 probe row's) instead of the zig windows-gnu triple;
+        probe row's) instead of the zig windows-gnu triple;
       - `-fPIC` (the game image is a SHARED library placed low at runtime
         by android_dlopen_ext, not an exe linked at a fixed image base);
       - plain `-g` DWARF (no `-gcodeview`: that is PDB/dbghelp tooling,
@@ -1119,7 +1119,7 @@ def android_common_flags():
         the ANDROID_HEADER_CONTENT_PATCHES);
       - the on-device MP6_DVD_* fallback paths (see ANDROID_DEVICE_BASE).
     Kept as its own list builder rather than a transform of COMMON_FLAGS so
-    the Windows list stays a single untouched literal (the U-A1 hard rule:
+    the Windows list stays a single untouched literal (a hard rule:
     Windows builds bit-for-bit unaffected)."""
     return [
         "-target", ANDROID_TRIPLE,
@@ -1276,7 +1276,7 @@ REL_SOURCES = [
                                     "-Dfn_1_C8C=mdsel_fn_1_C8C",
                                     "-Dlbl_1_data_0=mdsel_lbl_1_data_0",
                                     "-Dlbl_1_data_154=mdsel_lbl_1_data_154"]),
-    # M14 (docs/M14_MDPARTY_INTEGRATION.md): mdpartydll (party-mode setup --
+    # mdpartydll (party-mode setup --
     # mode select's own "Party Mode" confirm proceeds to this overlay,
     # ovl_table.h line 92 = index 91). The decomp's configure.py marks all
     # 3 mdpartydll objects (mdparty.c, stage.c, runtime.c) Matching and the
@@ -1285,7 +1285,7 @@ REL_SOURCES = [
     # reasoning as mdseldll's runtime.c above (a 1-line #include of the
     # MWCC/PPC REL runtime, replaced by the native toolchain's own runtime).
     # fn_1_*/lbl_1_* collision -D renames: measured the same way as
-    # mdsel.c's own (M12) -- by attempting the link with none, reading the
+    # mdsel.c's own -- by attempting the link with none, reading the
     # linker's duplicate-symbol errors against every earlier fn_1_-namespace
     # REL object (mdsel/filesel), and renaming only the newcomer side. All
     # 6 are REL-internal (defined and referenced only inside mdparty.c
@@ -1306,7 +1306,7 @@ MAIN_C_FLAGS = ["-Dmain=GameMain"]
 
 # Compiled with COMMON_FLAGS (decomp -I's + -include dolphin_compat.h), same
 # as every game/REL source, in BOTH build modes.
-# Savestate carve-out (docs/SAVESTATE.md, shim/include/mp6_host_section.h).
+# Savestate carve-out (shim/include/mp6_host_section.h).
 # These TUs' file-scope statics are owned by something other than the game
 # thread -- the SDL audio callback thread's mixer, the content-import worker
 # threads, the SDL/Dawn handle holders -- or, in savestate.c's own case, must
@@ -1326,7 +1326,7 @@ HOST_STATE_SECTION_SOURCES = {
     "platform/audio/audio_out_sdl.c",
     "platform/gx/aurora_bridge.c",
     "platform/content/content_import.cpp",
-    # W2 (docs/SAVESTATE.md): the DVD layer's whole statics set is host-owned
+    # The DVD layer's whole statics set is host-owned
     # -- the FST blob and its string pool are CRT-heap pointers, g_entryPaths
     # is a heap array of heap strings, and g_resolvedFilesRoot/_FstPath are
     # THIS machine's content paths (restoring those would override the running
@@ -1338,7 +1338,7 @@ HOST_STATE_SECTION_SOURCES = {
     # g_openReal[]'s open-file identity -- which is empty at every capture
     # point in today's build, asserted at capture time in savestate.c.
     "platform/dvd/dvd_files.c",
-    # W6: a GetProcAddress result from winmm.dll plus path caches. No game
+    # A GetProcAddress result from winmm.dll plus path caches. No game
     # state (audited: timer-resolution fn ptr/flag and resolved host paths).
     "platform/host/host_win32.c",
     # Pure host UI state -- RmlUi document stacks, toasts, picked-path
@@ -1354,7 +1354,7 @@ HOST_STATE_SECTION_SOURCES = {
     # UI state -- all host-owned, none of it game state. A restore that
     # reinstalls a capturing process's std::string data pointers into these
     # TUs' statics recreates the exact static-destructor crash class the
-    # aurora-archive carve-out (W1) fixed, via the port's own files instead.
+    # aurora-archive carve-out fixed, via the port's own files instead.
     # framescope.c additionally holds env-latched arming state and
     # dumped-pointer dedupe tables that must describe the RUNNING process.
     "platform/gx/framescope.c",
@@ -1380,6 +1380,30 @@ HOST_STATE_SECTION_SOURCES = {
     # to the RUNNING process's UI session -- a restored state must neither
     # re-enable freecam nor teleport the camera the user is flying.
     "platform/hsf/mp6_freecam.c",
+    # Unlocked FPS MODEL interpolation (shim/include/mp6_fi_model.h): the
+    # per-tick transform/camera snapshot buffers are host-owned RENDER state
+    # of the RUNNING process, not captured game state -- a restore must not
+    # reinstate a pre-restore snapshot (it would interpolate across the state
+    # discontinuity). Same carve-out shape as frame_interp.c right below.
+    # Compiled in BOTH modes (COMMON_FLAGS), so the section pragma is asserted
+    # against both builds; harmless in headless (no interpolation there).
+    "platform/hsf/mp6_fi_model.c",
+    # MP6_SHADOW_DUMP (shim/include/mp6_shadow_dump.h): same shape as
+    # framescope.c right above -- an env-latched arming flag and a dump
+    # counter that describe the RUNNING process's debug session, not game
+    # state.
+    "platform/gx/shadow_dump.c",
+    # Unlocked FPS presentation layer (shim/include/mp6_unlocked_fps.h): the
+    # idle-window pacing statics are monotonic timestamps taken from the RUNNING
+    # process's timer plus diagnostic counters -- host state, not captured game
+    # state. Restoring a capturing process's timestamps into the loading one
+    # would hand the first post-restore window a nonsense alpha and spacing.
+    # (Historically this carve-out also protected the retained-stream path's
+    # realloc'd buffers, whose restored pointer VALUES corrupted the heap; that
+    # path is deleted, the carve-out stays for the reason above.) Aurora-only
+    # TU (PLATFORM_AURORA_ONLY); the headless build never compiles it, so this
+    # entry is asserted only against the windowed build.
+    "platform/gx/frame_interp.c",
 }
 
 
@@ -1435,12 +1459,19 @@ def verify_host_section_sources():
             else:
                 missing.append(f"{rel} (no #include \"mp6_host_section.h\")")
     if missing:
-        print("\n[BUILD] FATAL: savestate carve-out is incomplete -- these TUs are listed in")
-        print("        HOST_STATE_SECTION_SOURCES but do not include the section pragma:")
+        print("\n[BUILD] FATAL: savestate carve-out is incomplete. Each TU listed in")
+        print("        HOST_STATE_SECTION_SOURCES holds file-scope statics owned by a")
+        print("        non-game thread or an OS/driver handle -- not the deterministic")
+        print("        game simulation a savestate captures. Without the section include,")
+        print("        a restore overwrites this TU's live SDL/thread/heap state with the")
+        print("        CAPTURING process's own: corruption, not a clean load. Affected:")
         for m in missing:
             print(f"          - {m}")
-        print("        Add `#include \"mp6_host_section.h\"` AFTER that file's own includes,")
-        print("        or remove it from the list. See docs/SAVESTATE.md.")
+        print("        Fix: add `#include \"mp6_host_section.h\"` AFTER that file's own")
+        print("        includes, at preprocessor top level (never inside an #if/#ifdef")
+        print("        branch, or a platform build silently skips the carve-out) -- or,")
+        print("        if this file genuinely holds no host-owned statics, remove it from")
+        print("        HOST_STATE_SECTION_SOURCES instead.")
         raise SystemExit(1)
 
 
@@ -1454,12 +1485,12 @@ PLATFORM_SOURCES_COMMON = [
                                        # header comment for the full investigation.
     "platform/os/malloc_direct.c",
     "platform/os/savestate.c",  # cross-session savestate capture/restore
-                                  # (docs/SAVESTATE.md). In BOTH build modes on
+                                  # In BOTH build modes on
                                   # purpose: the headless build is where the
                                   # capture/restore regression gate runs, since
                                   # it is the mode with a byte-identical log.
     "platform/os/dll_bridge.c",
-    "platform/os/board_stub.c",  # M14: honest no-op placeholder for src/board/board.c's
+    "platform/os/board_stub.c",  # Honest no-op placeholder for src/board/board.c's
                                    # mbSaveInit/mbSavePartyInit -- board.c itself is a separate,
                                    # not-yet-integrated recovery lane; see the file's own header.
     "platform/os/log.c",
@@ -1491,9 +1522,16 @@ PLATFORM_SOURCES_COMMON = [
                                      # neighbors; BOTH modes because its one caller is the
                                      # shared Hu3DExec patch hook -- a permanently-false
                                      # branch in headless (nothing there can enable it).
-    "platform/hsf/mp6_widescreen_extrude.c",  # WS12 (docs/WS11_EXTRUDE_BACKDROPS.md):
+    "platform/hsf/mp6_fi_model.c",  # Unlocked FPS MODEL-level interpolation (shim/include/
+                                      # mp6_fi_model.h): snapshot Hu3DData[]/Hu3DCamera[] per tick,
+                                      # re-run Hu3DExec on the interpolated pose in the idle window.
+                                      # Needs game/hu3d.h (COMMON_FLAGS' decomp -I's) like mp6_freecam.c;
+                                      # BOTH modes so the replay-pass flag it defines resolves for the
+                                      # shared hsfman.c guard patch -- the replay caller (frame_interp.c)
+                                      # is aurora-only, so the re-run path is dead code in headless.
+    "platform/hsf/mp6_widescreen_extrude.c",  # The shared backdrop-extrude helpers:
                                                  # shared backdrop-extrude helper, hoisted out of
-                                                 # mdpartydll/mdparty.c's WS11-local static so every
+                                                 # mdpartydll/mdparty.c's own file-local static so every
                                                  # widescreen-extruded REL calls one definition. Needs
                                                  # game/hu3d.h (COMMON_FLAGS' decomp -I's), same as
                                                  # hsf_load_native.c above; links into BOTH modes since
@@ -1511,6 +1549,13 @@ PLATFORM_SOURCES_COMMON = [
                                          # flags compile it fine; lives in COMMON so it's linked into BOTH
                                          # modes -- hsf_load_native.c (both modes) is the writer,
                                          # aurora_bridge.c (aurora only) is the one real reader.
+    "platform/gx/shadow_dump.c",  # MP6_SHADOW_DUMP debug lever (shim/include/
+                                     # mp6_shadow_dump.h): GPU->CPU readback + PNG dump of the
+                                     # resolved Hu3DShadow copy texture (aurora-patches/0016).
+                                     # Needs game/hu3d.h (Hu3DShadow), same COMMON_FLAGS access as
+                                     # its platform/gx/framescope.c and platform/hsf/ neighbors;
+                                     # links into BOTH modes, internally #ifdef MP6_HEADLESS_BUILD
+                                     # (headless has no renderer/GPU -- standing no-op there).
     # platform/null/shims_generated{,_aurora}.c is NOT in this list -- see
     # collect_units() below, it's the one PLATFORM_SOURCES_COMMON entry
     # whose SOURCE FILE (not just its compile flags) differs per mode. See
@@ -1544,6 +1589,12 @@ PLATFORM_SOURCES_COMMON = [
 MAIN_NATIVE = "platform/main_native.c"
 PLATFORM_AURORA_ONLY = [
     "platform/gx/aurora_bridge.c", "platform/gx/framescope.c",
+    "platform/gx/frame_interp.c",  # Unlocked FPS presentation layer
+                                     # (shim/include/mp6_unlocked_fps.h): the frame-boundary
+                                     # hooks + the idle-window pacing that drives the
+                                     # model-level replay (platform/hsf/mp6_fi_model.c).
+                                     # Aurora headers only (AURORA_FLAGS), same split as
+                                     # aurora_bridge.c -- headless untouched by construction.
     "platform/gx/freecam_input.c",  # freecam host-input collector (SDL keyboard/
                                       # mouse/touch/gamepad -> per-tick camera deltas;
                                       # shim/include/mp6_freecam.h's windowed-only half)
@@ -1584,11 +1635,11 @@ PLATFORM_AURORA_ONLY = [
     "platform/gx/ui/graphics_tuner.cpp",
     "platform/gx/ui/prelaunch.cpp",
     "platform/gx/ui/settings.cpp",
-    # A4 (docs/A4_ANDROID_UI.md): first-run content onboarding -- the
+    # first-run content onboarding -- the
     # ContentSetup dialog (ripped-framework idiom, ours) + the nod-backed
     # import engine it drives. Aurora-flavor .cpp like the rest of ui/;
     # compiled on BOTH the Windows windowed row and the android --windowed
-    # row (collect_units no longer skips .cpp on android -- that was the L1
+    # row (collect_units no longer skips .cpp on android -- an earlier
     # "windows-windowed only" rule this lane retires).
     "platform/gx/ui/content_setup.cpp",
     "platform/content/content_import.cpp",
@@ -1639,7 +1690,7 @@ def _ar_has_section(archive_path, section_name, max_objects=40):
 
 def verify_aurora_carveout():
     """Fail the WINDOWED build if the aurora tree was rebuilt without the
-    savestate carve-out flags (review finding C7).
+    savestate carve-out flags (a review finding).
 
     The port TUs' carve-out is asserted by verify_host_section_sources(),
     but the aurora/RmlUi/sqlite archives come from an out-of-band CMake tree
@@ -1687,12 +1738,12 @@ def collect_units(headless, coro_fibers=False, android=False):
     -I's only -- platform/main_native.c in the default build, and
     platform/gx/aurora_bridge.c, see that file's own header comment).
 
-    U-A1: android=True is the headless TU set with exactly ONE swap --
-    platform/host/host_win32.c -> platform/host/host_android.c (the H1
+    android=True is the headless TU set with exactly ONE swap --
+    platform/host/host_win32.c -> platform/host/host_android.c (the host-seam
     seam's second backend; everything else in the set is portable C, the
-    U1 section-3.1 'already-portable' census + coro_arena.c). Callers pass
-    headless=True with it (the android row is headless-only until U-A2)."""
-    verify_host_section_sources()  # savestate carve-out completeness (docs/SAVESTATE.md)
+    the design's own 'already-portable' census + coro_arena.c). Callers pass
+    headless=True with it (the android row is headless-only on Android)."""
+    verify_host_section_sources()  # savestate carve-out completeness
     units = []
     for rel, flags in game_sources():
         abs_path = resolve_source(rel)
@@ -1730,7 +1781,7 @@ def collect_units(headless, coro_fibers=False, android=False):
     headless_flags = (["-DMP6_HEADLESS_BUILD"] if headless else []) + coro_flags
     for rel in PLATFORM_SOURCES_COMMON:
         if android and rel == "platform/host/host_win32.c":
-            rel = "platform/host/host_android.c"  # U-A1: the one backend swap (see docstring)
+            rel = "platform/host/host_android.c"  # the one backend swap (see docstring)
         abs_path = os.path.join(NATIVE_ROOT, rel.replace("/", os.sep))
         base = os.path.basename(abs_path).replace(".c", "")
         units.append((abs_path, headless_flags, f"plat_{base}{mode_suffix}.o", "common"))
@@ -1751,8 +1802,8 @@ def collect_units(headless, coro_fibers=False, android=False):
 
     if not headless:
         for rel in PLATFORM_AURORA_ONLY:
-            # A4 (docs/A4_ANDROID_UI.md): the .cpp launcher/onboarding TUs
-            # now compile on the android --windowed row too (the L1
+            # the .cpp launcher/onboarding TUs
+            # now compile on the android --windowed row too (an earlier
             # "windows-windowed only" exclusion is retired) -- as the
             # "aurora_cpp_rmlui" flavor: NDK clang++ with the same RmlUi
             # include/define set the Windows .cpp branch adds, RTTI ON
@@ -1762,7 +1813,7 @@ def collect_units(headless, coro_fibers=False, android=False):
             flavor = "aurora"
             if rel.endswith(".cpp") and android:
                 flavor = "aurora_cpp_rmlui"
-            # A4: the import engine reads nod's C FFI header; nod include
+            # The import engine reads nod's C FFI header; nod include
             # dir is per-unit so no other TU sees it (tools/fetch_nod.py
             # populates port/toolchain/nod).
             flags = ["-I", NOD_INCLUDE] if rel.endswith("content_import.cpp") else []
@@ -1810,7 +1861,7 @@ def _write_if_changed(path, content):
         f.write(content)
 
 
-# U-A1: set (only) by build_android() before compilation -- {"clang": <NDK
+# Set (only) by build_android() before compilation -- {"clang": <NDK
 # clang path>, "flags": android_common_flags()}. None = the Windows flow,
 # untouched. compile_one/needs_rebuild read module globals, so the android
 # build redirects OBJ_DIR/MSL_OVERRIDE/PATCHED_INCLUDE the same way (see
@@ -1826,10 +1877,10 @@ def compile_one(unit):
         return (src, obj, True, "", True)  # skipped=True
     if _ANDROID_CC is not None:
         # android row. Headless: every unit is "common" flavor by
-        # construction. U-A2 --windowed adds the aurora-flavor TUs
+        # construction. The android --windowed row adds the aurora-flavor TUs
         # (aurora_bridge/framescope/audio_out_sdl/main_native), compiled
         # against android_aurora_flags() exactly like the Windows split.
-        # U-A3 "aurora_cpp" (docs/UA3_DEVICE_PARITY.md): the touch-overlay
+        # "aurora_cpp": the touch-overlay
         # TU (platform/android/touch_pad.cpp) draws through aurora's ImGui
         # pass, whose API is C++ -- same aurora include set with the C
         # -std swapped for aurora's own C++20 (its CMAKE_CXX_STANDARD),
@@ -1843,7 +1894,7 @@ def compile_one(unit):
                         for f in _ANDROID_CC["aurora_flags"]]
             cmd = [cxx] + cxxflags + ["-fno-exceptions", "-fno-rtti"] + flags + ["-c", src, "-o", obj]
         elif flavor == "aurora_cpp_rmlui":
-            # A4 (docs/A4_ANDROID_UI.md): the launcher/onboarding .cpp TUs
+            # the launcher/onboarding .cpp TUs
             # on android -- NDK clang++ with the exact RmlUi include/define
             # set the Windows .cpp branch (below) adds, resolved against
             # the RmlUi-enabled android tree. Differences from the Windows
@@ -1943,7 +1994,7 @@ def copy_aurora_runtime_dlls(dst_dir):
 
 
 def build_android(args):
-    """U-A1 (docs/UA1_ANDROID_HEADLESS.md): the whole `--target
+    """the whole `--target
     aarch64-android` flow, kept as its own function (ending in its own
     link) so the Windows flow in main() is textually untouched. Redirects
     the generated-tree globals (OBJ_DIR/MSL_OVERRIDE/PATCHED_INCLUDE) into
@@ -1967,7 +2018,7 @@ def build_android(args):
         # The fiber backend is win32-only (host_win32.c); android always
         # runs the shared arena/minicoro backend -- same default as Windows.
         print("[FATAL] --coro-fibers is a win32-only A/B lever; the android row always uses "
-              "the arena/minicoro backend (docs/UW1_ARENA_CORO.md section 7)")
+              "the arena/minicoro backend")
         return 1
 
     OBJ_DIR = ANDROID_OBJ_DIR
@@ -1976,14 +2027,14 @@ def build_android(args):
     _ANDROID_CC = {"clang": clang, "flags": android_common_flags(),
                    "aurora_flags": android_aurora_flags()}
 
-    # U-A2 (docs/UA2_ANDROID_GRAPHICS.md): --windowed = the aurora/SDL3/Dawn
+    # --windowed = the aurora/SDL3/Dawn
     # graphics build as libmp6game.so for the APK shell. Default (no flag)
-    # stays byte-for-byte the U-A1 headless row.
+    # stays byte-for-byte the headless row.
     windowed = getattr(args, "windowed", False)
     if windowed and not os.path.isdir(AURORA_BUILD_ANDROID_RMLUI):
         print(f"[FATAL] --windowed: {AURORA_BUILD_ANDROID_RMLUI} not configured/built -- see the "
               "AURORA_BUILD_ANDROID_RMLUI comment block in tools/build.py (or "
-              "docs/A4_ANDROID_UI.md) for the cmake recipe")
+              "for the cmake recipe")
         return 1
     if windowed and not os.path.exists(NOD_ANDROID_LIB):
         print(f"[FATAL] --windowed: {NOD_ANDROID_LIB} missing (the disc-import backend) -- "
@@ -2004,12 +2055,12 @@ def build_android(args):
                        libc_desc="the NDK sysroot/clang-resource headers")
     patch_abi_struct_headers(dst_root=ANDROID_PATCHED_INCLUDE,
                              extra_patches=ANDROID_HEADER_CONTENT_PATCHES)
-    apply_decomp_override_headers(dst_root=ANDROID_PATCHED_INCLUDE)  # L4 shield (see docstring)
+    apply_decomp_override_headers(dst_root=ANDROID_PATCHED_INCLUDE)  # shield (see docstring)
     apply_patches.apply_all()  # shared patched-src, see docstring
 
     units = collect_units(headless=not windowed, coro_fibers=False, android=True)
     if windowed:
-        # U-A3 (docs/UA3_DEVICE_PARITY.md): the touch-overlay TU -- android
+        # the touch-overlay TU -- android
         # --windowed ONLY (appended here, not in collect_units, so neither
         # the Windows aurora build nor the headless rows ever see it). C++
         # because it draws through aurora's ImGui pass ("aurora_cpp" flavor,
@@ -2020,7 +2071,7 @@ def build_android(args):
         units.append((os.path.join(NATIVE_ROOT, "platform", "android", "touch_pad.cpp"),
                       ['-DIMGUI_USER_CONFIG="aurora/imgui_config.h"'],
                       "plat_touch_pad_aurora.o", "aurora_cpp"))
-        # A4 (docs/A4_ANDROID_UI.md): the SAF bridge -- the JNI poll surface
+        # the SAF bridge -- the JNI poll surface
         # between the launcher's onboarding dialog and Mp6Activity's
         # ACTION_OPEN_DOCUMENT_TREE flow. Plain C, aurora flavor (jni.h
         # comes from the NDK sysroot; no SDL/aurora headers needed, but the
@@ -2102,16 +2153,16 @@ def build_android(args):
 
     # ---- link libmp6game.so ------------------------------------------------
     # -shared -fPIC: the image is placed low at RUNTIME by the launcher's
-    # android_dlopen_ext(ANDROID_DLEXT_RESERVED_ADDRESS) -- the U-A0-proven
+    # android_dlopen_ext(ANDROID_DLEXT_RESERVED_ADDRESS) -- the proven
     # equivalent of the Windows --image-base/--no-dynamicbase pair; the
     # in-.so startup assert (mp6_assert_image_low -> dl_iterate_phdr)
     # enforces it. 16KB max-page-size on every android link from day one
-    # (U1 risk-5). -lz = bionic's PUBLIC libz, ABI-compatible with the
+    # (per the design's own risk analysis). -lz = bionic's PUBLIC libz, ABI-compatible with the
     # decomp's vendored zlib.h exactly like zlib-ng's compat build on
     # Windows (z_stream layout unchanged since 1.1.x; version check
     # compares major only). -lm/-ldl are separate libs on bionic.
     if windowed:
-        # U-A2: the aurora graphics .so, kept in its own subdir so the U-A1
+        # The aurora graphics .so, kept in its own subdir so the
         # headless artifact (and its byte-compare re-runs) are never
         # clobbered. clang++ (not clang) for the same reason the Windows
         # aurora link uses `zig c++`: aurora's archives are C++ and need
@@ -2136,7 +2187,7 @@ def build_android(args):
             # future link stops pulling SDL_android.c.o for other reasons.
             "-Wl,-u,JNI_OnLoad",
         ] + _resolve_android_aurora_link_items() + [
-            # A4: nod staticlib (disc-image import; cargo cross-build, see
+            # nod staticlib (disc-image import; cargo cross-build, see
             # NOD_ANDROID_LIB's comment). After the aurora items: its only
             # consumers are content_import.o (an objs[] member) and its own
             # libc/liblog/libm/libdl needs, all already on this line.
@@ -2187,7 +2238,7 @@ def build_android(args):
         # decoupling: gradle never runs the NDK; this driver is the only
         # build brain and gradle only packages what it stages).
         #
-        # A4 (docs/A4_ANDROID_UI.md): staging now STRIPS release-style
+        # staging now STRIPS release-style
         # (llvm-strip --strip-unneeded -- the debug APK was 141MB because
         # the RelWithDebInfo DWARF rode into jniLibs; gradle's own strip
         # task silently skips hand-placed jniLibs when it can't find the
@@ -2237,7 +2288,7 @@ def build_android(args):
         print(f"\nBuilt {so_path}")
         print(f"Built {shell_path}")
         print("APK: cd platforms/android && gradlew assembleDebug (or tools/apk_package.py "
-              "for the gradle-free path) -- docs/UA2_ANDROID_GRAPHICS.md")
+              "for the gradle-free path)")
         return 0
 
     # ---- build mp6launcher (single-TU exe, plain C, no game headers) -------
@@ -2256,7 +2307,7 @@ def build_android(args):
 
     print(f"\nBuilt {so_path}")
     print(f"Built {launcher_path}")
-    print("\nOn-device smoke (docs/UA1_ANDROID_HEADLESS.md):")
+    print("\nOn-device smoke:")
     print(f"  adb push {launcher_path} {so_path} {ANDROID_DEVICE_BASE}/")
     print(f"  adb push <disc>/sys/fst.bin {ANDROID_DEVICE_BASE}/GP6E01/sys/")
     print(f"  adb push <disc>/files/sound {ANDROID_DEVICE_BASE}/GP6E01/files/sound")
@@ -2270,14 +2321,14 @@ def main():
     ap.add_argument("--clean", action="store_true")
     ap.add_argument("--link-only", action="store_true")
     ap.add_argument("-j", type=int, default=os.cpu_count() or 4)
-    # U-A1 (docs/UA1_ANDROID_HEADLESS.md): the U1 section-4.2 target table.
+    # the design's own target-row table.
     # Default = today's Windows behavior, byte-for-byte (the whole Windows
     # flow below is untouched; the android row branches out immediately).
     ap.add_argument("--target", choices=["win-x86_64", "aarch64-android"],
                      default="win-x86_64",
-                     help="Build target row (U1 design section 4.2). Default: the Windows "
+                     help="Build target row (the design's own target-row table). Default: the Windows "
                           "build exactly as before. aarch64-android: NDK-clang headless "
-                          "build/android/{libmp6game.so,mp6launcher} (U-A1; implies "
+                          "build/android/{libmp6game.so,mp6launcher} (implies "
                           "--headless semantics, aurora/SDL excluded).")
     # A BUILD-time (not run-time) choice, deliberately -- see
     # platform/main_native.c's own header comment for why a run-time flag
@@ -2292,15 +2343,15 @@ def main():
                           "anywhere in the link) as build/mp6native_headless.exe, for CI-style "
                           "runs with no display. Default (no flag): links Aurora in for a real "
                           "window, as build/mp6native.exe.")
-    # U-A2 (docs/UA2_ANDROID_GRAPHICS.md): android-row-only. The default
-    # android row stays byte-for-byte the U-A1 headless build (so its
+    # android-row-only. The default
+    # android row stays byte-for-byte the headless build (so its
     # committed-log byte-compare re-runs keep working unchanged).
     ap.add_argument("--windowed", action="store_true",
                      help="With --target aarch64-android only: build the aurora/SDL3/Dawn "
                           "graphics libmp6game.so + the libmain.so APK bootstrap shell into "
                           "build/android/aurora/, and stage jniLibs for platforms/android. "
                           "Requires external_refs/repos/aurora/build-android (see "
-                          "docs/UA2_ANDROID_GRAPHICS.md). Ignored on the Windows rows.")
+                          "). Ignored on the Windows rows.")
     ap.add_argument("--coro-fibers", action="store_true",
                      help="A/B lever: build the Win32 FIBER "
                           "coroutine backend (platform/host/host_win32.c) instead of the DEFAULT "
@@ -2333,7 +2384,7 @@ def main():
     apply_decomp_override_headers()  # shield against foreign decomp WIP (see its docstring)
     apply_patches.apply_all()  # build/patched-src/* for the be16/be32 endianness fixes
 
-    # A4 (docs/A4_ANDROID_UI.md): the windowed build now links nod (the
+    # the windowed build now links nod (the
     # launcher's disc-image import backend). Fail fast with the recipe
     # rather than dying later on a missing include/import-lib.
     if not args.headless and (not os.path.isdir(NOD_INCLUDE) or not os.path.exists(NOD_WIN_LIB)):
@@ -2424,7 +2475,7 @@ def main():
     objs = objs + [stamp_obj]
 
     if not args.headless:
-        verify_aurora_carveout()  # C7: the archives must carry the carve-out sections
+        verify_aurora_carveout()  # the archives must carry the carve-out sections
 
     if args.headless:
         # The null-platform link recipe -- no AURORA anywhere -- plus real

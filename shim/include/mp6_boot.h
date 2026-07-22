@@ -116,7 +116,7 @@ void mp6_bridge_post_window_init(void *sdlWindow);
  * display surface. Invisible on the desktop default 1024x768 window
  * (already 4:3, so the fit is a no-op) but severe on any non-4:3 physical
  * surface (confirmed on a Galaxy S22+, ~21.5:9 landscape --
- * docs/A5_LAUNCHER_ASPECT.md). See mp6_bridge_apply_content_aspect_policy()
+). See mp6_bridge_apply_content_aspect_policy()
  * below for where that half of the policy moved. */
 void mp6_bridge_window_policy_init(void *sdlWindow);
 
@@ -207,7 +207,7 @@ void mp6_alloc_census_tick_check(void);
  * this header stays includable from TUs without dolphin/types.h. */
 uint32_t mp6_heap_block_data_size(const void *ptr);
 
-/* WS6 (docs/WS6_OVERLAY_CAMERAS.md): the real GPU's maxTextureDimension2D,
+/* The real GPU's maxTextureDimension2D,
  * as actually negotiated for THIS run -- captured by main_native.c's
  * mp6_aurora_log_callback, which scans Aurora's own startup "Using
  * limits:\n  maxTextureDimension2D: N" INFO log line (lib/webgpu/gpu.cpp)

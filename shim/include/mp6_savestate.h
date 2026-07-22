@@ -1,4 +1,4 @@
-/* MP6 native port -- cross-session savestates (docs/SAVESTATE.md).
+/* MP6 native port -- cross-session savestates.
  *
  * PURPOSE. Capture the game's whole mid-session execution state to a file
  * and restore it later, in a DIFFERENT process run, so a bug can be handed
@@ -18,7 +18,7 @@
  *      sections land at the same addresses every run.
  *   2. The arena and the coroutine-stack pool are reserved at explicit,
  *      non-ASLR candidate addresses, and were measured stable across
- *      repeated windowed boots (docs/SAVESTATE.md's spike). This is what
+ *      repeated windowed boots. This is what
  *      lets raw host pointers inside captured memory stay valid in the
  *      restoring process -- and it is a MEASURED property, not a
  *      guarantee, which is exactly why the loader below re-checks every

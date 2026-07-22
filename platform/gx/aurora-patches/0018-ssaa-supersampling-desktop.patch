@@ -1,0 +1,122 @@
+diff --git a/include/aurora/aurora.h b/include/aurora/aurora.h
+index 72376e2..39f0419 100644
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -95,6 +95,13 @@ typedef struct {
+   const char* resourcesPath;
+   AuroraBackend desiredBackend;
+   uint32_t msaa;
++  /* Anti-Aliasing P3 (aurora-patches/0018): SSAA supersampling factor for the
++   * content framebuffer (the surface stays native; aurora's present-resample
++   * pass downsamples). 0 or <=1 = off/native (byte-identical). Read once at
++   * aurora_initialize, so it is restart-pending like msaa. Desktop-only: the
++   * scaling is compiled out under __ANDROID__ (the port never sends >1 there
++   * either). Clamped to the device maxTextureDimension2D. */
++  float ssaa;
+   uint16_t maxTextureAnisotropy;
+   bool vsync;
+   bool startFullscreen;
+diff --git a/lib/webgpu/gpu.cpp b/lib/webgpu/gpu.cpp
+index ec5db54..3e0d0fc 100644
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -71,6 +71,13 @@ bool g_bcTexturesSupported = false;
+ bool g_astcTexturesSupported = false;
+ bool g_textureComponentSwizzleSupported = false;
+ static std::atomic_bool g_initialized = false;
++// Anti-Aliasing P3 (aurora-patches/0018): SSAA supersampling. g_ssaaFactor
++// (read from AuroraConfig.ssaa at init) scales the content framebuffer while
++// the surface stays native; the existing present-resample pass downsamples.
++// 1.0 = off (byte-identical). g_maxTextureDimension2D caches the adapter limit
++// so the scaled size is clamped and never exceeds what the device allows.
++static float g_ssaaFactor = 1.f;
++static uint32_t g_maxTextureDimension2D = 0;
+ 
+ namespace {
+ 
+@@ -328,6 +335,25 @@ uint32_t viewport_extent(float value) noexcept {
+   return std::max(1u, static_cast<uint32_t>(std::lround(std::max(value, 1.f))));
+ }
+ 
++#ifndef __ANDROID__
++// Anti-Aliasing P3 (aurora-patches/0018): scale a content-framebuffer extent by
++// the SSAA factor, clamped to the device's max 2D texture dimension so an
++// aggressive factor on a high-res window can never request a texture the device
++// rejects. Factor <= 1 returns the extent unchanged (exact native -> the SSAA-
++// off path is byte-identical). Desktop-only (compiled out under __ANDROID__).
++uint32_t apply_ssaa_scale(uint32_t dim) noexcept {
++  if (g_ssaaFactor <= 1.f || dim == 0) {
++    return dim;
++  }
++  auto scaled = static_cast<uint32_t>(
++      std::max<double>(1.0, std::lround(static_cast<double>(dim) * static_cast<double>(g_ssaaFactor))));
++  if (g_maxTextureDimension2D != 0 && scaled > g_maxTextureDimension2D) {
++    scaled = g_maxTextureDimension2D;
++  }
++  return scaled;
++}
++#endif
++
+ } // namespace
+ 
+ TextureWithSampler create_render_texture(uint32_t width, uint32_t height, bool multisampled) {
+@@ -962,6 +988,9 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+   {
+     wgpu::Limits supportedLimits{};
+     g_adapter.GetLimits(&supportedLimits);
++    // Anti-Aliasing P3 (aurora-patches/0018): remember the device's max 2D
++    // texture dimension so SSAA can clamp the scaled content framebuffer.
++    g_maxTextureDimension2D = supportedLimits.maxTextureDimension2D;
+     wgpu::CompatibilityModeLimits compatibilityModeLimits{wgpu::CompatibilityModeLimits::Init{
+         .maxStorageBuffersInVertexStage = 2,
+         .maxStorageBuffersInFragmentStage = 2,
+@@ -1146,6 +1175,13 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
+       .msaaSamples = g_config.msaa,
+       .textureAnisotropy = g_config.maxTextureAnisotropy,
+   };
++#ifndef __ANDROID__
++  // Anti-Aliasing P3 (aurora-patches/0018): latch the SSAA factor before the
++  // content framebuffer is built below. Desktop-only; <=1 or non-finite means
++  // off/native (byte-identical). resize_swapchain scales the content targets
++  // by this while the surface stays native.
++  g_ssaaFactor = (std::isfinite(g_config.ssaa) && g_config.ssaa > 1.f) ? g_config.ssaa : 1.f;
++#endif
+   create_copy_pipeline();
+   create_resample_pipeline();
+   gpu_prof::initialize();
+@@ -1190,9 +1226,21 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t
+   if (!g_surface || !g_device || width == 0 || height == 0 || nativeHeight == 0 || nativeWidth == 0) {
+     return;
+   }
++  // Anti-Aliasing P3 (aurora-patches/0018): the content framebuffer is built at
++  // SSAA factor x the logical size while the surface stays native -- the game
++  // viewport/scissor track it automatically (get_render_target_size derives
++  // from g_frameBuffer.size) and the present-resample pass downsamples for
++  // free. Factor 1 (off) makes fbWidth/fbHeight == width/height exactly, so the
++  // SSAA-off path is byte-identical. Desktop-only (compiled out on __ANDROID__).
++  uint32_t fbWidth = width;
++  uint32_t fbHeight = height;
++#ifndef __ANDROID__
++  fbWidth = apply_ssaa_scale(width);
++  fbHeight = apply_ssaa_scale(height);
++#endif
+   const bool sizeChanged = g_graphicsConfig.surfaceConfiguration.width != nativeWidth ||
+                            g_graphicsConfig.surfaceConfiguration.height != nativeHeight ||
+-                           g_frameBuffer.size.width != width || g_frameBuffer.size.height != height;
++                           g_frameBuffer.size.width != fbWidth || g_frameBuffer.size.height != fbHeight;
+   if (!force && !sizeChanged) {
+     return;
+   }
+@@ -1208,9 +1256,9 @@ static void resize_swapchain_internal(uint32_t width, uint32_t height, uint32_t
+     window::SurfaceLock surfaceLock;
+     g_surface.Configure(&surfaceConfiguration);
+   }
+-  g_frameBuffer = create_render_texture(width, height, true);
+-  g_frameBufferResolved = create_render_texture(width, height, false);
+-  g_depthBuffer = create_depth_texture(width, height);
++  g_frameBuffer = create_render_texture(fbWidth, fbHeight, true);
++  g_frameBufferResolved = create_render_texture(fbWidth, fbHeight, false);
++  g_depthBuffer = create_depth_texture(fbWidth, fbHeight);
+   g_CopyBindGroup = create_copy_bind_group(present_source());
+ }
+ 

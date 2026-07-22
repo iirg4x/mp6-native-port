@@ -111,7 +111,7 @@ whatever it complained about.
   `sdkmanager --licenses` or install the SDK for you -- accepting Google's
   SDK license is something only you can do. The disc itself is never
   touched by this tool for Android: the APK's own first-run onboarding
-  (`platform/gx/ui/content_setup.cpp`, `docs/A4_ANDROID_UI.md`) handles
+  (`platform/gx/ui/content_setup.cpp`) handles
   that on-device.
 - **Linux/macOS (`setup.sh`): partial by design.** The prerequisite check,
   decomp clone, and disc extraction (`nod` ships Linux/macOS builds too)

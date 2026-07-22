@@ -3,25 +3,25 @@
 @@ -9,0 +10,2 @@
 +#include <stdio.h>
 +#include <stdlib.h>
-@@ -11,0 +14,2 @@
-+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) */
-+#include "mp6_freecam.h" /* runtime Mods-page freecam override (shim/include/mp6_freecam.h) */
-@@ -150,0 +155,27 @@
-+/* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md): the title-wordmark
-+ * draw census. M10's framescope census proved the three BootTitleCreate
-+ * models (TITLE_HSF_PARTY/SIX/STAR) never load a single texture on the
-+ * title frame -- i.e. they never reach ObjDraw at all -- but framescope
-+ * can only see GX calls, not WHY the Hu3DExec model loop skipped a model.
-+ * This census prints, for MP6_DRAW_CENSUS=<tick> (two consecutive ticks
-+ * starting there, so one full Hu3DExec pass is guaranteed even if the
-+ * first armed tick lands mid-frame):
+@@ -11,0 +14,3 @@
++#include "mp6_widescreen.h" /* widescreen support */
++#include "mp6_freecam.h" /* runtime Mods-page freecam override */
++#include "mp6_fi_model.h" /* mp6_fi_replay_pass guard flag (unlocked-fps replay pass) */
+@@ -150,0 +156,27 @@
++/* Title-wordmark draw census: an earlier framescope census proved the
++ * three BootTitleCreate models (TITLE_HSF_PARTY/SIX/STAR) never load a
++ * single texture on the title frame -- i.e. they never reach ObjDraw at
++ * all -- but framescope can only see GX calls, not WHY the Hu3DExec model
++ * loop skipped a model. This census prints, for MP6_DRAW_CENSUS=<tick>
++ * (two consecutive ticks starting there, so one full Hu3DExec pass is
++ * guaranteed even if the first armed tick lands mid-frame):
 + *   - one entry-state dump per Hu3DExec call (live cameras, layerNum[],
 + *     and every live model's routing state: layer, cameraBit, attr bits,
 + *     scale, motion id, object count), and
 + *   - one verdict line per live model on its OWN layer's pass per camera,
 + *     evaluating the loop's real skip chain in the loop's real order.
 + * Zero output and one getenv (cached) when the env var is unset.
-+ * PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++ * Diagnostic only: prints state, never changes behavior. */
 +extern long mp6_tick_count;
 +static long mp6CensusTick = -2; /* -2 = env not parsed yet, -1 = disabled */
 +static int mp6CensusActive(void)
@@ -34,14 +34,14 @@
 +           mp6_tick_count < mp6CensusTick + 2;
 +}
 +
-@@ -195,0 +227,39 @@
+@@ -195,0 +228,39 @@
 +    /* MP6 native port -- freecam (shim/include/mp6_freecam.h): override the
 +     * main camera at Hu3DExec entry, AFTER every game-side camera write this
 +     * tick (HuPrcCall already returned) and BEFORE Hu3DCameraSet consumes
 +     * the fields. One false-branch no-op while the Mods-page toggle is off,
 +     * so automation/headless behavior is byte-identical. */
 +    mp6_freecam_apply();
-+    if (mp6CensusActive()) { /* M11 census entry dump -- see mp6CensusActive above */
++    if (mp6CensusActive()) { /* census entry dump -- see mp6CensusActive above */
 +        HU3D_MODEL *cmP;
 +        s16 ci;
 +        printf("[CENSUS] tick=%ld Hu3DExec entry, cameraExistF=%04x\n",
@@ -74,9 +74,12 @@
 +        }
 +        fflush(stdout);
 +    }
-@@ -276,0 +347,27 @@
-+                    }
-+                    /* M11 census verdict line -- evaluates the loop's own
+@@ -199,0 +271 @@
++    if (!mp6_fi_replay_pass) { /* skip shadow/reflect EFB passes on a re-run (cost; also sidesteps shadow/interp desync) */
+@@ -238,0 +311 @@
++    } /* end shadow/reflect skip */
+@@ -277,0 +351,27 @@
++                    /* Census verdict line -- evaluates the loop's own
 +                     * skip chain, in the loop's own order, once per live
 +                     * model on its own layer's pass (see mp6CensusActive's
 +                     * comment above). Prints only; changes nothing. */
@@ -102,53 +105,66 @@
 +                        printf("[CENSUS]  cam%d layer%d model%d -> %s (layerMdlNum=%d/%d)\n",
 +                               Hu3DCameraNo, layer, i, mp6Verdict, layerMdlNum, layerNum[layer]);
 +                        fflush(stdout);
-@@ -935,0 +1033,22 @@
-+/* MP6 native port -- docs/M2C_MENU_PATH.md. On real hardware this lookup
-+ * always finds a real object -- a model's real HSF data always has the
-+ * name callers ask for, so returning NULL here was pure defensive code,
-+ * never actually exercised. The M2c HSF stub (docs/M2B_TITLE_PATH.md's
-+ * frontier, deferred rather than solved) gives every model an EMPTY
-+ * object list on purpose, so this lookup now genuinely fails every time
-+ * -- and 18 call sites across 7 files (src/REL/bootDll/opening.c alone
-+ * has 6, src/REL/fileseldll/filesel.c has 2 -- grep-confirmed, not
-+ * guessed) immediately write through the result with no NULL check of
-+ * their own (object->mesh.base.pos.x = ..., the same shape this patch
-+ * queue already fixed once for Hu3DAnimAnimSet/HuAR_ARAMtoMRAMFileRead's
-+ * own callers). Patching all 18 call sites individually -- several in
-+ * files this milestone hasn't even reached yet -- is far more surface
-+ * area than fixing the one shared chokepoint they all already funnel
-+ * through. This dummy is a plain zeroed HSF_OBJECT, never linked into
-+ * any real hsf->root/object[] tree, so nothing ever traverses INTO it
-+ * (Hu3DDraw/MakeDisplayList never see it); it only ever absorbs a
++                    }
+@@ -279 +379 @@
+-                        Hu3DCameraMotionExec(i);
++                        if (!mp6_fi_replay_pass) Hu3DCameraMotionExec(i); /* freeze camera-motion re-sample on a re-run */
+@@ -282 +382 @@
+-                    if((modelP->attr & HU3D_ATTR_CAMERA_UPDATE) == HU3D_ATTR_CAMERA_UPDATE && modelP->motId != HU3D_MOTIONID_NONE) {
++                    if(!mp6_fi_replay_pass && (modelP->attr & HU3D_ATTR_CAMERA_UPDATE) == HU3D_ATTR_CAMERA_UPDATE && modelP->motId != HU3D_MOTIONID_NONE) { /* freeze on re-run */
+@@ -294,2 +394,2 @@
+-                    if(((modelP->attr & HU3D_ATTR_MOT_EXEC) == 0 && (modelP->attr & HU3D_ATTR_MOT_SLOW) == 0) ||
+-                        ((modelP->attr & HU3D_ATTR_MOT_SLOW) != 0 && (modelP->tick & 1) != 0)) {
++                    if(!mp6_fi_replay_pass && (((modelP->attr & HU3D_ATTR_MOT_EXEC) == 0 && (modelP->attr & HU3D_ATTR_MOT_SLOW) == 0) ||
++                        ((modelP->attr & HU3D_ATTR_MOT_SLOW) != 0 && (modelP->tick & 1) != 0))) { /* no motion re-sample / vertex deform on a re-run */
+@@ -353 +453 @@
+-                    modelP->tick++;
++                    if (!mp6_fi_replay_pass) { modelP->tick++; } /* no tick advance on a re-run */
+@@ -374,0 +475 @@
++    if (!mp6_fi_replay_pass) { /* no motion/sprite/tex-anim clock advance on a re-run */
+@@ -385,0 +487 @@
++    } /* end re-run skip */
+@@ -935,0 +1038,22 @@
++/* On real hardware this lookup always finds a real object -- a model's
++ * real HSF data always has the name callers ask for, so returning NULL
++ * here was pure defensive code, never actually exercised. This port's HSF
++ * loader stub gives every model an EMPTY object list on purpose, so this
++ * lookup now genuinely fails every time -- and 18 call sites across 7
++ * files immediately write through the result with no NULL check of their
++ * own (the same shape this patch queue already fixed once for
++ * Hu3DAnimAnimSet's own callers). Patching all 18 call sites individually
++ * is far more surface area than fixing the one shared chokepoint they all
++ * already funnel through. This dummy is a plain zeroed HSF_OBJECT, never
++ * linked into any real hsf->root/object[] tree, so nothing ever traverses
++ * INTO it (Hu3DDraw/MakeDisplayList never see it); it only ever absorbs a
 + * caller's writes harmlessly instead of crashing. Shared across every
 + * "not found" case rather than allocated fresh: nothing ever reads a
 + * meaningful value back out of it, so there is no cross-talk to avoid. */
 +static HSF_OBJECT mp6_dummyObj;
 +
-@@ -952 +1071 @@
+@@ -952 +1076 @@
 -    return NULL;
 +    return &mp6_dummyObj;
-@@ -1287,0 +1407 @@
-+    defCamera.aspect = HU_DISP_ASPECT * mp6_widescreen_scale_factor(); /* WS2: see mp6_widescreen.h -- 1.0 (no-op) when disabled, reproducing the reference ROM hack's confirmed defCamera.aspect x4/3 widen (WS_REFERENCE_STUDY.md section 5) at the LIVE aspect instead of a fixed ratio */
-@@ -1294,0 +1415,3 @@
+@@ -1287,0 +1412 @@
++    defCamera.aspect = HU_DISP_ASPECT * mp6_widescreen_scale_factor(); /* 1.0 (no-op) when disabled; reproduces the reference widescreen hack's defCamera aspect widen at the live aspect instead of a fixed ratio */
+@@ -1294,0 +1420,3 @@
 +    printf("[MP6-DIAG-CAM] Hu3DCameraCreate(bit=%d) ran; Hu3DCameraExistF=%d Hu3DCamera[0].fov=%f\n",
 +           cameraBit, Hu3DCameraExistF, Hu3DCamera[0].fov);
 +    fflush(stdout);
-@@ -1477 +1600,9 @@
+@@ -1477 +1605,9 @@
 -        Hu3DCameraPerspectiveSet(cameraBit, obj->camera.fov, obj->camera.near, obj->camera.far, HU_DISP_ASPECT);
-+        /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): this is an HSF-scene-
-+         * authored (cutscene/cinematic) camera -- genuinely on-screen main
-+         * viewport content, so it gets the same live-aspect treatment as
-+         * defCamera.aspect above (Hu3DCameraCreate), not the shadow/
-+         * reflection exclusion below (those stay at HU_DISP_ASPECT
-+         * unchanged -- off-screen render-to-texture passes, not the main
-+         * viewport). */
++        /* This is an HSF-scene-authored (cutscene/cinematic) camera --
++         * genuinely on-screen main viewport content, so it gets the same
++         * live-aspect treatment as defCamera.aspect above
++         * (Hu3DCameraCreate), not the shadow/reflection exclusion below
++         * (those stay at HU_DISP_ASPECT unchanged -- off-screen
++         * render-to-texture passes, not the main viewport). */
 +        Hu3DCameraPerspectiveSet(cameraBit, obj->camera.fov, obj->camera.near, obj->camera.far,
 +            HU_DISP_ASPECT * mp6_widescreen_scale_factor());
-@@ -2106,0 +2238,2 @@
+@@ -2106,0 +2243,2 @@
 +/* MP6 native port -- Mods-page Shadow Quality (shim/include/mp6_shadow_quality.h). */
 +#include "mp6_shadow_quality.h"
-@@ -2114,0 +2248,11 @@
+@@ -2114,0 +2253,11 @@
 +            /* MP6 native port -- Mods-page Shadow Quality (shim/include/
 +             * mp6_shadow_quality.h has the full contract). shadowP->size
 +             * stays NATIVE: the render pass (viewport/scissor/copy-src)
@@ -160,49 +176,93 @@
 +             * GXInitTexObj sites -- so the map covers the SAME light
 +             * frustum at any setting. The buffer holds the scaled dst
 +             * texels (I8, 1 byte per texel). */
-@@ -2117 +2261,2 @@
+@@ -2117 +2266,3 @@
 -                shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, SHADOW_DEFAULT_SIZE*SHADOW_DEFAULT_SIZE);
 +                s32 allocSide = mp6_shadow_effective_size(SHADOW_DEFAULT_SIZE);
 +                shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, allocSide*allocSide);
-@@ -2182,0 +2328,4 @@
++                mp6_shadow_latch_size(shadowP->buf, allocSide); /* latch effective size for this buffer's lifetime */
+@@ -2182,0 +2334,4 @@
 +            /* MP6 native port -- Shadow Quality, same native-size +
 +             * scaled-alloc treatment as Hu3DShadowMultiCreate above.
 +             * Dormant in the shipped game (no caller). */
 +            s32 allocSide = mp6_shadow_effective_size(size);
-@@ -2187 +2336 @@
+@@ -2187 +2342,2 @@
 -            shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, size*size);
 +            shadowP->buf = HuMemDirectMalloc(HEAP_MODEL, allocSide*allocSide);
-@@ -2301,0 +2451,8 @@
-+        /* [MP6 Shadow Quality] pristine pass, scaled DESTINATION: the src
-+         * rect stays the native EFB-unit region (aurora maps it to window-
-+         * scaled physical pixels), and only the dst texel count grows --
-+         * capped at 2x by mp6_shadow_effective_size(), the point where dst
-+         * texels equal the src region's own supersampled detail. World
-+         * coverage is untouched by construction. Native setting emits the
-+         * pristine values exactly. */
-+        s32 effDst = mp6_shadow_effective_size(Hu3DShadow->size);
-@@ -2303 +2460 @@
++            mp6_shadow_latch_size(shadowP->buf, allocSide); /* latch effective size for this buffer's lifetime */
+@@ -2224,0 +2381,10 @@
++    /* [MP6 Shadow Quality] (shim/include/mp6_shadow_quality.h): mp6OffPx
++     * arms the offscreen bracket only when the effective scale exceeds 2
++     * (i.e. never at native/2x -- those keep the pristine in-EFB pass and
++     * emit the pristine GX values exactly). When armed, the whole pass
++     * below runs inside aurora's dedicated offscreen target of
++     * (size*scale*2)^2 pixels -- the pristine viewport/scissor/copy-src,
++     * scaled to those offscreen units, with the SAME projection and
++     * lookAt, so world coverage is byte-identical by construction. */
++    s32 mp6EffDst;
++    s32 mp6OffPx;
+@@ -2228,0 +2395,2 @@
++    mp6EffDst = mp6_shadow_latched_size(Hu3DShadow->buf, Hu3DShadow->size); /* create-time size, not live config */
++    mp6OffPx = (mp6EffDst > Hu3DShadow->size*2) ? mp6EffDst*2 : 0;
+@@ -2230,2 +2398,15 @@
+-        GXSetScissor(2, 2, (Hu3DShadow->size*2)-4, (Hu3DShadow->size*2)-4);
+-        GXSetViewport(0, 0, (Hu3DShadow->size*2), (Hu3DShadow->size*2), 0, 1);
++        if(mp6OffPx != 0) {
++            /* Pristine values scaled to the offscreen units (the 2-px
++             * scissor border scales too, keeping the same world-fraction
++             * black border for the GX_CLAMP receiver). */
++            s32 mp6Scale = mp6EffDst/Hu3DShadow->size;
++            mp6_shadow_offscreen_begin(mp6OffPx);
++            /* Render scissor in offscreen pixels, not the 11-bit-packed
++             * GXSetScissor -- its register only holds values up to 2048px,
++             * which overflows above 4x scale and corner-clips/empties the
++             * map -- see mp6_shadow_quality.h. */
++            mp6_shadow_offscreen_scissor(2*mp6Scale, 2*mp6Scale, (Hu3DShadow->size*2-4)*mp6Scale, (Hu3DShadow->size*2-4)*mp6Scale);
++            GXSetViewport(0, 0, mp6OffPx, mp6OffPx, 0, 1);
++        } else {
++            GXSetScissor(2, 2, (Hu3DShadow->size*2)-4, (Hu3DShadow->size*2)-4);
++            GXSetViewport(0, 0, (Hu3DShadow->size*2), (Hu3DShadow->size*2), 0, 1);
++        }
+@@ -2302,2 +2483,14 @@
+-        GXSetTexCopySrc(0, 0, Hu3DShadow->size*2, Hu3DShadow->size*2);
 -        GXSetTexCopyDst(Hu3DShadow->size, Hu3DShadow->size, GX_CTF_R8, GX_TRUE);
-+        GXSetTexCopyDst((u16)effDst, (u16)effDst, GX_CTF_R8, GX_TRUE);
-@@ -2611,0 +2769,21 @@
-+    /* MP6 native port -- M3 (docs/M3_HSF.md). Explicit GXEnd() -- a pure
-+     * no-op on real hardware (this function's own 4-vertex GXBegin count
-+     * already exactly matches the 4 GXPosition3f32 calls above; real GX
-+     * hardware ends a primitive by vertex count, never needing this call
-+     * at all -- see docs/M2D_MENUS.md's own root-cause writeup for this
-+     * exact function). Aurora's own GX emulation tracks completion via an
-+     * explicit open/close flag instead, and the general "auto-close on the
-+     * next GXBegin" bridge-side tolerance this project already has
-+     * (platform/gx/aurora_bridge.c) isn't precise enough once OTHER,
-+     * unrelated vertex-emitting calls can interleave between this
-+     * function's own last vertex and whatever the next real GXBegin
-+     * happens to be -- exactly the same gap docs/M2D_MENUS.md already
-+     * root-caused and fixed once for game/sprput.c's HuSpr3DDisp, and
-+     * unreachable for THIS function until real HSF meshes (this
-+     * milestone) started actually rendering multiple objects/materials
-+     * per frame around it. Confirmed by direct evidence, not guessed:
-+     * repeating "[AURORA WARNING: aurora::gx] GXEnd: vertex data not
-+     * evenly divisible" for exactly 4 (this function's own count) and 6
-+     * (an unrelated interleaved call's count) vertices, every frame,
-+     * during the opening cutscene once HSF loading started succeeding. */
++        /* Scaled DESTINATION (mp6EffDst, == pristine size at native -- the
++         * pristine values exactly). In-EFB (1x/2x):
++         * the src rect stays the native EFB-unit region and only the dst
++         * texel count grows, 2x being the EFB pass's own supersampled
++         * detail. Offscreen (>2x, mp6OffPx armed above): the src rect is
++         * the offscreen target's own full 2x-supersampled box, resolved
++         * (with a mip chain, see mp6_shadow_offscreen_begin) down to the
++         * (size*scale)^2 map. */
++        if(mp6OffPx != 0) {
++            GXSetTexCopySrc(0, 0, (u16)mp6OffPx, (u16)mp6OffPx);
++        } else {
++            GXSetTexCopySrc(0, 0, Hu3DShadow->size*2, Hu3DShadow->size*2);
++        }
++        GXSetTexCopyDst((u16)mp6EffDst, (u16)mp6EffDst, GX_CTF_R8, GX_TRUE);
+@@ -2308,0 +2502,6 @@
++    if(mp6OffPx != 0) {
++        /* Closes the offscreen bracket AFTER the copy resolved from it;
++         * the pristine full-screen viewport/scissor restore right below
++         * then applies to the resumed EFB pass. */
++        mp6_shadow_offscreen_end();
++    }
+@@ -2611,0 +2811,21 @@
++    /* Explicit GXEnd() -- a pure no-op on real hardware (this function's
++     * own 4-vertex GXBegin count already exactly matches the 4
++     * GXPosition3f32 calls above; real GX hardware ends a primitive by
++     * vertex count, never needing this call at all). Aurora's own GX
++     * emulation tracks completion via an explicit open/close flag instead,
++     * and the general "auto-close on the next GXBegin" bridge-side
++     * tolerance this project already has (platform/gx/aurora_bridge.c)
++     * isn't precise enough once OTHER, unrelated vertex-emitting calls can
++     * interleave between this function's own last vertex and whatever the
++     * next real GXBegin happens to be -- the same gap already root-caused
++     * and fixed once for game/sprput.c's HuSpr3DDisp, and unreachable for
++     * THIS function until real HSF meshes started actually rendering
++     * multiple objects/materials per frame around it. Confirmed by direct
++     * evidence, not guessed: repeating "GXEnd: vertex data not evenly
++     * divisible" for exactly 4 (this function's own count) and 6 (an
++     * unrelated interleaved call's count) vertices, every frame, during
++     * the opening cutscene once HSF loading started succeeding. */
 +    GXEnd();

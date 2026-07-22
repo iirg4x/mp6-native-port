@@ -55,7 +55,7 @@
 #include <string.h>
 #include <ctype.h>
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+/* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
  * redirects every file-scope definition FOLLOWING it. As a -include (before all
  * headers) it also captured the decomp headers' C TENTATIVE definitions --
@@ -544,7 +544,7 @@ void mp6_dvd_close(DVDFileInfo *fileInfo)
 }
 
 /* =======================================================================
- * Savestate support (docs/SAVESTATE.md, W2)
+ * Savestate support
  * =======================================================================
  * This whole TU's statics are carved out of the savestate (see
  * HOST_STATE_SECTION_SOURCES in tools/build.py), because every one of them

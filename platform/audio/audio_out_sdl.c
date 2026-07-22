@@ -34,7 +34,7 @@
 #include <stdio.h>
 #include <stdint.h>
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+/* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
  * redirects every file-scope definition FOLLOWING it. As a -include (before all
  * headers) it also captured the decomp headers' C TENTATIVE definitions --

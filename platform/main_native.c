@@ -38,7 +38,7 @@
  *     lib/main.cpp, which does nothing beyond calling aurora_main.
  */
 #include "mp6_boot.h"
-#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): mp6_widescreen_set_enabled */
+#include "mp6_widescreen.h" /* mp6_widescreen_set_enabled */
 #include "host.h" /* mp6_host_crash_install, mp6_host_image_below_4gb */
 
 #include <stdio.h>
@@ -160,20 +160,23 @@ int main(int argc, char **argv)
 extern int mp6_launcher_decide_mode(int hasNumericArg, int hasInputScript, int *outShowMenu);
 extern int mp6_launcher_cfg_backend(void);
 extern int mp6_launcher_cfg_vsync(void);
+extern int mp6_launcher_cfg_msaa(void); /* Anti-Aliasing (MSAA): aurora_initialize-time, restart-pending like backend/vsync */
+extern int mp6_launcher_cfg_post_aa(void); /* Anti-Aliasing P2 (FXAA): AuroraPostAA value, applied LIVE (not restart-pending) */
+extern float mp6_launcher_cfg_ssaa(void);  /* Anti-Aliasing P3 (SSAA): AuroraConfig.ssaa factor, aurora_initialize-time, restart-pending (desktop-only) */
 extern int mp6_launcher_cfg_aspect_locked(void); /* A5: gameplay-time-only aspect policy */
-extern int mp6_launcher_cfg_widescreen(void); /* WS2: gameplay-time-only dynamic-widescreen policy (docs/WS2_DYNAMIC_WIDESCREEN.md) */
+extern int mp6_launcher_cfg_widescreen(void); /* gameplay-time-only dynamic-widescreen policy */
 extern void mp6_launcher_apply_display_settings(void *sdlWindow);
 extern int mp6_launcher_run_menu(void *sdlWindow);
 extern void mp6_launcher_apply_game_settings(void);
 extern int mp6_launcher_content_ready(void);
 
-/* WS6 (docs/WS6_OVERLAY_CAMERAS.md): captured out of Aurora's own startup
+/* Captured out of Aurora's own startup
  * log line (see mp6_boot.h's declaration comment for the full mechanism --
  * this is what mp6_aurora_queried_max_texture_dimension_2d() below reads
  * back). 0 = not seen yet. */
 static int g_mp6AuroraMaxTextureDimension2D = 0;
 
-/* WS6: scans one already-received log message for Aurora's own
+/* Scans one already-received log message for Aurora's own
  * "maxTextureDimension2D: <N>" substring (lib/webgpu/gpu.cpp's
  * Log.info("Using limits: ...") -- {fmt}-style formatting, so N is always
  * plain decimal digits, no separators) and stashes N if found. Safe to
@@ -301,7 +304,7 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     config.appName = "mp6native [mp6-native]";
     config.desiredBackend = BACKEND_AUTO;
     config.vsync = true;
-    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) test lever: MP6_WINDOW_SIZE=WxH
+    /* Widescreen test lever: MP6_WINDOW_SIZE=WxH
      * sets the INITIAL window size directly (AuroraConfig.windowWidth/
      * windowHeight -- aurora lib/window.cpp create_window(), consumed only
      * as the OS window's initial size). Exists so a scripted verification
@@ -331,6 +334,12 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     if (launcherMode) {
         config.desiredBackend = (AuroraBackend)mp6_launcher_cfg_backend();
         config.vsync = mp6_launcher_cfg_vsync() ? true : false;
+        /* Anti-Aliasing P1 (docs history: MSAA 4x): aurora_initialize-time
+         * parameter like backend/vsync above -- aurora already builds the
+         * multisampled targets/resolve/per-pipeline sampleCount off this
+         * one value; the port previously never set it (zero-init default,
+         * which aurora itself clamps to 1/off). */
+        config.msaa = (uint32_t)mp6_launcher_cfg_msaa();
     } else {
         /* Automation/straight-boot: default vsync OFF. A drive that only needs
          * to REACH a screen shouldn't be paced down to the display refresh
@@ -343,7 +352,33 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
          * it (e.g. tearing-free capture of a moving scene). */
         const char *vs = getenv("MP6_VSYNC");
         config.vsync = (vs != NULL && vs[0] == '1') ? true : false;
+        /* MP6_MSAA env lever, mirroring MP6_VSYNC just above: automation
+         * mode never reads mp6_config.json, so a scripted MSAA hazard/
+         * verification drive (tools/vtest.sh + --input-script) needs its
+         * own lever to force it on, same automation-compatible-test-lever
+         * shape as MP6_VSYNC/MP6_WIDESCREEN/MP6_SHADOW_QUALITY. Tolerant:
+         * only "4" turns it on; anything else (unset included) is 1 (off),
+         * matching the config parser's own tolerant clamp. */
+        const char *ms = getenv("MP6_MSAA");
+        config.msaa = (ms != NULL && strcmp(ms, "4") == 0) ? 4 : 1;
     }
+#ifndef __ANDROID__
+    /* Anti-Aliasing P3 (SSAA, DESKTOP-ONLY): supersample factor for the content
+     * framebuffer (aurora scales it, downsamples via the present resampler;
+     * aurora ignores the field on __ANDROID__ too, but the port never even
+     * sends it there). Launcher mode reads the unified video.aa enum; automation
+     * uses the MP6_SSAA lever (mirrors MP6_MSAA), tolerant: only "1.5"/"2" set a
+     * factor, anything else (unset included) is 1.0 (off -> content fb built at
+     * exactly native, byte-identical). Restart-pending like msaa. */
+    if (launcherMode) {
+        config.ssaa = mp6_launcher_cfg_ssaa();
+    } else {
+        const char *ss = getenv("MP6_SSAA");
+        config.ssaa = (ss != NULL && strcmp(ss, "2") == 0)   ? 2.0f
+                      : (ss != NULL && strcmp(ss, "1.5") == 0) ? 1.5f
+                                                               : 1.0f;
+    }
+#endif
 #ifdef __ANDROID__
     /* A4: launcher resources ("res/rml/...", "res/fonts/...") ship as APK
      * assets and load through aurora's SDL_IOFromFile-backed RmlUi file
@@ -370,6 +405,23 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     printf("[BOOT] calling aurora_initialize() before GameMain() reaches the game's GXInit\n");
     fflush(stdout);
     AuroraInfo info = aurora_initialize(argc, argv, &config);
+    /* Anti-Aliasing P2 (FXAA): a live post-process, applied here right after
+     * aurora is up rather than through AuroraConfig (unlike msaa) -- so it is
+     * NOT restart-pending. Launcher mode reads the unified video.aa enum; a
+     * later in-menu change re-applies itself live via settings.cpp. Automation
+     * uses the MP6_FXAA lever (mirrors MP6_MSAA), tolerant: only "1" turns it
+     * on, anything else (unset included) is off. Off is a no-op -- the shader's
+     * post_aa_mode stays 0, the present path byte-identical. */
+    {
+        int fxaaOn;
+        if (launcherMode) {
+            fxaaOn = mp6_launcher_cfg_post_aa();
+        } else {
+            const char *fx = getenv("MP6_FXAA");
+            fxaaOn = (fx != NULL && fx[0] == '1') ? 1 : 0;
+        }
+        aurora_set_post_aa(fxaaOn ? AURORA_POST_AA_FXAA : AURORA_POST_AA_NONE);
+    }
     /* Normal-window placement + the WINDOW half of the fixed-aspect policy
      * (bordered windowed window, interactive resizes constrained to 4:3).
      * Must run before the first game frame; see platform/gx/aurora_bridge.c's
@@ -424,7 +476,7 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
         mp6_launcher_apply_game_settings();
     }
 
-    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): decided once, right before
+    /* Decided once, right before
      * GameMain(), on every boot path (automation, launcher.skip, and
      * interactive Play alike) -- mp6_launcher_cfg_widescreen() returns
      * g_cfg.widescreen in launcher mode or a fixed 0 (matching every
@@ -447,7 +499,7 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * the real window/display surface instead of a phantom letterboxed
      * one. mp6_launcher_cfg_aspect_locked() returns g_cfg.aspectLocked in
      * launcher mode or a fixed 1 (today's automation default) otherwise --
-     * identical final gameplay-time state to pre-A5. WS2 extends this same
+     * identical final gameplay-time state to before. Widescreen extends this same
      * call (mp6_bridge_apply_content_aspect_policy(), aurora_bridge.c) to
      * also consult mp6_widescreen_enabled() (set immediately above) and
      * stay on FIT -- never STRETCH -- at the live wide aspect when active. */

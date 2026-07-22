@@ -38,7 +38,7 @@
 extern "C" void mp6_widescreen_set_enabled(int enabled);
 extern "C" void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg);
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): host-owned statics (RmlUi document
+/* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
  * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
  * LEVEL (build.py rejects a conditionally-nested include -- a platform
@@ -69,6 +69,36 @@ namespace {
         { 2.0f, "1280 \xC3\x97 960" },
         { 3.0f, "1920 \xC3\x97 1440" },
     } };
+
+    /* Anti-Aliasing (video.aa -- launcher_state.hpp Mp6AaMode has the full
+     * contract): ONE select button drives every AA mechanism. Off and
+     * MSAA 4x keep P1's aurora_initialize-time "Takes effect next launch"
+     * shape; FXAA is a live post-process (aurora_set_post_aa) that applies
+     * the instant it is selected. (SSAA 1.5x/2x are appended, desktop-only,
+     * by the P3 lane.) */
+    struct AaPreset {
+        int mode; /* Mp6AaMode */
+        const char *label;
+    };
+    /* SSAA 1.5x/2x are DESKTOP-ONLY (P3): the two rows are #ifndef __ANDROID__-
+     * gated out of the array itself, so both the label lookup and the button
+     * loop below exclude them on Android with no per-site guards -- mirroring
+     * the launcher_core.cpp __ANDROID__ UI gating. */
+#ifndef __ANDROID__
+    constexpr std::array<AaPreset, 5> kAaPresets = { {
+        { MP6_AA_OFF, "Off" },
+        { MP6_AA_MSAA4X, "MSAA 4x" },
+        { MP6_AA_FXAA, "FXAA" },
+        { MP6_AA_SSAA15, "SSAA 1.5x" },
+        { MP6_AA_SSAA2X, "SSAA 2x" },
+    } };
+#else
+    constexpr std::array<AaPreset, 3> kAaPresets = { {
+        { MP6_AA_OFF, "Off" },
+        { MP6_AA_MSAA4X, "MSAA 4x" },
+        { MP6_AA_FXAA, "FXAA" },
+    } };
+#endif
 
     /* Their backend name/id tables, kept verbatim. */
     bool try_parse_backend(std::string_view backend, AuroraBackend &outBackend)
@@ -408,6 +438,57 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
                 .setValue = [](bool value) { cfg().vsync = value ? 1 : 0; },
                 .isModified = [] { return cfg().vsync != 1; },
             });
+
+        /* Anti-Aliasing (video.aa): Shadow Quality's exact select_button +
+         * register_control shape (Mods tab, below), one button over the
+         * unified Mp6AaMode enum. isDisabled mirrors every other env-lever-
+         * backed row in this file (Shadow Quality/Free-Run Tick/Unlocked
+         * FPS/Dynamic Widescreen): greyed out while any AA test lever is set,
+         * because those levers already win over whatever is saved here. */
+        leftPane.register_control(leftPane.add_select_button({
+                                      .key = "Anti-Aliasing",
+                                      .getValue =
+                                          [] {
+                                              for (const auto &p : kAaPresets) {
+                                                  if (cfg().aa == p.mode) {
+                                                      return Rml::String { p.label };
+                                                  }
+                                              }
+                                              return Rml::String { "Off" };
+                                          },
+                                      .isDisabled = [] { return getenv("MP6_MSAA") != NULL || getenv("MP6_FXAA") != NULL || getenv("MP6_SSAA") != NULL; },
+                                      .isModified = [] { return cfg().aa != MP6_AA_OFF; },
+                                  }),
+            rightPane, [](Pane &pane) {
+                pane.clear();
+                for (const auto &preset : kAaPresets) {
+                    pane
+                        .add_button({
+                            .text = preset.label,
+                            .isSelected = [mode = preset.mode] { return cfg().aa == mode; },
+                        })
+                        .on_pressed([mode = preset.mode] {
+                            cfg().aa = mode;
+                            /* FXAA is a post-process -> apply LIVE the instant
+                             * it is (de)selected; selecting any non-FXAA mode
+                             * clears a previously-live FXAA immediately. MSAA
+                             * still takes effect next launch (restart-pending,
+                             * mp6_launcher_cfg_msaa). */
+                            aurora_set_post_aa(mode == MP6_AA_FXAA ? AURORA_POST_AA_FXAA : AURORA_POST_AA_NONE);
+                            cfg_save();
+                        });
+                }
+                pane.add_rml("<br/>Anti-aliasing smooths jagged edges. <b>MSAA 4x</b> multisamples "
+                             "polygon edges (takes effect next launch). <b>FXAA</b> is a fast "
+                             "post-process that applies immediately, with near-zero cost."
+#ifndef __ANDROID__
+                             " <b>SSAA 1.5x/2x</b> supersample the whole scene -- the strongest "
+                             "quality, the highest cost (takes effect next launch)."
+#endif
+                             " <b>Off</b> is the original game's own rendering (byte-identical)."
+                             "<br/><br/>Disabled while the MP6_MSAA / MP6_FXAA / MP6_SSAA "
+                             "environment levers are set (they win).");
+            });
     });
 
     /* ------------------------------------------------------------------
@@ -484,7 +565,7 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
                 pane.add_rml(text);
             });
 
-        /* [MP6] A4 (docs/A4_ANDROID_UI.md): the guided import path -- disc
+        /* The guided import path -- disc
          * image (nod-backed) or extracted folder through the system picker,
          * same dialog the prelaunch "Select Game" button opens. */
         leftPane.register_control(leftPane.add_button("Select Game...").on_pressed([this] {
@@ -564,7 +645,7 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
 
         leftPane.add_section("Display");
 
-        /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): dynamic true-widescreen --
+        /* Dynamic true-widescreen --
          * NOT the fixed 16:9 a binary ROM patch is stuck with. Moved here
          * from the Video tab; flipping it MID-GAME now also flips the live
          * engine flag (window shape, render width, 2D layer track it
@@ -605,6 +686,32 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
                 .isModified = [] { return cfg().widescreen != 0; },
             });
 
+        /* Unlocked FPS (shim/include/mp6_unlocked_fps.h has the full
+         * contract): tick-decoupled presentation. Game logic stays the
+         * design-rate 60Hz tick; the tick throttle's idle window presents
+         * extra frames with every live 3D model and camera advanced along
+         * the last two ticks' motion and the renderer re-run on that pose
+         * (platform/hsf/mp6_fi_model.c -- the one and only mechanism; the
+         * former "FPS Smoothing Mode" selector and its stream-level
+         * alternative are gone). Freecam's exact config_bool_select shape;
+         * saved to the config (video.unlocked_fps) and applied live --
+         * frame_interp.c re-reads the accessor every tick. */
+        config_bool_select(leftPane, rightPane,
+            {
+                .key = "Unlocked FPS",
+                .helpText = "Present extra in-between frames at your display's refresh rate "
+                            "while game logic keeps its original 60 Hz tick -- 3D motion "
+                            "(characters, boards, camera) is interpolated between ticks. "
+                            "UI, effects and screen transitions stay 60Hz.<br/><br/>Applies "
+                            "immediately; needs the standard 60 Hz tick (it does nothing "
+                            "under a free-run tick).<br/><br/>Disabled while the "
+                            "MP6_UNLOCKED_FPS environment lever is set (it wins).",
+                .getValue = [] { return cfg().unlockedFps != 0; },
+                .setValue = [](bool value) { cfg().unlockedFps = value ? 1 : 0; },
+                .isDisabled = [] { return getenv("MP6_UNLOCKED_FPS") != NULL; },
+                .isModified = [] { return cfg().unlockedFps != 0; },
+            });
+
         leftPane.add_section("Rendering");
 
         /* Shadow Quality (shim/include/mp6_shadow_quality.h has the full
@@ -616,7 +723,19 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
          * map that's already up -- said in the description below rather
          * than papered over, same as Dynamic Widescreen's own row.
          * Their FPS row's exact select_button + register_control shape,
-         * five options instead of six. */
+         * five options {1,2,4,8,16}. 8x/16x are REAL as of the offscreen
+         * scissor fix: commits 3f179cd/2d599c4 had clamped the ceiling to
+         * 8x then 4x because 8x's offscreen map dumped as a ~0.4% corner
+         * sliver and 16x as uniform 0/0 -- root-caused (see
+         * platform/hsf/mp6_shadow_quality.c) to the caster pass's
+         * GXSetScissor overflowing the GameCube's 11-bit SU_SCIS register
+         * once the offscreen pass scaled it past 4x, NOT an offscreen-
+         * bracket size limit. Setting that scissor through aurora's
+         * render-pixel path (mp6_shadow_offscreen_scissor / GXSetScissor-
+         * Render) instead makes 8x/16x dump as full-scene ~14%-coverage
+         * maps like 1x/2x/4x. Anything that still doesn't fit the model
+         * heap steps down (mp6_shadow_quality_scale's heap-fit loop,
+         * logged). */
         leftPane.register_control(leftPane.add_select_button({
                                       .key = "Shadow Quality",
                                       .getValue = [] { return Rml::String { fmt::format("{}x", cfg().shadowQuality) }; },
@@ -640,10 +759,12 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
                              "shadows (the blob under characters and hosts) -- same lighting, same "
                              "shadow size and shape, just sharper edges. 1x is the original game's "
                              "own resolution (byte-identical).<br/><br/>"
-                             "Right now 2x is the effective ceiling: the shadow view is bounded by "
-                             "the GameCube's own framebuffer box, and 2x already captures every "
-                             "pixel it renders. Higher settings safely clamp to 2x (logged) until "
-                             "the renderer grows a dedicated shadow pass.<br/><br/>"
+                             "4x and up render the shadow pass into a dedicated offscreen target "
+                             "at the full scaled resolution, resolved with a mip chain so the "
+                             "sharper map stays clean at a distance -- real added detail. 2x keeps "
+                             "the lighter in-framebuffer path. 16x is the maximum. A setting "
+                             "whose shadow map doesn't fit in the model heap steps down "
+                             "(logged).<br/><br/>"
                              "Takes effect the next time a board or scene loads -- not "
                              "retroactively on a shadow map that's already up.<br/><br/>"
                              "Disabled while the MP6_SHADOW_QUALITY environment lever is set (it "

@@ -154,7 +154,7 @@
 #include <stdint.h>
 #include <math.h>
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+/* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
  * redirects every file-scope definition FOLLOWING it. As a -include (before all
  * headers) it also captured the decomp headers' C TENTATIVE definitions --
@@ -3048,7 +3048,7 @@ void AIStartDMA(void)
 }
 
 /* =======================================================================
- * Savestate audio shadow (docs/SAVESTATE.md, W3)
+ * Savestate audio shadow
  * =======================================================================
  * Everything in this file is carved out of the savestate, because it is
  * owned by the SDL audio callback thread -- restoring it would race a

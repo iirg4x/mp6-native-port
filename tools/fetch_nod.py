@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """fetch_nod.py -- populates port/toolchain/nod for the A4 content-import
-backend (docs/A4_ANDROID_UI.md).
+backend.
 
 nod (https://github.com/encounter/nod) is the GC/Wii disc-image library
 (ISO/GCM/CISO/GCZ/RVZ/WIA/...) behind the launcher's first-run import --
 the exact library+version aurora's own AURORA_ENABLE_DVD dependency table
 pins (cmake/AuroraDependencyVersions.cmake), consumed through its C FFI
 (nod-ffi). Dual-licensed MIT OR Apache-2.0 (license texts are fetched next
-to the artifacts; docs/A4_ANDROID_UI.md carries the vendoring note).
+to the artifacts).
 
 Two artifacts, both pinned to NOD_VERSION:
 

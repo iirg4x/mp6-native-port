@@ -275,7 +275,7 @@ void mp6_coro_destroy(Mp6Coro *c)
 }
 
 /* =======================================================================
- * Savestate introspection (docs/SAVESTATE.md)
+ * Savestate introspection
  * =======================================================================
  * Read-only accessors over this file's own statics. A savestate has to
  * capture the live coroutine stacks themselves -- suspended HuPrc

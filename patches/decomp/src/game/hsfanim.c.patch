@@ -2,30 +2,21 @@
 +++ b/src/game/hsfanim.c
 @@ -89 +89,29 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* MP6 native port -- docs/M2C_MENU_PATH.md. This function already
-+     * treats "not a live anim slot" (texAnimP->modelId==HU3D_MODELID_NONE)
-+     * as a safe no-op one line below -- but that check used to run AFTER
-+     * already indexing Hu3DTexAnimData[animId], a genuine out-of-bounds
-+     * access if animId itself is HU3D_ANIMID_NONE (-1: zig cc's runtime
-+     * bounds check on this fixed-size array catches the index expression
-+     * itself, before any further dereference). On real hardware this
-+     * never came up: Hu3DAnimCreate (this file, the only function that
-+     * ever PRODUCES an animId) only returns NONE when a model's real HSF
-+     * data lacks the expected named bitmap attribute -- a real content
-+     * bug that (evidently) never shipped. The M2c HSF stub
-+     * (docs/M2B_TITLE_PATH.md's frontier, deferred rather than solved)
-+     * gives every model an empty object list on purpose, so
-+     * Hu3DAnimCreate's own "Error: Not Found TexAnim Name" path fires
-+     * honestly for every lookup, and OpeningExec's SetCharAnimFrame
-+     * (src/REL/bootDll/opening.c) calls this function with that NONE id
-+     * unconditionally, no guard of its own -- caught directly (a real
-+     * "index -1 out of bounds" panic, not a guess), a few seconds into
-+     * the boot opening sequence, right after the HSF stub and the
-+     * HuSprAnimMake alignment fix (this same patch queue) both let
-+     * execution reach this far for the first time. Fixed at the one
-+     * chokepoint every caller already funnels through, matching this
-+     * function's OWN existing "invalid slot is a safe no-op" contract
-+     * instead of pushing the check out to every call site. */
++    /* This function already treats "not a live anim slot"
++     * (texAnimP->modelId==HU3D_MODELID_NONE) as a safe no-op one line
++     * below -- but that check used to run AFTER already indexing
++     * Hu3DTexAnimData[animId], an out-of-bounds access if animId itself is
++     * HU3D_ANIMID_NONE (-1). On real hardware this never came up:
++     * Hu3DAnimCreate (this file, the only function that produces an
++     * animId) only returns NONE when a model's real HSF data lacks the
++     * expected named bitmap attribute -- a real content bug that evidently
++     * never shipped. This port's HSF loader stub gives every model an
++     * empty object list on purpose, so that lookup fails honestly every
++     * time, and callers that don't already guard against NONE hit this
++     * out-of-bounds index -- caught directly as a real crash, not a guess.
++     * Fixed at the one chokepoint every caller already funnels through,
++     * matching this function's OWN existing "invalid slot is a safe no-op"
++     * contract instead of pushing the check out to every call site. */
 +    HU3D_TEXANIM *texAnimP;
 +    if (animId == HU3D_ANIMID_NONE) {
 +        return NULL;
@@ -33,21 +24,13 @@
 +    texAnimP = &Hu3DTexAnimData[animId];
 @@ -165 +193,20 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* MP6 native port -- docs/M2E_MILESTONE.md. Same bug SHAPE, same fix,
-+     * as this file's own Hu3DAnimAnimSet above (docs/M2C_MENU_PATH.md):
-+     * indexes Hu3DTexAnimData[animId] before ever checking animId itself
-+     * for HU3D_ANIMID_NONE (-1). Caught directly (not guessed): the FIRST
-+     * time this port's own boot flow ever got far enough to call
-+     * OpeningKill() (REL/bootDll/opening.c) -- itself only reachable after
-+     * a real START-skip past the opening cutscene AND a real START-confirm
-+     * at the title screen both succeed -- OpeningKill's own
-+     * Hu3DAnimKill(BookFrameBufAnimId[0]) call panics here because
-+     * BookFrameBufAnimId[0] was never assigned a real anim id in the first
-+     * place: OpeningCreate's own Hu3DAnimCreate call for it fails the same
-+     * "Error: Not Found TexAnim Name" way Hu3DAnimAnimSet's own comment
-+     * above already documents, under this milestone's HSF stub. Fixed the
-+     * same way: treat a NONE id as the safe no-op it already conceptually
-+     * is (nothing was ever created, so there is nothing to tear down). */
++    /* Same bug shape and fix as Hu3DAnimAnimSet above: indexes
++     * Hu3DTexAnimData[animId] before checking for HU3D_ANIMID_NONE. Caught
++     * directly the first time this port's boot flow reached OpeningKill(),
++     * whose Hu3DAnimKill(BookFrameBufAnimId[0]) call panics here because
++     * that anim id was never actually created (its own Hu3DAnimCreate call
++     * failed the same way, under the HSF loader stub). Fixed the same way:
++     * treat a NONE id as the safe no-op it already conceptually is. */
 +    HU3D_TEXANIM *texAnimP;
 +    if (animId == HU3D_ANIMID_NONE) {
 +        return;
@@ -55,19 +38,13 @@
 +    texAnimP = &Hu3DTexAnimData[animId];
 @@ -216 +263,18 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* MP6 native port -- docs/M2E_MILESTONE.md. Same bug shape, same
-+     * fix, as this file's own Hu3DAnimAnimSet/Hu3DAnimKill above -- see
-+     * those for the full root-cause story (the M2c HSF stub makes every
-+     * Hu3DAnimCreate lookup fail, so any caller that doesn't already
-+     * guard against HU3D_ANIMID_NONE panics indexing
-+     * Hu3DTexAnimData[animId] with -1). Caught directly: fileseldll/
-+     * filesel.c's own FileselMain, the first real code from a SECOND
-+     * overlay this port's boot flow has ever reached (via a real
-+     * START-skip + START-confirm reaching omOvlCallEx(DLL_fileseldll,
-+     * ...)), calls several of these Hu3DAnim* setters on its own
-+     * title/character-portrait anim ids -- Hu3DAnimBankSet specifically,
-+     * fn_1_6E8's Hu3DAnimBankSet(lbl_1_bss_A2[0], 1) call, is the exact
-+     * one confirmed via a real caught-directly panic. */
++    /* Same bug shape and fix as Hu3DAnimAnimSet/Hu3DAnimKill above -- see
++     * those for the full root-cause story (the HSF loader stub makes
++     * every Hu3DAnimCreate lookup fail, so any caller that doesn't
++     * already guard against HU3D_ANIMID_NONE panics indexing this array
++     * with -1). Caught directly the first time a second overlay
++     * (fileseldll/filesel.c's FileselMain) called one of these Hu3DAnim*
++     * setters on its own title/character-portrait anim ids. */
 +    HU3D_TEXANIM *texAnimP;
 +    if (animId == HU3D_ANIMID_NONE) {
 +        return;
@@ -75,8 +52,7 @@
 +    texAnimP = &Hu3DTexAnimData[animId];
 @@ -222 +286,7 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* MP6 native port -- same fix as Hu3DAnimAttrSet above (this file's
-+     * own first Hu3DAnimAttrSet, docs/M2E_MILESTONE.md). */
++    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
 +    if (animId == HU3D_ANIMID_NONE) {
 +        return;
@@ -84,8 +60,7 @@
 +    texAnimP = &Hu3DTexAnimData[animId];
 @@ -228 +298,7 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* MP6 native port -- same fix as Hu3DAnimAttrSet above (this file's
-+     * own first Hu3DAnimAttrSet, docs/M2E_MILESTONE.md). */
++    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
 +    if (animId == HU3D_ANIMID_NONE) {
 +        return;
@@ -93,8 +68,7 @@
 +    texAnimP = &Hu3DTexAnimData[animId];
 @@ -235 +311,7 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* MP6 native port -- same fix as Hu3DAnimAttrSet above (this file's
-+     * own first Hu3DAnimAttrSet, docs/M2E_MILESTONE.md). */
++    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
 +    if (animId == HU3D_ANIMID_NONE) {
 +        return;
@@ -102,21 +76,19 @@
 +    texAnimP = &Hu3DTexAnimData[animId];
 @@ -246 +328,7 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* MP6 native port -- same fix as Hu3DAnimAttrSet above (this file's
-+     * own first Hu3DAnimAttrSet, docs/M2E_MILESTONE.md). */
++    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
 +    if (animId == HU3D_ANIMID_NONE) {
 +        return;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
 @@ -250,0 +339,21 @@
-+/* MP6 native port -- M11 thread 3 (docs/M11_WORDMARK_STAR.md): texture-anim
-+ * frame/region census, gated by the SAME MP6_DRAW_CENSUS_OBJ=<tick> window
-+ * as hsfdraw.c's object census (independent parse of the same env var, both
-+ * TUs see the same tick). One line per Hu3DAnimSet evaluation: which anim
-+ * slot picked which pattern/bitmap and the sheet sub-region (layer start/
-+ * size vs bitmap dims -> the ANIM2D texmtx scale/trans hsfdraw will apply).
-+ * PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++/* Texture-anim frame/region census, gated by the same MP6_DRAW_CENSUS_OBJ
++ * env var and tick window as hsfdraw.c's own object census. One line per
++ * Hu3DAnimSet evaluation: which anim slot picked which pattern/bitmap and
++ * the sheet sub-region (layer start/size vs bitmap dims -> the texture
++ * matrix scale/translate hsfdraw will apply). Diagnostic only: prints
++ * state, never changes behavior. */
 +#include <stdio.h>
 +#include <stdlib.h>
 +extern long mp6_tick_count;
@@ -151,34 +123,31 @@
 -        
 +
 @@ -497,0 +621,3 @@
-+/* MP6 native port -- P1 (docs/P1_PARTICLE_ARRAYS.md): defined after baseST
-+ * below (it needs sizeof(baseST)); called from Hu3DParticleCreate. */
++/* Defined after baseST below (it needs sizeof(baseST)); called from
++ * Hu3DParticleCreate. */
 +static void mp6ParticleArraysRegister(HU3D_PARTICLE *particleP);
 @@ -537,0 +664,13 @@
-+    /* MP6 native port -- P1 (docs/P1_PARTICLE_ARRAYS.md): tell the port's
-+     * GXSetArray bridge the real byte sizes of this particle system's three
-+     * indexed vertex arrays (all allocated/set up by this function), same as
-+     * platform/hsf/hsf_load_native.c already does for every HSF model
-+     * buffer. Without this, particleFunc's per-frame GXSetArray binds fall
-+     * through to the bridge's learned-size path, which only ever grows from
-+     * an IMMEDIATE-mode GXBegin -- and this particle draw has none (its one
-+     * GXBegin ran during the display-list recording below, where the V1
-+     * recording-guard rightly ignores it), so the arrays upload 0 bytes and
-+     * the replayed DL's indexed fetches read out of range: sparkle quads
-+     * drew as garbage streaks or nothing at all (docs/V1_FILESEL_VERTEX.md
-+     * section 5 predicted exactly this). */
++    /* Tells the port's GXSetArray bridge the real byte sizes of this
++     * particle system's three indexed vertex arrays (all allocated/set up
++     * by this function), same as platform/hsf/hsf_load_native.c already
++     * does for every HSF model buffer. Without this, the per-frame
++     * GXSetArray binds fall through to the bridge's learned-size path,
++     * which only ever grows from an immediate-mode GXBegin -- and this
++     * particle draw has none (its one GXBegin ran during the display-list
++     * recording below, which ignores it) -- so the arrays upload 0 bytes
++     * and the replayed display list's indexed fetches read out of range:
++     * sparkle quads drew as garbage streaks or nothing at all. */
 +    mp6ParticleArraysRegister(particleP);
 @@ -671,0 +811,37 @@
 +
-+/* MP6 native port -- P1 (docs/P1_PARTICLE_ARRAYS.md): register the three
-+ * arrays particleFunc binds with GXSetArray right before its
-+ * GXCallDisplayList replay, so the port's bridge (platform/gx/
-+ * aurora_bridge.c mp6_GXSetArray3) takes the authoritative registry path
-+ * (real byte size -> Aurora uploads the whole array for the DL's indexed
-+ * fetches) instead of the learned-size fallback (0 for these: no
-+ * immediate-mode GXBegin ever follows these binds; the DL was recorded
-+ * once in Hu3DParticleCreate). The exact upload windows the recorded DL
-+ * needs, matching particleFunc's own binds:
++/* Registers the three arrays particleFunc binds with GXSetArray right
++ * before its GXCallDisplayList replay, so the port's bridge
++ * (platform/gx/aurora_bridge.c's mp6_GXSetArray3) takes the authoritative
++ * registry path (real byte size -> uploads the whole array for the
++ * display list's indexed fetches) instead of the learned-size fallback (0
++ * for these: no immediate-mode GXBegin ever follows these binds; the
++ * display list was recorded once in Hu3DParticleCreate). The exact upload
++ * windows match particleFunc's own binds:
 + *   GX_VA_POS  vtxBuf, stride sizeof(HuVecF), indices 0..maxCnt*4-1
 + *              -> maxCnt*4*sizeof(HuVecF) bytes (the whole allocation);
 + *   GX_VA_CLR0 &data->color, stride sizeof(HU3D_PARTICLE_DATA), indices
@@ -188,11 +157,10 @@
 + *              from that pointer -- Aurora reads the registered window
 + *              from CPU memory on every bind);
 + *   GX_VA_TEX0 baseST (this file's own static above), 4 entries.
-+ * mp6_gxarray_register is compiled into BOTH build modes (see
-+ * platform/gx/gxarray_registry.c) and re-registering a reused heap
-+ * address just updates the entry in place, so a killed-and-recreated
-+ * particle model stays correct. Registered at create time (not per draw)
-+ * to mirror hsf_load_native.c's own register-at-load convention. */
++ * Registering a reused heap address just updates the entry in place, so a
++ * killed-and-recreated particle model stays correct. Registered at create
++ * time (not per draw) to mirror hsf_load_native.c's own register-at-load
++ * convention. */
 +#include "mp6_gxarray_registry.h"
 +static void mp6ParticleArraysRegister(HU3D_PARTICLE *particleP)
 +{

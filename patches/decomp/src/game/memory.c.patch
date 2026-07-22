@@ -3,19 +3,19 @@
 @@ -4,2 +4,16 @@
 -#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-32))
 -#define BLOCK_GET_DATA(block) (((char *)(block))+32)
-+/* MP6 native port -- docs/M2B_TITLE_PATH.md. MEMORY_BLOCK's own prev/next
-+ * fields are real pointers: 8 bytes each on this native 64-bit build vs 4
-+ * bytes on the original 32-bit target, so the true native header is 40
-+ * bytes, not the 32 these three macros hardcoded. Same root cause and fix
-+ * shape as docs/M2A_ENDIANNESS.md's ANIMDATA/ANIMBANK/ANIMPAT/ANIMBMP
-+ * relayout (a pointer-width struct-size mismatch, not an endianness
-+ * issue) -- caught directly, not guessed: HuMemMemoryFileSet's `block->file
-+ * = file` was landing exactly on the FIRST 4 BYTES of the caller's own
-+ * data (confirmed byte-for-byte: a corrupted ANIM header's first 4 bytes
-+ * decoded to the exact little-endian encoding of the dataNum tag being
-+ * set), because BLOCK_GET_DATA(block) (block+32) pointed 8 bytes before
-+ * the real data start (block+40) -- i.e. straight at the `file` field
-+ * (real offset 32) this struct's own layout puts there. */
++/* MEMORY_BLOCK's own prev/next fields are real pointers: 8 bytes each on
++ * this native 64-bit build vs 4 bytes on the original 32-bit target, so
++ * the true native header is 40 bytes, not the 32 these three macros
++ * hardcoded. Same root cause and fix shape as this codebase's
++ * ANIMDATA/ANIMBANK/ANIMPAT/ANIMBMP relayout (a pointer-width struct-size
++ * mismatch, not an endianness issue) -- caught directly, not guessed:
++ * HuMemMemoryFileSet's `block->file = file` was landing exactly on the
++ * FIRST 4 BYTES of the caller's own data (confirmed byte-for-byte: a
++ * corrupted ANIM header's first 4 bytes decoded to the exact
++ * little-endian encoding of the dataNum tag being set), because
++ * BLOCK_GET_DATA(block) (block+32) pointed 8 bytes before the real data
++ * start (block+40) -- i.e. straight at the `file` field (real offset 32)
++ * this struct's own layout puts there. */
 +#define MP6_MEMBLOCK_HDR ((s32)sizeof(MEMORY_BLOCK))
 +#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-MP6_MEMBLOCK_HDR))
 +#define BLOCK_GET_DATA(block) (((char *)(block))+MP6_MEMBLOCK_HDR)

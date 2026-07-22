@@ -25,7 +25,7 @@ const char *SDL_GetAndroidInternalStoragePath(void);
 }
 #endif
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): must sit AFTER this TU's own
+/* SAVESTATE CARVE-OUT: must sit AFTER this TU's own
  * includes AND at preprocessor top level -- an earlier revision was inside
  * the __ANDROID__ block above, leaving this TU uncarved on Windows, where
  * sPickMutex/sPickedPath below would then be memcpy'd over by a restore

@@ -16,7 +16,7 @@
 
 #include "game/hu3d.h"
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md): freecam state belongs to the
+/* SAVESTATE CARVE-OUT: freecam state belongs to the
  * RUNNING process (a UI/debug tool), not to captured game state -- a
  * restored .state must neither re-enable freecam nor teleport its pose.
  * Must sit AFTER this TU's own includes and at preprocessor TOP LEVEL. */

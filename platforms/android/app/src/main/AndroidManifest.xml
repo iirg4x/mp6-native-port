@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- MP6 native port : U-A2 (docs/UA2_ANDROID_GRAPHICS.md). Minimal on
+<!-- MP6 native port : Android graphics support. Minimal on
      purpose: no permissions at all (the disc tree lives in the app's OWN
      external files dir, which needs none), landscape-locked, single
      instance. -->
@@ -14,10 +14,10 @@
          rumble (PADControlMotor) -> aurora::pad -> SDL rumble -> Java
          VibratorService, which throws SecurityException without this, and
          SDL's JNI call turns that into a fatal JNI abort (measured on
-         device, docs/UA2_ANDROID_GRAPHICS.md). -->
+         device). -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- U-A3 (docs/UA3_DEVICE_PARITY.md) back-button policy: OPT OUT of
+    <!-- Back-button policy: OPT OUT of
          predictive back. Android 16 enables the OnBackInvokedCallback path
          by default for targetSdk 36 apps, which bypasses Activity
          .onBackPressed() entirely and lets the SYSTEM finish() the activity

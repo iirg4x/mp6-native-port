@@ -1,12 +1,11 @@
 --- a/src/game/printfunc.c
 +++ b/src/game/printfunc.c
 @@ -4,0 +5 @@
-+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -297 +298,6 @@
 -                            if(x > HU_FB_WIDTH) {
-+                            /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md):
-+                             * reference ROM hack site #1 (WS_REFERENCE_
-+                             * STUDY.md section 4) -- 640->848 there,
-+                             * generalized to the live render width here;
-+                             * 640 (byte-identical) when disabled. */
++                            /* The reference widescreen hack widens this
++                             * same check to a fixed value; generalized to
++                             * the live render width here. 640 (byte-
++                             * identical) when disabled. */
 +                            if(x > mp6_widescreen_render_width()) {

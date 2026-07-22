@@ -1,18 +1,17 @@
 --- a/src/game/ClusterExec.c
 +++ b/src/game/ClusterExec.c
 @@ -122,0 +123,7 @@
-+                    /* MP6 native port -- docs/A2_CLUSTER.md. Defensive
-+                     * fallback-tolerance (never crash on malformed data): a
-+                     * well-formed cluster always targets a real mesh object
-+                     * with a resolved part, but a bad file could leave
-+                     * obj->mesh.vertex or cluster->part NULL -- SetClusterMain
-+                     * (and the Vertextop fetch just below) would fault. */
++                    /* Defensive fallback-tolerance (never crash on
++                     * malformed data): a well-formed cluster always
++                     * targets a real mesh object with a resolved part, but
++                     * a bad file could leave obj->mesh.vertex or
++                     * cluster->part NULL -- SetClusterMain (and the
++                     * Vertextop fetch just below) would fault. */
 +                    if (obj->mesh.vertex == NULL || cluster->part == NULL) { continue; }
 @@ -165,2 +172,11 @@
 -                        cluster = &hsf->cluster[track->cluster];
 -                        cluster->index = GetClusterCurve(track, t);
-+                        /* MP6 native port -- docs/A2_CLUSTER.md. Same
-+                         * reasoning as the hsfmotion.c.patch guard on
++                        /* Same reasoning as the hsfmotion.c.patch guard on
 +                         * Hu3DMotionExec's own HSF_TRACK_CLUSTER case: a
 +                         * cluster track whose name didn't resolve leaves
 +                         * track->cluster == -1, and this path (unlike that
@@ -25,8 +24,8 @@
 @@ -170,2 +186,6 @@
 -                        cluster = &hsf->cluster[weightTrack->cluster];
 -                        cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, t);
-+                        /* MP6 native port -- same guard as HSF_TRACK_CLUSTER
-+                         * immediately above (docs/A2_CLUSTER.md). */
++                        /* Same guard as HSF_TRACK_CLUSTER immediately
++                         * above. */
 +                        if (weightTrack->cluster >= 0 && weightTrack->cluster < hsf->clusterNum) {
 +                            cluster = &hsf->cluster[weightTrack->cluster];
 +                            cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, t);

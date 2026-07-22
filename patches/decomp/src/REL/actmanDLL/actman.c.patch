@@ -1,17 +1,15 @@
 --- a/src/REL/actmanDLL/actman.c
 +++ b/src/REL/actmanDLL/actman.c
 @@ -5,0 +6 @@
-+#include "mp6_widescreen.h" /* WS6 (docs/WS6_OVERLAY_CAMERAS.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -73,2 +74,10 @@
 -    Hu3DCameraPerspectiveSet(HU3D_CAM0, 45, 20, 15000, 1.2f);
 -    Hu3DCameraViewportSet(HU3D_CAM0, 0, 0, 640, 480, 0, 1);
-+    /* MP6 native port -- WS6 (docs/WS6_OVERLAY_CAMERAS.md): this overlay's
-+     * own 3D camera has the same native-640, left-anchored own-camera bug
-+     * as the other overlay screens this lane fixes -- WS2/WS4 deliberately
-+     * left every REL's own camera native (reference-hack scope match,
-+     * WS_REFERENCE_STUDY.md section 2.4), leaving a black band on the
-+     * right. Widened the same proven way as hsfman.c's defCamera/
-+     * opening.c's camera: FOV aspect x scale_factor(), viewport width ->
-+     * live render width. No-op when Widescreen is disabled. */
++    /* This overlay's own 3D camera has the same native-640, left-anchored
++     * framing as the other overlay screens, left native to match the
++     * reference widescreen hack's own scope, leaving a black band on the
++     * right. Widened the same way as hsfman.c's defCamera/opening.c's
++     * camera: FOV aspect x scale_factor(), viewport width -> live render
++     * width. No-op when widescreen is disabled. */
 +    Hu3DCameraPerspectiveSet(HU3D_CAM0, 45, 20, 15000, 1.2f * mp6_widescreen_scale_factor());
 +    Hu3DCameraViewportSet(HU3D_CAM0, 0, 0, mp6_widescreen_render_width(), 480, 0, 1);

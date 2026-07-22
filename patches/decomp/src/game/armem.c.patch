@@ -7,20 +7,17 @@
 +    s32 *dirBuf; s32 nextOff; s32 rawLen; s32 decodeType;
 @@ -348 +349,15 @@
 -    count = dirBuf[0];
-+    /* MP6 native port -- docs/M2C_MENU_PATH.md. preLoadBuf is DMA'd
-+     * straight from ARAM -- itself a raw copy of the original big-endian
-+     * disc bytes -- so dirBuf[0]/dirBuf[1] here are two consecutive BE
-+     * u32 offsets into this ARAM-cached directory's blob, the exact same
-+     * per-file offset-table shape game/data.c's GetFileInfo already reads
-+     * via be32() (docs/M2A_ENDIANNESS.md), not native ints. Confirmed a
++    /* preLoadBuf is DMA'd straight from ARAM -- itself a raw copy of the
++     * original big-endian disc bytes -- so dirBuf[0]/dirBuf[1] here are
++     * two consecutive BE u32 offsets into this ARAM-cached directory's
++     * blob, the exact same per-file offset-table shape game/data.c's
++     * GetFileInfo already reads via be32(), not native ints. Confirmed a
 +     * real bug, not a guess: an unfixed read here fed a bogus, huge size
 +     * into HuMemDirectMallocNum a few lines down, printing a genuine
 +     * "HuMem>memory alloc error" and -- via HuWinFrameCreate's own
 +     * missing NULL check one level up (game/window.c) -- crashing
 +     * OpeningExec's window-frame setup the first time this port ever
-+     * reached that far (docs/M2B_TITLE_PATH.md's HSF stub + the
-+     * HuSprAnimMake/Hu3DAnimAnimSet fixes in this same patch queue all
-+     * needed to land first before this code path was even reachable). */
++     * reached that far. */
 +    count = (s32)be32(&dirBuf[0]);
 @@ -350 +365,2 @@
 -    if(dirBuf[1] - count < 0) {

@@ -1,89 +1,78 @@
 --- a/src/REL/bootDll/opening.c
 +++ b/src/REL/bootDll/opening.c
 @@ -23,0 +24 @@
-+#include "mp6_widescreen.h" /* WS6 (docs/WS6_OVERLAY_CAMERAS.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -169,0 +171,22 @@
-+    /* MP6 native port -- WS12 (docs/WS11_EXTRUDE_BACKDROPS.md): OpeningMdlId[0]
-+     * (pos z=-4500, the furthest-back layer-1 model, slow ambient
-+     * Hu3DMotionSpeedSet(0.015f) -- already documented as "backdrop" by
-+     * this same file's own PostDrawHook comment above, which groups
-+     * "OpeningMdlId[0]/[3..7] (backdrop + star effects)") is the opening
-+     * storybook's own 3D backdrop, drawn behind the book (OpeningMdlId[1],
-+     * untouched, separately confirmed rotated -20/-30/30 -- NOT extruded)
-+     * and unrelated to the character/story-texture layer (OpeningMdlId[2],
-+     * layer 0, its own PreDrawHook camera, feeds the native BookFrameBuf
-+     * capture -- explicitly out of scope). HSF diagnostic dump (this
-+     * session) found OpeningMdlId[0] loads the EXACT SAME underlying HSF
-+     * asset as fileseldll/filesel.c's own storybook backdrop
-+     * (lbl_1_bss_2D8[1] -- identical sub-object names bg_hiru/bg_sora/
-+     * bg_yoru/grid1/hikari, identical bitmap names, identical computed
-+     * hierarchical center) -- see that file's own comment on this same
-+     * call for the full CLAMP-vs-REPEAT finding, which applies here
-+     * unchanged. OpeningMdlId[0]'s own top-level transform is confirmed
-+     * unrotated (no Hu3DModelRotSet call anywhere in this file for it,
-+     * leaving Hu3DModelCreate's own default rot=(0,0,0)). Camera
-+     * unchanged (WS9's native PreDrawHook / WS6's widened PostDrawHook,
-+     * both untouched by this change). */
++    /* OpeningMdlId[0] (pos z=-4500, the furthest-back layer-1 model, slow
++     * ambient motion -- already documented as "backdrop" by this same
++     * file's own PostDrawHook comment above) is the opening storybook's
++     * own 3D backdrop, drawn behind the book (OpeningMdlId[1], untouched,
++     * separately confirmed rotated -- NOT extruded) and unrelated to the
++     * character/story-texture layer (OpeningMdlId[2], layer 0, its own
++     * PreDrawHook camera, feeds the native BookFrameBuf capture --
++     * explicitly out of scope). HSF diagnostic dump found OpeningMdlId[0]
++     * loads the EXACT SAME underlying HSF asset as fileseldll/filesel.c's
++     * own storybook backdrop (identical sub-object names, identical
++     * bitmap names, identical computed hierarchical center) -- see that
++     * file's own comment on this same call for the full CLAMP-vs-REPEAT
++     * finding, which applies here unchanged. OpeningMdlId[0]'s own
++     * top-level transform is confirmed unrotated. Camera unchanged (the
++     * native PreDrawHook / widened PostDrawHook below, both untouched by
++     * this change). */
 +    mp6_widescreen_extrude_model(OpeningMdlId[0]);
 @@ -522,2 +545,24 @@
 -    Hu3DCameraPerspectiveSet(OPENING_CAMERA_BIT, 30.f, 20.f, 15000.f, 1.2f);
 -    Hu3DCameraViewportSet(OPENING_CAMERA_BIT, 0.0f, 0.0f, 640.f, 480.f, 0.0f, 1.0f);
-+    /* MP6 native port -- WS9 (docs/WS8_2D_COHERENCE.md section 5.0/1.7;
-+     * see PreDrawHook above for the fuller writeup): this camera bit is
-+     * shared by two layers with opposite needs. PreDrawHook (just above)
-+     * was reverted to fully native -- it only ever configures a RENDER-TO-
-+     * TEXTURE pass (OpeningMdlId[2], layer 0, the story-texture: sun/moon +
-+     * character stickers), immediately photographed by a hardcoded-native
-+     * Hu3DFbCopyExec(x=0, w=640) a few lines below into BookFrameBuf[] --
-+     * widening that render while the capture stayed native shifted the
-+     * captured page content off-center. THIS hook is different: it
-+     * reconfigures the SAME camera bit for LAYER 1 -- OpeningMdlId[1] (the
-+     * real 3D book, cluster-deformed for page turns) plus OpeningMdlId[0]/
-+     * [3..7] (backdrop + star effects) -- which then draw straight to the
-+     * visible frame (hsfman.c's Hu3DExec re-applies whatever camera state
-+     * is current immediately before each layer's own models draw; nothing
-+     * else reconfigures this bit between layers). That content is never
-+     * captured, so it must track the live wide render width to fill/
-+     * center the screen, same as every other overlay camera in this
-+     * project -- confirmed correctly centered at the user's own wide
-+     * aspect by direct pixel measurement (WS8: book spine within 10px of
++    /* This camera bit is shared by two layers with opposite needs.
++     * PreDrawHook (just above) was reverted to fully native -- it only
++     * ever configures a RENDER-TO-TEXTURE pass (OpeningMdlId[2], layer 0,
++     * the story-texture: sun/moon + character stickers), immediately
++     * photographed by a hardcoded-native Hu3DFbCopyExec a few lines below
++     * into BookFrameBuf[] -- widening that render while the capture stayed
++     * native shifted the captured page content off-center. THIS hook is
++     * different: it reconfigures the SAME camera bit for LAYER 1 --
++     * OpeningMdlId[1] (the real 3D book, cluster-deformed for page turns)
++     * plus OpeningMdlId[0]/[3..7] (backdrop + star effects) -- which then
++     * draw straight to the visible frame (hsfman.c's Hu3DExec re-applies
++     * whatever camera state is current immediately before each layer's
++     * own models draw; nothing else reconfigures this bit between
++     * layers). That content is never captured, so it must track the live
++     * wide render width to fill/center the screen, same as every other
++     * overlay camera in this project -- confirmed correctly centered at a
++     * wide aspect by direct pixel measurement (book spine within 10px of
 +     * true center at 2560x1180). Reverting this hook too would shrink the
 +     * book/backdrop back to a native 640px column on a wide screen -- a
-+     * regression, not a fix. No-op when Widescreen is disabled. */
++     * regression, not a fix. No-op when widescreen is disabled. */
 +    Hu3DCameraPerspectiveSet(OPENING_CAMERA_BIT, 30.f, 20.f, 15000.f, 1.2f * mp6_widescreen_scale_factor());
 +    Hu3DCameraViewportSet(OPENING_CAMERA_BIT, 0.0f, 0.0f, mp6_widescreen_render_width(), 480.f, 0.0f, 1.0f);
 @@ -725 +770,36 @@
 -    OpeningFocusObject *object;
-+    /* MP6 native port -- docs/A3_GUIDE_PLACEMENT.md. OpeningFocusObject is a
-+     * hand-modeled PARTIAL OVERLAY of HSF_OBJECT (see its own typedef, just
-+     * above this function): `u8 reserved_00[0x34]; float focus34; float
-+     * focus38;` -- a classic decompiler pattern for "we don't have this
-+     * struct's real field names, so address it by raw byte offset instead."
-+     * Those offsets (0x34/0x38 = 52/56) are only correct against the REAL
-+     * GameCube build's 32-BIT-POINTER HSF_OBJECT layout, where they land
-+     * exactly on `mesh.base.scale.x`/`scale.y` (confirmed by hand: name@0
-+     * type@4 constData@8 flags@12, mesh.parent@16 childNum@20 child@24
-+     * base.pos@28 base.rot@40 base.scale@52 -- every member 4-byte-aligned
-+     * with no gaps on a 32-bit ABI). This port's HSF_OBJECT has 8-byte
-+     * pointers (name/constData/parent/child), which shifts every offset at
-+     * and after `mesh.child` -- confirmed empirically via offsetof() on
-+     * this exact build: mesh.child@48 (an 8-byte pointer, occupying bytes
-+     * 48-55) and mesh.base.pos@56, mesh.base.scale@80. So on THIS build,
-+     * raw offset 0x34(52) lands inside the upper 4 bytes of the
-+     * `mesh.child` pointer (corrupting it -- harmless only because these
-+     * two guide objects happen to have childNum==0, so it's never
-+     * dereferenced) and offset 0x38(56) lands exactly on `mesh.base.pos.x`
-+     * (NOT scale.y) -- i.e., every "focus pulse" call below was silently
-+     * overwriting the guide's own carefully-computed SetStarDist() arc
-+     * X-position with a plain 1.0/1.2 scale-pulse value, which is exactly
-+     * the "moon and sun sprites ... weirdly placed" bug this milestone was
-+     * asked to fix (confirmed instrumented: both soruru's and luluna's
-+     * base.pos.x converged on identical 1.0/1.2 values whenever either
-+     * guide's focus pulse ran, while base.pos.y silently froze at whatever
-+     * SetStarDist last set it to). Fixed at the root by bypassing the
-+     * fragile offset-based overlay entirely and writing the REAL,
-+     * named `mesh.base.scale.x`/`scale.y` fields directly through a plain
-+     * HSF_OBJECT*, which is immune to pointer width (and any future
++    /* OpeningFocusObject is a hand-modeled PARTIAL OVERLAY of HSF_OBJECT
++     * (see its own typedef, just above this function): `u8
++     * reserved_00[0x34]; float focus34; float focus38;` -- a classic
++     * decompiler pattern for "we don't have this struct's real field
++     * names, so address it by raw byte offset instead." Those offsets
++     * (0x34/0x38 = 52/56) are only correct against the REAL GameCube
++     * build's 32-BIT-POINTER HSF_OBJECT layout, where they land exactly on
++     * `mesh.base.scale.x`/`scale.y` (every member 4-byte-aligned with no
++     * gaps on a 32-bit ABI). This port's HSF_OBJECT has 8-byte pointers
++     * (name/constData/parent/child), which shifts every offset at and
++     * after `mesh.child` -- confirmed empirically via offsetof() on this
++     * exact build: mesh.child is now an 8-byte pointer, so raw offset
++     * 0x34(52) lands inside the upper 4 bytes of the `mesh.child` pointer
++     * (corrupting it -- harmless only because these two guide objects
++     * happen to have childNum==0, so it's never dereferenced) and offset
++     * 0x38(56) lands exactly on `mesh.base.pos.x` (NOT scale.y) -- i.e.,
++     * every "focus pulse" call below was silently overwriting the guide's
++     * own carefully-computed SetStarDist() arc X-position with a plain
++     * 1.0/1.2 scale-pulse value, which is exactly a previously reported
++     * "moon and sun sprites weirdly placed" bug (confirmed instrumented:
++     * both guides' base.pos.x converged on identical 1.0/1.2 values
++     * whenever either guide's focus pulse ran, while base.pos.y silently
++     * froze at whatever SetStarDist last set it to). Fixed at the root by
++     * bypassing the fragile offset-based overlay entirely and writing the
++     * REAL, named `mesh.base.scale.x`/`scale.y` fields directly through a
++     * plain HSF_OBJECT*, which is immune to pointer width (and any future
 +     * HSF_OBJECT layout change) instead of re-deriving another
 +     * build-specific magic-number offset pair. Semantically this is
 +     * unchanged from the original's own intent (a scale pulse used as a

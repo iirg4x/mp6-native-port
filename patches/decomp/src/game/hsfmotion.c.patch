@@ -2,13 +2,12 @@
 +++ b/src/game/hsfmotion.c
 @@ -75 +75,12 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
-+    /* MP6 native port: mdsel's teardown calls this with the "no motion"
-+     * sentinel (-1) when a mode is confirmed (A1 lane's repro, panic at
-+     * &Hu3DMotion[-1]). On hardware the out-of-bounds read lands on
-+     * whatever precedes the array and the !motP->hsf gate below almost
-+     * always bails; natively it's a bounds panic. Treat the sentinel as
-+     * the no-op it de-facto is -- same class as this file's existing
-+     * M12 guard. */
++    /* mdsel's teardown calls this with the "no motion" sentinel (-1) when
++     * a mode is confirmed (reproduced as a panic at &Hu3DMotion[-1]). On
++     * hardware the out-of-bounds read lands on whatever precedes the
++     * array and the !motP->hsf gate below almost always bails; natively
++     * it's a bounds panic. Treat the sentinel as the no-op it de-facto is
++     * -- same class as this file's existing guard below. */
 +    HU3D_MOTION *motP;
 +    if (motId < 0) {
 +        return FALSE;
@@ -16,34 +15,31 @@
 +    motP = &Hu3DMotion[motId];
 @@ -191 +202,21 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
-+    /* MP6 native port -- docs/M12_MDSEL_INTEGRATION.md. 64-bit/checked-build
-+     * portability fix, negative-sentinel-index class: motId ==
-+     * HU3D_MOTIONID_NONE (-1) reaches this function ORGANICALLY. mdseldll's
-+     * fn_1_6F40 does Hu3DMotionShiftSet(mdlId, Hu3DMotionIDGet(mdlId), ...)
-+     * for DATANUM(DATA_mdsel, 0..2), and file 0's real disc HSF has
-+     * motion.count == 0 (verified by decoding the file's own HSF header
-+     * bytes: files 1 and 2 have 1 embedded motion each, file 0 has none),
-+     * so Hu3DMotionIDGet honestly returns -1 on real hardware too. There,
-+     * `&Hu3DMotion[-1]` is a DEAD computation: `motP` is never read
-+     * anywhere in this function's body (grep it -- every subsequent line
-+     * touches only modelP->*), and the one motion-array access on the
++    /* 64-bit/checked-build portability fix, negative-sentinel-index class:
++     * motId == HU3D_MOTIONID_NONE (-1) reaches this function ORGANICALLY.
++     * mdseldll's fn_1_6F40 does Hu3DMotionShiftSet(mdlId,
++     * Hu3DMotionIDGet(mdlId), ...) for 3 files, and one of those files'
++     * real disc HSF has motion.count == 0 (verified by decoding its own
++     * HSF header bytes), so Hu3DMotionIDGet honestly returns -1 on real
++     * hardware too. There, `&Hu3DMotion[-1]` is a DEAD computation: `motP`
++     * is never read anywhere in this function's body (every subsequent
++     * line touches only modelP->*), and the one motion-array access on the
 +     * motId==-1 path further down, Hu3DMotionShiftMaxTimeGet, already has
 +     * its own `motIdShift == HU3D_MOTIONID_NONE -> return 0` guard. So
 +     * hardware behavior is fully well-defined EXCEPT for forming the
 +     * out-of-bounds address itself -- which this port's checked build
 +     * (zig cc's UB sanitizer) turns into a hard panic ("index -1 out of
-+     * bounds for type 'HU3D_MOTION[384]'", this line, reproduced driving
-+     * file-select -> mode select). Guarding the index computation changes
-+     * nothing observable: the pointer stays dead either way, and every
-+     * modelP field write below is identical. */
++     * bounds for type 'HU3D_MOTION[384]'", reproduced driving file-select
++     * -> mode select). Guarding the index computation changes nothing
++     * observable: the pointer stays dead either way, and every modelP
++     * field write below is identical. */
 +    HU3D_MOTION *motP = (motId != HU3D_MOTIONID_NONE) ? &Hu3DMotion[motId] : NULL;
 @@ -887,2 +918,20 @@
 -                    clusterP = &hsf->cluster[trackP->cluster];
 -                    clusterP->index = GetClusterCurve(trackP, time);
-+                    /* MP6 native port -- docs/A1_MOTION.md. hsf->cluster is
-+                     * still stub-tolerated (forced NULL/0 -- see
-+                     * platform/hsf/hsf_load_native.c's LoadMotion(), which
-+                     * deliberately writes -1 into every CLUSTER/
++                    /* hsf->cluster is still stub-tolerated (forced NULL/0
++                     * -- see platform/hsf/hsf_load_native.c's LoadMotion(),
++                     * which deliberately writes -1 into every CLUSTER/
 +                     * CLUSTER_WEIGHT track's own `cluster` field for this
 +                     * same reason). An embedded HSF_MOTION legitimately
 +                     * containing a CLUSTER track (the storybook page-turn
@@ -63,9 +59,8 @@
 @@ -895,2 +944,7 @@
 -                    clusterP = &hsf->cluster[track->cluster];
 -                    clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
-+                    /* MP6 native port -- same reasoning as
-+                     * HSF_TRACK_CLUSTER immediately above
-+                     * (docs/A1_MOTION.md). */
++                    /* Same reasoning as HSF_TRACK_CLUSTER immediately
++                     * above. */
 +                    if (track->cluster >= 0 && track->cluster < hsf->clusterNum) {
 +                        clusterP = &hsf->cluster[track->cluster];
 +                        clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);

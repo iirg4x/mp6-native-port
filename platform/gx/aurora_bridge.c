@@ -2,17 +2,13 @@
  * build only; see tools/build.py's --headless flag).
  *
  * Compiled against AURORA's OWN dolphin/aurora headers (AURORA_FLAGS in
- * tools/build.py: -I external_refs/repos/aurora/include + its transitive
- * dep include dirs), NEVER the decomp's include/ tree and NEVER
+ * tools/build.py), NEVER the decomp's include/ tree and NEVER
  * shim/include/dolphin_compat.h -- keeping this file's header universe
- * strictly on the Aurora side is what guarantees GXAttr/BOOL/u32/etc. here
- * mean exactly what Aurora's compiled libaurora_gx.a/libaurora_vi.a expect,
- * with zero risk of accidentally resolving a decomp copy of a same-named
- * header instead (both trees have `dolphin/gx/GXGeometry.h` at the same
- * relative path; -I order is deterministic per-TU, not per-#include, so
- * mixing both -I roots in one translation unit would silently pick
- * whichever tree happens to be listed first for EVERY `#include
- * <dolphin/...>` in this file, not just the ones we intend).
+ * strictly on the Aurora side guarantees GXAttr/BOOL/u32/etc. here mean
+ * exactly what Aurora's compiled libraries expect, with zero risk of
+ * accidentally resolving a decomp copy of a same-named header instead
+ * (both trees have `dolphin/gx/GXGeometry.h` at the same relative path,
+ * and -I order is deterministic per-TU, not per-#include).
  *
  * Five jobs:
  *   1. GXSetArray arity bridge (a genuine signature drift between decomp's
@@ -21,83 +17,60 @@
  *   2. The VI frame-pacing bridge: decomp's game/main.c calls
  *      VIWaitForRetrace() once per main-loop iteration (the classic
  *      GameCube "wait for vblank" idiom); Aurora has no such call at all
- *      (aurora_surface.md: VIWaitForRetrace is one of the 8 VI gaps) --
- *      its equivalent is aurora_update() + aurora_begin_frame()/
+ *      -- its equivalent is aurora_update() + aurora_begin_frame()/
  *      aurora_end_frame(), a different (event-pump-then-maybe-skip-frame)
- *      shape. This file is the adapter between the two: every
- *      VIWaitForRetrace() call ends the frame the PREVIOUS call opened,
- *      pumps SDL/Aurora events (a window-close request becomes a clean
- *      process exit), fires the game's registered pre/post-retrace
- *      callbacks (game/pad.c's PadReadVSync -- the game's actual per-frame
- *      controller sample point -- is one of these), then opens the next
- *      frame.
+ *      shape. This file is the adapter: every VIWaitForRetrace() call ends
+ *      the frame the PREVIOUS call opened, pumps SDL/Aurora events (a
+ *      window-close request becomes a clean process exit), fires the
+ *      game's registered pre/post-retrace callbacks (game/pad.c's
+ *      PadReadVSync -- the game's actual per-frame controller sample point
+ *      -- is one of these), then opens the next frame.
  *   3. The MTX/VEC rename bridge: Aurora ships a real, complete
- *      MTX/VEC/QUAT library (`lib/dolphin/mtx/*.c`), and the game must
- *      link against IT, never against generated no-op shims (a no-op
- *      matrix function silently produces a black screen the moment a draw
- *      depends on a computed matrix). Two sub-cases:
- *      (a) 9 names (`C_MTXOrtho`, `C_MTXPerspective`, `C_MTXLookAt`,
- *          `C_MTXLightPerspective`, `C_VECHalfAngle`, `PSVECDistance`,
- *          `PSVECMag`, `PSVECNormalize`, `PSVECSquareMag`) are symbols
- *          Aurora's library exports under the EXACT name decomp's own
- *          header resolves calls to -- listed in
- *          `../planning/aurora_surface.json`'s `implemented.MTX`
- *          (matching the GX/VI/PAD mechanism), no bridge code needed here
- *          at all, just linking `libaurora_mtx.a` and excluding them from
- *          shim generation.
- *      (b) 19 names decomp needs under a `PSMTX*`/`PSVEC*` spelling (the
- *          real, paired-single-optimized name in decomp's OWN header --
- *          `MTXFoo` is just a macro alias TO `PSMTXFoo` there) have NO
- *          symbol under that exact name anywhere in Aurora's library at
- *          all -- Aurora only ever defines the generic `C_MTXFoo`/
- *          `C_VECFoo` equivalent. These get a real, one-line,
- *          unconditional rename wrapper below (`gen_shims.py`'s
- *          `AURORA_HAND_BRIDGED` excludes these same 19 names from shim
- *          generation, matching `mp6_GXSetArray3`'s own precedent).
- *          `Mtx`/`Vec`/`ROMtx`/`Point3d`/`Quaternion` are plain float
- *          arrays/structs with no pointer members, byte-identical between
- *          decomp's and Aurora's copies of `dolphin/mtx/GeoTypes.h` -- no
- *          32-on-64-bit ABI risk the way `GXTlutObj`/`GXTexObj`/
- *          `PADStatus` had, so a plain pass-through is safe.
- *   4. GXBegin/GXEnd hardware-faithful tolerance: a PURE rename, same
- *      shape as (b) above, NOT an arity bridge like (1) -- decomp's and
- *      Aurora's GXBegin/GXEnd signatures already match exactly. Real,
- *      unpatched decomp code (e.g. game/hsfman.c's Hu3DZClear) never
- *      calls GXEnd() for some primitives because real hardware's GX FIFO
- *      ends a primitive by vertex count, not an explicit End signal --
- *      but Aurora does NOT infer completion from vertex count and FATALs
- *      on "GXBegin: called without matching GXEnd". Tracks a single
- *      open/close boolean and auto-closes (calling the REAL GXEnd()) any
- *      still-open primitive before the next GXBegin or at frame-end --
- *      see section 5 below for the full story, including the one case
- *      (game/sprput.c's HuSpr3DDisp) where this general tolerance wasn't
- *      enough on its own and needed a companion decomp patch too.
- *   5. Draw-call bisect harness: `MP6_SKIP_DRAWS
- *      "lo-hi"` hides a specific, index-addressed, per-frame range of draws
- *      (both immediate-mode GXBegin/GXEnd primitives and GXCallDisplayList
- *      display-list replays -- section 7 below) by bracketing the real,
+ *      MTX/VEC/QUAT library, and the game must link against IT, never
+ *      against generated no-op shims (a no-op matrix function silently
+ *      produces a black screen the moment a draw depends on a computed
+ *      matrix). 9 names are symbols Aurora's library exports under the
+ *      exact name decomp's header resolves calls to, so no bridge code is
+ *      needed -- just linking libaurora_mtx.a. 19 other names decomp needs
+ *      under a `PSMTX*`/`PSVEC*` spelling have no symbol under that exact
+ *      name in Aurora's library at all (Aurora only defines the generic
+ *      `C_MTXFoo`/`C_VECFoo` equivalent), so these get a real, one-line,
+ *      unconditional rename wrapper below. `Mtx`/`Vec`/`ROMtx`/`Point3d`/
+ *      `Quaternion` are plain float arrays/structs with no pointer
+ *      members, byte-identical between decomp's and Aurora's copies of
+ *      `dolphin/mtx/GeoTypes.h` -- no ABI risk, so a plain pass-through is
+ *      safe.
+ *   4. GXBegin/GXEnd hardware-faithful tolerance: a pure rename, not an
+ *      arity bridge like (1) -- decomp's and Aurora's GXBegin/GXEnd
+ *      signatures already match exactly. Real, unpatched decomp code
+ *      (e.g. game/hsfman.c's Hu3DZClear) never calls GXEnd() for some
+ *      primitives because real hardware's GX FIFO ends a primitive by
+ *      vertex count, not an explicit End signal -- but Aurora does NOT
+ *      infer completion from vertex count and FATALs on "GXBegin: called
+ *      without matching GXEnd". Tracks a single open/close boolean and
+ *      auto-closes any still-open primitive before the next GXBegin or at
+ *      frame-end -- see section 5 below for the full story, including the
+ *      one case (game/sprput.c's HuSpr3DDisp) where this general
+ *      tolerance wasn't enough on its own and needed a companion decomp
+ *      patch too.
+ *   5. Draw-call bisect harness: `MP6_SKIP_DRAWS "lo-hi"` hides a specific,
+ *      index-addressed, per-frame range of draws by bracketing the real,
  *      unmodified call with a zero-area GXSetScissor, NOT by skipping the
- *      call itself -- deliberately chosen so nothing about vertex-count/
- *      FIFO-buffer bookkeeping (section 5's own hard-won subject) is ever
- *      disturbed. A pure empirical elimination tool ("which draw call
- *      paints these exact pixels"), absent/unset by default with zero
- *      overhead beyond one counter increment per draw.
+ *      call itself -- so nothing about vertex-count/FIFO-buffer
+ *      bookkeeping is ever disturbed. A pure empirical elimination tool
+ *      ("which draw call paints these exact pixels"), absent/unset by
+ *      default with zero overhead beyond one counter increment per draw.
  *
- * Every other GX/VI/PAD/MTX/VEC symbol decomp calls (the ~100 direct-link
- * GX functions -- TEV, lighting, vertex submission, texture setup, matrix
- * loading, ...; VIInit/VIConfigure/VIGetTvFormat/VIFlush; all 7 real PAD
- * functions; the 9 MTX/VEC names in (a) above) needs NO bridge code at
- * all: it links straight against Aurora's compiled, real definition of
+ * Every other GX/VI/PAD/MTX/VEC symbol decomp calls needs NO bridge code
+ * at all: it links straight against Aurora's compiled, real definition of
  * the same name. This is NOT a weak-symbol override (weak-vs-archive
- * resolution does not behave as needed on this toolchain: the linker
- * takes an already-seen weak definition over an archive member) --
- * tools/gen_shims.py's shims_generated_aurora.c (used only by the
- * default/aurora build, in place of shims_generated.c) simply never
- * generates a shim at all for any of these names, so decomp's own plain
- * reference is the ONLY one in the link and correctly pulls in Aurora's
- * real archive member. The ~15 GX + 8 VI gap symbols Aurora truly has no
+ * resolution does not behave as needed on this toolchain) --
+ * tools/gen_shims.py's shims_generated_aurora.c simply never generates a
+ * shim at all for any of these names, so decomp's own plain reference is
+ * the ONLY one in the link and correctly pulls in Aurora's real archive
+ * member. The handful of GX + VI gap symbols Aurora truly has no
  * definition for at all still get a (weak, but uncontested) logging
- * no-op from that same shims_generated_aurora.c.
+ * no-op from that same file.
  */
 #include <aurora/aurora.h>
 #include <aurora/event.h>
@@ -110,8 +83,12 @@
 #include "mp6_boot.h"
 #include "mp6_shim_log.h"
 #include "mp6_gxarray_registry.h"
-#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): dynamic true-widescreen */
+#include "mp6_widescreen.h" /* dynamic true-widescreen support */
 #include "mp6_savestate.h"  /* F5/F8 hotkeys -> queued, serviced at the frame boundary */
+#include "mp6_unlocked_fps.h" /* Mods-page Unlocked FPS: retained-stream frame interpolation
+                               * (platform/gx/frame_interp.c); hooks at the frame boundaries
+                               * + the tick throttle's idle window below, all single-compare
+                               * no-ops while the feature is off */
 #include "host.h" /* mp6_host_monotonic_ns/mp6_host_sleep_ns/mp6_host_init
                    * -- the tick throttle's OS primitives
                    * (QPC/Sleep/timeBeginPeriod) live behind the host
@@ -142,8 +119,9 @@
 #include <sched.h> /* sched_yield for the throttle's non-aarch64 spin fallback */
 #endif /* _WIN32 */
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Two placement rules, BOTH
- * load-bearing and both learned the hard way:
+/* SAVESTATE CARVE-OUT: host-owned statics in this TU must land in the
+ * carve-out section (see mp6_host_section.h), and the #include below has
+ * two load-bearing placement rules, both learned the hard way:
  *  - AFTER this TU's own includes: it is a #pragma clang section redirecting
  *    every file-scope definition that FOLLOWS it. As a -include (before all
  *    headers) it also captured the decomp headers' C TENTATIVE definitions
@@ -188,120 +166,73 @@ _Static_assert(sizeof(GXTlutObj) == 40, "Aurora's real GXTlutObj changed size --
 /* ---------------------------------------------------------------------
  * 1. GXSetArray arity bridge.
  *
- * decomp's OWN call sites (game/hsfdraw.c, game/hsfanim.c, game/sprput.c,
- * game/printfunc.c -- every one, confirmed via grep) use the REAL-hardware
- * 3-argument shape: GXSetArray(attr, data, stride), no explicit size --
- * real hardware addresses memory directly, there is no GPU buffer to
- * size. tools/build.py's patch_abi_struct_headers() ships a shadow
- * dolphin/gx/GXGeometry.h that declares exactly this 3-arg shape
- * unconditionally (decomp's OWN header still has a `#ifdef TARGET_PC`
- * branch here, it's just never how MP6's code actually calls it -- see
- * that function's own comment), so decomp compiles clean against it.
- *
- * Aurora's real GXSetArray takes 5 arguments: (attr, data, size, stride,
- * le). `size` is NOT cosmetic -- reading lib/dolphin/gx/GXGeometry.cpp
- * (writes the raw pointer + size into Aurora's internal FIFO command
- * stream) through to lib/gx/command_processor.cpp's GX_AURORA_LOAD_
- * ARRAYBASE handler (stores them into g_gxState.arrays[attr]) through to
- * lib/gx/command_processor.cpp's push_gx_draw() (`gfx::push_storage(
- * array.data, array.size)` for any indexed vertex attribute) confirms
- * `size` bytes are genuinely read from `data` later, at
- * aurora_end_frame() time, to build a real GPU-visible buffer -- exactly
- * the information the real GameCube API never needed and decomp's call
- * sites genuinely do not have on hand (the actual element count only
+ * decomp's own call sites use the real-hardware 3-argument shape:
+ * GXSetArray(attr, data, stride), no explicit size -- real hardware
+ * addresses memory directly, there is no GPU buffer to size. Aurora's
+ * real GXSetArray takes 5 arguments: (attr, data, size, stride, le).
+ * `size` is NOT cosmetic: Aurora reads exactly that many bytes from
+ * `data` later, at aurora_end_frame() time, to build a real GPU-visible
+ * buffer -- exactly the information the real GameCube API never needed
+ * and decomp's call sites don't have on hand (the element count only
  * becomes known later, at the paired GXBegin(..., nverts) call).
  *
- * Passing a GUESSED, possibly-too-large size risks reading past the real
- * (often small stack or scratch-heap) allocation decomp's code actually
- * made -- a genuine out-of-bounds read, not a theoretical one. A size=0
- * fallback is PROVABLY crash-safe (Aurora's own lib/gfx/common.cpp
- * push()/push_storage() -- `if (length > 0) { target.append(data,
- * length); }`, data is never dereferenced at all for a 0-byte push), but
- * NOT actually harmless: push_gx_draw() (lib/gx/command_processor.cpp)
- * uploads exactly `array.size` bytes into the real GPU-visible storage
- * buffer the vertex shader indexes into for GX_INDEX8/GX_INDEX16
- * attributes -- size=0 uploads ZERO bytes, so every indexed fetch (every
- * HSF mesh vertex/normal/st/color, all of them GX_INDEX16) reads
- * out-of-range/zeroed data and the mesh vanishes.
+ * A guessed, too-large size risks reading past the real allocation --
+ * a genuine out-of-bounds read. A size=0 fallback is provably crash-safe
+ * (Aurora never dereferences `data` for a 0-byte push) but not harmless:
+ * it uploads zero bytes, so every indexed fetch for a GX_INDEX8/16
+ * attribute (every HSF mesh vertex/normal/st/color) reads out-of-range
+ * data and the mesh vanishes.
  *
  * PRIMARY MECHANISM: mp6_gxarray_registry.h/.c
- * (platform/gx/gxarray_registry.c). decomp itself never has a real
- * element count on hand at this call site (real hardware never needed one
- * either), but platform/hsf/hsf_load_native.c -- which ALLOCATES every
- * vertex/normal/st/color buffer HSF meshes ever pass here -- knows each
+ * (platform/gx/gxarray_registry.c). decomp never has a real element count
+ * on hand here, but platform/hsf/hsf_load_native.c -- which allocates
+ * every vertex/normal/st/color buffer HSF meshes pass here -- knows each
  * one's real byte size at allocation time and registers it there; this
  * bridge looks the pointer up and uses the real size when known, falling
  * back to the learned-size mechanism below (and ultimately the still
- * crash-safe size=0) for any OTHER GXSetArray call site the registry
- * never saw (game/sprput.c, game/printfunc.c, game/hsfanim.c).
+ * crash-safe size=0) for any call site the registry never saw.
  *
  * The arity gap itself (3 args supplied, 5 needed) can't be closed with
- * GNU ld's usual --wrap trick on THIS toolchain: zig cc/c++'s own linker-
- * arg frontend rejects `-Wl,--wrap=X` outright ("unsupported linker arg:
- * --wrap", confirmed by direct testing, both via -Wl, and -Xlinker, and
- * regardless of -fuse-ld=lld); the underlying linker it actually invokes
- * for this target is lld-link (COFF/MSVC-style), which doesn't implement
- * GNU --wrap-style symbol interposition at all in the first place. A
- * link-ORDER trick (link our own strong GXSetArray before libaurora_gx.a,
- * hoping the archive member defining Aurora's real one is simply never
- * pulled in) was tested directly too and does NOT work either: that same
- * .cpp file also defines several OTHER functions decomp genuinely needs
- * directly, so the member gets pulled in regardless, and lld-link then
- * hard-errors with "duplicate symbol" rather than preferring either
- * definition.
+ * GNU ld's usual --wrap trick on this toolchain: zig cc/c++'s linker
+ * frontend rejects `-Wl,--wrap=X` outright, and the linker it actually
+ * invokes (lld-link, COFF/MSVC-style) doesn't implement --wrap-style
+ * symbol interposition at all. A link-order trick (linking a strong
+ * GXSetArray before libaurora_gx.a) doesn't work either: that archive
+ * member also defines other functions decomp genuinely needs, so it gets
+ * pulled in regardless and produces a duplicate-symbol error.
  *
- * Fixed instead in shim/include/dolphin_compat.h (see its own section-3
- * comment): every decomp call site is renamed, at the preprocessor level,
- * to `mp6_GXSetArray3` -- a name Aurora's own build never defines, so
- * there is no collision to resolve at link time at all. This file
- * provides the actual mp6_GXSetArray3 definition for the aurora build
- * (gen_shims.py's MACRO_RESOLUTION covers the --headless build's own
- * null shim under the same resolved name).
- *
- * `le = true`: this whole port is a fresh recompile of the C source for a
- * native little-endian target, never a raw reinterpretation of original
- * big-endian disc bytes, so vertex arrays are already little-endian from
- * Aurora's point of view (byte-order conversion is scoped to
- * DVD-sourced/compiled-in data blobs, not to freshly-compiled-and-laid-out
- * arrays like the ones GXSetArray is handed here).
+ * Fixed instead in shim/include/dolphin_compat.h: every decomp call site
+ * is renamed, at the preprocessor level, to `mp6_GXSetArray3` -- a name
+ * Aurora's own build never defines, so there is no link-time collision to
+ * resolve at all. This file provides the actual mp6_GXSetArray3
+ * definition for the aurora build. `le = true`: this whole port is a
+ * fresh recompile for a native little-endian target, so vertex arrays are
+ * already little-endian from Aurora's point of view.
  * --------------------------------------------------------------------- */
 /* LEARNED-SIZE MECHANISM (for arrays the HSF registry never saw):
  * non-HSF indexed consumers exist -- e.g. game/sprput.c's HuSpr3DDisp
  * registers a (col+1)*(row+1)-element vertex/texcoord grid via
- * GXSetArray, then submits a QUADS primitive that indexes into it
- * (GXPosition1x16/GXTexCoord1x16); with size=0 every indexed vertex
- * resolves to degenerate/empty data and the whole quad grid (e.g. a
- * message-window frame) collapses to nothing visible, while DIRECT-mode
- * draws (text glyphs) still render.
+ * GXSetArray, then submits a QUADS primitive that indexes into it; with
+ * size=0 the whole quad grid (e.g. a message-window frame) collapses to
+ * nothing visible.
  *
- * Learn the real size instead of guessing OR hand-special-casing call
- * sites. decomp's own call PATTERN gives us everything needed, fully
- * generically (no knowledge of col/row/HUSPR_3DDATA required here):
- * GXSetArray(attr, data, stride) is always followed by a
- * GXBegin(..., nverts) before the array's contents are ever really read
- * (Aurora reads an array's bytes lazily, at aurora_end_frame() time, per
- * this file's own section-1 header comment above) -- cache (data, stride)
- * per attribute here; the very next mp6_GXBegin call (section 5 below)
- * computes nverts*stride and re-registers the REAL GXSetArray with that
- * size whenever it's bigger than whatever's already registered for this
- * exact pointer.
+ * Learn the real size instead of guessing. GXSetArray(attr, data,
+ * stride) is always followed by a GXBegin(..., nverts) before the
+ * array's contents are ever really read -- cache (data, stride) per
+ * attribute here; the very next mp6_GXBegin call (section 5 below)
+ * computes nverts*stride and re-registers the real GXSetArray with that
+ * size whenever it's bigger than whatever's already registered.
  *
- * Is nverts*stride always >= the true buffer size? For DIRECT-shaped
- * sequential indexing (index i used only for vertex i, 0..nverts-1) it's
- * EXACT. For HuSpr3DDisp's shared-grid-pool indexing specifically (proven
- * algebraically): the true size is (col+1)*(row+1) elements, nverts is
- * col*row*4; 4*col*row >= (col+1)*(row+1) for every integer col,row >= 1
- * (equality only at col=row=1; strictly bigger otherwise -- e.g.
- * col=8,row=1: nverts=32 vs true 18 elements), so this NEVER under-reads
- * (never reproduces the missing-geometry bug), and the modest overshoot
- * reads only slightly past the real allocation -- still safely inside
- * this port's own large pre-reserved game arena, not the OS heap, so
- * there is no unmapped-page/crash risk the way a truly arbitrary guessed
- * size would carry. Resetting to 0 whenever the (data, stride) pair
- * actually CHANGES (a genuinely different buffer, e.g. a different
- * sprite's own data3D) avoids ever carrying a stale, possibly-too-large
- * size over onto an unrelated, smaller allocation that happens to reuse
- * the same attribute slot. */
+ * Is nverts*stride always >= the true buffer size? For sequential
+ * indexing it's exact. For HuSpr3DDisp's shared-grid-pool indexing
+ * (proven algebraically): the true size is (col+1)*(row+1) elements,
+ * nverts is col*row*4, and 4*col*row >= (col+1)*(row+1) for every integer
+ * col,row >= 1, so this never under-reads, and the modest overshoot reads
+ * only slightly past the real allocation -- still safely inside this
+ * port's own large pre-reserved game arena, not the OS heap. Resetting to
+ * 0 whenever the (data, stride) pair actually changes avoids carrying a
+ * stale, too-large size onto an unrelated, smaller allocation that
+ * happens to reuse the same attribute slot. */
 
 /* [ARRAYPROBE] -- env-gated (MP6_ARRAYPROBE=1) evidence probe for
  * "clean data, garbage pixels" vertex-corruption investigations.
@@ -849,7 +780,7 @@ static void mp6_latch_key_down_event(const SDL_Event *sdlEvent)
     }
 }
 
-/* Savestate hotkeys (docs/SAVESTATE.md): F5 saves, F8 loads -- the
+/* Savestate hotkeys: F5 saves, F8 loads -- the
  * emulator-conventional pair, chosen so muscle memory transfers and so
  * neither collides with g_keyBinds above (which is entirely letters/arrows
  * mapped to real pad buttons).
@@ -873,11 +804,10 @@ static void mp6_latch_savestate_key_event(const SDL_Event *sdlEvent)
         return;
     }
     if (sdlEvent->key.repeat) {
-        /* S4 (review): OS auto-repeat delivers a KEY_DOWN stream while the
-         * key is held, and each one used to queue a fresh multi-second
-         * capture/restore -- a one-second hold stacked ~30 of them and read
-         * as "savestates hard-froze the game". One request per physical
-         * press. */
+        /* OS auto-repeat delivers a KEY_DOWN stream while the key is held,
+         * and each one used to queue a fresh multi-second capture/restore
+         * -- a one-second hold stacked ~30 of them and read as "savestates
+         * hard-froze the game". One request per physical press. */
         return;
     }
     if (sdlEvent->key.scancode == SDL_SCANCODE_F5) {
@@ -1107,8 +1037,9 @@ static void mp6_pump_keyboard_to_pad(void)
             status.stickX = touchSX;
             status.stickY = touchSY;
         }
-        /* U-A3: the touch overlay IS this device's controller -- a stock
-         * Android install has no Bluetooth/USB pad. The merge just above
+        /* On Android, the touch overlay IS this device's controller -- a
+         * stock Android install has no Bluetooth/USB pad. The merge just
+         * above
          * only feeds PADRead()'s per-tick BUTTON data (aurora's own
          * merge_virtual_status, gated on g_virtualPadActive) -- a
          * COMPLETELY SEPARATE signal from what platform/gx/ui/overlay.cpp's
@@ -1171,10 +1102,14 @@ static void mp6_pump_keyboard_to_pad(void)
  * destroyed" -- a plain exit(0) mid-frame with the device still live
  * would instead surface as a FATAL in Aurora's static-destructor
  * teardown, which this port's log callback turns into an abort(). */
+static void mp6_present_rate_log_final(void); /* defined with the rate-log block below */
+
 static void mp6_clean_shutdown_exit(const char *reason)
 {
-    /* Savestate (docs/SAVESTATE.md): after a restore, third-party TEARDOWN
-     * state is not trustworthy, so do not run it.
+    mp6_present_rate_log_final(); /* MP6_PRESENT_RATE_LOG=1: the begin/end/tick
+                                   * totals line both Unlocked FPS gates quote */
+    /* After a savestate restore, third-party TEARDOWN state is not
+     * trustworthy, so do not run it.
      *
      * The savestate carve-out is a denylist -- it excludes the statics of
      * every TU we know is host-owned, but it cannot reach the static C
@@ -1198,8 +1133,8 @@ static void mp6_clean_shutdown_exit(const char *reason)
      * completely unchanged. */
     if (mp6_savestate_was_restored()) {
         printf("[BOOT] %s -- savestate was restored this run, skipping third-party "
-               "teardown (see docs/SAVESTATE.md), exiting 0\n", reason);
-        mp6_savestate_guarded_exit(0); /* C15: the ONE exit seam for restored processes */
+               "teardown, exiting 0\n", reason);
+        mp6_savestate_guarded_exit(0); /* the ONE exit seam for restored processes */
     }
     printf("[BOOT] %s -- shutting down Aurora, exiting 0\n", reason);
     fflush(stdout);
@@ -1220,77 +1155,51 @@ static void mp6_clean_shutdown_exit(const char *reason)
  *
  * WHY: this engine is a fixed-tick-per-frame design -- game logic advances
  * exactly one tick per VIWaitForRetrace call, with no delta-time scaling
- * anywhere in decomp code (real hardware's VI guaranteed the 60Hz cadence,
- * so the original game never needed any). The only frame-rate limiter this
- * port inherits is aurora_end_frame()'s vsync'd present: main_native.c
- * sets config.vsync = true, which Aurora's lib/webgpu/gpu.cpp
- * best_present_mode() maps to FifoRelaxed (or Fifo) -- i.e. the DISPLAY's
- * refresh rate, not the game's design rate. On a 60Hz display the two
- * accidentally coincide and everything paces correctly; on a high-refresh
- * display (e.g. ~176Hz) the whole game runs ~3x fast. The correct fix for
- * a fixed-tick engine is NOT delta-time surgery on game code (out of the
- * question under this project's decomp-read-only discipline anyway):
+ * anywhere in decomp code (real hardware's VI guaranteed the 60Hz cadence).
+ * The only frame-rate limiter this port inherits is aurora_end_frame()'s
+ * vsync'd present, which paces to the DISPLAY's refresh rate, not the
+ * game's design rate -- on a high-refresh display (e.g. ~176Hz) the whole
+ * game would run ~3x fast. The fix is not delta-time surgery on game code
+ * (out of the question under this project's decomp-read-only discipline):
  * throttle the tick rate itself back to the design rate, here at the
- * single place the game blocks per frame. Presentation simply follows
- * ticks -- 60fps presented on a 176Hz vsync'd display is fine; each
- * present just lands on the next 176Hz vblank.
+ * single place the game blocks per frame.
  *
- * MECHANISM: an absolute-deadline scheduler on the host monotonic clock
- * (mp6_host_monotonic_ns -- QueryPerformanceCounter underneath on win32).
+ * MECHANISM: an absolute-deadline scheduler on the host monotonic clock.
  * Each tick advances a persistent next-deadline by exactly one period and
  * waits for it -- ABSOLUTE deadlines, so however long this tick's own work
- * took (game logic, and crucially aurora_end_frame()'s vsync present
- * block, <=1/176s ~= 5.7ms on this display, well inside the 16.67ms
- * budget) is absorbed into the same period rather than added on top of it
+ * took is absorbed into the same period rather than added on top of it
  * (the classic "sleep a fixed amount per frame" mistake, which would pace
- * at period+worktime and drift). There is therefore no double-throttle
- * against Aurora's vsync: vsync quantizes WHEN a present lands (176Hz
- * grid), this scheduler alone decides how many ticks happen per second --
- * and 176Hz vblanks always arrive faster than 60Hz deadlines. (Corollary,
- * documented not hidden: on a display REFRESHING SLOWER than MP6_TICK_HZ,
- * the vsync block itself would pace ticks down to the display rate --
- * deadlines would run perpetually late and the resnap rule below keeps
- * that graceful. Not this machine's case, 176 > 60.)
+ * at period+worktime and drift). There is no double-throttle against
+ * Aurora's vsync: vsync quantizes WHEN a present lands, this scheduler
+ * alone decides how many ticks happen per second, and a faster-refreshing
+ * display's vblanks always arrive before the next 60Hz deadline.
  *
- * LATE/RESNAP RULE: if this tick finds itself late by more than
+ * LATE/RESNAP RULE: if a tick finds itself late by more than
  * MP6_TICK_RESNAP_PERIODS periods (debugger pause, disc-load stall, a
  * dragged window), the schedule re-anchors at now+period instead of
  * fast-forwarding through the backlog -- no spiral of death, no burst of
- * catch-up ticks played at max speed. Lateness of up to that many periods
- * is simply absorbed by running the next few ticks back-to-back (bounded,
- * at most 4 fast ticks), which keeps ordinary one-off scheduler hiccups
- * from accumulating into wall-clock drift.
+ * catch-up ticks played at max speed. Lateness up to that many periods is
+ * absorbed by running the next few ticks back-to-back (bounded, at most 4
+ * fast ticks).
  *
- * PRECISION: a coarse OS sleep alone (even at timeBeginPeriod(1)
- * resolution) has ~1-2ms of wakeup slop -- so this sleeps only until ~2ms
- * before the deadline, then spins on the monotonic clock for the
- * remainder (YieldProcessor/_mm_pause in the loop; worst case ~2ms of one
- * core per 16.67ms tick, typically ~1ms). The OS timer-resolution push
- * (timeBeginPeriod(1) via a runtime-resolved winmm.dll, atexit-paired
- * timeEndPeriod) is mp6_host_init() (platform/host/host_win32.c), called
- * once, lazily, at the moment the throttle first engages -- so
- * MP6_TICK_HZ=0 keeps loading no winmm and pushing no timer resolution,
- * exactly the env contract below. mp6_host_init's return value feeds the
- * "timeBeginPeriod(1) ok/UNAVAILABLE" status in the boot line.
+ * PRECISION: a coarse OS sleep alone has ~1-2ms of wakeup slop -- so this
+ * sleeps only until ~2ms before the deadline, then spins on the monotonic
+ * clock for the remainder (YieldProcessor/_mm_pause in the loop). The OS
+ * timer-resolution push (timeBeginPeriod(1), atexit-paired
+ * timeEndPeriod) happens once, lazily, at the moment the throttle first
+ * engages.
  *
  * ENV CONTRACT (MP6_TICK_HZ):
  *   unset/empty -> 60 (the design rate; the default everyone gets).
- *   0           -> throttle fully disabled: VIWaitForRetrace does no QPC
- *                  reads, no timeBeginPeriod, no winmm load -- pure
- *                  free-run timing, the A/B and leakgate-comparability
- *                  escape hatch.
- *   other > 0   -> that tick rate (dev tool: slow-mo/fast-forward; values
- *                  above the display refresh are additionally capped by
- *                  the vsync present block, and MP6_TICK_HZ=0 -- not a
- *                  huge number -- is the real "uncapped" switch).
+ *   0           -> throttle fully disabled: pure free-run timing, the A/B
+ *                  and leakgate-comparability escape hatch.
+ *   other > 0   -> that tick rate (dev tool: slow-mo/fast-forward).
  *   invalid     -> 60, with a warning line (never silently 0: a typo'd
  *                  env var must not silently disable pacing).
  *
  * MP6_TICK_RATE_LOG=1 (default off): once per ~5s, prints one stderr line
  * with the measured tick rate over that window plus worst/mean scheduler
- * lateness -- a permanent env-gated diagnostic (matching
- * MP6_DIAG_DRAWCOUNT / MP6_AUTO_START_TICKS precedent: zero overhead
- * when unset).
+ * lateness -- a permanent env-gated diagnostic, zero overhead when unset.
  * --------------------------------------------------------------------- */
 #define MP6_TICK_HZ_DEFAULT      60.0
 #define MP6_TICK_RESNAP_PERIODS  4
@@ -1403,6 +1312,19 @@ static void mp6_tick_throttle_wait(void)
         {
             double remainMs = (double)remain / 1000000.0;
             if (remainMs > MP6_TICK_SPIN_WINDOW_MS) {
+                /* Unlocked FPS (shim/include/mp6_unlocked_fps.h): spend the
+                 * idle window presenting interpolated frames instead of
+                 * sleeping through it. Each successful present blocks on the
+                 * display's own vsync cadence (aurora's 2-slot render worker
+                 * backpressure), so this needs no pacing of its own -- loop
+                 * back and re-read the clock. Declines (feature off, snapshots
+                 * not ready, window too small for one more present) fall
+                 * through to the ordinary sleep below; with the feature off
+                 * this is a single cheap call that returns immediately, and
+                 * the sub-2ms spin tail below never attempts a present. */
+                if (mp6_fi_idle_present(remain, g_tickPeriodNs)) {
+                    continue;
+                }
                 uint32_t sleepMs = (uint32_t)(remainMs - MP6_TICK_SPIN_WINDOW_MS);
                 if (sleepMs > 0) {
                     mp6_host_sleep_ns((uint64_t)sleepMs * 1000000ull); /* was Sleep(sleepMs) */
@@ -1432,6 +1354,75 @@ static void mp6_tick_throttle_wait(void)
         g_tickLateSumNs += late;
         g_tickLateSamples++;
     }
+}
+
+/* Present accounting (MP6_PRESENT_RATE_LOG=1, the exact MP6_TICK_RATE_LOG
+ * shape below): every aurora_begin_frame()/aurora_end_frame() pair is
+ * counted -- the real per-tick frame here in VIWaitForRetrace, and each
+ * extra interpolated present frame_interp.c pushes through
+ * mp6_present_counters_add(). With Unlocked FPS OFF this makes the no-op
+ * contract measurable: begin-frames == tick-count exactly, end-frames ==
+ * tick-count - 1 (the final opened frame is discarded by process exit --
+ * it exists for every run and is not an extra present). With the feature
+ * ON, the present rate visibly exceeds the tick rate. */
+static long g_mp6BeginFrames = 0;
+static long g_mp6EndFrames = 0;
+
+void mp6_present_counters_add(long begins, long ends)
+{
+    g_mp6BeginFrames += begins;
+    g_mp6EndFrames += ends;
+}
+
+static int mp6_present_rate_log_enabled(void)
+{
+    static int s_enabled = -1; /* -1 = env not checked yet */
+    if (s_enabled < 0) {
+        const char *env = getenv("MP6_PRESENT_RATE_LOG");
+        s_enabled = (env && *env && *env != '0') ? 1 : 0;
+    }
+    return s_enabled;
+}
+
+static void mp6_present_rate_log(void)
+{
+    static int64_t s_windowStartNs = 0;
+    static long s_windowStartEnds = 0;
+    int64_t now;
+    double elapsed;
+    if (!mp6_present_rate_log_enabled()) {
+        return;
+    }
+    now = (int64_t)mp6_host_monotonic_ns();
+    if (s_windowStartNs == 0) {
+        s_windowStartNs = now;
+        s_windowStartEnds = g_mp6EndFrames;
+        return;
+    }
+    elapsed = (double)(now - s_windowStartNs) / (double)MP6_TICK_NS_PER_SEC;
+    if (elapsed >= 5.0) {
+        double rate = (double)(g_mp6EndFrames - s_windowStartEnds) / elapsed;
+        fprintf(stderr, "[MP6-PRESENTRATE] window=%.2fs presents=%ld rate=%.3f presents/s "
+                        "(cum: begin-frames=%ld end-frames=%ld ticks=%ld)\n",
+                elapsed, g_mp6EndFrames - s_windowStartEnds, rate,
+                g_mp6BeginFrames, g_mp6EndFrames, mp6_tick_count);
+        fflush(stderr);
+        s_windowStartNs = now;
+        s_windowStartEnds = g_mp6EndFrames;
+    }
+}
+
+/* The one-shot totals line at clean shutdown -- the quantitative anchor for
+ * the Unlocked FPS off-proof (begin-frames == ticks exactly, end-frames ==
+ * ticks-1 structurally) and on-proof (both counters far above ticks). */
+static void mp6_present_rate_log_final(void)
+{
+    if (!mp6_present_rate_log_enabled()) {
+        return;
+    }
+    fprintf(stderr, "[MP6-PRESENTRATE] final: begin-frames=%ld end-frames=%ld ticks=%ld\n",
+            g_mp6BeginFrames, g_mp6EndFrames, mp6_tick_count);
+    fflush(stderr);
 }
 
 /* MP6_TICK_RATE_LOG=1: once per ~5s, one stderr line with the measured
@@ -1504,11 +1495,11 @@ static void mp6_dll_stub_draw_black_screen(void)
     Mtx44 proj;
     Mtx modelview;
     GXColor black = { 0, 0, 0, 255 };
-    /* WS4 (docs/WS4_WIDESCREEN_2D.md): this stub's own quad/viewport were
-     * hardcoded to native 640, so a wide (Widescreen-on) window showed an
-     * uncovered strip past pixel 640 on any still-undecompiled-minigame
-     * black-screen stub. mp6_widescreen_render_width() returns exactly 640
-     * (byte-identical) when disabled. */
+    /* This stub's own quad/viewport were hardcoded to native 640, so a
+     * wide (widescreen-on) window showed an uncovered strip past pixel 640
+     * on any still-undecompiled-minigame black-screen stub.
+     * mp6_widescreen_render_width() returns exactly 640 (byte-identical)
+     * when disabled. */
     int w = mp6_widescreen_render_width();
 
     MTXOrtho(proj, 0, 480, 0, w, 0, 10);
@@ -1564,7 +1555,17 @@ void VIWaitForRetrace(void)
         { extern void mp6_launcher_frame_overlay(void); mp6_launcher_frame_overlay(); }
         mp6_gx_close_stale_primitive("closing it before aurora_end_frame()");
         aurora_end_frame();
+        mp6_present_counters_add(0, 1); /* MP6_PRESENT_RATE_LOG accounting */
+        mp6_fi_note_frame_end(); /* Unlocked FPS: snapshot tick N's model/camera pose
+                                  * and timestamp its present -- the alpha reference for
+                                  * every interpolated frame in the idle window below */
         { extern void mp6_fs_frame_end(void); mp6_fs_frame_end(); } /* framescope */
+        { /* MP6_SHADOW_DUMP (shim/include/mp6_shadow_dump.h): right after
+           * aurora_end_frame(), same hook point as framescope right above --
+           * any shadow copy THIS tick made is guaranteed already resolved. */
+            extern void mp6_shadow_dump_tick(void);
+            mp6_shadow_dump_tick();
+        }
         g_frameOpen = false;
     }
 
@@ -1577,6 +1578,7 @@ void VIWaitForRetrace(void)
      * not up to a full period stale. */
     mp6_tick_throttle_wait();
     mp6_tick_rate_log();
+    mp6_present_rate_log();
 
     const AuroraEvent *event = aurora_update();
     while (event != NULL && event->type != AURORA_NONE) {
@@ -1607,25 +1609,25 @@ void VIWaitForRetrace(void)
     mp6_pad_motor_apply_pending();
 #endif
 
-    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): every tick (not just on a
-     * detected resize event) -- mp6_widescreen_render_width() re-reads the
-     * live window size fresh every call, and the decomp-side setter is a
-     * cheap no-op whenever nothing changed since the last tick, so this is
-     * the simplest robust way to converge a live interactive resize
-     * without any separate resize-event bookkeeping. A true no-op (both
-     * calls return 640 as a pure passthrough) when widescreen is disabled
-     * -- the default -- so this line does not perturb any existing gate. */
+    /* Runs every tick (not just on a detected resize event) --
+     * mp6_widescreen_render_width() re-reads the live window size fresh
+     * every call, and the decomp-side setter is a cheap no-op whenever
+     * nothing changed since the last tick, so this is the simplest robust
+     * way to converge a live interactive resize without any separate
+     * resize-event bookkeeping. A true no-op (both calls return 640 as a
+     * pure passthrough) when widescreen is disabled -- the default -- so
+     * this line does not perturb any existing gate. */
     mp6_widescreen_apply_render_width(mp6_widescreen_render_width());
 
-    /* WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): the render-width/2D-layer sync
-     * above already converges every tick, but WS11-13's own 3D backdrop
-     * extrude + per-scene camera setup ran exactly ONCE, at scene load --
-     * frozen at whatever window size happened to be current then. This
+    /* The render-width/2D-layer sync above already converges every tick,
+     * but the 3D backdrop extrude + per-scene camera setup (platform/hsf/
+     * mp6_widescreen_extrude.c) ran exactly ONCE, at scene load -- frozen
+     * at whatever window size happened to be current then. This
      * re-derives every REGISTERED 3D backdrop/camera from its own cached
      * native baseline using the CURRENT scale_factor(), every tick, so a
      * live interactive resize converges the 3D content too, not just the
      * 2D/render-target layers. A true no-op (a for-loop over permanently-
-     * empty registries) when Widescreen is disabled -- see platform/hsf/
+     * empty registries) when widescreen is disabled -- see platform/hsf/
      * mp6_widescreen_extrude.c's own file header for the full mechanism. */
     mp6_widescreen_reapply();
 
@@ -1635,6 +1637,10 @@ void VIWaitForRetrace(void)
 
     if (aurora_begin_frame()) {
         g_frameOpen = true;
+        mp6_present_counters_add(1, 0); /* MP6_PRESENT_RATE_LOG accounting */
+        mp6_fi_note_frame_begin(); /* Unlocked FPS: reserved per-tick hook inside the
+                                    * just-opened frame (currently a no-op -- the
+                                    * snapshot is a frame-END operation) */
 #ifdef __ANDROID__
         /* Draw the touch overlay into the just-opened ImGui frame
          * (aurora ran ImGui::NewFrame inside the successful
@@ -2121,7 +2127,7 @@ void mp6_GXCallDisplayList(const void *list, u32 nbytes)
  *     the fitted viewport) -- a real letterbox/pillarbox, computed from
  *     the CONTENT aspect, engaged for any window shape.
  *
- *     A5: (b)'s AuroraSetViewportPolicy call itself now happens LATER --
+ *     (b)'s AuroraSetViewportPolicy call itself now happens LATER --
  *     see mp6_bridge_apply_content_aspect_policy() below, called from
  *     main_native.c right before GameMain() instead of from here. Reason:
  *     aurora::rmlui's presentation-dimension calc (lib/rmlui.cpp
@@ -2137,7 +2143,7 @@ void mp6_GXCallDisplayList(const void *list, u32 nbytes)
  *     status text all rendered as if the screen were a narrow 4:3 box,
  *     leaving partyboard's own (verbatim, working-as-designed) `@media
  *     (max-height: 640dp)` mobile layout to reflow against the WRONG
- *     viewport metrics. Full story: docs/A5_LAUNCHER_ASPECT.md.
+ *     viewport metrics.
  *
  * Belt and braces: (b) alone already guarantees an undistorted scene at
  * ANY window shape, but the window would still
@@ -2156,13 +2162,12 @@ void mp6_GXCallDisplayList(const void *list, u32 nbytes)
  * the user's saved aspectLocked setting is known.
  * --------------------------------------------------------------------- */
 
-/* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): stashed by mp6_bridge_window_policy_init
- * below (the earliest point a real SDL_Window* is available), consumed by
+/* Stashed by mp6_bridge_window_policy_init below (the earliest point a
+ * real SDL_Window* is available), consumed by
  * mp6_widescreen_render_width() further down to query the LIVE window
  * size on every call -- interactive resizes must keep tracking, not just
  * the size at boot, and this is the one place a real SDL_Window* is
- * available this early with no extra plumbing (same stash WS1's own
- * discarded mechanism used, for the same reason). */
+ * available this early with no extra plumbing. */
 static SDL_Window *g_mp6AspectWindow = NULL;
 
 void mp6_bridge_window_policy_init(void *sdlWindowPtr)
@@ -2170,12 +2175,12 @@ void mp6_bridge_window_policy_init(void *sdlWindowPtr)
     SDL_Window *window = (SDL_Window *)sdlWindowPtr;
     const char *freeAspect = getenv("MP6_FREE_ASPECT");
     bool aspectLocked = !(freeAspect != NULL && freeAspect[0] != '\0' && freeAspect[0] != '0');
-    g_mp6AspectWindow = window; /* WS2: see the static's own comment above -- stash before the NULL check so later queries are consistent even if this call is ever a no-op below */
-    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): this runs BEFORE config is ever
-     * loaded (right after aurora_initialize(), same as before WS2), so the
-     * only widescreen signal available this early is the MP6_WIDESCREEN
-     * env lever (mirroring MP6_FREE_ASPECT's own env-only early decision)
-     * -- mp6_widescreen_enabled() already consults it internally (see that
+    g_mp6AspectWindow = window; /* see the static's own comment above -- stash before the NULL check so later queries are consistent even if this call is ever a no-op below */
+    /* This runs BEFORE config is ever loaded (right after
+     * aurora_initialize()), so the only widescreen signal available this
+     * early is the MP6_WIDESCREEN env lever (mirroring MP6_FREE_ASPECT's
+     * own env-only early decision) -- mp6_widescreen_enabled() already
+     * consults it internally (see that
      * function). A real config-driven Widescreen selection unlocks the
      * window shape later too, via mp6_launcher_apply_display()
      * (launcher_core.cpp) once the saved setting is actually known --
@@ -2246,16 +2251,16 @@ void mp6_bridge_window_policy_init(void *sdlWindowPtr)
     fflush(stdout);
 }
 
-/* A5: the CONTENT half of (b) above -- AuroraSetViewportPolicy itself,
- * deferred from "before the launcher" to "right before GameMain()" so the
- * RmlUi launcher (menu + persistent overlay) always composes against the
- * real window/display surface, on every aspect (docs/A5_LAUNCHER_ASPECT.md).
+/* The CONTENT half of the launcher-aspect fix above -- AuroraSetViewportPolicy
+ * itself, deferred from "before the launcher" to "right before GameMain()"
+ * so the RmlUi launcher (menu + persistent overlay) always composes
+ * against the real window/display surface, on every aspect.
  *
  * aspectLockedCfg is the resolved user preference: g_cfg.aspectLocked in
  * launcher mode (mp6_launcher_cfg_aspect_locked(), launcher_core.cpp,
  * mirroring the existing mp6_launcher_cfg_backend()/_vsync() pattern) or a
  * fixed 1 (today's automation-mode default, matching this function's own
- * pre-A5 behavior when config is never read) otherwise. MP6_FREE_ASPECT
+ * earlier behavior when config is never read) otherwise. MP6_FREE_ASPECT
  * keeps absolute priority in both directions, same as before.
  *
  * Call once, right before GameMain(), on EVERY boot path (automation,
@@ -2269,13 +2274,13 @@ void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg)
     const char *freeAspect = getenv("MP6_FREE_ASPECT");
     bool envFree = freeAspect != NULL && freeAspect[0] != '\0' && freeAspect[0] != '0';
     bool aspectLocked = aspectLockedCfg != 0 && !envFree;
-    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): mp6_widescreen_set_enabled()
-     * (platform/main_native.c) must run BEFORE this function for this to
-     * see the right value -- both are called back-to-back, right before
-     * GameMain(), same call-timing contract as every other setting in
-     * this file. MP6_FREE_ASPECT keeps absolute top priority over BOTH
-     * Widescreen and aspectLocked (unchanged escape hatch: raw anisotropic
-     * stretch, for A/B comparisons only). */
+    /* mp6_widescreen_set_enabled() (platform/main_native.c) must run
+     * BEFORE this function for this to see the right value -- both are
+     * called back-to-back, right before GameMain(), same call-timing
+     * contract as every other setting in this file. MP6_FREE_ASPECT keeps
+     * absolute top priority over BOTH widescreen and aspectLocked
+     * (unchanged escape hatch: raw anisotropic stretch, for A/B
+     * comparisons only). */
     bool widescreen = mp6_widescreen_enabled() && !envFree;
 
     if (envFree) {
@@ -2283,22 +2288,22 @@ void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg)
         printf("[MP6-WINDOW] content aspect policy: FREE STRETCH (MP6_FREE_ASPECT) -- "
                "non-4:3 window shapes will distort the scene\n");
     } else if (widescreen) {
-        /* THE key trick (docs/WS2_DYNAMIC_WIDESCREEN.md section 2): stay
-         * on FIT, never switch to STRETCH. FIT letterboxes/pillarboxes
-         * the GX render target to match Aurora's own logical-fb aspect
-         * (aurora lib/gx/gx.cpp vi::configured_fb_size(), driven by
-         * whatever RenderMode the game's own VIConfigure call currently
-         * holds) inside the real window. WS2 widens THAT logical aspect
-         * itself (mp6_widescreen_apply_render_width(), called from the
-         * game's own HuSysInit and every tick thereafter) to track the
-         * live window aspect -- so FIT's fitted rectangle converges to
-         * the full window with no visible bars, because the thing being
-         * fit is already the right shape, not because fitting was
-         * disabled. This is what makes WS2 a TRUE-WIDE render (the GX
-         * viewport/scissor genuinely widen) rather than WS1's discarded
-         * approach (STRETCH + an anamorphic projection widen -- visibly
-         * distorts every 2D/HUD element, since STRETCH scales the whole
-         * already-composited frame non-uniformly). */
+        /* THE key trick: stay on FIT, never switch to STRETCH. FIT
+         * letterboxes/pillarboxes the GX render target to match Aurora's
+         * own logical-fb aspect (aurora lib/gx/gx.cpp
+         * vi::configured_fb_size(), driven by whatever RenderMode the
+         * game's own VIConfigure call currently holds) inside the real
+         * window. Widescreen widens THAT logical aspect itself
+         * (mp6_widescreen_apply_render_width(), called from the game's
+         * own HuSysInit and every tick thereafter) to track the live
+         * window aspect -- so FIT's fitted rectangle converges to the
+         * full window with no visible bars, because the thing being fit
+         * is already the right shape, not because fitting was disabled.
+         * This is what makes this a TRUE-WIDE render (the GX
+         * viewport/scissor genuinely widen) rather than an earlier
+         * discarded approach (STRETCH + an anamorphic projection widen --
+         * visibly distorts every 2D/HUD element, since STRETCH scales the
+         * whole already-composited frame non-uniformly). */
         AuroraSetViewportPolicy(AURORA_VIEWPORT_FIT);
         printf("[MP6-WINDOW] content aspect policy: WIDESCREEN (dynamic true-wide, "
                "render_width=%d) -- 3D + 2D both track the live window aspect, no "
@@ -2319,8 +2324,8 @@ void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg)
 }
 
 /* ---------------------------------------------------------------------
- * WS2. Dynamic true-widescreen (docs/WS2_DYNAMIC_WIDESCREEN.md) --
- * implementation of shim/include/mp6_widescreen.h's contract.
+ * Dynamic true-widescreen -- implementation of
+ * shim/include/mp6_widescreen.h's contract.
  *
  * Every accessor below is computed FRESH on every call. No field here is
  * a cache that a resize event invalidates -- there IS no cache -- so
@@ -2383,9 +2388,9 @@ int mp6_widescreen_render_width(void)
     if (raw < 640.0f) {
         raw = 640.0f; /* never narrower than native (a taller-than-4:3 window doesn't shrink the render) */
     }
-    /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): this used to clamp at a hardcoded
-     * 1280.0f ("sane upper bound -- an extreme sliver window can't blow out
-     * a texture/array bound"), which silently pinned the render width at
+    /* This used to clamp at a hardcoded 1280.0f ("sane upper bound -- an
+     * extreme sliver window can't blow out a texture/array bound"), which
+     * silently pinned the render width at
      * 32:9-class ultra-wide aspects (raw ~1707 at 2560x720) below what the
      * live window actually needed -- the game then rendered narrower than
      * the window, leaving a black band on the right even with every
@@ -2437,14 +2442,13 @@ int mp6_widescreen_render_width(void)
     {
         int aligned = mp6_align16_down(raw);
         int result = aligned < 640 ? 640 : aligned;
-        /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): self-sync, closing a real
-         * early-boot race this lane found by testing at an extreme aspect
-         * (crash repro: MP6_WINDOW_SIZE=5120x480, "[AURORA FATAL] WebGPU
-         * error 2: Viewport width (40960.000000) exceeds the maximum
-         * (16384)" -- 40960 == 5120*8). Root cause: several decomp-side
-         * camera patches (this lane's own boot.c/opening.c/filesel.c/
+        /* Self-sync, closing a real early-boot race found by testing at
+         * an extreme aspect (crash repro: MP6_WINDOW_SIZE=5120x480,
+         * "[AURORA FATAL] WebGPU error 2: Viewport width (40960.000000)
+         * exceeds the maximum (16384)" -- 40960 == 5120*8). Root cause:
+         * several decomp-side camera patches (boot.c/opening.c/filesel.c/
          * mdsel.c/actman.c/sequence.c widens, mirroring hsfman.c's own
-         * established WS2 pattern) pass THIS function's return value
+         * established pattern) pass THIS function's return value
          * directly as a viewport width. Aurora's own map_logical_viewport
          * (aurora/lib/gx/gx.cpp) independently rescales every viewport by
          * targetWidth/logicalFbWidth, where logicalFbWidth comes from

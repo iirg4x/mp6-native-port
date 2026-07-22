@@ -1,7 +1,7 @@
 --- a/src/REL/fileseldll/filesel.c
 +++ b/src/REL/fileseldll/filesel.c
 @@ -18,0 +19 @@
-+#include "mp6_widescreen.h" /* WS6 (docs/WS6_OVERLAY_CAMERAS.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -276,6 +277,21 @@
 -    Hu3DCameraPerspectiveSet(1, 5.0f, 20.0f, 15000.0f, 1.2f);
 -    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f,
@@ -9,118 +9,71 @@
 -    Hu3DCameraPerspectiveSet(2, 10.0f, 20.0f, 15000.0f, 1.2f);
 -    Hu3DCameraViewportSet(2, 0.0f, 0.0f, 640.0f,
 -                          480.0f, 0.0f, 1.0f);
-+    /* MP6 native port -- WS6 (docs/WS6_OVERLAY_CAMERAS.md): file-select's
-+     * own two-camera scene (book/storybook + star-tag overlay) has the same
-+     * native-640, left-anchored own-camera bug as boot.c/opening.c -- WS2/
-+     * WS4 deliberately left every REL's own camera native (reference-hack
-+     * scope match, WS_REFERENCE_STUDY.md section 2.4), leaving a black band
-+     * on the right. Both cameras widened the same proven way as hsfman.c's
++    /* File-select's own two-camera scene (book/storybook + star-tag
++     * overlay) has the same native-640, left-anchored framing as
++     * boot.c/opening.c, left native to match the reference widescreen
++     * hack's own scope (it never edits a .rel file), leaving a black band
++     * on the right. Both cameras widened the same way as hsfman.c's
 +     * defCamera/opening.c's camera: FOV aspect x scale_factor(), viewport
-+     * width -> live render width. No-op when Widescreen is disabled. */
-+    /* MP6 native port -- WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): replaces the
-+     * same two calls with ONE call that ALSO registers this camera so it
-+     * re-derives live on a later window resize -- ObjectSetup only ever
-+     * runs once, at overlay load; omOutViewMulti (this file's own shared
-+     * per-frame camera-position updater) never touched Perspective/
++     * width -> live render width. No-op when widescreen is disabled. */
++    /* Replaces the two calls above with one that also registers this
++     * camera so it re-derives live on a later window resize -- ObjectSetup
++     * only runs once, at overlay load; omOutViewMulti (this file's own
++     * shared per-frame camera-position updater) never touches Perspective/
 +     * ViewportSet, so this camera stayed frozen at scene-load size without
-+     * this. Same literals, same effect on THIS call. */
++     * this. Same literals, same effect on this call. */
 +    mp6_widescreen_camera_widen(1, 5.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
-+    /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): same fix as camera-bit-1's own
-+     * sibling above -- see that comment. */
-+    /* MP6 native port -- WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): same fix as
-+     * camera-bit-1's own sibling above -- see that comment. */
++    /* Same fix as the sibling camera above. */
 +    mp6_widescreen_camera_widen(2, 10.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
 @@ -429,0 +446,92 @@
-+    /* MP6 native port -- WS10 (docs/WS10_BACKDROP_SCALE.md): this is the
-+     * file-select storybook's own distant backdrop -- positioned far
-+     * behind the book itself (z=-9000 vs the book's z=-2000), drawn under
-+     * camera bit 2 (index 1, FOV 10 deg, already aspect-widened by WS6) --
-+     * a fixed-size 2D-style backdrop prop, unlike the book (a separate
-+     * model, untouched) or the foreground prop lbl_1_bss_2D8[2] (also
-+     * untouched). Its own explicit Hu3DModelPosSet above places its local
-+     * origin's world position; Hu3DModelScaleSet scales in LOCAL space
-+     * before that translation is applied (game/hsfman.c's Hu3DExec), so
-+     * this grows the backdrop about its own local center while its world
-+     * position stays exactly where it was set above -- the same safe
-+     * pattern confirmed for mdpartydll's own ring/swirl backdrop prop
-+     * (docs/WS10_BACKDROP_SCALE.md). 1.0f (native) is an exact no-op when
-+     * Widescreen is disabled. */
-+    /* MP6 native port -- WS12 (docs/WS11_EXTRUDE_BACKDROPS.md): CONVERTED
-+     * from WS10's plain uniform Hu3DModelScaleSet to the shared, bbox-
-+     * center-aware extrude helper. This backdrop is 5 sub-objects
-+     * ("bg_hiru"/"bg_sora"/"bg_yoru" -- day/sky/night, "grid1", "hikari"
-+     * -- a light-glow accent), each with real, non-zero base.pos (HSF
-+     * diagnostic dump), so WS10's plain scale-about-local-origin was
-+     * scaling about the WRONG point for every one of them; this helper
-+     * computes the correct composite center by composing each
-+     * sub-object's own base transform first (docs/
-+     * WS11_EXTRUDE_BACKDROPS.md). Wrap-mode: the file's attribute pool
-+     * has 4 confirmed GX_CLAMP entries directly bound to all 5 visible
-+     * sub-objects' own primary texture ("rgba8fileselect_bg03") plus one
-+     * GX_REPEAT entry ("fileselect_bg01") that is NOT bound as any of
-+     * those 5 objects' own primary attribute -- confirmed by direct
-+     * pixel inspection of the reference capture (docs/history/
-+     * reference_fileselect.jpg) that the actual rendered backdrop is a
-+     * smooth day/night gradient swirl with no visible tiling/grid
-+     * pattern anywhere, so this whole model is treated as CLAMP in
-+     * practice -- see docs/WS11_EXTRUDE_BACKDROPS.md for the full
-+     * finding (flagged, not silently assumed: the REPEAT attribute's
-+     * exact purpose, e.g. an unused leftover or a secondary material
-+     * layer, is unresolved, but does not change which mechanism the 5
-+     * actually-visible objects need). This exact model (same HSF asset,
-+     * same bitmap names) is ALSO bootDll/opening.c's OpeningMdlId[0] --
-+     * both extruded the same way.
++    /* This is the file-select storybook's own distant backdrop --
++     * positioned far behind the book itself (z=-9000 vs the book's
++     * z=-2000), drawn under camera bit 2 (already aspect-widened above).
++     * Its own explicit Hu3DModelPosSet places its local origin's world
++     * position; Hu3DModelScaleSet scales in LOCAL space before that
++     * translation is applied (game/hsfman.c's Hu3DExec), so this grows the
++     * backdrop about its own local center while its world position stays
++     * exactly where it was set above -- the same pattern used for
++     * mdpartydll's own ring/swirl backdrop prop. No-op when widescreen is
++     * disabled. */
++    /* Converted from a plain uniform scale to a bbox-center-aware extrude:
++     * this backdrop is 5 sub-objects (day/sky/night panels, a grid layer,
++     * and a light-glow accent), each with real, non-zero base.pos, so
++     * scaling about local origin was scaling about the wrong point for
++     * every one of them -- this helper composes each sub-object's own base
++     * transform first to find the correct composite center. Of this
++     * model's attribute pool, 4 entries are GX_CLAMP and bound to all 5
++     * visible sub-objects' primary texture; one GX_REPEAT entry exists but
++     * isn't bound to any of their primary attributes (purpose unresolved),
++     * and the reference capture shows a smooth day/night gradient with no
++     * visible tiling anywhere, so the whole model is treated as CLAMP in
++     * practice. This exact HSF asset (same bitmap names) is also
++     * bootDll/opening.c's OpeningMdlId[0]; both extrude the same way.
 +     *
-+     * MP6 native port -- WS13 (docs/WS11_EXTRUDE_BACKDROPS.md follow-up):
-+     * the plain extrude above still left a measured, real (not eyeballed)
-+     * black notch near the top/bottom-center edge at 2.17:1 -- captured
-+     * and pixel-scanned directly: at one sampled instant a ~136-244px-wide,
-+     * ~130px-tall gap opened right at the top-center edge (top edge y=0
-+     * down to about y=130 of a 1180px-tall frame, centered a little right
-+     * of screen-center), and at a DIFFERENT sampled instant (~20s later,
-+     * same static "choose a file" screen, nothing else changed) the gap
-+     * had moved to the BOTTOM-center edge instead and shrunk to about a
-+     * 300x95px notch -- confirming this asset's own slow ambient motion
-+     * (Hu3DMotionSpeedSet(lbl_1_bss_2D8[1], 0.05f) two lines above) shifts
-+     * exactly where the residual gap shows up over time, not a fixed
-+     * static shortfall in one corner.
-+     *
-+     * FIRST attempt (reverted, kept here as a documented dead end so a
-+     * future session doesn't retry it): more of the SAME isotropic x/y/z
-+     * growth via an extra multiplier on scale_factor(). Confirmed WRONG by
-+     * direct recapture -- it made the backdrop mostly VANISH (replaced by
-+     * plain black clear, one soft glow left over) instead of closing the
-+     * gap. Root-caused via the HSF diagnostic dump's own per-sub-object
-+     * bbox data: this backdrop is NOT a flat plane -- its 5 sub-objects
-+     * span real local-Z depth (roughly -3444..+3454 relative to the
-+     * model's own computed center), and isotropic scaling grows Z by the
-+     * same factor as X/Y. Checked against this scene's own camera (bit 2
-+     * above: zoom/distance 2800, FOV 10 deg, far clip 15000.0f): the
-+     * deepest sub-object's own farthest local-Z point is already within
-+     * roughly 100 units of that far clip at the plain, unmultiplied
-+     * scale_factor() this project already ships -- ANY extra multiplier on
-+     * Z pushes it past 15000, and this engine's own per-object cull check
-+     * (ObjCullCheck, referenced by this same file's REPEAT-mechanism
-+     * comment) then drops the whole sub-object. This also plausibly
-+     * explains the ORIGINAL notch itself: this backdrop's own slow ambient
-+     * motion (Hu3DMotionSpeedSet two lines above) can walk a marginal
-+     * sub-object across that same ~15000 threshold as it plays, without
-+     * any widescreen-side change at all.
-+     *
-+     * REAL fix: mp6_widescreen_extrude_model_xy() (same shared file/header
-+     * as the plain function -- platform/hsf/mp6_widescreen_extrude.c /
-+     * shim/include/mp6_widescreen.h) grows ONLY X and Y by scale_factor()
-+     * -- identical to what the isotropic function already contributed on
-+     * those two axes -- and leaves Z completely untouched, so this
-+     * backdrop's own depth never grows past whatever far-clip margin it
-+     * already has, regardless of window width. Coverage-wise this loses
-+     * nothing (aspect-widening was always an X/Y screen-space concern for
-+     * a backdrop sitting at a fixed distance; Z growth was pure incidental
-+     * risk with no coverage benefit). Confirmed by recapture at both
-+     * 2.17:1 and 16:9 (see this branch's own commit for the exact before/
-+     * after pixel measurements) -- every other extruded scene (Party Mode,
-+     * title, mode-select, and opening's own identical-asset call) still
-+     * goes through the plain, unmultiplied, fully-isotropic
++     * That plain extrude still left a real, measured black notch near the
++     * top/bottom-center edge at wide aspect -- and the notch was seen to
++     * MOVE between the top-center and bottom-center edge across two
++     * captures of the same static screen taken ~20s apart, confirming this
++     * asset's own slow ambient motion shifts where the shortfall shows up
++     * over time, not a fixed static gap. A first attempted fix (more of
++     * the same isotropic growth via an extra multiplier) was confirmed
++     * WRONG by recapture -- it made the backdrop mostly vanish instead of
++     * closing the gap. Root cause: this backdrop is not a flat plane -- its
++     * 5 sub-objects span real local-Z depth, and isotropic scaling grows Z
++     * by the same factor as X/Y; the deepest sub-object's own farthest
++     * point already sits within roughly 100 units of this scene's far clip
++     * (15000) at the plain scale_factor() this project ships, so any extra
++     * Z multiplier pushes it past the clip and this engine's own per-object
++     * cull check drops the whole sub-object. This also plausibly explains
++     * the original notch itself: the backdrop's own ambient motion can walk
++     * a marginal sub-object across that same threshold as it plays, with no
++     * widescreen-side change at all. Real fix: grow only X and Y by
++     * scale_factor() and leave Z completely untouched
++     * (mp6_widescreen_extrude_model_xy()) -- identical contribution on the
++     * two axes that matter for screen-space coverage, with no depth-clip
++     * risk regardless of window width. Every other extruded scene (Party
++     * mode, title, mode-select, and opening's own identical-asset call)
++     * still goes through the plain, fully-isotropic
 +     * mp6_widescreen_extrude_model(), byte-unchanged. */
 +    mp6_widescreen_extrude_model_xy(lbl_1_bss_2D8[1]);
 @@ -458,0 +567,26 @@
@@ -155,94 +108,64 @@
 +        lbl_1_bss_98[i] = Hu3DParManCreate(parAnim, 0x64, &fileselSparkleParam);
 @@ -1058 +1192,18 @@
 -        strcpy(obj->name, lbl_1_data_190[i]);
-+        /* MP6 native port -- docs/M2E_MILESTONE.md. Under this port's HSF
-+         * stub (patches/decomp/src/game/hsfload.c.patch), every loaded model
-+         * has objectNum==0, so Hu3DModelObjPtrGet's by-name lookup can never
-+         * succeed -- it OSReports "OBJPtr Error! siori_fix-itemhook_a" and
-+         * returns NULL (its own existing not-found contract, unchanged). The
-+         * original code strcpy's through that pointer unconditionally because
-+         * on real hardware the real model ALWAYS contains this object -- the
-+         * NULL branch is unreachable there. Natively it's a guaranteed access
-+         * violation (write through NULL), and an OS-level one, so zig's
-+         * runtime UB checker prints NO panic trace -- confirmed as this exact
-+         * crash by the log ending at hsfman.c's own OBJPtr OSReport line,
-+         * reproduced twice. Skipping the rename when the object doesn't exist
-+         * is semantically exact: the rename's only purpose is to retarget
-+         * which sub-object later per-slot logic finds by name, and with zero
-+         * objects there is nothing to find either way. */
++        /* Under this port's HSF loader stub, every loaded model has
++         * objectNum==0, so the by-name lookup above can never succeed --
++         * it reports the not-found case and returns NULL (its own existing
++         * contract, unchanged). The original code writes through that
++         * pointer unconditionally because on real hardware the model
++         * always contains this object, so the NULL branch is unreachable
++         * there; natively it's a guaranteed null-pointer write, confirmed
++         * as this exact crash by the log ending at hsfman.c's own
++         * not-found report line. Skipping the rename when the object
++         * doesn't exist is semantically exact: the rename only retargets
++         * which sub-object later per-slot logic finds by name, and with
++         * zero objects there is nothing to find either way. */
 +        if (obj != NULL) {
 +            strcpy(obj->name, lbl_1_data_190[i]);
 +        }
 @@ -1092,0 +1244,32 @@
-+    /* MP6 native port -- WS8 (docs/WS8_2D_COHERENCE.md). fn_1_35AC runs
-+     * every frame (Hu3DCameraLayerHookSet(1,1,...) above) and grabs a
-+     * screen-space SNAPSHOT of each save slot's own star/date/count sprite
-+     * group (created above -- HuSprGrpPosSet(grp, 288.0*(i&1), 168.0*(i/2)),
-+     * same logical position this capture rectangle is derived from) into a
-+     * texture that gets pasted onto the actual "page label" 3D quad
-+     * (p->unk_A, Hu3DAnimCreate(p->unk_58, p->unk_A, ...) above) -- the
-+     * fake-3D storybook-page illusion for this label, same photograph-a-
-+     * live-frame trick bootDll/opening.c's own BookFrameBufAnim uses for
-+     * its page-turn effect. The X argument is the group's own logical X
-+     * (288.0*(i&1), 576-wide HU_DISP space) converted to native framebuffer
-+     * pixels by the constant 640/576 ratio (1.111... -- HU_DISP_WIDTH's own
-+     * fixed relationship to HU_FB_WIDTH, unrelated to widescreen) -- but
-+     * WITHOUT the SAME +half_width_delta the shared, WS4-recentered
-+     * HuSprDispInit ortho (game/sprput.c) now adds when it maps that same
-+     * logical group position onto the actual (wider) screen. So the sprite
-+     * group itself renders correctly recentered, but this capture keeps
-+     * grabbing the OLD, un-recentered native rectangle -- increasingly
-+     * missing the group's actual (shifted) screen position as half_width_
-+     * delta grows with aspect (~104px at 16:9, ~250px+ at a 2:1 stream
-+     * aspect), so the page-label photo captures the wrong/partial region
-+     * while the group's OWN direct 2D sprites (if/where still visible
-+     * outside the page quad) stay correctly positioned -- exactly the
-+     * reported "part of the label tracks the star, part floats elsewhere"
-+     * symptom. Fixed by re-deriving the SAME pixel_x the ortho itself now
-+     * produces for logical X Lx: pixel_x = (640/576)*(Lx + half_width_
-+     * delta) -- the 640/576 ratio is unchanged (it is not a function of
-+     * scale_factor: both the logical canvas and the real render target
-+     * widen by the same scale_factor, so it cancels out of this ratio;
-+     * only the additive recenter survives), so this is the literal
-+     * original multiply with one term added inside the sum it already
-+     * multiplies -- 0.0f/no-op (byte-identical float ops) when disabled. */
++    /* fn_1_35AC runs every frame and grabs a screen-space snapshot of each
++     * save slot's own star/date/count sprite group into a texture pasted
++     * onto the "page label" 3D quad -- the same photograph-a-live-frame
++     * trick bootDll/opening.c's own page-turn effect uses. Its X argument
++     * converts the group's own logical X into native framebuffer pixels by
++     * the fixed 640/576 display-to-framebuffer ratio (unrelated to
++     * widescreen), but without the same recenter offset the shared ortho
++     * (game/sprput.c) now adds when it maps that same logical position onto
++     * the wider screen -- so the sprite group itself renders correctly
++     * recentered, but this capture kept grabbing the old, un-recentered
++     * rectangle, increasingly missing the group's actual screen position as
++     * the window widens: exactly a "part of the label tracks the star, part
++     * floats elsewhere" symptom. Fixed by adding the same recenter offset
++     * inside the sum before the ratio is applied -- the 640/576 ratio
++     * itself is unchanged (both the logical canvas and the render target
++     * widen by the same factor, so it cancels out of the ratio; only the
++     * additive recenter survives) -- a no-op (byte-identical float ops)
++     * when disabled. */
 @@ -1095 +1278 @@
 -        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1)),
 +        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1) + mp6_widescreen_half_width_delta()),
 @@ -2110 +2293,27 @@
 -    q = arg->unk_00->unk_120;
-+    /* MP6 native port -- docs/M6_MODESELECT.md. `F7E58_Arg`/`F7E58_P` (this
-+     * file's own hand-reconstructed "arg-chain views", see their definition
-+     * comment near the top of this file) hardcode BYTE OFFSETS (0x00/0x0C/
-+     * 0x120) reverse-engineered from the ORIGINAL 32-bit GameCube binary's
-+     * disassembly, where every pointer field is 4 bytes. This port compiles
-+     * HU3D_DRAW_OBJ/HU3D_MODEL (game/hu3d.h, completely unmodified) natively
-+     * at 64-bit pointer width, so any field declared AFTER an earlier
-+     * pointer field in either struct sits at a DIFFERENT real offset than
-+     * these hardcoded 32-bit-derived constants assume -- `unk_120` in
-+     * particular no longer lands on HU3D_MODEL's real `hookData` field.
-+     * Confirmed with direct evidence (a temporary diagnostic, since removed):
-+     * `arg`/`arg->unk_00` (the model pointer) were both sane, live arena
-+     * pointers, but the raw 8 bytes read from the hardcoded `unk_120` offset
-+     * were `0x3F80000000000000` -- the IEEE-754 bit pattern for 1.0f sitting
-+     * in the UPPER 32 bits, i.e. some unrelated float field very close to
-+     * (but not at) the real hookData offset (Hu3DModelCreate initializes
-+     * several fields to exactly 1.0f right around there: scale.x/y/z,
-+     * ambR/G/B) -- not a null/freed pointer, a plain struct-offset
-+     * miscalculation, then dereferenced as if it were one, reliably
-+     * reachable via a single, realistically-paced press dismissing file-
-+     * select's no-card warning (not an aggressive-input artifact). Fixed by
-+     * going through the REAL typed fields instead of the hardcoded offsets
-+     * -- `arg` always was a `HU3D_DRAW_OBJ*` (confirmed: matches `HU3D_MAT_
-+     * HOOK`'s own real typedef, game/hu3d.h), so the compiler computes the
-+     * correct offset for THIS build automatically, exactly as fn_1_8688's
-+     * own `mdl->hookData = &lbl_1_bss_18[i];` write already does. */
++    /* This file's own hand-reconstructed "arg-chain" views hardcode BYTE
++     * OFFSETS reverse-engineered from the original 32-bit binary, where
++     * every pointer field is 4 bytes. This port compiles the same structs
++     * natively at 64-bit pointer width, so any field declared after an
++     * earlier pointer field sits at a different real offset than these
++     * hardcoded constants assume -- confirmed by direct evidence (a
++     * temporary diagnostic, since removed): the model pointer was sane and
++     * live, but the hardcoded offset read back an unrelated float field's
++     * bit pattern instead of the intended one, reliably reached via a
++     * single realistically-paced press dismissing file-select's no-card
++     * warning. Fixed by going through the real typed fields instead of the
++     * hardcoded offsets, so the compiler computes the correct offset for
++     * this build automatically. */
 +    q = (F7E58_Q *)((HU3D_DRAW_OBJ *)arg)->model->hookData;
 @@ -2124 +2333,4 @@
 -    PSMTXConcat(invMtx, arg->unk_0c, tmpMtx);
-+    /* MP6 native port -- same 32-bit-offset issue as `q` above; `unk_0c`
-+     * (HU3D_DRAW_OBJ.matrix) sits after 2 pointer fields (model/object), so
-+     * it shifts too. Same fix: go through the real, compiler-computed field. */
++    /* Same 32-bit-offset issue as above; this field sits after 2 pointer
++     * fields, so it shifts too. Same fix: go through the real,
++     * compiler-computed field. */
 +    PSMTXConcat(invMtx, ((HU3D_DRAW_OBJ *)arg)->matrix, tmpMtx);
 @@ -2308 +2520 @@
 -/* ==================== module .bss (head, REVERSE definition order — exact sizes) ==================== */

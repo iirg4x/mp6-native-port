@@ -212,6 +212,17 @@ fps[corner=tl] {
     left: 12dp;
 }
 
+/* Android touch build only (set from platform/gx/ui/overlay.cpp, never on
+ * desktop): the in-game gear button owns the top-left corner on the touch
+ * overlay (platform/android/touch_pad.cpp -- centre m+gearR, radius 0.048h,
+ * so its lower edge sits ~13% of the window height down). Drop the counter
+ * below that so the two never overlap; vh tracks the gear's height-relative
+ * size across every screen resolution. left stays flush with the plain tl. */
+fps[corner=tl-gear] {
+    top: 15vh;
+    left: 12dp;
+}
+
 fps[corner=tr] {
     top: 12dp;
     right: 12dp;

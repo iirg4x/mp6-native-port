@@ -7,7 +7,7 @@
 #include "dolphin/mic.h" /* MICProbeEx/MICMount, see their own comment below */
 #include "mp6_shim_log.h"
 #include "mp6_boot.h"
-#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): headless has no window --
+#include "mp6_widescreen.h" /* Headless has no window --
                              * fixed-native stand-ins, see below */
 #include "host.h" /* mp6_host_monotonic_ns/mp6_host_wallclock (the OSGetTime
                    * timebase below) + mp6_host_rss_bytes (RSS watchdog +
@@ -378,7 +378,7 @@ int mp6_tick_advance(void)
      * init has already run in both build modes (see mp6_boot.h's own
      * comment on this function). No-op unless MP6_TEST_LOAD_DLL is set. */
     mp6_dll_bridge_selftest_check_env();
-    /* Savestate (docs/SAVESTATE.md): the one per-tick hook BOTH build modes
+    /* The one per-tick hook BOTH build modes
      * already call, so the scripted MP6_SAVESTATE_*_AT_TICK levers behave
      * identically headless (where the regression gate runs -- it needs a
      * byte-identical log) and windowed. The interactive hotkey is handled
@@ -484,7 +484,7 @@ u32 VIGetNextField(void)
 }
 
 /* -------------------------------------------------------------------
- * WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) -- fixed-native stand-ins.
+ * Fixed-native stand-ins for the widescreen accessors.
  *
  * --headless has no window, no SDL, and no widescreen setting at all
  * (mp6_widescreen_set_enabled() is only ever called from
@@ -632,7 +632,7 @@ static u8 *mp6_aram_buf(void)
     return g_fakeAram;
 }
 
-/* Savestate support (docs/SAVESTATE.md). This buffer is the one piece of
+/* This buffer is the one piece of
  * genuinely load-bearing GAME data that lives on the C runtime heap rather
  * than in the arena, so the savestate has to capture it as its own region
  * kind and hand it back afterwards.
@@ -1018,7 +1018,7 @@ s32 MICMount(s32 chan, s16 *buffer, s32 size, MICCallback detachCallback)
     return MIC_RESULT_NOCARD;
 }
 
-/* U-A3 (docs/UA3_DEVICE_PARITY.md): the ANDROID builds rename decomp's
+/* The ANDROID builds rename decomp's
  * PADControlMotor call sites to mp6_PADControlMotor (dolphin_compat.h,
  * #ifdef __ANDROID__ -- see the rationale there: motor commands must not
  * execute on HuPrc coroutine stacks because the Android path can reach a
@@ -1026,9 +1026,10 @@ s32 MICMount(s32 chan, s16 *buffer, s32 size, MICCallback detachCallback)
  * platform/gx/aurora_bridge.c as a defer-to-VIWaitForRetrace queue; THIS
  * definition is the HEADLESS android build's null backend, emitting the
  * byte-identical MP6_LOG_ONCE line the generated plain-name shim
- * (shims_generated.c PADControlMotor) emits on Windows -- the U-A1
- * 600-tick logdiff compares that exact "[SDK] PAD.PADControlMotor(...)"
- * line across platforms, so the name string must stay "PADControlMotor",
+ * (shims_generated.c PADControlMotor) emits on Windows -- the Windows-vs-
+ * Android 600-tick logdiff compares that exact
+ * "[SDK] PAD.PADControlMotor(...)" line across platforms, so the name
+ * string must stay "PADControlMotor",
  * not the renamed symbol. Guarded so Windows builds (no rename, generated
  * shim serves) preprocess this file byte-identically. */
 #if defined(__ANDROID__) && defined(MP6_HEADLESS_BUILD)

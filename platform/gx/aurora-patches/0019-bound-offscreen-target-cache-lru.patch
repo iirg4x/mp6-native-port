@@ -1,0 +1,60 @@
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -484,8 +484,23 @@
+ struct OffscreenCacheEntry {
+   webgpu::TextureWithSampler color;
+   webgpu::TextureWithSampler depth;
++  // [MP6] LRU stamp for the bounded eviction in get_offscreen_textures().
++  uint64_t lastUse = 0;
+ };
+ static absl::flat_hash_map<OffscreenCacheKey, OffscreenCacheEntry> g_offscreenCache;
++// [MP6] Bound g_offscreenCache. It is keyed by (width,height) and was only
++// ever cleared on surface resize (clear_caches) or shutdown, so any workload
++// that renders offscreen passes at several distinct sizes over a run --
++// notably cycling the Mods-page Shadow Quality, whose offscreen shadow pass
++// resolves at (size*scale*2)^2 -- accreted a full-resolution color + depth
++// target pair per distinct size for the entire process lifetime (hundreds of
++// MiB of GPU memory, a device-loss risk). Retain only the most-recently-used
++// MP6_OFFSCREEN_CACHE_MAX sizes; the least-recently-used entry is evicted (its
++// wgpu textures freed as their refcounts drop) before a new size is inserted.
++// No-op until more than that many DISTINCT sizes have actually been requested:
++// a steady quality setting uses exactly one size, and native/2x uses none.
++static constexpr size_t MP6_OFFSCREEN_CACHE_MAX = 4;
++static uint64_t g_offscreenClock = 0;
+ 
+ // Pooled destinations for the public resolve_pass API. Entries are recycled
+ // per frame slot: a slot is only re-acquired after the render worker has
+@@ -995,8 +1010,24 @@
+ static OffscreenCacheEntry get_offscreen_textures(uint32_t width, uint32_t height) {
+   OffscreenCacheKey key{width, height};
+   if (const auto it = g_offscreenCache.find(key); it != g_offscreenCache.end()) {
++    it->second.lastUse = ++g_offscreenClock; // [MP6] touch for LRU
+     return it->second;
+   }
++  // [MP6] Evict the least-recently-used size(s) before inserting a new one, so
++  // the cache never grows past MP6_OFFSCREEN_CACHE_MAX distinct sizes. The
++  // entry about to be created is not a candidate (it is inserted below and
++  // immediately stamped newest), and an offscreen entry is only in use inside
++  // its own begin/end bracket -- during which it is the most-recently-used --
++  // so eviction can never drop a target the current pass still needs.
++  while (g_offscreenCache.size() >= MP6_OFFSCREEN_CACHE_MAX) {
++    auto lru = g_offscreenCache.begin();
++    for (auto it = g_offscreenCache.begin(); it != g_offscreenCache.end(); ++it) {
++      if (it->second.lastUse < lru->second.lastUse) {
++        lru = it;
++      }
++    }
++    g_offscreenCache.erase(lru);
++  }
+   const auto colorFormat = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+   const wgpu::Extent3D size{width, height, 1};
+   const wgpu::TextureDescriptor colorDesc{
+@@ -1038,6 +1069,7 @@
+   OffscreenCacheEntry entry{
+       .color = std::move(color),
+       .depth = std::move(depth),
++      .lastUse = ++g_offscreenClock, // [MP6] newest
+   };
+   auto [insertIt, _] = g_offscreenCache.emplace(key, std::move(entry));
+   return insertIt->second;

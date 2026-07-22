@@ -1,0 +1,262 @@
+diff --git a/cmake/aurora_gx.cmake b/cmake/aurora_gx.cmake
+index a473bd0..98b5002 100644
+--- a/cmake/aurora_gx.cmake
++++ b/cmake/aurora_gx.cmake
+@@ -1,6 +1,7 @@
+ add_library(aurora_gx STATIC
+         lib/gfx/clear.cpp
+         lib/gfx/common.cpp
++        lib/gfx/debug_readback.cpp
+         lib/gfx/depth_peek.cpp
+         lib/gfx/pipeline_cache.cpp
+         lib/gfx/render_worker.cpp
+diff --git a/lib/gfx/debug_readback.cpp b/lib/gfx/debug_readback.cpp
+new file mode 100644
+index 0000000..c469b49
+--- /dev/null
++++ b/lib/gfx/debug_readback.cpp
+@@ -0,0 +1,143 @@
++// MP6 "Shadow Dump" debug lever (aurora-patches/0016): a host-callable,
++// C-linkage GPU->CPU readback of a resolved EFB/offscreen copy texture,
++// keyed by its copy-dest pointer -- the SAME aurora::gx::g_gxState.
++// copyTextures map a later GXInitTexObj bind of that same pointer itself
++// consults (see copy_tex(), lib/dolphin/gx/GXFrameBuffer.cpp: the CPU bytes
++// at a copy-dest pointer are never written on this renderer, the resolved
++// data lives GPU-side only, keyed by that pointer's identity).
++//
++// Deliberately additive and self-contained, in the shape the retired
++// aurora-patches/0015 used in lib/gx/fifo.cpp: no public header changes,
++// no new GX_AURORA_* FIFO subcommand (unlike 0014's GXSetTexCopyMipGen,
++// this is a pure post-hoc query -- it doesn't affect GX state or drawing,
++// so it doesn't need FIFO ordering of its own; the render-worker enqueue
++// below already orders it after any already-enqueued frame work). Debug/
++// tooling use only -- does nothing and costs nothing unless called, and
++// when called it deliberately stalls the calling thread until the GPU
++// readback completes (fine for a debug tool, never acceptable on a hot
++// path).
++#include "../gx/gx.hpp"
++#include "../webgpu/gpu.hpp"
++#include "png_io.hpp"
++#include "render_worker.hpp"
++
++#include <cstdint>
++#include <vector>
++
++extern "C" {
++
++// Looks up the most recently resolved copy texture for copy-dest pointer
++// `dest`, reads mip level 0 back from the GPU, and writes it to `path` as an
++// 8-bit grayscale PNG. Every GX_CTF_R8/GX_TF_I8-style copy-conversion
++// pipeline in tex_copy_conv.cpp replicates its resolved intensity value into
++// R=G=B=A of an RGBA8Unorm texture (see FragR8/FragI8 et al) -- every copy
++// resolve texture aurora creates is RGBA8Unorm regardless of the GX copy
++// format (see to_wgpu()'s default case) -- so the R channel alone IS the
++// intensity value; this reads it back and de-interleaves straight into a
++// tight one-byte-per-texel grayscale image, the map's real dimensions.
++//
++// Returns true on success. False if: `dest` has no resolved copy yet, the
++// GPU buffer map times out or fails, or the PNG write fails. Blocking:
++// enqueues the work onto aurora's render worker (so it runs strictly after
++// any frame work already enqueued for that dest's copy, and safely on the
++// thread that owns the GPU queue/device) and synchronously waits for it to
++// finish. Never call this on a hot path.
++bool aurora_gx_debug_dump_copy_png(const void* dest, const char* path) {
++  bool ok = false;
++
++  aurora::gfx::render_worker::enqueue_work([&]() {
++    using aurora::gx::g_gxState;
++    const auto it = g_gxState.copyTextures.find(dest);
++    if (it == g_gxState.copyTextures.end() || !it->second.handle) {
++      return;
++    }
++    const auto& ref = *it->second.handle;
++    const uint32_t width = ref.size.width;
++    const uint32_t height = ref.size.height;
++    if (width == 0 || height == 0) {
++      return;
++    }
++
++    using aurora::webgpu::g_device;
++    using aurora::webgpu::g_instance;
++    using aurora::webgpu::g_queue;
++
++    // Every conv/render copy texture is RGBA8Unorm (see to_wgpu()'s default
++    // case in texture_convert.hpp) regardless of the GX copy format.
++    constexpr uint32_t bytesPerPixel = 4;
++    const uint32_t unpaddedBytesPerRow = width * bytesPerPixel;
++    // wgpu requires CopyTextureToBuffer's bytesPerRow to be a multiple of 256.
++    const uint32_t bytesPerRow = (unpaddedBytesPerRow + 255u) & ~255u;
++    const uint64_t bufferSize = static_cast<uint64_t>(bytesPerRow) * height;
++
++    const wgpu::BufferDescriptor readbackDescriptor{
++        .label = "Shadow Dump Readback Buffer",
++        .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst,
++        .size = bufferSize,
++    };
++    wgpu::Buffer readback = g_device.CreateBuffer(&readbackDescriptor);
++    if (!readback) {
++      return;
++    }
++
++    // Requires CopySrc on the resolved copy texture -- see
++    // gfx::new_conv_texture/new_render_texture (lib/gfx/texture.cpp), which
++    // this same aurora-patches/0016 also adds (a pure capability addition;
++    // aurora itself never reads one of these back on its own).
++    wgpu::CommandEncoder encoder = g_device.CreateCommandEncoder();
++    const wgpu::TexelCopyTextureInfo copySrc{
++        .texture = ref.texture,
++        .mipLevel = 0, // the full-resolution level -- generated mip levels
++                       // 1..N (aurora-patches/0014) are never what we want here
++    };
++    const wgpu::TexelCopyBufferInfo copyDst{
++        .layout =
++            wgpu::TexelCopyBufferLayout{
++                .offset = 0,
++                .bytesPerRow = bytesPerRow,
++                .rowsPerImage = height,
++            },
++        .buffer = readback,
++    };
++    const wgpu::Extent3D copySize{width, height, 1};
++    encoder.CopyTextureToBuffer(&copySrc, &copyDst, &copySize);
++    wgpu::CommandBuffer commands = encoder.Finish();
++    g_queue.Submit(1, &commands);
++
++    // Synchronous map wait -- same WaitAnyOnly + Instance::WaitAny idiom
++    // lib/webgpu/gpu.cpp uses for RequestAdapter/RequestDevice. Fine here
++    // (debug tool, already on the render worker thread); never do this on
++    // any per-frame path.
++    wgpu::MapAsyncStatus mapStatus = wgpu::MapAsyncStatus::Error;
++    const auto future = readback.MapAsync(
++        wgpu::MapMode::Read, 0, bufferSize, wgpu::CallbackMode::WaitAnyOnly,
++        [&](wgpu::MapAsyncStatus status, wgpu::StringView) { mapStatus = status; });
++    const auto waitStatus = g_instance.WaitAny(future, 5'000'000'000);
++    if (waitStatus != wgpu::WaitStatus::Success || mapStatus != wgpu::MapAsyncStatus::Success) {
++      return;
++    }
++
++    const auto* mapped = static_cast<const uint8_t*>(readback.GetConstMappedRange(0, bufferSize));
++    if (mapped == nullptr) {
++      readback.Unmap();
++      return;
++    }
++
++    std::vector<uint8_t> gray(static_cast<size_t>(width) * static_cast<size_t>(height));
++    for (uint32_t y = 0; y < height; ++y) {
++      const uint8_t* rowSrc = mapped + static_cast<uint64_t>(y) * bytesPerRow;
++      uint8_t* rowDst = gray.data() + static_cast<size_t>(y) * width;
++      for (uint32_t x = 0; x < width; ++x) {
++        rowDst[x] = rowSrc[x * bytesPerPixel];
++      }
++    }
++    readback.Unmap();
++
++    ok = aurora::gfx::png::write_png_gray8(path, gray.data(), width, height);
++  });
++  aurora::gfx::render_worker::synchronize();
++
++  return ok;
++}
++
++} // extern "C"
+diff --git a/lib/gfx/png_io.cpp b/lib/gfx/png_io.cpp
+index 0aa8703..97f20e2 100644
+--- a/lib/gfx/png_io.cpp
++++ b/lib/gfx/png_io.cpp
+@@ -1,6 +1,7 @@
+ #include "png_io.hpp"
+ 
+ #include <cstring>
++#include <fstream>
+ 
+ #include "dds_io.hpp"
+ #include "png.h"
+@@ -107,4 +108,71 @@ load_png_file(const std::filesystem::path& path) noexcept {
+   }
+   return parse_png_bytes(*bytes);
+ }
++
++struct PngWriteStructs {
++  png_structp pStruct = nullptr;
++  png_infop pInfo = nullptr;
++
++  ~PngWriteStructs() {
++    png_destroy_write_struct(&pStruct, &pInfo);
++  }
++};
++
++static void writePngData(png_structp png, png_bytep data, const size_t length) {
++  auto* stream = static_cast<std::ofstream*>(png_get_io_ptr(png));
++  stream->write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(length));
++}
++
++static void flushPngData(png_structp png) {
++  auto* stream = static_cast<std::ofstream*>(png_get_io_ptr(png));
++  stream->flush();
++}
++
++bool write_png_gray8(const std::filesystem::path& path, const uint8_t* data, uint32_t width,
++                      uint32_t height) noexcept {
++  if (data == nullptr || width == 0 || height == 0) {
++    return false;
++  }
++
++  std::ofstream out(path, std::ios::binary);
++  if (!out) {
++    Log.error("write_png_gray8: failed to open {}", fs_path_to_string(path));
++    return false;
++  }
++
++  PngWriteStructs structs{};
++  structs.pStruct = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
++  if (!structs.pStruct) {
++    Log.error("png_create_write_struct failed");
++    return false;
++  }
++  structs.pInfo = png_create_info_struct(structs.pStruct);
++  if (!structs.pInfo) {
++    Log.error("png_create_info_struct failed");
++    return false;
++  }
++
++  // I'm scared of putting any locals after that setjmp (see parse_png_bytes above).
++  std::vector<png_bytep> rowPointers;
++  uint32_t i;
++
++  if (setjmp(png_jmpbuf(structs.pStruct))) {
++    Log.error("libpng encountered an error while writing {}", fs_path_to_string(path));
++    return false;
++  }
++
++  png_set_write_fn(structs.pStruct, &out, &writePngData, &flushPngData);
++  png_set_IHDR(structs.pStruct, structs.pInfo, width, height, /*bit_depth=*/8, PNG_COLOR_TYPE_GRAY,
++               PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
++  png_write_info(structs.pStruct, structs.pInfo);
++
++  rowPointers.resize(height);
++  for (i = 0; i < height; i++) {
++    rowPointers[i] = const_cast<png_bytep>(data + static_cast<size_t>(i) * width);
++  }
++  png_write_image(structs.pStruct, rowPointers.data());
++  png_write_end(structs.pStruct, nullptr);
++
++  return static_cast<bool>(out);
++}
+ }
+diff --git a/lib/gfx/png_io.hpp b/lib/gfx/png_io.hpp
+index 2a31443..aea2047 100644
+--- a/lib/gfx/png_io.hpp
++++ b/lib/gfx/png_io.hpp
+@@ -9,4 +9,12 @@
+ namespace aurora::gfx::png {
+ std::optional<ConvertedTexture> parse_png_bytes(ArrayRef<uint8_t> bytes) noexcept;
+ std::optional<ConvertedTexture> load_png_file(const std::filesystem::path& path) noexcept;
++
++// Writes `data` (tightly packed 8-bit grayscale, width*height bytes, row-
++// major, no row padding) to `path` as an 8-bit grayscale (PNG_COLOR_TYPE_GRAY)
++// PNG. Debug/tooling use only (MP6 shadow-map dump, aurora-patches/0016) --
++// not on any hot path. Returns false on any failure (bad args, file open,
++// libpng error); never throws.
++bool write_png_gray8(const std::filesystem::path& path, const uint8_t* data, uint32_t width,
++                      uint32_t height) noexcept;
+ }

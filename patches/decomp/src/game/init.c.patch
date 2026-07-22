@@ -1,15 +1,14 @@
 --- a/src/game/init.c
 +++ b/src/game/init.c
 @@ -7,0 +8 @@
-+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -43,0 +45,48 @@
-+/* MP6 native port -- WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md). The render-
-+ * target-widening crux: this is what makes the game's GX render target
-+ * genuinely wider than 640 (not a post-hoc stretch of a 640-wide image)
-+ * when Widescreen is on, generalizing what the reference ROM hack's
-+ * injected boot-time code most likely does to the live RenderMode struct
-+ * (WS_REFERENCE_STUDY.md section 3.2) to an arbitrary, live-window-
-+ * derived width instead of a hardcoded 848.
++/* The render-target-widening crux: this is what makes the game's GX
++ * render target genuinely wider than 640 (not a post-hoc stretch of a
++ * 640-wide image) when widescreen is on, generalizing what the reference
++ * widescreen hack's injected boot-time code most likely does to the live
++ * RenderMode struct to an arbitrary, live-window-derived width instead of
++ * a hardcoded fixed one.
 + *
 + * RenderMode->fbWidth is a plain runtime struct field several call sites
 + * already read dynamically (Hu3DCameraCreate's viewportW/scissorW,
@@ -17,10 +16,8 @@
 + * this function) -- overwriting it here and re-running VIConfigure() is
 + * enough to widen every one of those "for free", with no further decomp
 + * edit needed at those sites at all. VIConfigure() matters because
-+ * Aurora's own GX emulation derives its "logical" framebuffer size (the
-+ * denominator AuroraSetViewportPolicy's FIT/STRETCH math scales against,
-+ * aurora lib/gx/gx.cpp map_logical_viewport -> vi::configured_fb_size())
-+ * from whatever GXRenderModeObj was last handed to VIConfigure, not from
++ * Aurora's own GX emulation derives its "logical" framebuffer size from
++ * whatever GXRenderModeObj was last handed to VIConfigure, not from
 + * RenderMode itself -- so the pointer write alone isn't enough; this
 + * function's whole reason to exist is doing both together, atomically,
 + * from one call.
@@ -30,13 +27,12 @@
 + * aurora_bridge.c's VIWaitForRetrace does, to track a live interactive
 + * resize) is cheap, and it is a provable no-op in the --headless build
 + * (mp6_widescreen_render_width() always returns 640 there, already
-+ * matching GXNtsc480IntDf's compiled-in fbWidth -- shim/include/
-+ * mp6_widescreen.h's own header comment has the full contract). Guarded
-+ * by a RUNTIME flag throughout (mp6_widescreen_render_width() itself
-+ * returns the native 640 unless Widescreen is actually on), never a
-+ * compile-time #ifdef -- this function and its one call site below
-+ * compile into every build, and are a byte-for-byte no-op whenever
-+ * Widescreen is off (the default). */
++ * matching GXNtsc480IntDf's compiled-in fbWidth). Guarded by a RUNTIME
++ * flag throughout (mp6_widescreen_render_width() itself returns the
++ * native 640 unless widescreen is actually on), never a compile-time
++ * #ifdef -- this function and its one call site below compile into every
++ * build, and are a byte-for-byte no-op whenever widescreen is off (the
++ * default). */
 +void mp6_widescreen_apply_render_width(int newFbWidth)
 +{
 +    static GXRenderModeObj mp6WideRenderMode;
@@ -45,18 +41,17 @@
 +    }
 +    mp6WideRenderMode = *RenderMode;
 +    mp6WideRenderMode.fbWidth = (u16)newFbWidth;
-+    /* efbHeight/xfbHeight deliberately untouched -- height never changes
-+     * (WS2 spec: "height stays 480"); only the width widens. */
++    /* efbHeight/xfbHeight deliberately untouched -- height never changes,
++     * per spec; only the width widens. */
 +    RenderMode = &mp6WideRenderMode;
 +    VIConfigure(RenderMode);
 +}
 +
 @@ -54,0 +104,8 @@
-+    /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md): establish the wide RenderMode
-+     * as early as physically possible -- before InitGX() (a few lines
-+     * below) ever reads RenderMode->fbWidth for the boot-time
-+     * GXSetViewport/GXSetScissor calls -- so there is no even-one-frame
-+     * native-4:3 transient on a Widescreen boot. The per-tick refresh
-+     * (aurora_bridge.c's VIWaitForRetrace) covers every frame after this
-+     * one, including a live interactive resize. */
++    /* Establishes the wide RenderMode as early as physically possible --
++     * before InitGX() (a few lines below) ever reads RenderMode->fbWidth
++     * for the boot-time GXSetViewport/GXSetScissor calls -- so there is no
++     * even-one-frame native-4:3 transient on a widescreen boot. The
++     * per-tick refresh (aurora_bridge.c's VIWaitForRetrace) covers every
++     * frame after this one, including a live interactive resize. */
 +    mp6_widescreen_apply_render_width(mp6_widescreen_render_width());

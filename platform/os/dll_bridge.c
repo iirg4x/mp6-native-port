@@ -92,7 +92,7 @@ const VoidFunc mdselDll_dtors[] = { 0 };
  * src/REL/mdpartydll/{mdparty.c,stage.c} and bound for real, exactly like
  * the other overlays; same -D rename scheme (tools/build.py REL_SOURCES)
  * for the shared _prolog/_epilog/_ctors/_dtors/ObjectSetup names. See
- * docs/M14_MDPARTY_INTEGRATION.md. */
+ * this port's own board_stub.c placeholder. */
 extern int mdpartyDll_prolog(void);
 extern void mdpartyDll_epilog(void);
 const VoidFunc mdpartyDll_ctors[] = { 0 };

@@ -4,8 +4,8 @@
 +#include "be.h"
 @@ -330,0 +332,3 @@
 +    /* dirP's own directory/index table and the per-file rawLen/decodeType
-+     * header are both big-endian-packed (docs/M2A_ENDIANNESS.md) -- read via
-+     * be32() rather than a native u32 dereference. */
++     * header are both big-endian-packed -- read via be32() rather than a
++     * native u32 dereference. */
 @@ -333 +337 @@
 -    readStat->fileDataP = PTR_OFFSET(readStat->dirP, *ptr);
 +    readStat->fileDataP = PTR_OFFSET(readStat->dirP, be32(ptr));

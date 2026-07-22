@@ -1,218 +1,149 @@
-/* MP6 native port -- WS12 (docs/WS11_EXTRUDE_BACKDROPS.md): the shared
- * backdrop-extrude helpers. See shim/include/mp6_widescreen.h for the
- * public contract; this is the real implementation, hoisted out of
- * mdpartydll/mdparty.c's WS11-committed, file-local `mp6_ws11_extrude_
- * model` static so every widescreen-extruded scene (Party Mode, title,
- * file-select, mode-select, opening) shares ONE definition instead of
- * duplicating this body once per REL patch (bloating -U0 decomp source
- * exposure). Lives here, not in the decomp patch tree, because it is
- * genuinely port-original logic with no decomp counterpart to diff
- * against -- and living in platform/hsf/ (alongside hsf_load_native.c,
- * the real HSF deserializer this function reads the OUTPUT of) means it
- * can #include "game/hu3d.h" directly, exactly like that file already
- * does, to reach Hu3DData[]/HSF_DATA/Hu3DModelPosGet/ScaleGet/Set for
- * real -- compiled with COMMON_FLAGS (tools/build.py's
- * PLATFORM_SOURCES_COMMON) in BOTH build modes, same as hsf_load_native.c,
- * since the REL callers that invoke this are shared between them.
+/* MP6 native port -- the shared backdrop-extrude helpers. See
+ * shim/include/mp6_widescreen.h for the public contract; this is the real
+ * implementation, hoisted out of an earlier file-local static in
+ * mdpartydll/mdparty.c so every widescreen-extruded scene (Party Mode,
+ * title, file-select, mode-select, opening) shares ONE definition. Lives
+ * here, not in the decomp patch tree, because it is genuinely port-original
+ * logic with no decomp counterpart to diff against -- and living in
+ * platform/hsf/ (alongside hsf_load_native.c, the real HSF deserializer
+ * this reads the OUTPUT of) means it can #include "game/hu3d.h" directly
+ * to reach Hu3DData[]/HSF_DATA/Hu3DModelPosGet/ScaleGet/Set for real.
  *
  * ==========================================================================
- * WS14 (docs/WS14_DYNAMIC_EXTRUDE.md): LIVE re-derivation on window resize
+ * LIVE re-derivation on window resize
  * ==========================================================================
- * WS11-13 called every function below EXACTLY ONCE per scene, at setup --
- * this file's own comment used to say so explicitly ("scene setup, never
- * per-frame"). That was fine for a FIXED window size (the mission those
- * lanes verified), but on-device testing at a LIVE, resizable window found
- * two defects: the 3D backdrops (this file) and the per-scene 3D cameras
- * (mdparty.c/mdsel.c/boot.c/filesel.c) stay frozen at whatever
- * mp6_widescreen_scale_factor() happened to read at the moment the scene
- * loaded -- resizing the window afterward re-fits the 2D layer (game/
- * sprput.c's HuSprDispInit already re-derives every frame, WS2) but NOT the
- * 3D content, because nothing ever re-applies it.
+ * Every function below used to apply EXACTLY ONCE per scene, at setup --
+ * fine for a fixed window size, but a live resizable window found the 3D
+ * backdrops (this file) and per-scene 3D cameras stay frozen at whatever
+ * mp6_widescreen_scale_factor() read when the scene loaded, unlike the 2D
+ * layer (game/sprput.c's HuSprDispInit), which already re-derives every
+ * frame.
  *
  * The fix is NOT "call the existing functions again every frame" -- each
  * one reads the model's CURRENT pos/scale and multiplies by k, so a second
- * call would compound (grow from the ALREADY-grown state, exploding over
- * time). Instead: every call below now REGISTERS the model (or camera, or
- * touched vertex/UV buffer) into a small, persistent, port-side registry
+ * call would compound. Instead: every call below REGISTERS the model (or
+ * camera, or touched vertex/UV buffer) into a small, persistent registry
  * that caches its NATIVE (pre-extrude) baseline ONCE -- the expensive part
- * (the recursive bbox walk, mp6_ws_accum_bbox_r/mp6_ws_model_center, or the
- * REPEAT mechanism's own hierarchy walk) still runs only once per model
- * instance, exactly as before. A new per-frame entry point,
+ * (the recursive bbox walk, or the REPEAT mechanism's own hierarchy walk)
+ * still runs only once per model instance. A per-frame entry point,
  * mp6_widescreen_reapply(), walks every registry and re-derives EVERY
  * registered model/buffer/camera from its cached native baseline using the
- * CURRENT, live scale_factor() -- cheap arithmetic, no re-walk. Hooked from
- * platform/gx/aurora_bridge.c's VIWaitForRetrace (the same per-tick site
- * WS2's own render-width refresh already uses), so a continuous drag-resize
- * converges every single frame, not just at discrete scene-(re)load events.
+ * CURRENT scale_factor() -- cheap arithmetic, no re-walk. Hooked from
+ * platform/gx/aurora_bridge.c's VIWaitForRetrace, so a continuous
+ * drag-resize converges every frame.
  *
- * Idempotency / model-ID-reuse safety: HU3D_MODELID slots ARE reused across
- * a play session (game/hsfman.c's Hu3DModelCreate scans for the first slot
- * with a NULL hsf; Hu3DModelKill eventually clears hsf back to NULL) -- so a
+ * Model-ID-reuse safety: HU3D_MODELID slots ARE reused across a play
+ * session (Hu3DModelCreate scans for the first NULL-hsf slot), so a
  * registry entry is only trusted by the per-frame walker while
  * Hu3DData[modelId].hsf still equals the EXACT hsf pointer captured at
- * registration time (the same "is this genuinely still the model I think it
- * is" identity check used for the camera registry below via HU3D_CAMERA's
- * own fov==-1 kill sentinel, game/hsfman.c's Hu3DCameraKill). A dead/reused
- * slot is silently skipped by the walker (never resurrected, never
- * corrupted) and its registry slot is recycled by the next call that needs
- * a fresh one. The model registry additionally guards against being called
- * MORE than once on the very same live model instance (not something any
- * current call site does, but cheap to make safe): the NATIVE baseline is
- * only (re-)captured via Hu3DModelPosGet/ScaleGet the FIRST time a given
- * (modelId, hsf) pairing is seen; a repeat call on the SAME instance just
- * refreshes center/mode and re-applies from the ALREADY-cached native
- * values, rather than re-reading (by then already-extruded) live pos/scale
- * as if it were native.
+ * registration -- a dead/reused slot is silently skipped and its registry
+ * slot recycled by the next call that needs one. A repeat registration on
+ * the SAME live instance just refreshes center/mode and re-applies from
+ * the already-cached native values, never re-reading (by then
+ * already-extruded) live pos/scale as if it were native.
  *
- * Default-off contract, preserved exactly: every registration path is
- * gated on mp6_widescreen_enabled() (the session-constant feature flag),
- * NOT on scale_factor() > 1.0f -- gating on the CURRENT scale factor would
- * incorrectly skip registering a model/camera whose scene happens to load
- * while the window is exactly native-shaped (e.g. Widescreen turned on but
- * the window's initial size is the default 1024x768 = 4:3), which would
- * then never track a LATER resize-up at all -- the exact bug this lane
- * exists to fix. When the feature is off, mp6_widescreen_enabled() is
- * false for the entire process lifetime, so every registry stays
+ * Default-off contract: every registration path is gated on
+ * mp6_widescreen_enabled(), NOT on scale_factor() > 1.0f -- gating on the
+ * current scale would skip registering a model whose scene loads while
+ * the window happens to be native-shaped, which would then never track a
+ * later resize-up. When the feature is off every registry stays
  * permanently empty and mp6_widescreen_reapply() is a for-loop over zero
- * entries, every frame -- zero registry churn, matching every other
- * mp6_widescreen_* accessor's byte-identical-when-disabled contract.
+ * entries, matching every accessor's byte-identical-when-disabled
+ * contract.
  *
  * ==========================================================================
- * THE MECHANISM (WS11's original derivation)
+ * THE MECHANISM
  * ==========================================================================
  * game/hsfman.c's Hu3DExec builds world = Translate(pos) * Scale(scale) *
- * localVertex for every model -- scale lands in LOCAL space, BEFORE pos's
- * translation. A plain Hu3DModelScaleSet therefore always scales a model
- * about its own LOCAL (0,0,0), never about wherever its own geometry is
- * actually centered. That "just works" (is visually a no-op difference)
- * for a model whose authored geometry happens to be symmetric around
- * local origin -- but WS10 found mdpartydll's "pillar" backdrop piece is
- * NOT: its real bbox (mp6_gxarray/HSF diagnostic dump) is
- * min=(-800,0,-800) max=(800,1000,-700), a local-space visual center of
- * (0,500,-750), a long way from (0,0,0). Plain-scaling that model grows
- * its geometry AWAY from local (0,0,0) instead of growing in place around
- * its own middle, which is exactly what revealed a mismatched flat-white
- * patch instead of more of its own artwork
- * (build/ws10_scaleattempt_217_partymode_flatwhite_FAILED.png).
+ * localVertex -- scale lands in LOCAL space, BEFORE pos's translation, so a
+ * plain Hu3DModelScaleSet always scales about local (0,0,0), never about
+ * wherever the geometry is actually centered. That's a visual no-op for
+ * symmetric geometry, but mdpartydll's "pillar" backdrop has a local-space
+ * visual center of (0,500,-750), nowhere near origin -- plain-scaling it
+ * grows the geometry away from its own middle, which is exactly what an
+ * early attempt revealed as a mismatched flat-white patch.
  *
  * This computes each model's own real visual center and folds a
  * compensating position offset into the same Hu3DModelPosSet/ScaleSet call
- * pair every other widescreen site already uses, so the model's own center
- * point stays exactly where it was placed while the extent around it grows
- * by scale_factor():
+ * pair every widescreen site uses, so the center stays put while the
+ * extent grows by scale_factor():
  *   newPos   = oldPos + (1 - k) * scale * bboxCenter
  *   newScale = oldScale * k
- * WS14 re-derives this every frame from a CACHED (oldPos, oldScale) --
- * i.e. oldPos/oldScale above are always the model's NATIVE values, never
- * its already-extruded ones, so repeated re-application never compounds.
+ * The per-frame reapply re-derives this from a CACHED (oldPos, oldScale)
+ * -- always the model's NATIVE values -- so repeated re-application never
+ * compounds.
  *
  * ==========================================================================
- * WS12 FIX: the center must be computed through each sub-object's OWN
- * base transform, not from a flat min/max union
+ * The center must be computed through each sub-object's OWN base
+ * transform, not from a flat min/max union
  * ==========================================================================
- * WS11's original bbox pass unioned every HSF_OBJ_MESH sub-object's raw
- * `mesh.min`/`mesh.max` DIRECTLY, without ever composing that same
- * object's own `mesh.base.pos/rot/scale`. That is only correct if every
- * sub-object's base transform is identity -- true for Party Mode's own
- * pieces (confirmed: "pillar"/"yuka" both basePos=(0,0,0); the ring's
- * "panel1"/"panel2" carry a mere basePos.z=-5, invisible against a scene
- * with thousands of units of depth) but NOT a general property of HSF
- * data. Confirmed wrong in general by direct investigation of game/
- * hsfdraw.c's own reference bbox walker (`PGObjCalc`, used by
- * Hu3DModelObjMtxGet/Hu3DModelObjPosGet): it seeds the traversal from the
- * model's own top-level transform, then for EVERY visited object
- * (including `hsf->root` itself -- no exemption for root/childless nodes)
- * concatenates that object's own `Trans(base.pos)*Rot(base.rot)*
- * Scale(base.scale)` onto the accumulated parent matrix BEFORE reading
- * `mesh.min`/`mesh.max`, i.e. `min`/`max` are defined in the object's own
- * PRE-base-transform local frame, not already root/model-relative.
+ * An early version of the bbox pass unioned every sub-object's raw
+ * `mesh.min`/`mesh.max` directly, without composing that object's own
+ * `mesh.base.pos/rot/scale` -- only correct if every sub-object's base
+ * transform is identity, which is NOT a general property of HSF data.
+ * game/hsfdraw.c's own reference bbox walker (`PGObjCalc`) instead
+ * concatenates each visited object's own base transform onto the
+ * accumulated parent matrix BEFORE reading `mesh.min`/`mesh.max` -- i.e.
+ * those bounds are defined in the object's PRE-base-transform local frame,
+ * not already model-relative. This matters for real: bootDll/boot.c's
+ * title screen has a single-mesh model with `base.pos=(0,-104,25)`, a
+ * Y-offset larger than its own Y-extent -- naively unioning raw min/max
+ * would miscompute its center by that same offset, reproducing the exact
+ * "grows away from its own middle" defect this mechanism exists to fix,
+ * inside the fix itself.
  *
- * This matters for real: bootDll/boot.c's title screen has a single-mesh-
- * object model ("gridzzz", `TitleMdlId[0]`) with `base.pos=(0,-104,25)` --
- * a Y-offset larger than the object's own Y-extent (+-57.7). Naively
- * unioning its raw min/max (ignoring that offset) would have miscomputed
- * its center by that same (0,-104,25) amount, reproducing the exact class
- * of "grows away from its own middle" defect this whole mechanism exists
- * to fix -- inside the fix itself. filesel.c's backdrop ("bg_hiru"/
- * "bg_sora"/"bg_yoru"/"grid1"/"hikari") and mdsel.c's sky/cloud/star
- * model (all with real, non-tiny, non-uniform basePos, several also with
- * non-zero baseRot) have the same property.
- *
- * Fixed by `mp6_ws_accum_bbox_r()` below: a small recursive walker that
- * mirrors `PGObjCalc`'s own transform composition EXACTLY (`mtxRot` +
- * `PSMTXScale` + `PSMTXConcat` + `mtxTransCat`, then parent-concat, the
- * same four calls in the same order PGObjCalc itself uses) starting from
- * `hsf->root` with an IDENTITY parent matrix (not the model's own
- * top-level pos/rot/scale, since the model's own top-level transform is
- * what THIS mechanism is adjusting -- the goal is the bbox center
- * relative to the model's own origin, i.e. in the same frame
- * Hu3DModelPosGet/ScaleGet already read/write). Every HSF_OBJ_MESH leaf's
- * own min/max corners are transformed by ITS OWN fully-accumulated
- * (root-to-leaf) matrix before being merged into the running bbox --
- * exact for any depth of hierarchy and any per-object rotation/scale, not
- * an approximation. Re-verified against Party Mode (whose objects happen
- * to have near-identity base transforms): the computed center is
- * unchanged from WS11's own flat-union result to within the panel1/2
- * z=-5 discrepancy already noted above (i.e. this fix is a strict
- * superset of correctness, not a behavior change for the already-proven
- * case) -- see docs/WS11_EXTRUDE_BACKDROPS.md's STEP1 section for the
- * re-verification capture. WS14 calls this exactly once per model
- * instance too (at first registration) -- the per-frame reapply reuses
- * the CACHED center, never re-walks.
+ * Fixed by `mp6_ws_accum_bbox_r()` below: a recursive walker that mirrors
+ * `PGObjCalc`'s own transform composition exactly, starting from
+ * `hsf->root` with an IDENTITY parent matrix (the goal is the bbox center
+ * relative to the model's own origin, the same frame Hu3DModelPosGet/
+ * ScaleGet read/write). Every mesh leaf's own min/max corners are
+ * transformed by its own fully-accumulated matrix before being merged into
+ * the running bbox -- exact for any depth of hierarchy and rotation, not
+ * an approximation. Re-verified against Party Mode's own near-identity
+ * base transforms: the computed center is unchanged from the flat-union
+ * result there, so this is a strict superset of correctness. This walk
+ * runs once per model instance (at first registration); the per-frame
+ * reapply reuses the cached center, never re-walks.
  *
  * ==========================================================================
  * TEXTURE-AWARE CONTRACT (CLAMP here; REPEAT is the OTHER mechanism, below)
  * ==========================================================================
  * This whole-piece scale-about-center mechanism is for a CLAMP (non-
- * tiling, wrapS=wrapT=GX_CLAMP=0) backdrop -- it enlarges the art, which
- * softens a little at ultra-wide aspects. That is an ACCEPTED tradeoff
- * (the user's own explicit texture-aware directive; Party Mode is
- * all-CLAMP and was confirmed as the target look). A REPEAT (tiling)
- * backdrop needs mp6_widescreen_extrude_model_repeat() below instead.
+ * tiling) backdrop -- it enlarges the art, which softens a little at
+ * ultra-wide aspects, an accepted tradeoff. A REPEAT (tiling) backdrop
+ * needs mp6_widescreen_extrude_model_repeat() below instead.
  *
  * ==========================================================================
  * ROTATION CAVEAT (of the MODEL's own top-level transform, not sub-objects)
  * ==========================================================================
  * The final Hu3DModelPosSet/ScaleSet step assumes the MODEL's own
- * top-level transform is unrotated: world = pos + scale*local, with no
- * rotation term, so `center`'s world-space displacement under a scale
- * change is exactly `(1-k)*scale*center` with no basis change (sub-object
- * ROTATIONS, handled by the hierarchical bbox walk above, are a different
- * and already-handled concern). A model with a rotated TOP-LEVEL
- * transform would need that offset rotated into world space first
- * (Hu3DExec actually builds Translate*Rotate*Scale*local at the model
- * level too -- this function does not read/apply Hu3DModelRotGet at
- * all). Every call site this project has needed so far was confirmed
- * unrotated at the TOP level by direct evidence (either a
- * `Hu3DModelRotSet(id, 0,0,0)` at creation, or simply no rotation setter
- * ever called on that model, leaving Hu3DModelCreate's own default
- * rot=(0,0,0) -- game/hsfman.c) -- see docs/WS11_EXTRUDE_BACKDROPS.md for
- * the per-scene confirmation. */
+ * top-level transform is unrotated: world = pos + scale*local, so
+ * `center`'s world-space displacement under a scale change is exactly
+ * `(1-k)*scale*center` with no basis change (sub-object rotations,
+ * handled by the hierarchical bbox walk above, are a different and
+ * already-handled concern). A rotated top-level transform would need that
+ * offset rotated into world space first -- not handled here. Every call
+ * site this project has needed so far was confirmed unrotated at the top
+ * level by direct evidence. */
 #include "game/hu3d.h"
 #include "mp6_widescreen.h"
-#include "mp6_savestate.h" /* W5: mp6_widescreen_savestate_rehydrate() */
-#include "mp6_gxarray_registry.h" /* WS27: grown vertex/ST buffers re-register their real byte size */
+#include "mp6_savestate.h" /* mp6_widescreen_savestate_rehydrate() */
+#include "mp6_gxarray_registry.h" /* grown vertex/ST buffers re-register their real byte size */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* WS12 investigative diagnostic (docs/WS11_EXTRUDE_BACKDROPS.md): dumps a
- * model's own HSF_OBJ_MESH sub-objects (name/vertex-buffer count/bbox/base
- * transform) and its attribute pool (wrapS/wrapT/linked bitmap name) -- the
- * same two facts WS11 used (per its own committed comments in mdpartydll/
- * mdparty.c.patch) to find the Party Mode "pillar" model's off-center bbox
- * and confirm every backdrop piece in that scene is GX_CLAMP. Reused here
- * to make the SAME determination for the title/file-select/mode-select/
- * opening/party-floor candidate backdrops, per each lane's own "confirm via
- * the same HSF diagnostic approach WS11 used" directive. Zero output and
- * one getenv (uncached -- this runs at most a handful of times per process,
- * at scene setup, never per-frame, so caching isn't worth the complexity)
- * when MP6_WS_HSF_DIAG is unset.
- * PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. Every
+/* Investigative diagnostic: dumps a model's own HSF_OBJ_MESH sub-objects
+ * (name/vertex-buffer count/bbox/base transform) and its attribute pool
+ * (wrapS/wrapT/linked bitmap name) -- the facts needed to find an
+ * off-center bbox and confirm a backdrop piece's wrap mode before writing
+ * a new extrude call for it. Zero output and one getenv (uncached -- this
+ * runs at most a handful of times per process, at scene setup, never
+ * per-frame, so caching isn't worth the complexity) when MP6_WS_HSF_DIAG
+ * is unset. Diagnostic only: prints state, never changes behavior. Every
  * temporary call site that uses this is removed again once the scene's
  * wrap-mode/bbox facts are confirmed and the real extrude call is
- * written -- see docs/WS11_EXTRUDE_BACKDROPS.md's per-scene sections for
- * the captured findings this produced. */
+ * written. */
 void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label);
 
 /* ==========================================================================
@@ -226,10 +157,9 @@ void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label);
  * dispatch switch either) and does not recurse into HSF_OBJ_REPLICA's
  * own children (its mesh.min/max slot is a union with a `replica`
  * pointer, not real bbox data, and this project's actual call sites never
- * exercise replicas -- see the .h file's own note on this).
- * WS14: called exactly once per model instance (from the registry upsert
- * below), never per-frame -- the per-frame reapply reuses the cached
- * result.
+ * exercise replicas -- see the .h file's own note on this). Called
+ * exactly once per model instance (from the registry upsert below), never
+ * per-frame -- the per-frame reapply reuses the cached result.
  * ========================================================================== */
 static void mp6_ws_accum_bbox_r(HSF_OBJECT *object, Mtx parentMtx, HuVecF *bmin, HuVecF *bmax, BOOL *any)
 {
@@ -302,17 +232,18 @@ static BOOL mp6_ws_model_center(HSF_DATA *hsf, HuVecF *outCenter)
 }
 
 /* ==========================================================================
- * WS14. Model pos/scale registry -- CLAMP mechanisms (isotropic/XY/XZ/
+ * Model pos/scale registry -- CLAMP mechanisms (isotropic/XY/XZ/
  * horizontal). Caches each extruded model's NATIVE pos/scale/center ONCE;
  * mp6_widescreen_reapply() (bottom of this file) re-derives from that cache
  * every frame using the CURRENT scale_factor(), so a live resize converges
- * without ever compounding (see the file header's WS14 section for the
- * full "why not just re-call the existing function" reasoning).
+ * without ever compounding (see the file header's "live re-derivation"
+ * section for the full "why not just re-call the existing function"
+ * reasoning).
  * ========================================================================== */
 typedef enum {
     MP6_WS_MODE_ISO = 0,        /* all three axes -- mp6_widescreen_extrude_model() */
     MP6_WS_MODE_XY,              /* X+Y only -- mp6_widescreen_extrude_model_xy() */
-    MP6_WS_MODE_XZ,              /* X+Z only -- mp6_widescreen_extrude_model_xz() (WS14: the party floor) */
+    MP6_WS_MODE_XZ,              /* X+Z only -- mp6_widescreen_extrude_model_xz() (the party floor) */
     MP6_WS_MODE_HORIZONTAL       /* X only -- mp6_widescreen_extrude_model_horizontal() */
 } MP6WSExtrudeMode;
 
@@ -429,8 +360,8 @@ static void mp6_ws_extrude_generic(HU3D_MODELID modelId, MP6WSExtrudeMode mode)
         e = mp6_ws_model_alloc();
     }
     if (e == NULL) {
-        /* Registry exhausted: degrade to the pre-WS14 one-shot behavior
-         * for just this call (apply once from the model's own current --
+        /* Registry exhausted: degrade to a one-shot apply for just this
+         * call (once from the model's own current --
          * at this point in every real call site, still native -- pos/
          * scale) so THIS frame is still correct; just not tracked for a
          * later resize. Flagged in the .h file's own doc comment. */
@@ -471,100 +402,96 @@ void mp6_widescreen_extrude_model(HU3D_MODELID modelId)
 }
 
 /* ==========================================================================
- * WS13: XY-only variant, for a backdrop with real Z-depth that the
- * isotropic mechanism pushes toward the camera's own far clip plane
+ * XY-only variant, for a backdrop with real Z-depth that the isotropic
+ * mechanism pushes toward the camera's own far clip plane
  * ==========================================================================
- * A FIRST attempt at file-select's own residual black notch (see filesel.c
- * .patch's own call-site comment for the measured-in-pixels finding) tried
- * mp6_widescreen_extrude_model() with an extra multiplier on top of
- * scale_factor() (more of the SAME isotropic x/y/z growth) -- confirmed
- * WRONG by direct recapture, not assumed: it made the backdrop mostly
- * VANISH (replaced by plain black clear, a single soft glow left over)
- * instead of closing the gap. Root-caused (not guessed) via the HSF
- * diagnostic dump's own per-sub-object bbox data: this backdrop is not a
- * flat plane -- its 5 sub-objects span real local-Z depth (roughly
- * -3444..+3454 relative to the model's own computed center, comparable to
- * or exceeding its own X/Y extent), and the isotropic formula grows Z by
- * the identical factor it grows X/Y. Hand-checked against this scene's own
- * camera (fileseldll/filesel.c's camera bit 2, zoom/distance 2800, FOV 10
- * deg) and its far clip (15000.0f, same call): the deepest sub-object's own
+ * A first attempt at file-select's own residual black notch (see
+ * filesel.c.patch's own call-site comment for the measured-in-pixels
+ * finding) tried mp6_widescreen_extrude_model() with an extra multiplier
+ * on top of scale_factor() (more of the SAME isotropic x/y/z growth) --
+ * confirmed WRONG by direct recapture, not assumed: it made the backdrop
+ * mostly VANISH (replaced by plain black clear, a single soft glow left
+ * over) instead of closing the gap. Root-caused via the HSF diagnostic
+ * dump's own per-sub-object bbox data: this backdrop is not a flat plane
+ * -- its 5 sub-objects span real local-Z depth (roughly -3444..+3454
+ * relative to the model's own computed center, comparable to or exceeding
+ * its own X/Y extent), and the isotropic formula grows Z by the identical
+ * factor it grows X/Y. Hand-checked against this scene's own camera
+ * (fileseldll/filesel.c's camera bit 2, zoom/distance 2800, FOV 10 deg)
+ * and its far clip (15000.0f, same call): the deepest sub-object's own
  * farthest local-Z point is ALREADY within roughly 100 units of the far
  * clip at the plain, unmultiplied scale_factor() this project already
- * ships (~14903 of 15000 at a representative wide aspect) -- any extra
- * multiplier on Z pushes it past 15000, and this engine's own per-object
- * cull check (ObjCullCheck, referenced by this same file's REPEAT-mechanism
- * comment below) then drops the WHOLE sub-object, not just its far edge --
- * explaining both the catastrophic result of adding more isotropic scale,
- * and quite plausibly the ORIGINAL small, animation-position-dependent
- * notch this fix targets (this backdrop's own slow ambient motion,
- * Hu3DMotionSpeedSet, can plausibly walk a marginal sub-object across that
- * same ~15000 threshold as it plays).
+ * ships -- any extra multiplier on Z pushes it past 15000, and this
+ * engine's own per-object cull check (ObjCullCheck, referenced by this
+ * same file's REPEAT-mechanism comment below) then drops the WHOLE
+ * sub-object, not just its far edge -- explaining both the catastrophic
+ * result of adding more isotropic scale, and quite plausibly the ORIGINAL
+ * small, animation-position-dependent notch this fix targets (this
+ * backdrop's own slow ambient motion can plausibly walk a marginal
+ * sub-object across that same ~15000 threshold as it plays).
  *
  * Fix: grow ONLY X and Y by scale_factor() (matching what the isotropic
- * mechanism already contributes on those two axes -- unchanged from
- * before); leave Z completely untouched, so this backdrop's own Z depth
- * never grows past whatever margin it already has against the far clip,
- * regardless of how wide the window gets. Coverage-wise this loses
- * nothing: the camera never needed MORE depth to fill a wider frame in the
- * first place (aspect widening is purely a screen-space/X-Y concern for a
- * backdrop that already sat at a fixed, safe distance) -- only Z's own
- * incidental, coverage-irrelevant growth (and its clipping risk) is
- * removed. */
+ * mechanism already contributes on those two axes); leave Z completely
+ * untouched, so this backdrop's own Z depth never grows past whatever
+ * margin it already has against the far clip, regardless of how wide the
+ * window gets. Coverage-wise this loses nothing: the camera never needed
+ * MORE depth to fill a wider frame in the first place (aspect widening is
+ * purely a screen-space/X-Y concern for a backdrop that already sat at a
+ * fixed, safe distance) -- only Z's own incidental, coverage-irrelevant
+ * growth (and its clipping risk) is removed. */
 void mp6_widescreen_extrude_model_xy(HU3D_MODELID modelId)
 {
     mp6_ws_extrude_generic(modelId, MP6_WS_MODE_XY);
 }
 
 /* ==========================================================================
- * WS14 (docs/WS14_DYNAMIC_EXTRUDE.md, issue 3): XZ-only variant, for a
- * horizontal ground-plane backdrop whose Y-extent is ~0
+ * XZ-only variant, for a horizontal ground-plane backdrop whose Y-extent
+ * is ~0
  * ==========================================================================
  * mdpartydll/mdparty.c's Party-floor model ("yuka", DATA_mdparty+1,
  * fn_1_861C's obj->mdlId[1]) is a flat horizontal plane the play-circle and
- * character-stand positions sit on -- WS11 explicitly left it untouched
- * (out of scope for that lane), so at wide/ultra-wide aspects its own
- * native-authored left/right edges become visible past the camera's own
- * Hor+-widened FOV (WS4/WS8's own accepted-tradeoff widen of this exact
- * camera). The isotropic mechanism is the wrong tool here: growing Y too
- * would lift/lower the floor's own world-height for no reason (its Y-extent
- * is ~0 -- there is no "vertical coverage" concern, unlike a wall-style
- * backdrop). Growing only X and Z -- the two axes that actually widen this
- * plane's own footprint -- pushes its edges further out while its Y-height
- * and its own computed center (the play-circle) stay exactly where they
- * were, keeping every character-stand position registered correctly. Same
- * CLAMP-only, unrotated-top-level-transform contract as every other
- * variant in this file (confirmed: GX_CLAMP per WS11's own HSF diagnostic
- * dump of this exact model, and fn_1_861C never calls Hu3DModelRotSet on
- * this model, leaving Hu3DModelCreateData's own default rot=(0,0,0)). */
+ * character-stand positions sit on -- left untouched at first, so at
+ * wide/ultra-wide aspects its own native-authored left/right edges become
+ * visible past the camera's own Hor+-widened FOV (an accepted tradeoff of
+ * this exact camera's own widen). The isotropic mechanism is the wrong
+ * tool here: growing Y too would lift/lower the floor's own world-height
+ * for no reason (its Y-extent is ~0 -- there is no "vertical coverage"
+ * concern, unlike a wall-style backdrop). Growing only X and Z -- the two
+ * axes that actually widen this plane's own footprint -- pushes its edges
+ * further out while its Y-height and its own computed center (the
+ * play-circle) stay exactly where they were, keeping every character-stand
+ * position registered correctly. Same CLAMP-only, unrotated-top-level-
+ * transform contract as every other variant in this file (confirmed:
+ * GX_CLAMP per this model's own HSF diagnostic dump, and fn_1_861C never
+ * calls Hu3DModelRotSet on this model, leaving Hu3DModelCreateData's own
+ * default rot=(0,0,0)). */
 void mp6_widescreen_extrude_model_xz(HU3D_MODELID modelId)
 {
     mp6_ws_extrude_generic(modelId, MP6_WS_MODE_XZ);
 }
 
 /* ==========================================================================
- * WS13: horizontal-only variant, for a FLAT/2D-style "cover collage" asset
+ * Horizontal-only variant, for a FLAT/2D-style "cover collage" asset
  * ==========================================================================
  * mp6_widescreen_extrude_model() above is ISOTROPIC -- it grows x/y/z by
  * the identical scale_factor(), which is exactly right for a genuine 3D
  * backdrop (Party Mode's ring/pillar, title/file-select/opening's own
  * distant scenery) where "more of the same picture, undistorted" is the
- * goal. It is the WRONG tool for a asset that is really a flat, 2D-style
+ * goal. It is the WRONG tool for an asset that is really a flat, 2D-style
  * "cover" composite meant to fill the SCREEN rather than occupy 3D space:
  * growing every axis together also zooms the vertical framing by the same
  * factor, cropping top/bottom exactly as much as it widens -- confirmed
  * needed for real (not speculative) by bootDll/boot.c's own title screen
  * (TitleMdlId[0..2], the "MARIO PARTY 6" cast-collage): the isotropic
  * extrude visibly zoomed it (Mario's own hat clipping the top edge at
- * 2.17:1), a regression the user explicitly rejected -- "The title screen
- * is zoomed in, I don't want a zoom, just scale the backdrop
- * horizontally". Investigation (this session, same HSF-diagnostic-dump
- * method as WS11/WS12) confirmed the title collage has no separable
- * background layer to treat differently (no GX_REPEAT anywhere in its
- * attribute pool either, so the REPEAT mesh+UV path doesn't apply): it is
- * one flat composite of ~33 real HSF_OBJ_MESH quads (character-portrait
- * billboards + rotated "grid"/"hikari" decoration/color-split pieces, all
- * at similar shallow Z) with Mario/characters/logo text all baked
- * together -- see boot.c.patch's own call-site comment for the full
+ * 2.17:1), a regression that was explicitly rejected: "just scale the
+ * backdrop horizontally, don't zoom." Investigation confirmed the title
+ * collage has no separable background layer to treat differently (no
+ * GX_REPEAT anywhere in its attribute pool either, so the REPEAT mesh+UV
+ * path doesn't apply): it is one flat composite of ~33 real HSF_OBJ_MESH
+ * quads (character-portrait billboards + rotated decoration/color-split
+ * pieces, all at similar shallow Z) with Mario/characters/logo text all
+ * baked together -- see boot.c.patch's own call-site comment for the full
  * per-object breakdown. For exactly this shape of asset, the fix is to
  * widen ONLY the horizontal axis and leave vertical framing byte-identical
  * to native.
@@ -585,11 +512,10 @@ void mp6_widescreen_extrude_model_xz(HU3D_MODELID modelId)
  * genuinely be the camera's own horizontal screen axis (i.e. the camera's
  * own "up" vector is not rotated away from (0,1,0) either -- a roll would
  * mix X/Y on screen); confirmed true for boot.c's title camera specifically
- * (BootCameraRot[0]=(0,0,0) at the title, boot.c's own CameraOutView) --
- * not asserted generically for a future caller.
+ * -- not asserted generically for a future caller.
  *
  * Same no-op contract as mp6_widescreen_extrude_model(): returns
- * immediately (zero calls) when Widescreen is disabled, or modelId/its hsf
+ * immediately (zero calls) when widescreen is disabled, or modelId/its hsf
  * is invalid. */
 void mp6_widescreen_extrude_model_horizontal(HU3D_MODELID modelId)
 {
@@ -597,7 +523,7 @@ void mp6_widescreen_extrude_model_horizontal(HU3D_MODELID modelId)
 }
 
 /* ==========================================================================
- * WS14. Camera registry -- every scene's own 3D camera setup (Party's
+ * Camera registry -- every scene's own 3D camera setup (Party's
  * fn_1_33A0, mode-select's fn_1_1734, boot's ObjectSetup/BootTitleExec,
  * file-select's ObjectSetup) calls Hu3DCameraPerspectiveSet+ViewportSet
  * EXACTLY ONCE too, same "frozen at scene load" defect as the models
@@ -653,25 +579,25 @@ static void mp6_ws_apply_camera(MP6WSCameraEntry *e, float k)
     int rw = mp6_widescreen_render_width();
     Hu3DCameraPerspectiveSet(e->bit, e->fov, e->nearZ, e->farZ, e->aspectBase * k);
     Hu3DCameraViewportSet(e->bit, 0.0f, 0.0f, (float)rw, e->vpH, 0.0f, 1.0f);
-    /* WS18 (docs/WS18_LIVE_RESIZE_SCISSOR.md): the SCISSOR rect is a
-     * SEPARATE camera field from the viewport (game/hsfman.c's HU3D_CAMERA
-     * has independent viewportW/H and scissorW/H, written by two DIFFERENT
-     * setters -- Hu3DCameraViewportSet above only ever touches the former).
-     * Hu3DCameraCreate's own defCamera template sets BOTH viewportW and
-     * scissorW from RenderMode->fbWidth, but only ONCE, at creation time --
-     * and every frame, Hu3DExec's real draw call re-issues a live
+    /* The SCISSOR rect is a SEPARATE camera field from the viewport
+     * (game/hsfman.c's HU3D_CAMERA has independent viewportW/H and
+     * scissorW/H, written by two DIFFERENT setters -- Hu3DCameraViewportSet
+     * above only ever touches the former). Hu3DCameraCreate's own
+     * defCamera template sets BOTH viewportW and scissorW from
+     * RenderMode->fbWidth, but only ONCE, at creation time -- and every
+     * frame, Hu3DExec's real draw call re-issues a live
      * GXSetScissor(cameraP->scissorX,...,cameraP->scissorW,...) using
-     * whatever was cached there, same "frozen at scene load" shape as the
-     * viewport bug WS14 fixed, just on the scissor field WS14 never touched.
-     * Confirmed to be the actual cause of the black-bar/boxing symptom
-     * that survives WS14's own viewport-only fix (see the doc): the
-     * viewport was already tracking the live render_width every tick, but
-     * GXSetScissor was clipping the frame to the STALE, creation-time
-     * scissor rect regardless, producing exactly the observed cutoff.
-     * Keeping scissor identical to viewport (both (0,0,renderWidth,vpH), the
-     * same relationship Hu3DCameraCreate's own defCamera establishes at
-     * native) closes that gap with no behavior change for a NATIVE/disabled
-     * camera (renderWidth==640==the original literal, vpH unchanged). */
+     * whatever was cached there, the same "frozen at scene load" shape as
+     * the viewport bug fixed above, just on the scissor field that fix
+     * never touched. Confirmed to be the actual cause of a black-bar/
+     * boxing symptom that survived the viewport-only fix: the viewport was
+     * already tracking the live render_width every tick, but GXSetScissor
+     * was clipping the frame to the STALE, creation-time scissor rect
+     * regardless, producing exactly the observed cutoff. Keeping scissor
+     * identical to viewport (both (0,0,renderWidth,vpH), the same
+     * relationship Hu3DCameraCreate's own defCamera establishes at native)
+     * closes that gap with no behavior change for a NATIVE/disabled camera
+     * (renderWidth==640==the original literal, vpH unchanged). */
     Hu3DCameraScissorSet(e->bit, 0, 0, (unsigned int)rw, (unsigned int)e->vpH);
 }
 
@@ -681,13 +607,13 @@ void mp6_widescreen_camera_widen(int cameraBit, float fov, float nearZ, float fa
     int rw = mp6_widescreen_render_width();
 
     /* Apply directly first, unconditionally -- byte-identical to the
-     * pre-WS14 two-call pair (Hu3DCameraPerspectiveSet + ViewportSet) this
-     * replaces at every call site, including when Widescreen is disabled
+     * original two-call pair (Hu3DCameraPerspectiveSet + ViewportSet) this
+     * replaces at every call site, including when widescreen is disabled
      * (k==1.0f, render_width()==640 exactly -- the original unwidened
      * literal call). This ALSO means the very first frame of every scene
-     * is correct even before mp6_widescreen_reapply() ever runs. WS18 adds
-     * the matching Hu3DCameraScissorSet call (see mp6_ws_apply_camera's own
-     * comment) -- redundant with Hu3DCameraCreate's own defCamera copy on a
+     * is correct even before mp6_widescreen_reapply() ever runs. The
+     * matching Hu3DCameraScissorSet call (see mp6_ws_apply_camera's own
+     * comment) is redundant with Hu3DCameraCreate's own defCamera copy on a
      * genuinely fresh camera (both already agree, since RenderMode->fbWidth
      * is already live by the time any scene creates its camera), but not
      * redundant -- and load-bearing -- for camera bit REUSE across scenes
@@ -732,91 +658,63 @@ void mp6_widescreen_camera_widen(int cameraBit, float fov, float nearZ, float fa
 /* ==========================================================================
  * REPEAT (tiling) mechanism -- mesh+UV edge extrude
  * ==========================================================================
- * Confirmed needed for real (not speculative) by mode-select's ocean plane
- * ("sea"/"sea1", mdsel.c's fn_1_6F40 mdlId[1]) -- GX_REPEAT wrapping
- * (wrapS=wrapT=1, HSF diagnostic dump), where a whole-piece scale-about-
- * center (the CLAMP mechanism) would stretch the tile pattern (more
- * world-space distance per repeat -- the same softening the CLAMP
- * mechanism accepts for a one-off painted image, but wrong for a texture
- * whose entire visual point is a uniform repeating pattern).
+ * Confirmed needed for real by mode-select's ocean plane ("sea"/"sea1",
+ * mdsel.c's fn_1_6F40 mdlId[1]) -- GX_REPEAT wrapping (wrapS=wrapT=1),
+ * where a whole-piece scale-about-center (the CLAMP mechanism) would
+ * stretch the tile pattern -- fine for a one-off painted image, wrong for
+ * a texture whose entire visual point is a uniform repeating pattern.
  *
  * Mechanism: scales BOTH the raw LOCAL vertex positions AND the raw ST
  * (UV) texture coordinates of every HSF_OBJ_MESH sub-object about their
  * own centers by scale_factor() -- mutating the live HSF_MESH.vertex->
  * data/.st->data arrays in place. Confirmed safe: game/hsfdraw.c's
- * objMesh binds GX_VA_POS/GX_VA_TEX0 via GX_INDEX16 + GXSetArray(...,
- * mesh.vertex->data / mesh.st->data, ...) on every draw (FaceDraw calls
- * ObjDraw, which resets its vtxMode cache every invocation, forcing this
- * rebind at least once per object per frame) and the port's own
- * aurora_bridge.c re-registers/reads that exact live pointer each time --
- * this is the identical live-buffer-mutation mechanism this engine's own
- * skinning/morph systems (game/EnvelopeExec.c's SetEnvelop, followed by
- * GXInvalidateVtxCache() in game/hsfman.c's per-frame EnvelopeProc
- * dispatch) already rely on every frame, not a display-list-baked
- * snapshot -- confirmed by direct source investigation, not assumed.
+ * objMesh re-binds GX_VA_POS/GX_VA_TEX0 from those exact live pointers on
+ * every draw (the same live-buffer-mutation mechanism this engine's own
+ * skinning/morph systems already rely on every frame, not a
+ * display-list-baked snapshot).
  *
  * Scaling position AND UV by the SAME factor about their own centers
- * keeps "world units per texture repeat" exactly unchanged (new_world_
- * extent / new_uv_extent = k*world/k*uv = world/uv, the original ratio)
- * -- MORE of the same native-size tiles become visible over the grown
- * extent, instead of the same tile COUNT being resampled larger (blurry)
- * the way the CLAMP mechanism's whole-piece scale would be for a tiling
- * texture. Unlike mp6_widescreen_extrude_model(), this does NOT touch the
- * model's top-level Hu3DModelPosSet/ScaleSet at all (those stay native)
- * -- the "grow about center" happens entirely inside local/authored
- * vertex space instead, and each touched sub-object's own authored
- * min/max bbox is updated to match (so a cull test against it,
- * ObjCullCheck, stays correct for the new, larger extent).
+ * keeps "world units per texture repeat" exactly unchanged -- MORE of the
+ * same native-size tiles become visible over the grown extent, instead of
+ * the same tile COUNT being resampled larger (blurry). Unlike
+ * mp6_widescreen_extrude_model(), this does NOT touch the model's
+ * top-level Hu3DModelPosSet/ScaleSet at all -- the "grow about center"
+ * happens entirely inside local/authored vertex space, and each touched
+ * sub-object's own authored min/max bbox is updated to match so culling
+ * stays correct.
  *
- * PER-OBJECT LOCAL CENTER: the model-level `center` computed by
- * mp6_ws_model_center() is in MODEL-local space, but each sub-object's
- * own raw vertex buffer is in THAT OBJECT's own PRE-base-transform local
- * space (same WS12 finding as the CLAMP mechanism's own fix, above) -- so
- * mutating a sub-object's vertices "about `center`" directly would mix
- * incompatible frames whenever that object's own base transform isn't
- * identity. This is resolved by mapping `center` back into each object's
- * own local frame via that object's OWN accumulated (root-to-it)
- * translation/scale -- tracked as plain per-axis running products/sums
- * (`accumScale`/`accumTrans` in mp6_ws_repeat_walk_r() below) rather than
- * a full matrix, which is exact whenever no rotation appears ANYWHERE
- * from the root down to that object (`hasRot` stays FALSE the whole way).
- * mode-select's own "sea"/"sea1" objects are confirmed exactly this case
- * (baseRot=(0,0,0), HSF diagnostic dump). A sub-object reached through
- * any non-zero rotation is left UNTOUCHED (skipped, not guessed) --
- * flagged in docs/WS11_EXTRUDE_BACKDROPS.md rather than silently mis-
- * transformed; no call site this project has needed hits that path.
+ * PER-OBJECT LOCAL CENTER: the model-level `center` is in MODEL-local
+ * space, but each sub-object's own raw vertex buffer is in THAT OBJECT's
+ * own PRE-base-transform local space (same finding as the CLAMP
+ * mechanism's own fix, above) -- so mutating a sub-object's vertices
+ * "about `center`" directly would mix incompatible frames whenever that
+ * object's base transform isn't identity. Resolved by mapping `center`
+ * back into each object's own local frame via its accumulated
+ * translation/scale, tracked as plain per-axis running products/sums
+ * rather than a full matrix -- exact whenever no rotation appears
+ * anywhere from the root down (true for mode-select's "sea"/"sea1"). A
+ * sub-object reached through any rotation is left UNTOUCHED (skipped, not
+ * guessed) rather than silently mis-transformed.
  *
  * ==========================================================================
- * WS14: dynamic re-tiling on resize -- native-snapshot registry
+ * Dynamic re-tiling on resize -- native-snapshot registry
  * ==========================================================================
- * Direct in-place mutation (WS11/WS12's original design) is NOT safe to
- * call twice on the same live buffer -- a second pass would scale the
- * ALREADY-grown positions again, compounding. To make this dynamic without
- * losing that safety, every touched vertex buffer, ST (UV) buffer, and
- * per-object min/max pair is registered ONCE (a malloc'd copy of its
- * NATIVE, pre-extrude contents is snapshotted the first time that exact
- * pointer is seen) and re-derived EVERY frame from that cached native
- * snapshot -- exactly the same "cache native once, recompute from it every
- * frame" strategy as the CLAMP model registry above, just applied per
- * buffer instead of per model. The hierarchy walk itself
- * (mp6_ws_repeat_walk_r) still runs only ONCE per model instance (at first
- * registration, to discover which buffers/objects need tracking and
- * compute each one's own local center) -- mp6_widescreen_reapply()'s own
- * per-frame pass is a flat loop over the already-flattened registry, no
- * re-walk, matching the model mechanism's own "cheap arithmetic, no
- * re-walk" bar.
- *
- * Idempotency: registering the SAME buffer pointer twice (e.g. two
- * sub-objects sharing one vertex buffer, within the same walk) is safe --
- * the SECOND visit finds it already registered (by pointer) and skips
- * re-snapshotting (which would otherwise snapshot the already-scaled
- * result from the first visit as if it were native), but still re-applies
- * from the EXISTING native snapshot, so behavior is unchanged either way.
- *
- * Liveness for the per-frame walker: each registry entry stores the owning
- * modelId AND the hsf pointer live at registration time, checked against
- * Hu3DData[modelId].hsf exactly like the CLAMP model registry -- a dead or
- * reused modelId slot is skipped, never resurrected. */
+ * Direct in-place mutation is NOT safe to call twice on the same live
+ * buffer -- a second pass would scale the already-grown positions again,
+ * compounding. So every touched vertex buffer, ST buffer, and per-object
+ * min/max pair is registered ONCE (a malloc'd copy of its native,
+ * pre-extrude contents snapshotted the first time that pointer is seen)
+ * and re-derived every frame from that cached snapshot -- the same
+ * "cache native once, recompute every frame" strategy as the CLAMP model
+ * registry, applied per buffer instead of per model. The hierarchy walk
+ * itself runs only once per model instance; the per-frame pass is a flat
+ * loop over the already-flattened registry, no re-walk. Registering the
+ * SAME buffer pointer twice (e.g. two sub-objects sharing one buffer) is
+ * safe -- the second visit finds it already registered and skips
+ * re-snapshotting, but still re-applies correctly. Liveness for the
+ * per-frame walker: each entry stores the owning modelId and hsf pointer
+ * at registration time, checked exactly like the CLAMP model registry --
+ * a dead or reused slot is skipped, never resurrected. */
 typedef struct {
     void *ptr;             /* live target: vb->data, stb->data, or &object->mesh.mesh.min/.max */
     float *native;         /* malloc'd once: pristine (pre-extrude) snapshot, same layout as *ptr */
@@ -886,15 +784,16 @@ static MP6WSRepeatEntry *mp6_ws_repeat_alloc(void)
 
 static void mp6_ws_repeat_apply(MP6WSRepeatEntry *e, float k)
 {
-    /* W5 (docs/SAVESTATE.md): a savestate restore leaves this registry's
-     * GAME half valid (ptr/hsf/modelId are arena addresses and ids, all
-     * restored) but nulls its HOST half -- `native` pointed into the
-     * capturing process's C runtime heap. mp6_widescreen_savestate_
-     * rehydrate() sets it NULL; this early-out keeps the per-frame
-     * re-apply from dereferencing it before the registrar re-snapshots.
-     * Skipping a frame's re-apply is harmless: the geometry in the arena
-     * is already extruded (that is what was captured), and the next
-     * register call re-takes the snapshot. */
+    /* A savestate restore leaves this registry's GAME half valid
+     * (ptr/hsf/modelId are arena addresses and ids, all restored) but
+     * nulls its HOST half -- `native` pointed into the capturing
+     * process's C runtime heap, which does not exist in the restoring
+     * process. mp6_widescreen_savestate_rehydrate() sets it NULL; this
+     * early-out keeps the per-frame re-apply from dereferencing it before
+     * the registrar re-snapshots. Skipping a frame's re-apply is
+     * harmless: the geometry in the arena is already extruded (that is
+     * what was captured), and the next register call re-takes the
+     * snapshot. */
     if (e->native == NULL || e->count <= 0) {
         return;
     }
@@ -1096,10 +995,10 @@ void mp6_widescreen_extrude_model_repeat(HU3D_MODELID modelId)
 }
 
 /* ==========================================================================
- * WS15 (docs/WS15_SELECTIVE_EXTRUDE.md). Selective per-sub-object horizontal
- * CLAMP extrude, rotation-aware -- for a model that MIXES foreground content
- * (that must stay native) with background content (that should widen) in
- * ONE HSF model, at the sub-object level.
+ * Selective per-sub-object horizontal CLAMP extrude, rotation-aware -- for
+ * a model that MIXES foreground content (that must stay native) with
+ * background content (that should widen) in ONE HSF model, at the
+ * sub-object level.
  * ==========================================================================
  * Confirmed needed for real (not speculative) by bootDll/boot.c's title
  * screen: TitleMdlId[2] ("STAR")'s 65 sub-objects are ~33 real HSF_OBJ_MESH
@@ -1168,7 +1067,7 @@ void mp6_widescreen_extrude_model_repeat(HU3D_MODELID modelId)
  * already-verified center computation instead of adding a second one scoped
  * to just the selected subset.
  *
- * WS14 dynamic registry: identical "malloc a native snapshot once per live
+ * Dynamic registry: identical "malloc a native snapshot once per live
  * vertex-buffer pointer, re-derive from it every frame with the CURRENT k"
  * strategy as the REPEAT mechanism, keyed by buffer pointer + owning
  * modelId/hsf for the same liveness reason. Also updates the sub-object's
@@ -1226,15 +1125,16 @@ static MP6WSSelectiveEntry *mp6_ws_selective_alloc(void)
 
 static void mp6_ws_selective_apply(MP6WSSelectiveEntry *e, float k)
 {
-    /* W5 (docs/SAVESTATE.md): a savestate restore leaves this registry's
-     * GAME half valid (ptr/hsf/modelId are arena addresses and ids, all
-     * restored) but nulls its HOST half -- `native` pointed into the
-     * capturing process's C runtime heap. mp6_widescreen_savestate_
-     * rehydrate() sets it NULL; this early-out keeps the per-frame
-     * re-apply from dereferencing it before the registrar re-snapshots.
-     * Skipping a frame's re-apply is harmless: the geometry in the arena
-     * is already extruded (that is what was captured), and the next
-     * register call re-takes the snapshot. */
+    /* A savestate restore leaves this registry's GAME half valid
+     * (ptr/hsf/modelId are arena addresses and ids, all restored) but
+     * nulls its HOST half -- `native` pointed into the capturing
+     * process's C runtime heap, which does not exist in the restoring
+     * process. mp6_widescreen_savestate_rehydrate() sets it NULL; this
+     * early-out keeps the per-frame re-apply from dereferencing it before
+     * the registrar re-snapshots. Skipping a frame's re-apply is
+     * harmless: the geometry in the arena is already extruded (that is
+     * what was captured), and the next register call re-takes the
+     * snapshot. */
     if (e->native == NULL || e->count <= 0) {
         return;
     }
@@ -1339,8 +1239,8 @@ void mp6_widescreen_extrude_model_selective_horizontal(int16_t modelId, MP6WSNam
 }
 
 /* ==========================================================================
- * WS19 (docs/WS19_SURGICAL_EXTRUDE.md). Selective per-sub-object horizontal
- * REPOSITION (never resize, never re-root) -- for decorations that must
+ * Selective per-sub-object horizontal REPOSITION (never resize, never
+ * re-root) -- for decorations that must
  * track a stretching sibling plane's own widening WITHOUT being distorted
  * OR losing their own independent per-object animation
  * ==========================================================================
@@ -1386,7 +1286,7 @@ void mp6_widescreen_extrude_model_selective_horizontal(int16_t modelId, MP6WSNam
  * outward from center by k" relationship applies to it directly:
  * `newBaseX = centerX + k*(nativeBaseX - centerX)`, cached natively once
  * (`e->nativeBaseX`, `e->centerX`) and re-derived every frame from the
- * live k, same WS14 dynamic-registry pattern as every other mechanism here.
+ * live k, same dynamic-registry pattern as every other mechanism here.
  *
  * Precondition (documented, not generically handled): the matched object's
  * own X position is not ALSO independently keyframed by its own motion data
@@ -1402,20 +1302,20 @@ typedef struct {
     HSF_OBJECT *obj;         /* direct pointer into hsf->object[] -- stable for the model instance's lifetime */
     float nativeBaseX;        /* cached native base.pos.x, read once at first registration */
     float centerX;             /* cached native shared model center x (mp6_ws_model_center()'s own x), read once */
-    float bias;                /* WS25: extra multiplier on the (k-1) term below, see mp6_ws_reposition_apply();
+    float bias;                /* extra multiplier on the (k-1) term below, see mp6_ws_reposition_apply();
                                  * always refreshed (not just on freshInstance), same as modelId/hsf above -- lets
                                  * two different callers (matching disjoint name sets) push their own matched
                                  * objects by different amounts through the identical mechanism/registry. */
-    float clampMinX;           /* WS26: hard lower bound on the repositioned base.pos.x, applied AFTER the
+    float clampMinX;           /* hard lower bound on the repositioned base.pos.x, applied AFTER the
                                  * formula in mp6_ws_reposition_apply(). MP6_WS_NO_CLAMP disables it, which is
-                                 * what every pre-WS26 caller passes -- see mp6_ws_reposition_apply(). */
+                                 * what an unclamped caller passes -- see mp6_ws_reposition_apply(). */
     HU3D_MODELID modelId;
     HSF_DATA *hsf;
 } MP6WSRepositionEntry;
 
 /* Sentinel "no clamp": far enough below any real world x that the clamp
  * branch can never fire, so a caller that does not opt in behaves exactly as
- * it did before WS26 existed. */
+ * it did before this clamp existed. */
 #define MP6_WS_NO_CLAMP (-1.0e30f)
 
 /* Mode-select's own "cloud1".."cloud6"/"star1".."star7" is 13 objects -- 16
@@ -1457,7 +1357,7 @@ static void mp6_ws_reposition_apply(MP6WSRepositionEntry *e, float k)
      * call every frame with the same k (idempotent): recomputed fresh from
      * the cached NATIVE baseline every time, never compounding.
      *
-     * WS25: `e->bias` generalizes the original `centerX + k*(nativeBaseX-
+     * `e->bias` generalizes the original `centerX + k*(nativeBaseX-
      * centerX)` to `nativeBaseX + bias*(k-1)*(nativeBaseX-centerX)` --
      * algebraically identical to the original at bias=1.0f (expand:
      * nativeBaseX + (k-1)*(nativeBaseX-centerX) = centerX + k*(nativeBaseX-
@@ -1467,37 +1367,37 @@ static void mp6_ws_reposition_apply(MP6WSRepositionEntry *e, float k)
      * this existed. */
     e->obj->mesh.base.pos.x = e->nativeBaseX + e->bias * (k - 1.0f) * (e->nativeBaseX - e->centerX);
 
-    /* WS26 (user: "I don't want any cloud on the night side"): the formula
-     * above scales an object's own offset FROM the divide, so an object that
-     * starts NEAR the divide has a (nativeBaseX - centerX) term near zero and
-     * therefore barely moves no matter how large `bias` gets -- no bias value
-     * can pull mode-select's own divide-straddling clouds off the night half.
-     * A hard day-side floor does. Gated on k>1 so the native aspect keeps its
-     * exactly-native rest positions (byte-identical), matching the same
-     * "zero out at native k" contract every mechanism in this file follows;
-     * MP6_WS_NO_CLAMP keeps every non-opting caller (e.g. the stars) on the
-     * pre-WS26 path. */
+    /* The formula above scales an object's own offset FROM the divide, so
+     * an object that starts NEAR the divide has a (nativeBaseX - centerX)
+     * term near zero and therefore barely moves no matter how large `bias`
+     * gets -- no bias value can pull mode-select's own divide-straddling
+     * clouds fully off the night half ("I don't want any cloud on the
+     * night side"). A hard day-side floor does. Gated on k>1 so the
+     * native aspect keeps its exactly-native rest positions (byte-
+     * identical), matching the same "zero out at native k" contract every
+     * mechanism in this file follows; MP6_WS_NO_CLAMP keeps every
+     * non-opting caller (e.g. the stars) on the unclamped path. */
     if (k > 1.0f && e->obj->mesh.base.pos.x < e->clampMinX) {
         e->obj->mesh.base.pos.x = e->clampMinX;
     }
 }
 
-/* WS25 (docs/WS25_TWEAKS.md): exposes `mp6_ws_model_center()`'s own x
- * component so a caller that needs to invoke
- * mp6_widescreen_extrude_model_selective_reposition_x() MORE THAN ONCE for
- * the SAME model (e.g. mode-select's sky: once for stars, once for clouds,
- * with different biases) can snapshot the center ONE time and pass the
- * IDENTICAL value to every call, rather than each call recomputing it fresh
- * and getting a DIFFERENT answer depending on what the PREVIOUS call already
- * mutated -- see mp6_widescreen_extrude_model_selective_reposition_x()'s own
- * updated comment for why that matters (it is not just a documentation nit:
+/* Exposes `mp6_ws_model_center()`'s own x component so a caller that needs
+ * to invoke mp6_widescreen_extrude_model_selective_reposition_x() MORE
+ * THAN ONCE for the SAME model (e.g. mode-select's sky: once for stars,
+ * once for clouds, with different biases) can snapshot the center ONE
+ * time and pass the IDENTICAL value to every call, rather than each call
+ * recomputing it fresh and getting a DIFFERENT answer depending on what
+ * the PREVIOUS call already mutated -- see
+ * mp6_widescreen_extrude_model_selective_reposition_x()'s own updated
+ * comment for why that matters (it is not just a documentation nit:
  * `mp6_ws_accum_bbox_r()`'s transform composition reads each object's own
  * CURRENT `mesh.base.pos`, so an earlier reposition call's write is visible
  * to a later call's own center recomputation, silently shifting the
  * reference point the second call's `(nativeBaseX-centerX)` term is measured
  * from). Returns 0.0f (a safe, inert fallback -- byte-identical-when-
  * disabled is preserved since callers only ever use this value when
- * Widescreen is enabled to begin with) if Widescreen is disabled or the
+ * widescreen is enabled to begin with) if widescreen is disabled or the
  * model/hsf isn't valid. */
 float mp6_widescreen_model_center_x(int16_t modelId)
 {
@@ -1547,13 +1447,13 @@ static void mp6_ws_reposition_x_impl(int16_t modelId, MP6WSNameMatchFn match, fl
         e->modelId = modelId;
         e->hsf = hsf;
         e->obj = o;
-        e->bias = bias; /* WS25: always refreshed (not just on freshInstance), same as modelId/hsf above */
-        e->clampMinX = clampMinX; /* WS26: same "always refreshed" rule as bias above */
+        e->bias = bias; /* always refreshed (not just on freshInstance), same as modelId/hsf above */
+        e->clampMinX = clampMinX; /* same "always refreshed" rule as bias above */
         if (freshInstance) {
             /* Native baseline, read once: this object's own REST x position,
              * genuinely native -- matching every other mechanism's own
              * "cache the native baseline once, at first registration" rule.
-             * `centerX` itself is the CALLER's own responsibility now (WS25)
+             * `centerX` itself is the CALLER's own responsibility now
              * -- see mp6_widescreen_model_center_x()'s own comment for why a
              * caller invoking this function more than once for the same
              * model must snapshot ONE center and pass it to every call. */
@@ -1569,7 +1469,7 @@ void mp6_widescreen_extrude_model_selective_reposition_x(int16_t modelId, MP6WSN
     mp6_ws_reposition_x_impl(modelId, match, bias, centerX, MP6_WS_NO_CLAMP);
 }
 
-/* WS26: identical mechanism, plus a hard day-side floor on the resulting
+/* Identical mechanism, plus a hard day-side floor on the resulting
  * base.pos.x -- see mp6_ws_reposition_apply()'s own clamp comment for why a
  * clamp (not a larger bias) is what moves a divide-straddling object. */
 void mp6_widescreen_extrude_model_reposition_x_clamped(int16_t modelId, MP6WSNameMatchFn match, float bias, float centerX, float clampMinX)
@@ -1578,17 +1478,17 @@ void mp6_widescreen_extrude_model_reposition_x_clamped(int16_t modelId, MP6WSNam
 }
 
 /* ==========================================================================
- * WS15 (docs/WS15_SELECTIVE_EXTRUDE.md). Border-only extend for a genuinely
- * CLAMP, subdivided-grid backdrop -- interior tiles/decal stay native
+ * Border-only extend for a genuinely CLAMP, subdivided-grid backdrop --
+ * interior tiles/decal stay native
  * ==========================================================================
  * Confirmed needed for real (not speculative) by mdpartydll/mdparty.c's
- * Party-floor model ("yuka", DATA_mdparty+1): WS14's own
+ * Party-floor model ("yuka", DATA_mdparty+1): the plain
  * `mp6_widescreen_extrude_model_xz()` (a whole-piece scale-about-center,
  * exactly like every other CLAMP mechanism in this file) visibly enlarges
  * the floor's own BAKED diamond-tile texture and its center play-circle
- * decal (both painted into ONE authored image, `ys77_floor` -- re-confirmed
- * this session via HSF diagnostic dump: wrapS=wrapT=0, genuinely CLAMP, not
- * REPEAT, so WS11's original finding stands) -- an "accepted softening"
+ * decal (both painted into ONE authored image, `ys77_floor` -- confirmed
+ * via HSF diagnostic dump: wrapS=wrapT=0, genuinely CLAMP, not REPEAT) --
+ * an "accepted softening"
  * tradeoff for a one-off painted backdrop image (Party's own pillar, the
  * title collage, mode-select's sky), but WRONG here: the tile grid and the
  * play-circle are both meant to read at a CONSISTENT, native world scale
@@ -1616,7 +1516,7 @@ void mp6_widescreen_extrude_model_reposition_x_clamped(int16_t modelId, MP6WSNam
  * gap, the same "trapezoid instead of square" border-image technique CSS's
  * own border-image/9-slice scaling uses. Y is never touched on any vertex
  * (this floor's own Y-extent is ~0 -- same non-concern already noted for
- * the isotropic-vs-XZ choice on this exact model, WS14 issue 3).
+ * the isotropic-vs-XZ choice on this exact model).
  *
  * Unlike the selective mechanism above, no rotation-awareness is needed
  * here: "yuka" itself is confirmed unrotated at its own base transform
@@ -1625,7 +1525,7 @@ void mp6_widescreen_extrude_model_reposition_x_clamped(int16_t modelId, MP6WSNam
  * explicit precondition (unhandled generalization, not silently
  * mis-transformed) for a future rotated caller.
  *
- * WS14 dynamic registry: same "malloc a native snapshot once, re-derive
+ * Dynamic registry: same "malloc a native snapshot once, re-derive
  * from it every frame with the CURRENT k" strategy as every other buffer
  * mechanism in this file. The per-vertex boundary/interior classification
  * is re-derived fresh every apply from the CACHED NATIVE min/max (a plain
@@ -1680,15 +1580,16 @@ static MP6WSBorderEntry *mp6_ws_border_alloc(void)
 
 static void mp6_ws_border_apply(MP6WSBorderEntry *e, float k)
 {
-    /* W5 (docs/SAVESTATE.md): a savestate restore leaves this registry's
-     * GAME half valid (ptr/hsf/modelId are arena addresses and ids, all
-     * restored) but nulls its HOST half -- `native` pointed into the
-     * capturing process's C runtime heap. mp6_widescreen_savestate_
-     * rehydrate() sets it NULL; this early-out keeps the per-frame
-     * re-apply from dereferencing it before the registrar re-snapshots.
-     * Skipping a frame's re-apply is harmless: the geometry in the arena
-     * is already extruded (that is what was captured), and the next
-     * register call re-takes the snapshot. */
+    /* A savestate restore leaves this registry's GAME half valid
+     * (ptr/hsf/modelId are arena addresses and ids, all restored) but
+     * nulls its HOST half -- `native` pointed into the capturing
+     * process's C runtime heap, which does not exist in the restoring
+     * process. mp6_widescreen_savestate_rehydrate() sets it NULL; this
+     * early-out keeps the per-frame re-apply from dereferencing it before
+     * the registrar re-snapshots. Skipping a frame's re-apply is
+     * harmless: the geometry in the arena is already extruded (that is
+     * what was captured), and the next register call re-takes the
+     * snapshot. */
     if (e->native == NULL || e->count <= 0) {
         return;
     }
@@ -1774,32 +1675,32 @@ void mp6_widescreen_extrude_model_border_xz(int16_t modelId, const char *objName
 }
 
 /* ==========================================================================
- * WS19 (docs/WS19_SURGICAL_EXTRUDE.md). Split-separate for a symmetric
- * proscenium-frame backdrop -- NATIVE scale, halves slide apart in X only
+ * Split-separate for a symmetric proscenium-frame backdrop -- NATIVE
+ * scale, halves slide apart in X only
  * ==========================================================================
  * Confirmed needed for real (not speculative) by mdpartydll/mdparty.c's
  * Party pillar model ("pillar", DATA_mdparty+0): on-device report says the
  * previous whole-piece isotropic scale (mp6_widescreen_extrude_model(), the
  * same CLAMP mechanism every other one-off backdrop image in this project
- * uses) is wrong for this specific asset for TWO reasons: (1) the user wants
- * NATIVE-SCALE art (no softening/stretch of the cloud-border texture) with
+ * uses) is wrong for this specific asset for TWO reasons: (1) native-scale
+ * art (no softening/stretch of the cloud-border texture) is wanted, with
  * the two halves simply SEPARATING to reveal more scene in the middle,
  * rather than a single piece growing uniformly; (2) the isotropic formula's
  * own position compensation, `pos += (1-k)*scale*center`, moves the WHOLE
  * model by a real amount on every axis whenever its own bbox center isn't at
- * local origin -- confirmed by direct measurement (WS19 diagnostic dump,
- * this session): "pillar"'s own local-space bbox is min=(-800,0,-800)/
- * max=(800,1000,-700), i.e. center=(0,500,-750) (the same off-center bbox
- * WS10 originally found) -- at a live 1280x720 window (k=1.325) this
- * measured as topPos going from native (0,0,0) to (0,-162.5,243.75): a real
- * 243.75-unit push TOWARD the camera (+Z) and 162.5-unit push down (-Y),
- * neither of which is a "widen" concern at all -- exactly the reported
- * "extrude moves it forward/back in Z, so the floor and cloud border
- * collide" symptom, root-caused (not guessed) via this same measurement.
+ * local origin -- confirmed by direct measurement: "pillar"'s own
+ * local-space bbox is min=(-800,0,-800)/max=(800,1000,-700), i.e.
+ * center=(0,500,-750), a long way from local origin -- at a live 1280x720
+ * window (k=1.325) this measured as topPos going from native (0,0,0) to
+ * (0,-162.5,243.75): a real 243.75-unit push TOWARD the camera (+Z) and
+ * 162.5-unit push down (-Y), neither of which is a "widen" concern at all
+ * -- exactly a reported "extrude moves it forward/back in Z, so the floor
+ * and cloud border collide" symptom, root-caused via this same
+ * measurement.
  *
  * Mechanism: for every HSF_OBJ_MESH sub-object of `modelId` (the Party
  * pillar has exactly one, "pillar", confirmed unrotated/at local origin/
- * identity-scale via the WS19 diagnostic dump -- base.pos=base.rot=(0,0,0),
+ * identity-scale via direct diagnostic dump -- base.pos=base.rot=(0,0,0),
  * base.scale=(1,1,1), so object-local space and model space coincide
  * exactly, no matrix composition needed, unlike the selective mechanism
  * above which DOES need one for rotated sub-objects), classify each of its
@@ -1816,10 +1717,10 @@ void mp6_widescreen_extrude_model_border_xz(int16_t modelId, const char *objName
  * identical in scale, just relocated). This is exactly the amount needed to
  * keep each half's own OUTER edge flush with the live frame edge: this
  * object's own native bbox already reaches exactly to the native 4:3 frame
- * edge at k=1 (WS8/WS10/WS11's own already-established precondition for
- * this exact asset -- "the model being too small for widescreen" was
- * accepted specifically because its edges align with the native viewport
- * edges, not floating short of them) and the camera's own Hor+ widen
+ * edge at k=1 (an already-established precondition for this exact asset --
+ * "the model being too small for widescreen" was accepted specifically
+ * because its edges align with the native viewport edges, not floating
+ * short of them) and the camera's own Hor+ widen
  * reveals exactly k times as much half-width at any given depth (the same
  * "world_extent scales with aspect, i.e. with k" relationship
  * mp6_widescreen_cover_fov()'s own header comment already derives) -- so
@@ -1843,7 +1744,7 @@ void mp6_widescreen_extrude_model_border_xz(int16_t modelId, const char *objName
  * all (stays at whatever native value the caller already set, exactly like
  * the selective/border mechanisms above never touch it either).
  *
- * WS14 dynamic registry: identical "malloc a native snapshot once per live
+ * Dynamic registry: identical "malloc a native snapshot once per live
  * vertex-buffer pointer, re-derive from it every frame with the CURRENT k"
  * strategy as every other buffer mechanism in this file. Also keeps each
  * touched object's own authored `mesh.min`/`max` in step (X only; Y/Z
@@ -1861,8 +1762,8 @@ typedef struct {
     s32 count;
     float localCenterX;     /* (nativeMin.x+nativeMax.x)*0.5 -- this object's own split line */
     float halfWidth;         /* (nativeMax.x-nativeMin.x)*0.5 -- native half-extent, the translate unit */
-    float zBackRate;        /* WS23: Z units to shift AWAY from the camera per unit of (k-1); 0 = the
-                              * plain WS19 behavior (mp6_widescreen_split_separate_x), byte-identical. */
+    float zBackRate;        /* Z units to shift AWAY from the camera per unit of (k-1); 0 = the
+                              * plain behavior (mp6_widescreen_split_separate_x), byte-identical. */
     HuVecF nativeMin;
     HuVecF nativeMax;
     HuVecF *liveMin;
@@ -1904,38 +1805,40 @@ static MP6WSSplitEntry *mp6_ws_split_alloc(void)
     return NULL;
 }
 
-/* WS23 (docs/WS23_PILLAR_ZBACK.md): the party camera's own source-confirmed
- * pose (game/objsysobj.c's omOutView(), fed by mdparty.c's fn_1_33A0:
- * center=(0,65,-800), rot=(-7.25,0,0), zoom=2650 for the character-select
- * screen) puts the camera at world (0, 399.4, 1828.8) with rotY=0 -- an
- * UNYAWED camera, so its own "right" screen axis is exactly world +X and its
- * forward axis has zero X component. Under a perspective projection this
- * means screen-space X is proportional to world_x / depthAlongForward,
- * where depthAlongForward(point) = (point-camPos).forward. Pushing this
+/* The party camera's own source-confirmed pose (game/objsysobj.c's
+ * omOutView(), fed by mdparty.c's fn_1_33A0: center=(0,65,-800),
+ * rot=(-7.25,0,0), zoom=2650 for the character-select screen) puts the
+ * camera at world (0, 399.4, 1828.8) with rotY=0 -- an UNYAWED camera, so
+ * its own "right" screen axis is exactly world +X and its forward axis
+ * has zero X component. Under a perspective projection this means
+ * screen-space X is proportional to world_x / depthAlongForward, where
+ * depthAlongForward(point) = (point-camPos).forward. Pushing this
  * object's own vertices back in Z by `zDelta` (more negative, away from the
  * camera) increases that denominator for every one of them, shrinking their
  * own projected X by the same ratio regardless of which half they're in --
  * so the X delta above needs multiplying by the INVERSE of that shrink to
  * keep landing exactly on the live frame edge, same as it does at zDelta=0.
  * `MP6_WS_PARTY_CAM_DEPTH_AT_PILLAR` is depthAlongForward evaluated once for
- * this object's own bbox-center (y=500, native z=-750, WS19 §3.1) -- a
- * single representative point, matching this mechanism's own "one rigid
- * delta per half" translate-only philosophy (not a per-vertex varying
- * scale, which would distort the art WS19 explicitly kept undistorted). */
+ * this object's own bbox-center (y=500, native z=-750) -- a single
+ * representative point, matching this mechanism's own "one rigid delta
+ * per half" translate-only philosophy (not a per-vertex varying scale,
+ * which would distort the art this mechanism explicitly keeps
+ * undistorted). */
 #define MP6_WS_PARTY_CAM_COS_TILT        0.99201f /* cos(7.25 deg) */
 #define MP6_WS_PARTY_CAM_DEPTH_AT_PILLAR 2545.5f  /* depthAlongForward at (y=500, z=-750) */
 
 static void mp6_ws_split_apply(MP6WSSplitEntry *e, float k)
 {
-    /* W5 (docs/SAVESTATE.md): a savestate restore leaves this registry's
-     * GAME half valid (ptr/hsf/modelId are arena addresses and ids, all
-     * restored) but nulls its HOST half -- `native` pointed into the
-     * capturing process's C runtime heap. mp6_widescreen_savestate_
-     * rehydrate() sets it NULL; this early-out keeps the per-frame
-     * re-apply from dereferencing it before the registrar re-snapshots.
-     * Skipping a frame's re-apply is harmless: the geometry in the arena
-     * is already extruded (that is what was captured), and the next
-     * register call re-takes the snapshot. */
+    /* A savestate restore leaves this registry's GAME half valid
+     * (ptr/hsf/modelId are arena addresses and ids, all restored) but
+     * nulls its HOST half -- `native` pointed into the capturing
+     * process's C runtime heap, which does not exist in the restoring
+     * process. mp6_widescreen_savestate_rehydrate() sets it NULL; this
+     * early-out keeps the per-frame re-apply from dereferencing it before
+     * the registrar re-snapshots. Skipping a frame's re-apply is
+     * harmless: the geometry in the arena is already extruded (that is
+     * what was captured), and the next register call re-takes the
+     * snapshot. */
     if (e->native == NULL || e->count <= 0) {
         return;
     }
@@ -1952,36 +1855,37 @@ static void mp6_ws_split_apply(MP6WSSplitEntry *e, float k)
         delta *= ratio;
     }
 
-    /* WS26: the Z push shrinks this object's own PROJECTED SIZE by exactly
+    /* The Z push shrinks this object's own PROJECTED SIZE by exactly
      * `1/ratio` -- not just the split translation the line above already
-     * compensates. Before WS26 only that translation was scaled, so each half
-     * still landed on the live frame edge horizontally while the art itself
-     * projected smaller: at the -400 Z-back the user asked for, the frame's
-     * own top edge visibly receded from the top corners and left clear-color
-     * wedges there (captured, not deduced -- build/ws26_*). Pre-multiplying
-     * every vertex about this object's own native bbox center by the SAME
-     * `ratio` cancels that shrink, so the pillar projects at its native
-     * on-screen size no matter how far back it goes -- which is what "just
-     * move it further back" has to mean visually: a depth change only, to
-     * close the parallax gap onto the floor, with the art unchanged.
+     * compensates. An earlier revision only scaled that translation, so
+     * each half still landed on the live frame edge horizontally while the
+     * art itself projected smaller: at a large Z-back, the frame's own top
+     * edge visibly receded from the top corners and left clear-color
+     * wedges there. Pre-multiplying every vertex about this object's own
+     * native bbox center by the SAME `ratio` cancels that shrink, so the
+     * pillar projects at its native on-screen size no matter how far back
+     * it goes -- which is what "just move it further back" has to mean
+     * visually: a depth change only, to close the parallax gap onto the
+     * floor, with the art unchanged.
      *
      * This is a SCALE about the object's own center, NOT the Y translate
-     * ("floor dip") WS19 rejected: at zDelta==0 -- native aspect (k=1), and
-     * every caller that never opts into a Z-back (mp6_widescreen_split_
-     * separate_x) -- `ratio` is exactly 1.0f and both axes below collapse
-     * algebraically to the pre-WS26 expressions (src.x +/- delta, src.y), so
-     * those paths stay byte-identical. Like the existing X compensation it
-     * evaluates the perspective ratio at ONE representative depth (this
-     * object's own bbox center), matching this mechanism's own established
-     * "one rigid delta per half" approximation rather than introducing a
-     * per-vertex varying projection. */
+     * ("floor dip") rejected above: at zDelta==0 -- native aspect (k=1),
+     * and every caller that never opts into a Z-back
+     * (mp6_widescreen_split_separate_x) -- `ratio` is exactly 1.0f and
+     * both axes below collapse algebraically to the plain (src.x +/-
+     * delta, src.y) expressions, so those paths stay byte-identical. Like
+     * the existing X compensation it evaluates the perspective ratio at
+     * ONE representative depth (this object's own bbox center), matching
+     * this mechanism's own established "one rigid delta per half"
+     * approximation rather than introducing a per-vertex varying
+     * projection. */
     for (j = 0; j < e->count; j++) {
         float sx = e->localCenterX + (src[j].x - e->localCenterX) * ratio;
         dst[j].x = (src[j].x < e->localCenterX) ? (sx - delta) : (sx + delta);
         dst[j].y = centerY + (src[j].y - centerY) * ratio;
-        dst[j].z = src[j].z + zDelta; /* WS23: uniform rigid Z shift only -- 0 at k=1 and for every
+        dst[j].z = src[j].z + zDelta; /* uniform rigid Z shift only -- 0 at k=1 and for every
                                         * caller that never opts in (mp6_widescreen_split_separate_x),
-                                        * so the plain WS19 "no Z shove" contract is unchanged for them. */
+                                        * so the plain "no Z shove" contract is unchanged for them. */
     }
     e->liveMin->x = e->localCenterX + (e->nativeMin.x - e->localCenterX) * ratio - delta;
     e->liveMax->x = e->localCenterX + (e->nativeMax.x - e->localCenterX) * ratio + delta;
@@ -2026,7 +1930,7 @@ static void mp6_ws_split_separate_x_impl(int16_t modelId, float zBackRate)
         }
         e->modelId = modelId;
         e->hsf = hsf;
-        e->zBackRate = zBackRate; /* WS23: always refreshed (not just on freshInstance), same as modelId/hsf above */
+        e->zBackRate = zBackRate; /* always refreshed (not just on freshInstance), same as modelId/hsf above */
         e->liveMin = &o->mesh.mesh.min;
         e->liveMax = &o->mesh.mesh.max;
         if (freshInstance) {
@@ -2065,14 +1969,13 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
 }
 
 /* ==========================================================================
- * WS20 (docs/WS20_SHADOW_PROJECTION.md). Floor border-fill via a SEPARATE,
- * NON-SHADOW-RECEIVING duplicate model instance -- decouples the projected-
- * shadow texcoord generation from border_xz's own per-vertex fill, WITHOUT
- * touching any shared decomp draw code (game/hsfdraw.c/hsfman.c untouched).
+ * Floor border-fill via a SEPARATE, NON-SHADOW-RECEIVING duplicate model
+ * instance -- decouples the projected-shadow texcoord generation from
+ * border_xz's own per-vertex fill, WITHOUT touching any shared decomp
+ * draw code (game/hsfdraw.c/hsfman.c untouched).
  * ==========================================================================
- * THE PROBLEM (investigated fresh this session, WS19 §4 diagnosed the root
- * cause but implemented no fix): mdpartydll's mushroom-house/fence shadows
- * are a genuine real-time PROJECTED shadow -- every frame, `Hu3DShadowExec`
+ * THE PROBLEM: mdpartydll's mushroom-house/fence shadows are a genuine
+ * real-time PROJECTED shadow -- every frame, `Hu3DShadowExec`
  * (game/hsfman.c) renders every `HU3D_ATTR_SHADOW`-flagged caster from a
  * shadow camera into a small offscreen texture, then `game/hsfdraw.c`'s
  * `SetShadow()` paints it onto every `HU3D_CONST_SHADOW_MAP`-flagged
@@ -2083,75 +1986,64 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * GX_VA_POS ARRAY the ordinary render uses (`objMesh`'s own
  * `GXSetArray(GX_VA_POS, objPtr->mesh.vertex->data, ...)`, hsfdraw.c) --
  * confirmed directly by reading `ObjDraw`/`FaceDraw`'s own texture-matrix
- * setup this session (not re-guessed from WS19's writeup alone). "yuka"'s
- * own top-level transform is untouched by `border_xz` (only raw vertex data
- * is mutated), so `drawObj->matrix` here is exactly native -- the ENTIRE
- * distortion is the raw per-vertex position term, which `border_xz`
- * deliberately moves for its outer 16 perimeter vertices (that is its whole
- * job: close the widescreen gap). Since GX_TG_POS has no API-level way to
- * source a DIFFERENT position stream from the one used for the main render
- * within a single draw, and a texture-MATRIX compensation is a single
- * transform applied uniformly to every vertex of one draw call (so it
- * cannot selectively "undo" the per-vertex/per-axis CONDITIONAL displacement
- * border_xz applies to only SOME vertices without equally corrupting the
- * untouched native ones) -- neither a matrix trick nor "just feed it the
- * native position" is possible without a genuinely separate per-vertex
- * position channel, which would mean threading a new vertex-attribute path
- * (and a new per-object opt-in) through hsfdraw.c's `FaceDraw`/`SetShadow`
- * -- shared draw code used by literally every model in the game, and
- * resting on an untested corner of this project's own GX-texgen emulation
- * (a 3x4 projective matrix sourced from a stored 2-component channel
- * instead of GX_TG_POS, a combination nothing else in this decompiled game
- * ever exercises). Investigated (this session, hsfdraw.c's own FaceDraw
- * read line-by-line) and rejected as disproportionate to a cosmetic
- * shadow-alignment fix -- see docs/WS20_SHADOW_PROJECTION.md for the full
- * writeup of every option considered, including why a finer/graduated
- * border mesh doesn't help either (would need new vertices+faces spliced
- * into "yuka"'s own fixed 5x5 grid, and the actual caster geometry already
- * reaches to within 50-130 world units of the floor's true edge -- measured
- * this session via a new `mp6_widescreen_debug_dump_world_bbox()` census of
- * DATA_mdparty+2's own "kinoko"/"kinoko1-3"/"saku"/"sou" objects, composed
- * through their own placement-joint parents -- so there is no meaningfully-
- * sized native margin to reclaim by narrowing border_xz's own outer ring
- * either).
+ * setup. "yuka"'s own top-level transform is untouched by `border_xz`
+ * (only raw vertex data is mutated), so `drawObj->matrix` here is exactly
+ * native -- the ENTIRE distortion is the raw per-vertex position term,
+ * which `border_xz` deliberately moves for its outer 16 perimeter
+ * vertices (that is its whole job: close the widescreen gap). Since
+ * GX_TG_POS has no API-level way to source a DIFFERENT position stream
+ * from the one used for the main render within a single draw, and a
+ * texture-MATRIX compensation is a single transform applied uniformly to
+ * every vertex of one draw call (so it cannot selectively "undo" the
+ * per-vertex/per-axis CONDITIONAL displacement border_xz applies to only
+ * SOME vertices without equally corrupting the untouched native ones) --
+ * neither a matrix trick nor "just feed it the native position" is
+ * possible without a genuinely separate per-vertex position channel,
+ * which would mean threading a new vertex-attribute path through
+ * hsfdraw.c's `FaceDraw`/`SetShadow` -- shared draw code used by every
+ * model in the game -- rejected as disproportionate to a cosmetic
+ * shadow-alignment fix. A finer/graduated border mesh doesn't help either:
+ * it would need new vertices+faces spliced into "yuka"'s own fixed 5x5
+ * grid, and the actual caster geometry already reaches to within 50-130
+ * world units of the floor's true edge, so there is no meaningfully-sized
+ * native margin to reclaim by narrowing border_xz's own outer ring
+ * either.
  *
  * THE FIX: since ONE vertex buffer cannot serve two different purposes in
  * one draw (native for shadow texcoord, extended for the fill), use TWO
  * draws instead. `Hu3DModelCreateData(dataNum)` (the SAME macro every
  * ordinary scene setup already calls, `game/hu3d.h`) is called a SECOND
  * time on the SAME on-disk floor asset -- confirmed safe by direct source
- * reading this session, not assumed: it expands to
- * `Hu3DModelCreate(HuDataSelHeapReadNum(...))`, and `Hu3DModelCreate`
- * (game/hsfman.c) unconditionally calls `LoadHSF` (this port's
- * `MP6_LoadHSFNative`, platform/hsf/hsf_load_native.c) fresh, which
- * allocates BRAND NEW `HuMemDirectMallocNum` buffers and decodes every
- * vertex/face/attribute array directly from the raw file bytes every
- * single call (`LoadVertexArrays` etc. -- no cache, no pointer sharing
- * keyed by data number). So a second `Hu3DModelCreateData(DATA_mdparty+1)`
- * yields a SECOND, fully independent `HSF_DATA`/vertex buffer -- mutating
- * IT via the EXISTING, unchanged `mp6_widescreen_extrude_model_border_xz()`
- * can never touch the FIRST (original) instance's own vertex data. (This is
- * a materially different, and safe, operation from `Hu3DModelLink()`,
- * game/hsfman.c's OTHER "second instance" primitive, which explicitly
- * SHARES object/attribute/material data via `Hu3DObjDuplicate` et al and
- * would NOT be safe here -- deliberately not used.)
+ * reading: it expands to `Hu3DModelCreate(HuDataSelHeapReadNum(...))`, and
+ * `Hu3DModelCreate` (game/hsfman.c) unconditionally calls `LoadHSF` (this
+ * port's `MP6_LoadHSFNative`, platform/hsf/hsf_load_native.c) fresh, which
+ * allocates BRAND NEW buffers and decodes every vertex/face/attribute
+ * array directly from the raw file bytes every single call -- no cache,
+ * no pointer sharing keyed by data number. So a second
+ * `Hu3DModelCreateData(DATA_mdparty+1)` yields a SECOND, fully independent
+ * `HSF_DATA`/vertex buffer -- mutating IT via the EXISTING, unchanged
+ * `mp6_widescreen_extrude_model_border_xz()` can never touch the FIRST
+ * (original) instance's own vertex data. (This is a materially different,
+ * and safe, operation from `Hu3DModelLink()`, game/hsfman.c's OTHER
+ * "second instance" primitive, which explicitly SHARES object/attribute/
+ * material data via `Hu3DObjDuplicate` et al and would NOT be safe here --
+ * deliberately not used.)
  *
  * The ORIGINAL "yuka" instance (mdpartydll's own `obj->mdlId[1]`) is now
  * left COMPLETELY untouched by any widescreen mechanism -- 100% native
  * vertex data, exactly as `Hu3DModelShadowMapSet` (still called on it,
  * unchanged call site) already expects for the shadow receiver -- so its
- * own projected shadow decal is pixel-native, byte-identical to the
- * pre-WS14 (before any floor-widening mechanism existed) rendering, for
- * every world position the native 4:3 game ever actually rendered. This
- * NEW duplicate instance is the one that gets `border_xz` (unchanged
- * mechanism, unchanged formula, same visual fill this project already
- * shipped) -- and is deliberately NEVER given `Hu3DModelShadowMapSet`, so
- * its own moved outer-ring vertices never feed a texcoord generator at all.
- * The dynamic-resize/reapply behavior comes for free: `border_xz` already
- * registers whatever modelId it's given into the existing WS14 border
- * registry, so the duplicate re-derives its own fill every frame from its
- * OWN cached native snapshot exactly like every other border_xz caller --
- * no new reapply wiring needed here.
+ * own projected shadow decal is pixel-native for every world position the
+ * native 4:3 game ever actually rendered. This NEW duplicate instance is
+ * the one that gets `border_xz` (unchanged mechanism, unchanged formula,
+ * same visual fill this project already shipped) -- and is deliberately
+ * NEVER given `Hu3DModelShadowMapSet`, so its own moved outer-ring
+ * vertices never feed a texcoord generator at all. The dynamic-resize/
+ * reapply behavior comes for free: `border_xz` already registers whatever
+ * modelId it's given into the existing border registry, so the duplicate
+ * re-derives its own fill every frame from its OWN cached native snapshot
+ * exactly like every other border_xz caller -- no new reapply wiring
+ * needed here.
  *
  * TRADE-OFF, stated plainly (not hidden): over the region the native 4:3
  * game already showed (the inner 800x800 footprint) the shadow is now
@@ -2162,7 +2054,7 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * screen-space the original never had" is judged a more honest outcome
  * than a decal that visibly grows/deforms as the window is resized -- but
  * it is a real, deliberate trade-off, not a full elimination of every
- * possible shadow ray, and is reported as such rather than oversold.
+ * possible shadow ray.
  *
  * COINCIDENT-SURFACE (Z-FIGHT) SAFETY: the duplicate's own inner 9 (of 25)
  * vertices are left untouched by border_xz (same as the original's), so
@@ -2179,33 +2071,31 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * comparison against whatever depth is already buffered, this makes the
  * ORIGINAL (nearer) instance win the shared inner region regardless of
  * which of the two instances the engine happens to submit first -- no
- * dependency on this project's own model-draw ordering, which was not
- * independently re-derived here. The offset is tiny relative to this
- * scene's own scale (party board pieces span hundreds to ~1600 world
- * units) -- chosen larger than any plausible float rounding at this
- * coordinate magnitude, small enough to be visually undetectable in a
- * near-overhead view; confirmed clean (no visible seam/flicker) by direct
- * capture rather than assumed, see the doc's own verification section.
+ * dependency on this project's own model-draw ordering. The offset is
+ * tiny relative to this scene's own scale (party board pieces span
+ * hundreds to ~1600 world units) -- chosen larger than any plausible
+ * float rounding at this coordinate magnitude, small enough to be
+ * visually undetectable in a near-overhead view; confirmed clean (no
+ * visible seam/flicker) by direct capture rather than assumed.
  *
  * Never touches the ORIGINAL model's own top-level transform (position,
- * scale, rotation) at all -- the ONLY thing WS20 changes about the
- * ORIGINAL floor instance is that it no longer receives a border_xz call
- * at its own former call site. Same default-off contract as every other
- * mechanism in this file (gated on mp6_widescreen_enabled(); a disabled
- * build never calls Hu3DModelCreateData a second time at all, so the
- * duplicate simply never exists -- byte-identical to the pre-WS20 single-
- * instance behavior). */
+ * scale, rotation) at all -- the ONLY change to the ORIGINAL floor
+ * instance is that it no longer receives a border_xz call at its own
+ * former call site. Same default-off contract as every other mechanism in
+ * this file (gated on mp6_widescreen_enabled(); a disabled build never
+ * calls Hu3DModelCreateData a second time at all, so the duplicate simply
+ * never exists -- byte-identical to the original single-instance
+ * behavior). */
 #define MP6_WS_FLOOR_DUP_Y_BIAS (-2.0f)
 
 /* ==========================================================================
- * WS28 companion fix: the border-fill duplicate's stretched ring must
- * sample CLEAN tile texels -- the user-reported "baked shadow leakage in
- * widescreen floor" (also WS26's own handoff, open issue 2: "there's baked
- * shadows in the 2nd floor mesh").
+ * Companion fix: the border-fill duplicate's stretched ring must sample
+ * CLEAN tile texels -- a user report of "baked shadow leakage in
+ * widescreen floor."
  * ==========================================================================
  * ROOT CAUSE, measured off the decoded ys77_floor bitmap (256x256 RGB565;
- * tools/mp6scene dump + texel census, this session): the floor art bakes
- * the mushroom-house/fence shadows INTO the picture as dark blobs hugging
+ * tools/mp6scene dump + texel census): the floor art bakes the
+ * mushroom-house/fence shadows INTO the picture as dark blobs hugging
  * the FAR half -- component-filtered census (luma < 160 vs the clean-tile
  * median 201, centre circle excluded): one 4738 px blob at s 0.227..0.875
  * / t 0.012..0.369 (t=0 is the far z=-800 edge), plus side blobs reaching
@@ -2219,9 +2109,8 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  *
  * FIX: rewrite the DUPLICATE's ring-cell STs once, at creation, so the
  * stretched bands sample the measured shadow-free parts of the SAME art
- * (the native floor instance -- the shadow receiver, WS20's contract --
- * is never touched; its own baked shadows render pixel-native where the
- * artist put them):
+ * (the native floor instance -- the shadow receiver -- is never touched;
+ * its own baked shadows render pixel-native where the artist put them):
  *   - FAR ring cells (any corner vert at native z = -800): every loop t
  *     := MP6_WS_FLOOR_ST_PIN_T. The tile art is a vertical-stripe pattern
  *     (colour varies with s, constant along t, measured: rows 104..255
@@ -2247,7 +2136,7 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * (Y_BIAS keeps it strictly below), so the rewrite is invisible there,
  * and a disabled build never creates the duplicate at all. STs are
  * written once (they are k-independent constants; only vertex positions
- * ride the WS14 reapply) and the arrays die with the duplicate model.
+ * ride the per-frame reapply) and the arrays die with the duplicate model.
  * Validated against the measured "yuka" layout before any write (25
  * verts on the exact {0,+-400,+-800} grid, 16 QUAD faces, 64 per-loop
  * STs, bijective ST indexing) -- anything else refuses and leaves the
@@ -2255,8 +2144,8 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
 #define MP6_WS_FLOOR_ST_EDGE_INSET 0.105f /* clean edge-column runs: texels 0..31 / 228..255 (blob max col 227) */
 #define MP6_WS_FLOOR_ST_PIN_T      0.9f   /* texture row 229.5: shadow-free full-width, below the circle decal */
 
-/* Defined in the WS27/WS28 extend section below; shared here for the same
- * refuse-don't-guess discipline and the same tolerant float compare. */
+/* Defined in the natural-extension section below; shared here for the
+ * same refuse-don't-guess discipline and the same tolerant float compare. */
 static void mp6_ws_extend_refuse(const char *objName, const char *why);
 static BOOL mp6_ws_pillar_near(float a, float b, float eps);
 
@@ -2416,7 +2305,7 @@ void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName)
      * for the full Z-fight-safety derivation. Hu3DModelCreate's own default
      * pos is (0,0,0), matching the original floor instance's native
      * position exactly; only Y is nudged, once, permanently (not part of
-     * the WS14 dynamic-reapply system -- this is a fixed rendering-order
+     * the dynamic-reapply system -- this is a fixed rendering-order
      * safety margin, not a widescreen-scale-dependent quantity). */
     Hu3DModelPosGet(dupId, &pos);
     Hu3DModelPosSet(dupId, pos.x, pos.y + MP6_WS_FLOOR_DUP_Y_BIAS, pos.z);
@@ -2426,7 +2315,7 @@ void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName)
      * become a shadow receiver, so its own extended outer-ring vertices can
      * never feed GX_TG_POS's projected-shadow texcoord generator. */
 
-    /* WS28: retarget the duplicate's ring-cell STs onto the measured
+    /* Retargets the duplicate's ring-cell STs onto the measured
      * shadow-free bands of its own texture BEFORE the border extension
      * moves any vertex (the helper keys cell membership off the authored
      * lattice) -- see mp6_ws_floor_dup_clean_sts' own section comment for
@@ -2463,59 +2352,56 @@ void mp6_widescreen_floor_border_fill_dup_kill_all(void)
 }
 
 /* ==========================================================================
- * WS27 (tools/mp6scene/WS_NATURAL_EXTENSION_SPEC.md). Natural scene
- * extension -- the curated backdrops stay PIXEL-NATIVE in the centre and
- * the margins are generated from the scene's OWN art, as appended
- * degenerate-collapsible quads in the object's OWN buffers:
+ * Natural scene extension -- the curated backdrops stay PIXEL-NATIVE in
+ * the centre and the margins are generated from the scene's OWN art, as
+ * appended degenerate-collapsible quads in the object's OWN buffers:
  *   - mode-select "sora" (mdsel[2]): periodic TILE strips continuing the
  *     checker outward (day window u [0, 93/512], world tile width
  *     93*(6000/512)=1089.84375; night [1-95/512, 1], 1113.28125 -- both
  *     windows measured on the decoded 512x256 bitmap, exhaustive shift
- *     search, spec section 1.1; counts: k=1.625 -> 2+2, k=1.775 -> 3+3).
- *     Replaces the WS19 selective horizontal stretch of sora's own verts.
+ *     search; counts: k=1.625 -> 2+2, k=1.775 -> 3+3). Replaces an earlier
+ *     selective horizontal stretch of sora's own verts.
  *   - title "grid5"/"grid14" (title[0x14]): one MIRROR border quad per
  *     side, u running BACKWARD from the fold (u=0 at x=-288 -- C0-exact,
  *     the native edge texel; outer u = (k-1)/2, clamped at 1.0 -- a single
  *     fold is valid to k=3, a 3.6:1 window). Chosen over tiling because
  *     neither back_ex nor back_house has ANY measurable x-periodicity
- *     (autocorrelation < 0.20 everywhere, spec section 1.2). Replaces the
- *     WS19 selective horizontal stretch of these two quads.
+ *     (autocorrelation < 0.20 everywhere). Replaces an earlier selective
+ *     horizontal stretch of these two quads.
  *   - party "CP" (mdparty[3]): a pinned-UV rim RING -- one quad per fan
  *     chord (16), inner vertices the rim vertices VERBATIM (watertight),
  *     outer the same positions scaled by k, both loops carrying the rim's
  *     own loop STs, so the ring samples, radially constant, the exact UV
  *     chord the disc's outer edge samples (the rim band r_tex 0.98..1.00
- *     is flat opaque gold, sd <= 4.2, alpha 255 -- spec section 1.3; a
- *     radial mirror would replay the disc's TRANSPARENT interior and was
- *     rejected on that pixel data). Replaces the WS11 whole-model
- *     isotropic extrude -- which also stops scaling panel1/panel2 (the
- *     live board-map render targets): they now render at native size at
- *     wide aspects, a deliberate, user-accepted side effect (spec
- *     section 4), as is the authored gold surround becoming visible in
- *     the wide corners.
+ *     is flat opaque gold, sd <= 4.2, alpha 255; a radial mirror would
+ *     replay the disc's TRANSPARENT interior and was rejected on that
+ *     pixel data). Replaces an earlier whole-model isotropic extrude --
+ *     which also stops scaling panel1/panel2 (the live board-map render
+ *     targets): they now render at native size at wide aspects, a
+ *     deliberate, accepted side effect, as is the authored gold surround
+ *     becoming visible in the wide corners.
  *   All UVs stay inside [0,1] (sub-window repetition is done by geometry
  *   subdivision, not wrap mode) -- every touched material is CLAMP/CLAMP
  *   and needs NO override.
- *   - WS28 adds a fourth treatment on this same mechanism: the party
- *     "pillar" EDGE EXTRUSION (its own section further down; spec:
- *     tools/mp6scene/WS_PILLAR_EXTENSION_SPEC.md). Its strip STs are
+ *   - A fourth treatment on this same mechanism: the party "pillar" EDGE
+ *     EXTRUSION (its own section further down). Its strip STs are
  *     verbatim copies of authored edge-loop STs, including the arch
  *     chain's authored v>1 CLAMP-band value -- the art's own top-edge
  *     dissolve -- so the [0,1] rule above is deliberately not asserted
  *     for it; CLAMP still needs no override for the same reason the ring
  *     needs none (every strip loop is an authored loop's own value).
  *
- * WHY GROWN BUFFERS, NOT COMPANION MODELS (the WS20 floor-dup shape):
- * Hu3DModelCreateData can only re-decode an ON-DISC asset (LoadHSF parses
- * raw file bytes -- there is no create-from-generated-HSF_DATA path), and,
- * decisively, the title model draws every object from `mesh.curr` under
- * its baked reveal motion (WS15's finding -- base writes are ineffective
+ * WHY GROWN BUFFERS, NOT COMPANION MODELS (the floor-dup shape used
+ * above): Hu3DModelCreateData can only re-decode an ON-DISC asset (LoadHSF
+ * parses raw file bytes -- there is no create-from-generated-HSF_DATA
+ * path), and, decisively, the title model draws every object from
+ * `mesh.curr` under its baked reveal motion (base writes are ineffective
  * there): a sibling model could never ride that motion, while faces
- * appended to the object's OWN buffers ride `curr` automatically. The
- * design pass proved the two shapes draw-equivalent at bind pose (its
- * companion objects copy the source's parent + base TRS) -- that
- * equivalence is what makes tools/mp6scene/build/wsdesign_*.png valid
- * evidence for THIS engine shape (spec section 5.1).
+ * appended to the object's OWN buffers ride `curr` automatically. A design
+ * pass proved the two shapes draw-equivalent at bind pose (its companion
+ * objects copy the source's parent + base TRS) -- that equivalence is
+ * what makes tools/mp6scene/build/wsdesign_*.png valid evidence for THIS
+ * engine shape.
  *
  * THE DISPLAY-LIST RE-BAKE (engine fact the spec's design pass could not
  * see, discovered by direct source reading here): game/hsfdraw.c's
@@ -2526,7 +2412,7 @@ void mp6_widescreen_floor_border_fill_dup_kill_all(void)
  * draw time, so faces appended after model create would simply never
  * draw. Vertex/ST POSITIONS are still fetched live (GXSetArray points GX
  * at mesh.vertex->data/st->data every draw -- the same live-array fact
- * every WS15/WS19 vertex mechanism in this file already relies on), so
+ * every other vertex mechanism in this file already relies on), so
  * the fix splits cleanly: grow the buffers ONCE at registration, then
  * re-run MakeDisplayList(modelId, mallocNo) ONCE so the new (fixed-
  * capacity, initially zero-area) quads are in the bake -- and from then
@@ -2558,7 +2444,7 @@ void mp6_widescreen_floor_border_fill_dup_kill_all(void)
  * constData/dlBuf pointers and the twin replays the grown bake; the
  * buffers themselves (mesh.vertex/st/face pointers, copied by value) are
  * shared outright, so the one per-tick ring rewrite feeds both instances
- * -- exactly how the twins already share the HSF (spec section 4).
+ * -- exactly how the twins already share the HSF.
  *
  * BUFFER OWNERSHIP / TEARDOWN: the grown vertex/ST/face arrays are
  * allocated with HuMemDirectMallocNum(HEAP_MODEL, ..., modelP->mallocNo)
@@ -2566,32 +2452,31 @@ void mp6_widescreen_floor_border_fill_dup_kill_all(void)
  * replace (whose individual allocations are HuMemDirectFree'd here once
  * unreferenced) -- so Hu3DModelKill's own tag bulk-free reclaims them
  * with the rest of the model and NO new teardown call site is needed
- * anywhere (unlike the WS20 floor dup, which is a whole extra model
+ * anywhere (unlike the floor dup above, which is a whole extra model
  * instance and does need its explicit kill). A killed/reused model slot
  * is detected by the same Hu3DData[modelId].hsf identity check every
  * registry in this file uses; dead entries are recycled, never
  * resurrected. New vertex/ST pointers are mp6_gxarray_register'd with
  * their real byte size, exactly like the loader registers the originals.
  *
- * SAVESTATE (docs/SAVESTATE.md W5): this registry deliberately caches
- * ONLY scalars and arena pointers (the grown buffers, the object, the
- * hsf) -- NO host-heap snapshot exists, so unlike the four vertex
- * registries above there is nothing to serialize or rehydrate: a restore
- * brings back the grown arena buffers, this TU's registry statics, and
- * the identity check just holds. Deliberately NOT added to the blob
- * writer's registry ids.
+ * SAVESTATE: this registry deliberately caches ONLY scalars and arena
+ * pointers (the grown buffers, the object, the hsf) -- NO host-heap
+ * snapshot exists, so unlike the four vertex registries above there is
+ * nothing to serialize or rehydrate: a restore brings back the grown
+ * arena buffers, this TU's registry statics, and the identity check just
+ * holds. Deliberately NOT added to the blob writer's registry ids.
  *
- * THE k=1 ZERO CONTRACT (spec section 7): every appended quad collapses
- * to zero area at k=1 (tiles/mirror: all four corners on the seam edge;
- * ring: outer == rim verbatim), GX rasterises nothing, and the object's
- * live mesh.min/max are written back EXACTLY native -- and a disabled
- * build never registers (or grows, or re-bakes) anything at all, so
- * default-off stays byte-identical, the same contract every WS lane
+ * THE k=1 ZERO CONTRACT: every appended quad collapses to zero area at
+ * k=1 (tiles/mirror: all four corners on the seam edge; ring: outer ==
+ * rim verbatim), GX rasterises nothing, and the object's live
+ * mesh.min/max are written back EXACTLY native -- and a disabled build
+ * never registers (or grows, or re-bakes) anything at all, so default-off
+ * stays byte-identical, the same contract every mechanism in this file
  * keeps. The proven counts: k=1.625 -> sora 2+2 strips, k=1.775 -> 3+3
  * (fixed capacity 9+9 covers k <= 4.0, a ~5.3:1 window -- beyond it the
  * strip count saturates and coverage falls short, accepted for aspects
- * no real display has); grids exactly 1+1; ring exactly 16; the WS28
- * pillar exactly 16 duplicates + 10 quads, k-independent.
+ * no real display has); grids exactly 1+1; ring exactly 16; the pillar
+ * treatment exactly 16 duplicates + 10 quads, k-independent.
  *
  * QUAD AUTHORING FACTS (measured off the real on-disc data via
  * tools/mp6scene/mp6_hsf.py, this session -- not assumed):
@@ -2622,7 +2507,7 @@ typedef enum {
     MP6_WS_EXTEND_TILES = 0,
     MP6_WS_EXTEND_MIRROR,
     MP6_WS_EXTEND_RING,
-    MP6_WS_EXTEND_PILLAR  /* WS28 (tools/mp6scene/WS_PILLAR_EXTENSION_SPEC.md) */
+    MP6_WS_EXTEND_PILLAR  /* pillar edge extrusion (see its own section below) */
 } MP6WSExtendMode;
 
 /* Fixed per-side strip capacity for the TILE treatment: ceil(halfW*(kCap-1)
@@ -2654,7 +2539,7 @@ typedef struct {
     float tileWL, tileWR;    /* world width of one day / night tile */
     float puL, puR;          /* u-window width: periodPx / texW per side */
     s16 capL, capR;          /* appended strip capacity per side */
-    /* ring -- and, since the counts coincide exactly (16), the WS28 pillar
+    /* ring -- and, since the counts coincide exactly (16), the pillar
      * treatment reuses these same arrays with a different meaning per
      * element i: rimVtx = the SOURCE edge vertex index the duplicate copies,
      * rimX = the side sign (-1 left / +1 right; the per-tick x is
@@ -2668,11 +2553,11 @@ typedef struct {
     /* cull box bookkeeping: the object's own authored native min/max --
      * written back verbatim at k=1 (byte-identical contract) and extended
      * to the live companion reach otherwise, the same "keep the cull walk
-     * honest" duty WS15/WS19 established. */
+     * honest" duty established by the mechanisms above. */
     HuVecF nativeMin, nativeMax;
 } MP6WSExtendEntry;
 
-/* Five live users exist (sora, grid5, grid14, CP, and WS28's pillar --
+/* Five live users exist (sora, grid5, grid14, CP, and the pillar --
  * at most two of them, CP + pillar, even share a scene) and only one
  * scene is ever on-screen -- 8 gives the same re-entry headroom margin as
  * every other registry in this file (dead slots recycled by liveness). */
@@ -2808,21 +2693,21 @@ static BOOL mp6_ws_extend_grow(HU3D_MODELID modelId, HSF_OBJECT *o,
      * safety argument. Old constData/drawData/dlBuf freed first (they are
      * re-created per mesh object by MakeDisplayList).
      *
-     * WS28: the receiver-side SHADOW-MAP state must survive the re-bake.
+     * The receiver-side SHADOW-MAP state must survive the re-bake.
      * Hu3DModelShadowMapSet (game/hsfman.c) stores its effect in
      * constData->attr (HU3D_CONST_SHADOW_MAP; the TPLvl variant also sets
      * HU3D_CONST_SHADOW_MAP_TPLVL + constData->shadowAlpha) -- and
      * MakeDisplayList's ObjConstantMake resets attr to HU3D_CONST_NONE and
      * only re-derives the MATERIAL-flag bits (SHADOW/SHADOW_MAP-from-
      * material/ALTBLEND/HILITE/..., game/hsfdraw.c), never an API-set
-     * receiver bit. WS27's own safety argument ("HU3D_CONST_SHADOW_MAP is
-     * the party FLOOR's, which this mechanism never touches") was true for
-     * sora/grids/CP -- but the WS28 party pillar registration runs AFTER
-     * fn_1_861C's own Hu3DModelShadowMapSet(obj->mdlId[i]) call on that
-     * very model, so without this snapshot/restore the re-bake would
+     * receiver bit. That was harmless for sora/grids/CP (none of them is a
+     * shadow receiver) -- but the party pillar registration below runs
+     * AFTER fn_1_861C's own Hu3DModelShadowMapSet(obj->mdlId[i]) call on
+     * that very model, so without this snapshot/restore the re-bake would
      * silently stop the pillar receiving the mushroom-house/fence projected
      * shadows. Snapshotted per object BEFORE the frees, OR-ed back after
-     * MakeDisplayList; a no-op (all-zero bits) for every pre-WS28 caller. */
+     * MakeDisplayList; a no-op (all-zero bits) for every caller that isn't
+     * a shadow receiver. */
     {
         HSF_DATA *hsf = Hu3DData[modelId].hsf;
         u32 *keepAttr = (u32 *)malloc((size_t)hsf->objectNum * sizeof(u32));
@@ -2862,7 +2747,7 @@ static BOOL mp6_ws_extend_grow(HU3D_MODELID modelId, HSF_OBJECT *o,
         /* keepAttr/keepAlpha NULL (host-heap OOM on a tiny alloc --
          * extremely unlikely): the re-bake still happened correctly; only
          * the receiver-bit restore is skipped, degrading exactly to the
-         * pre-WS28 behavior for this one registration. */
+         * behavior from before this shadow-bit preservation existed. */
         free(keepAttr);
         free(keepAlpha);
     }
@@ -3048,7 +2933,7 @@ static void mp6_ws_extend_ring_apply(MP6WSExtendEntry *e, float k)
 }
 
 /* --------------------------------------------------------------------------
- * PILLAR apply (WS28) -- positions only. Every duplicate i sits at
+ * PILLAR apply -- positions only. Every duplicate i sits at
  * x = sign_i * halfW * k with its y/z fixed at the values copied from its
  * source edge vertex at registration; the strip STs are pinned copies of
  * the source loops' own STs, written once at registration and never touched
@@ -3535,62 +3420,58 @@ void mp6_widescreen_extend_ring(int16_t modelId, const char *objName)
 }
 
 /* ==========================================================================
- * WS28 (tools/mp6scene/WS_PILLAR_EXTENSION_SPEC.md): party pillar EDGE
- * EXTRUSION -- replaces the WS19..WS26 split+move+Z-back treatment of the
- * party proscenium border (mdparty[0], object "pillar") outright. The
- * directive chain, verbatim: "i want you to extend the pillars instead of
- * moving them" -> "dont over complecate pillar, just grab the outer most
- * vertice and move it to the screen edge" -> "for pillar pull i want you to
- * extrude the vertice instead of straign pull to avoid stretch". Standard
- * mesh-extrude semantics: every native vertex/face/UV/normal stays
- * byte-identical, the 7 outermost verts per side (|x| = 800 exactly; the
- * nearest interior vert is 106.4 units away at |x| = 693.595, so
- * "outermost" is exact, not a band) are DUPLICATED, only the duplicates
- * translate outward to +-800k, and the bridging quad strips carry PINNED
- * UVs -- both strip columns sample the source edge loop's own STs, so the
- * border art continues outward at native texel density with zero stretch
- * (the swirl rim ring's own trick, one mechanism over). Measured off
- * GP6E01 (spec section 1): the edge texel column is pure flat white over
- * the column band (sd 0.0) and horizontally uniform grey + the gold trim
- * exit over the arch band (adjacent-column RMS <= 1.84), so the
- * horizontally-constant strip is pixel-equivalent to what the art itself
- * does at its own edge.
+ * Party pillar EDGE EXTRUSION -- replaces an earlier split+move+Z-back
+ * treatment of the party proscenium border (mdparty[0], object "pillar")
+ * outright. Directive chain: extend the pillars instead of moving them;
+ * grab the outermost vertices and move them to the screen edge; extrude
+ * rather than pull-stretch. Standard mesh-extrude semantics: every native
+ * vertex/face/UV/normal stays byte-identical, the 7 outermost verts per
+ * side (|x| = 800 exactly; the nearest interior vert is 106.4 units away
+ * at |x| = 693.595, so "outermost" is exact, not a band) are DUPLICATED,
+ * only the duplicates translate outward to +-800k, and the bridging quad
+ * strips carry PINNED UVs -- both strip columns sample the source edge
+ * loop's own STs, so the border art continues outward at native texel
+ * density with zero stretch (the swirl rim ring's own trick, one
+ * mechanism over). Measured off the real texture: the edge texel column
+ * is pure flat white over the column band (sd 0.0) and horizontally
+ * uniform grey + the gold trim exit over the arch band (adjacent-column
+ * RMS <= 1.84), so the horizontally-constant strip is pixel-equivalent to
+ * what the art itself does at its own edge.
  *
- * WHY THIS SUPERSEDES THE SPLIT (spec sections 0/4/7): moving the split
- * halves outward is what opened the floor-behind-border parallax window --
- * the WS23/24/25/26 Z-back/size-preserve family exists only to compensate
- * that movement, and the design pass's extended floor-gap row scan
- * (historical WS25 rows PLUS 0.50-0.56h) measured the shipped form STILL
- * leaking 676/535 px (2560x1180) / 775/769 px (3440x1440) of floor below
- * the historically-scanned band. With the border NATIVE (no split, no
+ * WHY THIS SUPERSEDES THE SPLIT: moving the split halves outward is what
+ * opened the floor-behind-border parallax window -- the Z-back/size-
+ * preserve family above exists only to compensate that movement, and an
+ * extended floor-gap row scan measured the shipped split form STILL
+ * leaking hundreds of pixels of floor below the historically-scanned
+ * band, at both tested aspects. With the border NATIVE (no split, no
  * Z-back, centre-x untouched, arch corner pieces continuous, strips lying
  * IN their sheets' authored z planes) the parallax mechanism is
  * structurally absent -- the design renders measure 0/0 across the FULL
- * extended band at both aspects, with the CONTROL (border ends at +-800)
- * proving the metric bites (it opens 980/1777 px). The superseded simple
- * PULL (translate the edge verts, append nothing) also measured 0/0 but
- * smears the arch trim's wisp ornament x5.7 across the margin -- its
- * resampling zone reaches inboard to world |x| 565..800, INSIDE the native
- * frame -- which is exactly the stretch directive 3 vetoes.
+ * extended band at both aspects, with a control render (border ends at
+ * +-800) confirming the metric bites. A simpler alternative tried first
+ * (translate the edge verts, append nothing) also measured 0/0 but smears
+ * the arch trim's wisp ornament ~6x across the margin -- its resampling
+ * zone reaches inboard to world |x| 565..800, INSIDE the native frame --
+ * exactly the stretch this directive rejects.
  *
- * THE STRIP GEOMETRY (per side; spec section 2): three extrudable edge
- * chains -- column front edge (z=-750; y 0 / 267.47 / 499.43), arch front
- * edge (z=-700; y 421.57 / 508.86 / 1000) and the arch rim pair (the two
- * y=421.57 verts at z=-700/-800 joined by the arch's bottom rim-wall quad)
- * -- give 2+2+1 = 5 bridge quads and 3+3+2 = 8 duplicates per side (the
- * arch's bottom corner vert duplicates once for its fill strip and once
- * for the rim strip: per-loop UVs are face-dependent -- that vert carries
- * u=0.004 on the front fill but u=0.886 on its rim-wall quad -- and the
- * extrusion honours the per-face loop UV exactly as authored). Totals: 16
- * duplicated verts, 16 appended STs (pinned copies, written once), 10
- * QUAD faces, fixed for all k. Winding is DERIVED from the native data,
- * not assumed: each strip quad's emission cycle traverses its shared edge
- * OPPOSITE to the native face it continues (the standard manifold-
- * consistency rule, convention-free), read off the real faces' own GX
- * emission order (TRI emits corners 0,2,1; QUAD 0,2,3,1 -- game/
- * hsfdraw.c's FaceDraw, same facts the section header above records).
- * Appended corners copy their source loop's own normal INDEX (zero normal
- * growth) and color -1 (no colour buffer on this object -- validated).
+ * THE STRIP GEOMETRY (per side): three extrudable edge chains -- column
+ * front edge (z=-750; y 0 / 267.47 / 499.43), arch front edge (z=-700; y
+ * 421.57 / 508.86 / 1000) and the arch rim pair (the two y=421.57 verts at
+ * z=-700/-800 joined by the arch's bottom rim-wall quad) -- give 2+2+1 = 5
+ * bridge quads and 3+3+2 = 8 duplicates per side (the arch's bottom corner
+ * vert duplicates once for its fill strip and once for the rim strip:
+ * per-loop UVs are face-dependent -- that vert carries u=0.004 on the
+ * front fill but u=0.886 on its rim-wall quad -- and the extrusion honours
+ * the per-face loop UV exactly as authored). Totals: 16 duplicated verts,
+ * 16 appended STs (pinned copies, written once), 10 QUAD faces, fixed for
+ * all k. Winding is DERIVED from the native data, not assumed: each strip
+ * quad's emission cycle traverses its shared edge OPPOSITE to the native
+ * face it continues (the standard manifold-consistency rule,
+ * convention-free), read off the real faces' own GX emission order (TRI
+ * emits corners 0,2,1; QUAD 0,2,3,1 -- game/hsfdraw.c's FaceDraw, same
+ * facts the section header above records). Appended corners copy their
+ * source loop's own normal INDEX (zero normal growth) and color -1 (no
+ * colour buffer on this object -- validated).
  *
  * Registration anchors on the measured shipped layout and REFUSES
  * (degrade to native, loud under MP6_WS_HSF_DIAG) anything else: half
@@ -4120,22 +4001,21 @@ void mp6_widescreen_extend_pillar_edge(int16_t modelId, const char *objName)
     GXInvalidateVtxCache();
 }
 
-/* WS27: the load-bearing cloud/star reference centre, in closed form
- * (spec section 2). The SHIPPED pipeline widened sora's own verts about
- * the sky model's hierarchical centre (which clouds and stars pull to
- * +702.95) and only then snapshotted model_center_x for the star/cloud
- * repositions -- so the value those repositions actually consume is
- * k-DEPENDENT: +702.95 at k=1, -439.35 at k=1.625, -544.79 at k=1.775.
- * Under the tile treatment sora's verts never widen, so that snapshot
- * would silently change and move every cloud by >1000 units (caught by
- * the design pass's own divergence log, not by eye). This reproduces the
- * shipped value exactly, without any phantom mutation:
+/* The load-bearing cloud/star reference centre, in closed form. The
+ * SHIPPED pipeline widened sora's own verts about the sky model's
+ * hierarchical centre (which clouds and stars pull to +702.95) and only
+ * then snapshotted model_center_x for the star/cloud repositions -- so the
+ * value those repositions actually consume is k-DEPENDENT: +702.95 at
+ * k=1, -439.35 at k=1.625, -544.79 at k=1.775. Under the tile treatment
+ * sora's verts never widen, so that snapshot would silently change and
+ * move every cloud by >1000 units. This reproduces the shipped value
+ * exactly, without any phantom mutation:
  *     c0         = model_center_x(native model)          (+702.95)
  *     objBox'    = [c0 + k(objMin-c0), c0 + k(objMax-c0)] (widen about c0)
  *     centerX    = midpoint( union(all OTHER meshes' composed boxes, objBox') )
  * Verified bit-equal against the shipped-order phantom widen on the real
- * mdsel[2] data at k=1, 1.625 and 1.775 (tools/mp6scene mirrors, this
- * session: -439.3461 / -544.7892). Collapses to the plain hierarchical
+ * mdsel[2] data at k=1, 1.625 and 1.775 (-439.3461 / -544.7892).
+ * Collapses to the plain hierarchical
  * centre at k=1 (the (k-1) term vanishes and sora's own box dominates
  * neither side), so a caller may use it unconditionally where it used
  * mp6_widescreen_model_center_x() before. Same walk composition as
@@ -4232,7 +4112,7 @@ float mp6_widescreen_model_center_x_widened(int16_t modelId, const char *objName
     return (u0 + u1) * 0.5f;
 }
 
-/* WS27: per-frame re-apply for the extension registry -- same "flat loop,
+/* Per-frame re-apply for the extension registry -- same "flat loop,
  * no re-walk" shape as every other *_reapply_all() here. Only array
  * CONTENTS change (the baked display lists index into them live), so this
  * is pure arithmetic + one vertex-cache invalidate. */
@@ -4254,12 +4134,12 @@ static void mp6_ws_extend_reapply_all(float k)
 }
 
 /* ==========================================================================
- * WS14. The single per-frame entry point -- called once per tick from
- * platform/gx/aurora_bridge.c's VIWaitForRetrace (the same site WS2's own
+ * The single per-frame entry point -- called once per tick from
+ * platform/gx/aurora_bridge.c's VIWaitForRetrace (the same site the
  * render-width refresh, mp6_widescreen_apply_render_width(), already uses),
  * so a continuous drag-resize converges every frame, not just at the next
  * scene-(re)load event. A true no-op (a for-loop over permanently-empty
- * registries) whenever Widescreen is disabled -- see this file's own top
+ * registries) whenever widescreen is disabled -- see this file's own top
  * comment for the full default-off reasoning.
  * ========================================================================== */
 static void mp6_ws_repeat_reapply_all(float k)
@@ -4292,8 +4172,8 @@ static void mp6_ws_camera_reapply_all(float k)
     }
 }
 
-/* WS15: per-frame re-apply for the two new selective/border registries
- * above -- same "flat loop over the already-flattened registry, no re-walk"
+/* Per-frame re-apply for the two selective/border registries above --
+ * same "flat loop over the already-flattened registry, no re-walk"
  * shape as mp6_ws_repeat_reapply_all(). */
 static void mp6_ws_selective_reapply_all(float k)
 {
@@ -4329,7 +4209,7 @@ static void mp6_ws_border_reapply_all(float k)
     }
 }
 
-/* WS19: per-frame re-apply for the reposition-only registry above -- same
+/* Per-frame re-apply for the reposition-only registry above -- same
  * "flat loop over the already-flattened registry, no re-walk" shape as
  * every other *_reapply_all() in this file. */
 static void mp6_ws_reposition_reapply_all(float k)
@@ -4348,7 +4228,7 @@ static void mp6_ws_reposition_reapply_all(float k)
     }
 }
 
-/* WS19: per-frame re-apply for the split-separate registry above -- same
+/* Per-frame re-apply for the split-separate registry above -- same
  * "flat loop over the already-flattened registry, no re-walk" shape as
  * every other *_reapply_all() in this file. */
 static void mp6_ws_split_reapply_all(float k)
@@ -4392,7 +4272,7 @@ void mp6_widescreen_reapply(void)
     mp6_ws_border_reapply_all(k);
     mp6_ws_split_reapply_all(k);
     mp6_ws_reposition_reapply_all(k);
-    mp6_ws_extend_reapply_all(k); /* WS27: tile/mirror/ring companions */
+    mp6_ws_extend_reapply_all(k); /* tile/mirror/ring companions */
 }
 
 void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label)
@@ -4433,8 +4313,8 @@ void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label)
         if (o->type != HSF_OBJ_MESH) {
             continue;
         }
-        /* WS19 (docs/WS19_SURGICAL_EXTRUDE.md): added vtxBuf=/vtxData=/
-         * childNum= to this existing reusable diagnostic -- a raw pointer
+        /* Includes vtxBuf=/vtxData=/childNum= in this reusable diagnostic --
+         * a raw pointer
          * identity check across every object in a census, needed to confirm
          * or rule out two DIFFERENT-named sub-objects (e.g. a "grid*"
          * background decoration and a "chara*" foreground portrait)
@@ -4477,7 +4357,7 @@ void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label)
     fflush(stdout);
 }
 
-/* WS15 TEMPORARY diagnostic (removed before final commit): raw vertex/ST
+/* TEMPORARY diagnostic (removed before final commit): raw vertex/ST
  * dump + material attribute-list dump for ONE named sub-object of a model --
  * mp6_widescreen_debug_dump_model() above reports only min/max/base transform
  * per object, not enough to (a) understand a mesh's own internal vertex-grid
@@ -4527,8 +4407,8 @@ void mp6_widescreen_debug_dump_verts(HU3D_MODELID modelId, const char *objName, 
         } else {
             printf("[MP6-WS-VERTS]   material=NULL\n");
         }
-        /* WS19 (docs/WS19_SURGICAL_EXTRUDE.md): the REAL per-object material,
-         * resolved the same way game/hsfdraw.c's own FaceDraw() does it --
+        /* The REAL per-object material, resolved the same way
+         * game/hsfdraw.c's own FaceDraw() does it --
          * `objPtr->mesh.material[face->mat & 0xFFF]` -- i.e. THIS object's
          * first face's own `.mat` index into the (whole-array) material
          * pointer above, not mesh.material itself (which is always index 0,
@@ -4582,8 +4462,7 @@ void mp6_widescreen_debug_dump_verts(HU3D_MODELID modelId, const char *objName, 
     fflush(stdout);
 }
 
-/* WS20 (docs/WS20_SHADOW_PROJECTION.md investigation): per-object COMPOSED
- * world/model-space bbox dump -- mp6_widescreen_debug_dump_model() above
+/* Per-object COMPOSED world/model-space bbox dump -- mp6_widescreen_debug_dump_model() above
  * only prints each object's own RAW `mesh.base.pos/rot/scale` (its
  * placement relative to its own immediate PARENT), which reads as (0,0,0)
  * for a mesh authored at local origin under a separate, non-mesh placement
@@ -4678,7 +4557,7 @@ void mp6_widescreen_debug_dump_world_bbox(HU3D_MODELID modelId, const char *labe
 }
 
 /* =======================================================================
- * Savestate rehydrate (docs/SAVESTATE.md, W5)
+ * Savestate rehydrate
  * =======================================================================
  * Every registry in this file is HALF game state and HALF host state, which
  * is exactly why this TU is deliberately NOT carved out of the savestate:

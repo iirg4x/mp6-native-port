@@ -23,7 +23,7 @@
 
 #include "mp6_boot.h" /* mp6_symbolize_addr's own declaration (crash section below) */
 
-/* SAVESTATE CARVE-OUT (docs/SAVESTATE.md). Placing this AFTER this TU's own
+/* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
  * redirects every file-scope definition FOLLOWING it. As a -include (before all
  * headers) it also captured the decomp headers' C TENTATIVE definitions --
@@ -191,7 +191,7 @@ int mp6_host_image_below_4gb(void)
     return ((uintptr_t)hMod + modInfo.SizeOfImage) <= 0xFFFFFFFFu;
 }
 
-/* Savestate (docs/SAVESTATE.md): enumerate this image's own WRITABLE
+/* Enumerates this image's own WRITABLE
  * sections -- the game's ordinary globals/BSS, which live in the binary's
  * fixed, non-ASLR data segments rather than inside the game arena, and so
  * have to be captured alongside it.

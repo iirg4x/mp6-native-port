@@ -1,21 +1,20 @@
 --- a/src/board/wipe.c
 +++ b/src/board/wipe.c
 @@ -17,0 +18 @@
-+#include "mp6_widescreen.h" /* WS2 (docs/WS2_DYNAMIC_WIDESCREEN.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -555 +556,13 @@
 -    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f,
-+    /* MP6 native port -- WS6 (docs/WS6_OVERLAY_CAMERAS.md): this function's
-+     * own ortho/viewport/scissor are a SEPARATE, independent setup from
-+     * WipeImageDraw's (WS4 already fixed that one, this file's other hunks
++    /* This function's own ortho/viewport/scissor are a SEPARATE,
++     * independent setup from WipeImageDraw's (this file's other hunks
 +     * below) -- 640-wide, 1:1-screen-pixel convention (matching game/
 +     * wipe.c's WipeGXInit, not the 576-logical HuSprDispInit canvas
 +     * WipeImageDraw's own ortho uses), so widen is the correct treatment
-+     * here, not recenter. Left native by WS2/WS4's original scope, this
-+     * left the transition pinned to the left native-640 portion of a wider
-+     * frame. Grid-tile POSITION math beyond this triplet (entry->pos,
-+     * computed elsewhere) was left untouched -- not confirmed exercised by
-+     * this lane's own test drive. Flagged, not assumed fine. 640/480
-+     * (byte-identical) when Widescreen is disabled. */
++     * here, not recenter. Left native originally, this left the transition
++     * pinned to the left native-640 portion of a wider frame. Grid-tile
++     * POSITION math beyond this triplet (entry->pos, computed elsewhere)
++     * was left untouched -- not confirmed exercised by testing. Flagged,
++     * not assumed fine. 640/480 (byte-identical) when widescreen is
++     * disabled. */
 +    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f,
 @@ -558,2 +571,2 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
@@ -24,12 +23,10 @@
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
 @@ -638 +651,7 @@
 -    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f,
-+    /* WS6 (docs/WS6_OVERLAY_CAMERAS.md): same widen as WipeGridDraw above
-+     * -- see that comment. Tile/vertex-flutter geometry beyond this
-+     * ortho/viewport/scissor triplet (work->vtx positions etc.) was left
-+     * untouched -- not confirmed exercised by this lane's own test drive,
-+     * and computed by code this lane did not have a verified capture to
-+     * check against. Flagged, not assumed fine. */
++    /* Same widen as WipeGridDraw above -- see that comment. Tile/vertex-
++     * flutter geometry beyond this ortho/viewport/scissor triplet
++     * (work->vtx positions etc.) was left untouched -- not confirmed
++     * exercised by testing. Flagged, not assumed fine. */
 +    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f,
 @@ -641,2 +660,2 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
@@ -39,52 +36,45 @@
 @@ -757,2 +776,12 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
 -    GXSetScissor(0, 0, 640, 480);
-+    /* WS4 (docs/WS4_WIDESCREEN_2D.md): this viewport/scissor is this
-+     * function's OWN, independent of HuSprDispInit's shared 2D canvas
-+     * (game/sprput.c) -- WipeImageDraw sets up its own projection/
-+     * viewport/scissor from scratch and never reads the shared ones, so
-+     * WS2's HuSprDispInit widen never reached this hook at all. Left
-+     * native, this wipe overlay's own drawable area stays pinned to the
-+     * left 640 (out of a live-wider) framebuffer at any non-4:3 aspect --
-+     * widened here the same way every other real GX viewport/scissor call
-+     * site in this codebase already is. 640 (byte-identical) when
-+     * disabled. */
++    /* This viewport/scissor is this function's OWN, independent of
++     * HuSprDispInit's shared 2D canvas (game/sprput.c) -- WipeImageDraw
++     * sets up its own projection/viewport/scissor from scratch and never
++     * reads the shared ones, so the shared canvas's own widen never
++     * reached this hook at all. Left native, this wipe overlay's own
++     * drawable area stays pinned to the left 640 (out of a live-wider)
++     * framebuffer at any non-4:3 aspect -- widened here the same way every
++     * other real GX viewport/scissor call site in this codebase already
++     * is. 640 (byte-identical) when disabled. */
 +    GXSetViewport(0.0f, 0.0f, mp6_widescreen_render_width(), 480.0f, 0.0f, 1.0f);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
 @@ -778 +807,6 @@
 -    C_MTXOrtho(imageProjection, 0.0f, 480.0f, 0.0f, 576.0f, 0.0f,
-+    /* WS4: recenter this ortho the same way HuSprDispInit's shared 2D
-+     * canvas is recentered -- left=-d, right=576+d instead of WS2's own
-+     * left-anchored 0,576*scale (reference ROM hack site #16,
-+     * WS_REFERENCE_STUDY.md section 4, never widened this at all --
-+     * confirmed byte-identical .rel). 0.0f (no-op) when disabled. */
++    /* Recenter this ortho the same way HuSprDispInit's shared 2D canvas is
++     * recentered -- left=-d, right=576+d instead of the old left-anchored
++     * 0,576*scale (the reference widescreen hack never widened this at
++     * all). No-op when disabled. */
 +    C_MTXOrtho(imageProjection, 0.0f, 480.0f, -mp6_widescreen_half_width_delta(), 576.0f + mp6_widescreen_half_width_delta(), 0.0f,
 @@ -790,0 +825,12 @@
-+    /* WS4 (docs/WS4_WIDESCREEN_2D.md): work->x is hardcoded to 288.0f
-+     * (WipeImageUpdate) -- exactly HU_DISP_WIDTH/2, the exact center of
-+     * BOTH the native canvas AND the recentered wide one (the recenter is
-+     * symmetric around that same point by construction). left/right,
-+     * being computed symmetrically around work->x, are therefore already
-+     * correctly positioned in the recentered space with NO shift needed --
-+     * WS2's own +half_width_delta here (added to compensate for the OLD
-+     * left-anchored ortho, mirroring the reference ROM hack's own cruder
-+     * "reuse an unrelated resident 480.0f literal" hack at this same site)
-+     * would now be a pure double-shift, pushing the right edge further
-+     * right than the left edge is pushed left. Reverted to the plain
-+     * native computation. */
++    /* work->x is hardcoded to 288.0f (WipeImageUpdate) -- exactly
++     * HU_DISP_WIDTH/2, the exact center of BOTH the native canvas AND the
++     * recentered wide one (the recenter is symmetric around that same
++     * point by construction). left/right, being computed symmetrically
++     * around work->x, are therefore already correctly positioned in the
++     * recentered space with NO shift needed -- an earlier +half_width_delta
++     * here (added to compensate for the OLD left-anchored ortho) would now
++     * be a pure double-shift, pushing the right edge further right than
++     * the left edge is pushed left. Reverted to the plain native
++     * computation. */
 @@ -805,0 +852,12 @@
-+    /* WS4 (docs/WS4_WIDESCREEN_2D.md): these 4 mask quads fill the area
-+     * between the growing/shrinking reveal hole and the canvas edges --
-+     * their 0.0f/576.0f literals ARE the canvas-edge constants (the
-+     * "outer mask quads" WS2's own doc flagged as a follow-up: "bounded
-+     * by literal 576.0f/480.0f canvas-edge constants... not further
-+     * widened this session"). Widened here to the recentered bounds
++    /* These 4 mask quads fill the area between the growing/shrinking
++     * reveal hole and the canvas edges -- their 0.0f/576.0f literals ARE
++     * the canvas-edge constants. Widened here to the recentered bounds
 +     * (-half_width_delta / 576+half_width_delta) so the mask actually
 +     * reaches the true new edges instead of stopping at the old ones,
 +     * which would leave a visible unmasked sliver during any wipe
 +     * transition at a wide aspect. left/right/top/bottom themselves are
 +     * NOT touched (see the `right` comment above -- already correct,
-+     * symmetric around work->x=288). 0.0f (no-op) when disabled. */
++     * symmetric around work->x=288). No-op when disabled. */
 @@ -808,4 +866,4 @@
 -        GXPosition2f32(0.0f, 0.0f);
 -        GXPosition2f32(576.0f, 0.0f);

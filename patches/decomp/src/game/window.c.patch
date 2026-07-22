@@ -3,21 +3,20 @@
 @@ -4,0 +5 @@
 +#include "be.h"
 @@ -16,0 +18 @@
-+#include "mp6_widescreen.h" /* WS5 (docs/WS5_OPENING_STORYBOOK.md) */
++#include "mp6_widescreen.h" /* widescreen support */
 @@ -536,0 +539,16 @@
-+/* MP6 native port -- docs/M2C_MENU_PATH.md. messDataPtr (game/window.c's
-+ * HuWinMesRead()) is a plain memcpy() of a real DVD file's raw bytes
-+ * (mess/messdata*.bin), never byte-swapped on the way in -- the exact
-+ * same "directory count, then a per-entry offset table" container shape
-+ * game/data.c's GetFileInfo and game/armem.c's HuAR_ARAMtoMRAMFileRead
-+ * already fix elsewhere in this patch queue, just unfixed here until now.
-+ * Every one of these 3 functions read it as plain native u32 -- wrong on
-+ * every single call, not just an edge case, which is exactly why "Error:
-+ * Message Dir Over"/"Error: Message Number Over" fired on EVERY message
-+ * lookup this port ever made (confirmed: neither original error path
-+ * actually returns early, so a garbage bounds check silently let a
-+ * garbage offset chain through every time). OpeningExec's own
-+ * HuWinMesSet(messageWinId, 0x10005) call is what surfaced this: the
++/* messDataPtr (game/window.c's HuWinMesRead()) is a plain memcpy() of a
++ * real DVD file's raw bytes (mess/messdata*.bin), never byte-swapped on
++ * the way in -- the exact same "directory count, then a per-entry offset
++ * table" container shape game/data.c's GetFileInfo and game/armem.c's
++ * HuAR_ARAMtoMRAMFileRead already fix elsewhere in this patch queue, just
++ * unfixed here until now. Every one of these 3 functions read it as plain
++ * native u32 -- wrong on every single call, not just an edge case, which
++ * is exactly why "Error: Message Dir Over"/"Error: Message Number Over"
++ * fired on EVERY message lookup this port ever made (confirmed: neither
++ * original error path actually returns early, so a garbage bounds check
++ * silently let a garbage offset chain through every time). OpeningExec's
++ * own HuWinMesSet(messageWinId, 0x10005) call is what surfaced this: the
 + * corrupted messData pointer it produced is the direct cause of the
 + * first-ever "GXBegin: called without matching GXEnd" Aurora FATAL this
 + * port hit, a few lines later, once real frame drawing tried to use it. */
@@ -45,55 +44,47 @@
 +    messData += be32(&messData[num])/sizeof(u32);
 @@ -596 +614,21 @@
 -        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, 0.0f, HU_DISP_WIDTH, 0.0f, 10.0f);
-+        /* MP6 native port -- WS5 (docs/WS5_OPENING_STORYBOOK.md). This is a
-+         * THIRD, independent copy of the exact ortho HuSprDispInit sets up
-+         * (game/sprput.c) -- MesDispFunc is a "func sprite" draw callback
-+         * (HuSprFuncCreate, this file's own HuWinCreate/HuWinExCreateFrame),
-+         * invoked from game/sprput.c's HuSprDisp for EVERY HuWin window's
-+         * message-glyph quads, every frame. A func sprite re-establishes its
-+         * OWN GX pipeline state from scratch (HuSprDisp calls HuSprDispInit()
-+         * again right after it returns, specifically because a func sprite is
-+         * free to leave this state however it wants) -- including its own
-+         * hardcoded, native-only MTXOrtho(0, HU_DISP_WIDTH). WS4's own recenter
-+         * of the SHARED HuSprDispInit ortho (docs/WS4_WIDESCREEN_2D.md section
-+         * 1) never touched this second, self-contained copy, so every character
-+         * glyph in every message window was still being projected through the
-+         * OLD native-only mapping while that same window's own frame/background
-+         * sprites (ordinary, non-func sprites drawn through the shared,
-+         * now-recentered ortho) were correctly centered -- a real mismatch
-+         * between where a window's box renders and where its own text renders.
-+         * Recentered exactly like HuSprDispInit's own copy -- same accessor,
-+         * same formula, 0.0f/no-op (byte-identical native call) when Widescreen
-+         * is disabled. */
++        /* This is a THIRD, independent copy of the exact ortho
++         * HuSprDispInit sets up (game/sprput.c) -- MesDispFunc is a "func
++         * sprite" draw callback, invoked from game/sprput.c's HuSprDisp for
++         * EVERY HuWin window's message-glyph quads, every frame. A func
++         * sprite re-establishes its OWN GX pipeline state from scratch
++         * (HuSprDisp calls HuSprDispInit() again right after it returns,
++         * specifically because a func sprite is free to leave this state
++         * however it wants) -- including its own hardcoded, native-only
++         * MTXOrtho(0, HU_DISP_WIDTH). The shared canvas's own recenter never
++         * touched this second, self-contained copy, so every character
++         * glyph in every message window was still being projected through
++         * the OLD native-only mapping while that same window's own frame/
++         * background sprites (ordinary, non-func sprites drawn through the
++         * shared, now-recentered ortho) were correctly centered -- a real
++         * mismatch between where a window's box renders and where its own
++         * text renders. Recentered exactly like HuSprDispInit's own copy --
++         * same accessor, same formula, no-op (byte-identical native call)
++         * when widescreen is disabled. */
 +        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0.0f, 10.0f);
 @@ -1524,0 +1563,32 @@
-+/* MP6 native port -- M4c ("Message Dir Over" crash fix, docs/NO_LEAK_POLICY.md-
-+ * adjacent menus milestone). HuWinMesSet/HuWinInsertMesSet's "is messNum a
-+ * real pointer, or a packed dir<<16|num value?" check was `messNum &
-+ * 0x80000000` -- reliable on real hardware, where EVERY live pointer
-+ * (static .bss/.data OR heap) unconditionally starts at MEM1's
++/* "Message Dir Over" crash fix. HuWinMesSet/HuWinInsertMesSet's "is
++ * messNum a real pointer, or a packed dir<<16|num value?" check was
++ * `messNum & 0x80000000` -- reliable on real hardware, where EVERY live
++ * pointer (static .bss/.data OR heap) unconditionally starts at MEM1's
 + * 0x80000000 base. This port's low-4GB game arena (platform/os/arena.c)
-+ * deliberately starts at 0x80000000 too, for this exact reason (see that
-+ * file's own header comment) -- so HEAP pointers still satisfy the
-+ * check -- but the executable's own fixed, non-ASLR image base
-+ * (tools/build.py's IMAGE_BASE=0x10000000) does NOT, so a STATIC/GLOBAL
-+ * (.bss/.data) buffer address passed this way has bit 31 CLEAR and gets
-+ * misclassified as a small packed dir/num value instead. Confirmed by
-+ * direct reproduction: REL/fileseldll/filesel.c's fn_1_36C4 passes
-+ * `(u32)p->unk_60` (the address of a static per-save-slot text buffer,
-+ * `lbl_1_bss_D8[]`, living in the image's low .bss -- around 0x10xxxxxx,
-+ * not 0x80000000+) to HuWinInsertMesSet; the low bit pattern of THAT
-+ * address decodes as a huge, bogus "directory" once right-shifted 16,
-+ * printing "Error: Message Dir Over" and then (since neither original
-+ * error path actually returns) chasing a wild offset computed from it --
-+ * a real access violation, resolved via dbghelp to a crash inside
-+ * mp6_be32, called from HuWinMesDataPtrGet, called from
-+ * HuWinInsertMesSet's own HuWinMesPtrGet call, reading address
-+ * 0xB0950670 (neither a valid heap nor image address). Real dir/num
-+ * encodings are always tiny (dir<<16|num; the largest dir this whole
-+ * codebase ever uses is under 0x100) -- comfortably below EVERY real
-+ * pointer this port ever produces, whether image-based (0x10000000+) or
-+ * arena-based (0x80000000+/0x90000000+/0xA0000000+/0xB0000000+) -- so a
++ * deliberately starts at 0x80000000 too, for this exact reason -- so HEAP
++ * pointers still satisfy the check -- but the executable's own fixed,
++ * non-ASLR image base (tools/build.py's IMAGE_BASE=0x10000000) does NOT,
++ * so a STATIC/GLOBAL (.bss/.data) buffer address passed this way has bit
++ * 31 CLEAR and gets misclassified as a small packed dir/num value
++ * instead. Confirmed by direct reproduction: REL/fileseldll/filesel.c's
++ * fn_1_36C4 passes the address of a static per-save-slot text buffer
++ * (living in the image's low .bss, around 0x10xxxxxx, not 0x80000000+) to
++ * HuWinInsertMesSet; the low bit pattern of THAT address decodes as a
++ * huge, bogus "directory" once right-shifted 16, printing "Error: Message
++ * Dir Over" and then (since neither original error path actually
++ * returns) chasing a wild offset computed from it -- a real access
++ * violation. Real dir/num encodings are always tiny (dir<<16|num; the
++ * largest dir this whole codebase ever uses is under 0x100) --
++ * comfortably below EVERY real pointer this port ever produces, whether
++ * image-based (0x10000000+) or arena-based (0x80000000+ and up) -- so a
 + * generous, safely-in-between threshold replaces the bit-31 check with
 + * one that is still correct for real hardware's own address range AND
 + * this port's. */
@@ -107,20 +98,16 @@
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
 @@ -2033 +2103,13 @@
 -    if(messNum > 0x80000000) {
-+    /* MP6 native port -- same M4c fix as HuWinMesSet/HuWinInsertMesSet
-+     * above (this file's own section-comment there has the full story):
-+     * a SECOND, independent instance of the same "is messNum a real
-+     * pointer or a packed dir<<16|num value?" check, reached via
-+     * GetMesMaxSizeSub2 (winP->messDataInsert[i], a pointer THIS port's
-+     * fix above may have legitimately stored, per this exact function's
-+     * own `messDataF = FALSE; messData = (char *)messNum;` pointer
-+     * branch below) -- confirmed by direct reproduction, a second real
-+     * crash on the exact same fileseldll path, one level deeper
-+     * (GetMesMaxSizeSub2 -> HuWinInsertMesSizeGet -> GetMesMaxSizeSub).
-+     * Branch order/bodies unchanged from the original -- only the
-+     * condition itself changes, same as the other two instances. */
++    /* Same fix as HuWinMesSet/HuWinInsertMesSet above (this file's own
++     * section-comment there has the full story): a SECOND, independent
++     * instance of the same "is messNum a real pointer or a packed
++     * dir<<16|num value?" check, reached via GetMesMaxSizeSub2 -- confirmed
++     * by direct reproduction, a second real crash on the exact same
++     * fileseldll path, one level deeper. Branch order/bodies unchanged
++     * from the original -- only the condition itself changes, same as the
++     * other two instances. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
 @@ -2224 +2306,2 @@
 -    if(messNum > 0x80000000) {
-+    /* MP6 native port -- same M4c fix, third instance in this file. */
++    /* Same fix, third instance in this file. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {

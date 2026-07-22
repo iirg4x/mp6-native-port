@@ -255,6 +255,30 @@ def validate_game_id(game_id6):
 # in for full fidelity/cutscenes at the cost of a much longer extraction).
 # ---------------------------------------------------------------------------
 
+def is_safe_rel(rel):
+    """SECURITY: mirror of platform/content/content_path_safe.h's
+    mp6_content_path_is_safe_rel(). An FST entry name is attacker-controlled
+    (raw bytes from the disc's string table), and extract_disc_image() joins
+    it onto dest_root to form a write path -- so a crafted name like
+    'data/../../evil', '/abs/evil', '..\\win' or 'C:\\x' must be rejected or
+    the extraction escapes the chosen root.
+
+    True iff `rel` is non-empty, not absolute, and every '/'-separated
+    component is a plain name: never '', '.', '..', and free of '\\', ':' or
+    any control byte.
+    """
+    if not rel or rel[0] == "/":
+        return False
+    for comp in rel.split("/"):
+        if comp in ("", ".", ".."):
+            return False
+        if "\\" in comp or ":" in comp:
+            return False
+        if any(ord(ch) < 0x20 for ch in comp):
+            return False
+    return True
+
+
 def _skip_subtree(rel, include_movies):
     if include_movies:
         return False
@@ -307,6 +331,7 @@ def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False
             walk_dirs = []  # stack of (end_index, prefix)
             wanted_files = []  # (index, size, rel)
             skipped_dirs = []
+            unsafe_skipped = []  # SECURITY: FST names that would escape dest_root
 
             def cb(index, kind, name, size):
                 while walk_dirs and index >= walk_dirs[-1][0]:
@@ -318,15 +343,27 @@ def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False
                 name_s = name.decode("utf-8", "replace") if name else ""
                 rel = f"{prefix}/{name_s}" if prefix else name_s
                 if kind == NOD_NODE_KIND_DIRECTORY:
+                    if not is_safe_rel(rel):
+                        # A traversal/absolute/drive-qualified directory name:
+                        # prune the whole subtree so no child is ever written.
+                        unsafe_skipped.append(rel)
+                        return size
                     if _skip_subtree(rel, include_movies):
                         skipped_dirs.append(rel)
                         return size  # child-end index: skip the whole subtree
                     walk_dirs.append((size, rel))
                     return index + 1
+                if not is_safe_rel(rel):
+                    unsafe_skipped.append(rel)
+                    return index + 1
                 wanted_files.append((index, size, rel))
                 return index + 1
 
             nod.iterate_fst(part, cb)
+
+            if unsafe_skipped:
+                common.warn(f"ignored {len(unsafe_skipped)} disc entry name(s) that would escape "
+                            f"the extraction root (e.g. {unsafe_skipped[0]!r}) -- possible tampered image")
 
             if not wanted_files:
                 raise common.SetupError(
@@ -405,6 +442,7 @@ def extract_disc_folder(folder_path, dest_root, include_movies=False, progress=N
 
     files_root = os.path.join(root, "files")
     to_copy = []
+    unsafe_skipped = []  # SECURITY: entries whose join would escape dest_root
     for dirpath, dirnames, filenames in os.walk(files_root):
         rel_dir = os.path.relpath(dirpath, files_root).replace("\\", "/")
         rel_dir = "" if rel_dir == "." else rel_dir
@@ -415,7 +453,15 @@ def extract_disc_folder(folder_path, dest_root, include_movies=False, progress=N
             rel = f"{rel_dir}/{fn}" if rel_dir else fn
             if not include_movies and (rel == "movie" or rel.startswith("movie/")):
                 continue
+            # SECURITY: mirror the disc-image gate. os.walk never yields '..',
+            # but validate defensively so the destination join stays rooted.
+            if not is_safe_rel(rel):
+                unsafe_skipped.append(rel)
+                continue
             to_copy.append(rel)
+    if unsafe_skipped:
+        common.warn(f"ignored {len(unsafe_skipped)} folder entry name(s) that would escape the "
+                    f"extraction root (e.g. {unsafe_skipped[0]!r})")
 
     total = len(to_copy)
     done_bytes = 0

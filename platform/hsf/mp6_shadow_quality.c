@@ -34,28 +34,142 @@ int mp6_shadow_effective_size(int size)
         return size; /* native/off: exact pass-through, the byte-identical
                       * contract lives here. */
     }
-    /* The shadow pass is EFB-unit-bounded (the pristine 240 cap IS the
-     * 480px EFB box over the 2x supersample) and aurora already renders +
-     * resolves it at window-scaled physical resolution -- scale_copy_dst()
-     * multiplies the dst texel count by window/EFB on its own. So the only
-     * information-bearing port-side raise is the copy DESTINATION's
-     * EFB-unit texel count, and its ceiling is the src region's own size:
-     * 2x (dst == the 2x-supersampled src, pixel for pixel). Beyond that is
-     * pure upsampling -- deeper gains need the offscreen shadow pass +
-     * mip-chain work in the renderer, not a bigger number here. */
+#ifdef MP6_HEADLESS_BUILD
+    /* No renderer, no offscreen shadow pass: the in-EFB pass's own detail
+     * ceiling is 2x (dst == the 2x-supersampled src, pixel for pixel).
+     * Structurally unreachable today -- mp6_shadow_quality_scale() is
+     * fixed 1 headless -- kept as the documented fallback shape should
+     * that ever change. */
     if (eff > 2) {
         eff = 2;
         if (loggedRequested != requested) {
             loggedRequested = requested;
             printf("[SHADOW] %dx requested -- 2x is the detail ceiling of the "
-                   "EFB-bounded shadow pass (dst texels = its supersampled "
-                   "src); effective 2x until the offscreen shadow pass "
-                   "lands\n", requested);
+                   "EFB-bounded shadow pass (no offscreen shadow pass in this "
+                   "build); effective 2x\n", requested);
             fflush(stdout);
         }
     }
+#else
+    /* Windowed/aurora build: >2x is REAL -- Hu3DShadowExec renders the
+     * pass into a dedicated offscreen target via mp6_shadow_offscreen_
+     * begin()/end() below (aurora's GX_AURORA_BEGIN/END_OFFSCREEN, where
+     * viewport/scissor/copy map 1:1), so the full heap-clamped requested
+     * scale flows through. 1x/2x keep their exact pre-offscreen paths. */
+    (void)loggedRequested;
+#endif
     return size * eff;
 }
+
+/* ------------------------------------------------------------------------
+ * Per-shadow-lifetime size latch (FINDING #6a). mp6_shadow_effective_size()
+ * reads the config LIVE, but Hu3DShadowExec and the hsfdraw bind run every
+ * frame off Hu3DShadow->size -- so raising Shadow Quality on an ALREADY-
+ * created shadow would (1) resize its offscreen target mid-run, contradicting
+ * the "takes effect the next time a scene loads" contract the Mods UI states,
+ * and (2) resolve a GXSetTexCopyDst of more texels than the create-time
+ * HuMemDirectMalloc(HEAP_MODEL, allocSide*allocSide) buffer holds -- a
+ * model-heap overflow. Latch the effective size when the buffer is created and
+ * replay it for that buffer's lifetime instead of re-reading config live.
+ *
+ * Tiny fixed LRU table keyed by the buf pointer (only a handful of shadows are
+ * ever live). The create site always runs before the first exec, and re-
+ * latches when a pointer is reused across scenes. These statics are carved out
+ * (this TU includes mp6_host_section.h), matching the pre-fix behavior that a
+ * restored shadow re-reads live config -- so no new savestate coupling: a
+ * buffer with no latch entry falls back to the live effective size. */
+#define MP6_SHADOW_LATCH_SLOTS 16
+static const void *s_latchBuf[MP6_SHADOW_LATCH_SLOTS];
+static int s_latchSize[MP6_SHADOW_LATCH_SLOTS];
+static unsigned int s_latchClock[MP6_SHADOW_LATCH_SLOTS];
+static unsigned int s_latchTick;
+
+void mp6_shadow_latch_size(const void *buf, int effSize)
+{
+    int i, victim;
+    if (buf == NULL) {
+        return;
+    }
+    ++s_latchTick;
+    for (i = 0; i < MP6_SHADOW_LATCH_SLOTS; ++i) {
+        if (s_latchBuf[i] == buf) { /* re-latch a reused buffer */
+            s_latchSize[i] = effSize;
+            s_latchClock[i] = s_latchTick;
+            return;
+        }
+    }
+    victim = 0;
+    for (i = 0; i < MP6_SHADOW_LATCH_SLOTS; ++i) {
+        if (s_latchBuf[i] == NULL) { /* prefer an empty slot */
+            victim = i;
+            break;
+        }
+        if (s_latchClock[i] < s_latchClock[victim]) { /* else evict LRU */
+            victim = i;
+        }
+    }
+    s_latchBuf[victim] = buf;
+    s_latchSize[victim] = effSize;
+    s_latchClock[victim] = s_latchTick;
+}
+
+int mp6_shadow_latched_size(const void *buf, int nativeSize)
+{
+    int i;
+    for (i = 0; i < MP6_SHADOW_LATCH_SLOTS; ++i) {
+        if (s_latchBuf[i] == buf) {
+            s_latchClock[i] = ++s_latchTick;
+            return s_latchSize[i];
+        }
+    }
+    return mp6_shadow_effective_size(nativeSize); /* not latched: live fallback */
+}
+
+#ifdef MP6_HEADLESS_BUILD
+/* No renderer: the offscreen bracket is unreachable (scale is fixed 1),
+ * these exist so the shared hsfman.c patch links -- see the header. */
+void mp6_shadow_offscreen_begin(int sidePx) { (void)sidePx; }
+void mp6_shadow_offscreen_end(void) {}
+void mp6_shadow_offscreen_scissor(int x, int y, int w, int h)
+{
+    (void)x; (void)y; (void)w; (void)h;
+}
+#else
+/* Aurora extension entry points (external_refs/repos/aurora,
+ * include/dolphin/gx/GXAurora.h + aurora-patches/0014): declared locally
+ * instead of including the aurora header because this TU compiles in BOTH
+ * build modes with the decomp's own dolphin headers, not aurora's --
+ * same C-linkage seam as mp6_launcher_cfg_shadow_quality() below.
+ * GXSetScissorRender is base aurora (GX_AURORA_LOAD_SCISSOR_RENDER, already
+ * in the vendored tree -- no patch), used to dodge the 11-bit SU_SCIS
+ * register overflow the header comment on mp6_shadow_offscreen_scissor
+ * documents. */
+extern void GXCreateFrameBuffer(unsigned int width, unsigned int height);
+extern void GXRestoreFrameBuffer(void);
+extern void GXSetTexCopyMipGen(unsigned int enable);
+extern void GXSetScissorRender(unsigned int left, unsigned int top,
+                               unsigned int wd, unsigned int ht);
+
+void mp6_shadow_offscreen_scissor(int x, int y, int w, int h)
+{
+    GXSetScissorRender((unsigned int)x, (unsigned int)y,
+                       (unsigned int)w, (unsigned int)h);
+}
+
+void mp6_shadow_offscreen_begin(int sidePx)
+{
+    GXCreateFrameBuffer((unsigned int)sidePx, (unsigned int)sidePx);
+    GXSetTexCopyMipGen(1); /* the resolve inside this bracket carries a
+                            * full mip chain (trilinear-minified receiver
+                            * sampling); cleared again in end() below */
+}
+
+void mp6_shadow_offscreen_end(void)
+{
+    GXSetTexCopyMipGen(0);
+    GXRestoreFrameBuffer();
+}
+#endif
 
 #ifndef MP6_HEADLESS_BUILD
 /* Aurora/windowed build only: launcher_core.cpp (Aurora-only TU, see
@@ -97,15 +211,32 @@ int mp6_shadow_quality_scale(int baseSize)
         requested = mp6_launcher_cfg_shadow_quality();
     }
 
+    /* No artificial detail ceiling: 8x/16x are real, buffer-dump verified
+     * full-scene maps (build/shadowdump_8x.png ~14% coverage across a
+     * 73%x57% bbox on the 1536px map; 16x the same composition on 3072px).
+     *
+     * History: commits 3f179cd/2d599c4 clamped the ceiling to 8x then 4x
+     * because 8x's offscreen map dumped as a ~0.4% corner sliver and 16x as
+     * uniform 0/0. That was NOT an offscreen-bracket-vs-size problem: the
+     * root cause was the caster pass's GXSetScissor. It packs its rect into
+     * the GameCube's 11-bit SU_SCIS register (max 2047, +342 guard band),
+     * and the offscreen pass scaled the scissor to (size*scale*2) units --
+     * fine at 4x (max coord 1869), but 8x's 3397 truncated to a ~992px
+     * corner and 16x's 6453 wrapped below its own top edge into an empty
+     * rect. Setting the offscreen scissor through aurora's render-pixel
+     * GXSetScissorRender instead (mp6_shadow_offscreen_scissor, see the
+     * header) sidesteps the packed register entirely, so the full offscreen
+     * box now survives at every scale. The heap-fit step-down below is the
+     * only remaining clamp -- a map that doesn't fit HEAP_MODEL still steps
+     * down (logged), exactly as before. */
     if (requested <= 1 || baseSize <= 0) {
         return 1; /* native/off: zero heap queries, zero [SHADOW] log noise */
     }
 
     /* requested is one of {2,4,8,16} here -- both sources above
-     * (launcher_core.cpp's config parser and the env-lever clamp right
-     * above) already tolerant-clamp anything else to 1, caught by the
-     * <=1 return above. Step down until the resulting baseSize*scale
-     * square fits inside
+     * (launcher_core.cpp's config parser and the env lever) already
+     * tolerant-clamp anything else to 1, caught by the <=1 return above.
+     * Step down until the resulting baseSize*scale square fits inside
      * HEAP_MODEL's current largest free block -- the same pre-flight
      * check game/audio.c's own msmSysRegularProc already makes before a
      * HuMemDirectMalloc(HEAP_MODEL, ...) whose size isn't a fixed compile-

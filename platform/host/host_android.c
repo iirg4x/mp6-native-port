@@ -252,7 +252,7 @@ int mp6_host_image_below_4gb(void)
  * real definition rather than an omission because host.h is a SHARED seam:
  * the Windows and Android backends must expose the identical symbol set or
  * the shared callers stop linking. The feature is Windows-only for now
- * because savestates are a desktop debugging tool (docs/SAVESTATE.md);
+ * because savestates are a desktop debugging tool;
  * whenever it is wanted here, the honest implementation is the
  * dl_iterate_phdr walk this file already uses just above, keeping PT_LOAD
  * segments whose p_flags carry PF_W -- deliberately NOT written blind,

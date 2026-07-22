@@ -1,18 +1,17 @@
 --- a/src/game/hsfdraw.c
 +++ b/src/game/hsfdraw.c
 @@ -14,0 +15 @@
-+#include "mp6_shadow_quality.h" /* [MP6 Shadow Quality] effective map size */
++#include "mp6_shadow_quality.h" /* shadow quality: effective map size */
 @@ -25,0 +27,54 @@
 +
-+/* MP6 native port -- M11 (docs/M11_WORDMARK_STAR.md): object-level draw
-+ * census, the per-OBJECT companion to hsfman.c's per-MODEL one (that
-+ * patch's MP6_DRAW_CENSUS explains what the Hu3DExec loop decided; this
-+ * one, behind its own MP6_DRAW_CENSUS_OBJ=<tick>, explains what happened
-+ * INSIDE each Hu3DDraw tree walk: which objects were visited, which were
-+ * skipped by LOCK/DISPOFF-flags/zero-scale, which deferred to the
-+ * z-sorted XLU list, and which reached ObjDraw). Same two-tick window
++/* Object-level draw census, the per-OBJECT companion to hsfman.c's
++ * per-MODEL one (that census explains what the Hu3DExec loop decided;
++ * this one, behind its own MP6_DRAW_CENSUS_OBJ=<tick>, explains what
++ * happened INSIDE each Hu3DDraw tree walk: which objects were visited,
++ * which were skipped by LOCK/DISPOFF-flags/zero-scale, which deferred to
++ * the z-sorted XLU list, and which reached ObjDraw). Same two-tick window
 + * semantics as the hsfman census; zero output and one cached getenv when
-+ * unset. PORT-DIAGNOSTIC ONLY: prints state, never changes behavior. */
++ * unset. Diagnostic only: prints state, never changes behavior. */
 +#include <stdio.h>
 +#include <stdlib.h>
 +extern long mp6_tick_count;
@@ -27,11 +26,11 @@
 +           mp6_tick_count < mp6ObjCensusTick + 2;
 +}
 +
-+/* MP6 native port -- M13 (docs/M13_MENUS_TO_REFERENCE.md): display-list /
-+ * vertex ground-truth dump. The mode-select/file-select "vertices all over
-+ * the place" hunt needs the actual bytes, not more theories: for the one
-+ * object named by MP6_DL_DUMP=<name> this dumps, at DL-BUILD time
-+ * (MDObjMesh, i.e. model-create), to build/dldump_<name>.txt:
++/* Display-list / vertex ground-truth dump, used to track down a
++ * mode-select/file-select "vertices all over the place" report with
++ * actual bytes instead of more theories: for the one object named by
++ * MP6_DL_DUMP=<name> this dumps, at DL-BUILD time (MDObjMesh, i.e.
++ * model-create), to build/dldump_<name>.txt:
 + *   - the parsed face records (type/mat/index tuples) the DL was built from,
 + *   - the vertex/st array contents summary (count, first entries, min/max
 + *     magnitude, out-of-range-index scan over every face tuple),
@@ -40,7 +39,7 @@
 + *   - the raw built DL bytes (first 1 KB hex) + per-batch dlOfs table.
 + * Decoding those bytes against the descriptor the draw path will set is a
 + * mechanical, offline check of stream-vs-descriptor alignment. One getenv,
-+ * zero output when unset. PORT-DIAGNOSTIC ONLY: never changes behavior. */
++ * zero output when unset. Diagnostic only: never changes behavior. */
 +#include <string.h>
 +static int mp6DlDumpParsed = 0;       /* 0 = env not parsed yet */
 +static const char *mp6DlDumpName = NULL;
@@ -58,14 +57,14 @@
 +    return want && objName && strcmp(want, objName) == 0;
 +}
 @@ -149,0 +205,6 @@
-+    if (mp6ObjCensusActive()) { /* M11 object census -- see mp6ObjCensusActive above */
++    if (mp6ObjCensusActive()) { /* object census -- see mp6ObjCensusActive above */
 +        printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=%p root=%p rootType=%d objectNum=%d motId=%d\n",
 +               (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)hsf, (void *)hsf->root,
 +               hsf->root ? hsf->root->type : -1, hsf->objectNum, modelP->motId);
 +        fflush(stdout);
 +    }
 @@ -189,0 +251,7 @@
-+    if (mp6ObjCensusActive()) { /* M11 object census (rot/pos: thread 3's sky-wheel angle) */
++    if (mp6ObjCensusActive()) { /* object census (rot/pos: the sky-wheel angle) */
 +        printf("[CENSUS-OBJ]  objCall type=%d name=%s childNum=%d baseRot=(%.1f,%.1f,%.1f) basePos=(%.1f,%.1f,%.1f) curRot=(%.1f,%.1f,%.1f)\n",
 +               objPtr->type, objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum,
 +               objPtr->mesh.base.rot.x, objPtr->mesh.base.rot.y, objPtr->mesh.base.rot.z,
@@ -73,12 +72,12 @@
 +               objPtr->mesh.curr.rot.x, objPtr->mesh.curr.rot.y, objPtr->mesh.curr.rot.z);
 +    }
 @@ -256,0 +325,3 @@
-+    if (mp6ObjCensusActive() && (constData->attr & HU3D_CONST_LOCK)) { /* M11 object census */
++    if (mp6ObjCensusActive() && (constData->attr & HU3D_CONST_LOCK)) { /* object census */
 +        printf("[CENSUS-OBJ]  mesh %s -> skip:LOCK\n", objPtr->name ? objPtr->name : "(null)");
 +    }
 @@ -338,0 +410,19 @@
 +            }
-+            if (mp6ObjCensusActive()) { /* M11 object census: predict the branch below, in its order */
++            if (mp6ObjCensusActive()) { /* object census: predict the branch below, in its order */
 +                const char *mp6Br;
 +                if (!dispF) {
 +                    mp6Br = "skip:dispF(cull/DISPOFF-flag)";
@@ -98,41 +97,41 @@
 +                fflush(stdout);
 @@ -1836 +1926,6 @@
 -    GXInitTexObj(&texObj, Hu3DShadow->buf, Hu3DShadow->size, Hu3DShadow->size, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
-+    /* [MP6 Shadow Quality] the texObj's claimed dims track the scaled
-+     * copy DESTINATION (mp6_shadow_effective_size()), matching what
-+     * Hu3DShadowExec's GXSetTexCopyDst resolved into Hu3DShadow->buf.
-+     * Identity at the native setting. */
-+    s32 effSize = mp6_shadow_effective_size(Hu3DShadow->size);
++    /* The texObj's claimed dims track the scaled copy DESTINATION
++     * (mp6_shadow_effective_size()), matching what Hu3DShadowExec's
++     * GXSetTexCopyDst resolved into Hu3DShadow->buf. Identity at the
++     * native setting. */
++    s32 effSize = mp6_shadow_latched_size(Hu3DShadow->buf, Hu3DShadow->size); /* create-time size, not live config */
 +    GXInitTexObj(&texObj, Hu3DShadow->buf, (u16)effSize, (u16)effSize, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
 @@ -1995,0 +2091,7 @@
 +    }
-+    if (mp6ObjCensusActive()) { /* M11 object census: name the texture each draw binds */
++    if (mp6ObjCensusActive()) { /* object census: name the texture each draw binds */
 +        printf("[CENSUS-OBJ]    LoadTexture bmp=%s data=%p fmt=%d %dx%d texId=%d attr=%s tint=(%d,%d,%d,%d)\n",
 +               bmpPtr->name ? bmpPtr->name : "(null)", (void *)bmpPtr->data, bmpPtr->dataFmt,
 +               bmpPtr->sizeX, bmpPtr->sizeY, texId, attrP->name ? attrP->name : "(null)",
 +               bmpPtr->tint.r, bmpPtr->tint.g, bmpPtr->tint.b, bmpPtr->tint.a);
 +        fflush(stdout);
 @@ -2124,0 +2227,5 @@
-+            if (mp6ObjCensusActive()) { /* M11 object census: whole subtree pruned here */
++            if (mp6ObjCensusActive()) { /* object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
 @@ -2174,0 +2282,5 @@
-+            if (mp6ObjCensusActive()) { /* M11 object census: whole subtree pruned here */
++            if (mp6ObjCensusActive()) { /* object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
 @@ -2399,0 +2512,6 @@
-+                if (mp6ObjCensusActive()) { /* M11 object census: deferred z-sorted draws */
++                if (mp6ObjCensusActive()) { /* object census: deferred z-sorted draws */
 +                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d obj=%s z=%.1f\n",
 +                           drawObjNo, (int)(drawObj->model - Hu3DData),
 +                           drawObj->object->name ? drawObj->object->name : "(null)", drawObj->z);
 +                    fflush(stdout);
 +                }
 @@ -2507,0 +2626,10 @@
-+    if (mp6ObjCensusActive()) { /* M11 object census (matrix row: thread 3's applied wheel rotation) */
++    if (mp6ObjCensusActive()) { /* object census (matrix row: the applied wheel rotation) */
 +        printf("[CENSUS-OBJ]   ObjDraw model=%d obj=%s faceCount=%d mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
 +               (int)(drawObj->model - Hu3DData),
 +               drawObj->object->name ? drawObj->object->name : "(null)",
@@ -144,7 +143,7 @@
 +    }
 @@ -2692,0 +2821,119 @@
 +    }
-+    if (mp6DlDumpEnv() && mp6DlDumpEnv()[0] == '*') { /* M13 sweep mode: one line per built object */
++    if (mp6DlDumpEnv() && mp6DlDumpEnv()[0] == '*') { /* sweep mode: one line per built object */
 +        HSF_FACE *fp = faceBuf->data;
 +        HuVecF *vtx = objPtr->mesh.vertex ? (HuVecF *)objPtr->mesh.vertex->data : NULL;
 +        s32 vtxN = objPtr->mesh.vertex ? objPtr->mesh.vertex->count : 0;
@@ -184,7 +183,7 @@
 +               ((int)totalSize > (int)DLTotalNum || badV || badS) ? "  <-- ANOMALY" : "");
 +        fflush(stdout);
 +    }
-+    if (mp6DlDumpWant(objPtr->name)) { /* M13 DL/vertex ground-truth dump -- see mp6DlDumpWant above */
++    if (mp6DlDumpWant(objPtr->name)) { /* DL/vertex ground-truth dump -- see mp6DlDumpWant above */
 +        char path[128];
 +        FILE *df;
 +        snprintf(path, sizeof(path), "build/dldump_%s.txt", objPtr->name);
@@ -263,81 +262,74 @@
 +            fflush(stdout);
 +        }
 @@ -2834,0 +3082,39 @@
-+                /* MP6 native port -- docs/M5_MENUS_STAR.md. Real, unpatched
-+                 * original decomp gap, same class as game/hsfman.c's
-+                 * Hu3DZClear and game/sprput.c's HuSpr3DDisp (see
-+                 * platform/gx/aurora_bridge.c's section-5 comment): this
-+                 * GXBegin(GX_TRIANGLES, ..., faceNumBuf[drawCnt]) is always
-+                 * followed by a loop emitting EXACTLY faceNumBuf[drawCnt]
-+                 * vertices, so on real hardware (GX FIFO ends a primitive by
-+                 * vertex count, no explicit End needed) this was always
-+                 * complete and correct with no GXEnd() call. Unlike
-+                 * HuSpr3DDisp, this one is NOT safe to leave to the bridge's
-+                 * general auto-close tolerance: this whole per-material
-+                 * batch is recorded inside a GXBeginDisplayList/
-+                 * GXEndDisplayList bracket (see 3 lines up / below), and
-+                 * Aurora's own fifo module (lib/gx/fifo.cpp) tracks the
-+                 * display-list recording buffer (sDlBuffer/sDlWritePos)
-+                 * completely separately from the immediate-mode buffer
-+                 * (sBufferSize) that GXBegin/GXEnd's byte-count validation
-+                 * always reads from, even while GXBeginDisplayList has
-+                 * redirected every write to the OTHER buffer -- so by the
-+                 * time the bridge's tolerance finally calls the real
-+                 * GXEnd() (the next GXBegin, typically well after this
-+                 * material's own GXEndDisplayList already returned),
-+                 * whatever unrelated IMMEDIATE-mode GX traffic happened to
-+                 * run in between gets misattributed as extra bytes for
-+                 * THIS primitive. Caught directly (Aurora build, fileseldll
-+                 * reached for the first time): "GXEnd: vertex count
-+                 * mismatch: GXBegin declared 60 vertices (6B each, 360B
-+                 * total) but 389 bytes were written (64 vertices)". A real,
-+                 * explicit GXEnd() here -- BEFORE GXEndDisplayList() falls
-+                 * through below -- is a pure no-op on real hardware (zero
-+                 * behavior change: it already correctly inferred completion
-+                 * from the vertex count) while guaranteeing Aurora's own
-+                 * (buffer-blind) byte measurement always sees a 0-byte
-+                 * delta at this exact point (nothing else runs between the
-+                 * last vertex and this call), which trivially satisfies its
-+                 * `bytesWritten > 0` validation gate instead of leaving the
-+                 * primitive open for the bridge's necessarily-coarser,
-+                 * wrong-buffer fallback to eventually mis-close. */
++                /* Real, unpatched original decomp gap, same class as
++                 * game/hsfman.c's Hu3DZClear and game/sprput.c's
++                 * HuSpr3DDisp: this GXBegin(GX_TRIANGLES, ...,
++                 * faceNumBuf[drawCnt]) is always followed by a loop
++                 * emitting EXACTLY faceNumBuf[drawCnt] vertices, so on real
++                 * hardware (GX FIFO ends a primitive by vertex count, no
++                 * explicit End needed) this was always complete and correct
++                 * with no GXEnd() call. Unlike HuSpr3DDisp, this one is NOT
++                 * safe to leave to the bridge's general auto-close
++                 * tolerance: this whole per-material batch is recorded
++                 * inside a GXBeginDisplayList/GXEndDisplayList bracket (see
++                 * 3 lines up / below), and Aurora's own fifo module tracks
++                 * the display-list recording buffer completely separately
++                 * from the immediate-mode buffer that GXBegin/GXEnd's
++                 * byte-count validation always reads from, even while
++                 * GXBeginDisplayList has redirected every write to the
++                 * OTHER buffer -- so by the time the bridge's tolerance
++                 * finally calls the real GXEnd() (the next GXBegin,
++                 * typically well after this material's own
++                 * GXEndDisplayList already returned), whatever unrelated
++                 * IMMEDIATE-mode GX traffic happened to run in between gets
++                 * misattributed as extra bytes for THIS primitive. Caught
++                 * directly (Aurora build, fileseldll reached for the first
++                 * time): "GXEnd: vertex count mismatch: GXBegin declared 60
++                 * vertices (6B each, 360B total) but 389 bytes were written
++                 * (64 vertices)". A real, explicit GXEnd() here -- BEFORE
++                 * GXEndDisplayList() falls through below -- is a pure
++                 * no-op on real hardware (zero behavior change: it already
++                 * correctly inferred completion from the vertex count)
++                 * while guaranteeing Aurora's own (buffer-blind) byte
++                 * measurement always sees a 0-byte delta at this exact
++                 * point, which trivially satisfies its validation gate
++                 * instead of leaving the primitive open for the bridge's
++                 * necessarily-coarser, wrong-buffer fallback to eventually
++                 * mis-close. */
 +                GXEnd();
 @@ -2904,0 +3191,6 @@
-+                /* MP6 native port -- docs/M5_MENUS_STAR.md. Same class and
-+                 * same fix as the HSF_FACE_TRI case above (this function's
-+                 * own comment there has the full root-cause story) --
-+                 * GXQUADS' own vertex loop always emits exactly
-+                 * faceNumBuf[drawCnt] vertices too. */
++                /* Same class and same fix as the HSF_FACE_TRI case above
++                 * (this function's own comment there has the full
++                 * root-cause story) -- GXQUADS' own vertex loop always
++                 * emits exactly faceNumBuf[drawCnt] vertices too. */
 +                GXEnd();
 @@ -2975,0 +3268,6 @@
-+                /* MP6 native port -- docs/M5_MENUS_STAR.md. Same class and
-+                 * same fix as the HSF_FACE_TRI case above (this function's
-+                 * own comment there has the full root-cause story) -- the
-+                 * initial 3 vertices plus this strip loop always emit
-+                 * exactly faceNumBuf[drawCnt] vertices in total too. */
++                /* Same class and same fix as the HSF_FACE_TRI case above
++                 * (this function's own comment there has the full
++                 * root-cause story) -- the initial 3 vertices plus this
++                 * strip loop always emit exactly faceNumBuf[drawCnt]
++                 * vertices in total too. */
 +                GXEnd();
 @@ -3495 +3793,23 @@
 -            objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
-+            /* MP6 native port -- docs/M12_MDSEL_INTEGRATION.md. 64-bit/
-+             * checked-build portability fix, NULL-in-pointer-rebase class:
-+             * a mesh with no attributes has mesh.attribute == NULL -- BY
-+             * DESIGN, on real hardware too (ObjectLoad's own
-+             * `if((s32)data->attribute >= 0) ... else newObj->mesh.attribute
-+             * = NULL;`, the file's -1 "no attributes" sentinel -- itself the
-+             * classic bit-31 idiom). Hardware's version of this line then
-+             * computes `attrBuf + (NULL - base)` for such meshes: a garbage
-+             * pointer, written back, and provably never read (GC mode
-+             * select runs fine -- the attribute pointer of an
-+             * attribute-less mesh has no consumer). This port's checked
-+             * build (zig cc UBSan) instead panics at the arithmetic itself
-+             * ("addition of unsigned offset ... overflowed", reproduced
-+             * via mdseldll fn_1_5614's Hu3DModelLink of the 30 linked fish
-+             * models -- the first Hu3DModelLink call any flow in this port
-+             * has ever reached). Keeping NULL for the linked copy is
-+             * observably identical on the never-read contract, and
-+             * strictly better diagnostics if some future path DOES read
-+             * it: an immediate, symbolized null-deref at the read site
-+             * instead of a wild pointer. */
++            /* 64-bit/checked-build portability fix, NULL-in-pointer-rebase
++             * class: a mesh with no attributes has mesh.attribute == NULL
++             * -- BY DESIGN, on real hardware too (ObjectLoad's own -1 "no
++             * attributes" sentinel, the classic bit-31 idiom). Hardware's
++             * version of this line then computes `attrBuf + (NULL - base)`
++             * for such meshes: a garbage pointer, written back, and
++             * provably never read (GC mode select runs fine -- the
++             * attribute pointer of an attribute-less mesh has no
++             * consumer). This port's checked build (zig cc UBSan) instead
++             * panics at the arithmetic itself ("addition of unsigned
++             * offset ... overflowed", reproduced via mdseldll fn_1_5614's
++             * Hu3DModelLink of the 30 linked fish models -- the first
++             * Hu3DModelLink call any flow in this port has ever reached).
++             * Keeping NULL for the linked copy is observably identical on
++             * the never-read contract, and strictly better diagnostics if
++             * some future path DOES read it: an immediate, symbolized
++             * null-deref at the read site instead of a wild pointer. */
 +            if (objPtr->mesh.attribute != NULL) {
 +                objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
 +            }
