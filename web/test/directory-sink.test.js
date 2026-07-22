@@ -6,7 +6,7 @@
 // under Node; the real thing is covered by manual/browser testing (see
 // MANUAL_TEST.md).
 
-import { test, assertEqual, assertBytesEqual } from "./tiny-test.js";
+import { test, assertEqual, assertDeepEqual, assertBytesEqual } from "./tiny-test.js";
 import { DirectorySink } from "../js/directory-sink.js";
 
 function concat(chunks) {
@@ -111,6 +111,33 @@ test("DirectorySink: directory handles are memoized across multiple files sharin
     const filesDir = root.dirs.get("content").dirs.get("GP6E01").dirs.get("files");
     assertEqual(filesDir.dirs.size, 2); // "data" and "mess", each created exactly once
     assertEqual(filesDir.dirs.get("data").files.size, 2);
+});
+
+// ---------------------------------------------------------------------
+// SECURITY: path-traversal / unsafe-path rejection (path-safe.js gate)
+// ---------------------------------------------------------------------
+
+async function* neverRead() {
+    throw new Error("must not be read: writeFile should reject before touching chunks");
+}
+
+test("DirectorySink: an unsafe path is skipped (not written, not thrown) and recorded", async () => {
+    const root = new FakeDirHandle("root");
+    const sink = new DirectorySink(root);
+    await sink.writeFile("content/GP6E01/files/data/../../evil", neverRead());
+    assertDeepEqual(sink.skippedPaths, ["content/GP6E01/files/data/../../evil"]);
+    assertEqual(root.dirs.size, 0);
+    assertEqual(root.files.size, 0);
+});
+
+test("DirectorySink: multiple unsafe paths across a run do not abort later safe writes", async () => {
+    const root = new FakeDirHandle("root");
+    const sink = new DirectorySink(root);
+    await sink.writeFile("/abs/evil", neverRead());
+    await sink.writeFile("data/x.bin", oneShot(new TextEncoder().encode("ok")));
+    await sink.writeFile("..\\win", neverRead());
+    assertDeepEqual(sink.skippedPaths, ["/abs/evil", "..\\win"]);
+    assertEqual(root.dirs.get("data").files.get("x.bin").closed, true);
 });
 
 test("DirectorySink: a write error aborts the writable and propagates", async () => {

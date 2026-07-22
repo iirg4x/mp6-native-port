@@ -114,8 +114,15 @@ export async function runPackage({ discSource, engineZip, sink, cancelToken, onP
         filesTotal,
         currentFile: "",
         error: "",
+        skippedCount: 0, // entries the sink rejected as unsafe (see directory-sink.js's isSafeRelPath gate)
     };
     const emit = () => onProgress && onProgress({ ...status });
+    // Sinks that validate paths (currently DirectorySink) expose the
+    // rejected ones on `skippedPaths`; sinks that don't (ZipStreamSink)
+    // simply leave the count at 0.
+    const syncSkippedCount = () => {
+        if (Array.isArray(sink.skippedPaths)) status.skippedCount = sink.skippedPaths.length;
+    };
     emit();
 
     try {
@@ -143,6 +150,7 @@ export async function runPackage({ discSource, engineZip, sink, cancelToken, onP
         await sink.finish();
         status.state = STATE.DONE;
         status.currentFile = "";
+        syncSkippedCount();
         emit();
         return status;
     } catch (e) {
@@ -159,6 +167,7 @@ export async function runPackage({ discSource, engineZip, sink, cancelToken, onP
             status.state = STATE.FAILED;
             status.error = e && e.message ? e.message : String(e);
         }
+        syncSkippedCount();
         emit();
         return status;
     }

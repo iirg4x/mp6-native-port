@@ -330,19 +330,30 @@ el.startBtn.addEventListener("click", async () => {
     el.startBtn.disabled = true; // this run is done; reload to start another
 
     if (status.state === STATE.DONE) {
-        setStatus(el.buildStatus, "ok", "Build complete.");
+        setStatus(el.buildStatus, "ok", "Build complete." + skippedSuffix(status.skippedCount));
         markStepState(el.stepBuild, "done");
         el.progressWrap.hidden = true;
         el.donePanel.hidden = false;
         el.doneMessage.textContent = doneMessageFor(outputTier, !!engineZip);
     } else if (status.state === STATE.CANCELLED) {
-        setStatus(el.buildStatus, "info", "Cancelled.");
+        setStatus(el.buildStatus, "info", "Cancelled." + skippedSuffix(status.skippedCount));
         el.startBtn.disabled = false;
     } else {
-        setStatus(el.buildStatus, "error", `Build failed: ${status.error}`);
+        setStatus(el.buildStatus, "error", `Build failed: ${status.error}` + skippedSuffix(status.skippedCount));
         el.startBtn.disabled = false;
     }
 });
+
+// SECURITY: a hostile or malformed disc/folder can carry entries whose
+// name would otherwise escape the output root (path-safe.js /
+// directory-sink.js); those are skipped rather than aborting the run, but
+// must not go unnoticed -- surface the count next to whatever status line
+// is already showing, for any run outcome.
+function skippedSuffix(skippedCount) {
+    if (!skippedCount) return "";
+    const noun = skippedCount === 1 ? "entry" : "entries";
+    return ` (${skippedCount} disc ${noun} skipped as unsafe -- see console for names.)`;
+}
 
 el.cancelBtn.addEventListener("click", () => {
     if (cancelToken) cancelToken.cancelled = true;
