@@ -14,11 +14,35 @@ engine this project builds from its own decompiled/reimplemented source.
   make sure the commit you're releasing from is actually pushed and is the
   real HEAD of the branch you're releasing (`main`/`master`), not a local
   working tree with uncommitted changes, stray test artifacts, or logs
-  sitting around. If your source lives in a separate internal/working
-  checkout, sync it into this repo (commit + push) *before* you build
-  anything for release -- a release asset must be reproducible from exactly
-  what's in this public repo at the tagged commit, or the whole point of
-  publishing the source is undermined.
+  sitting around. A release asset must be reproducible from exactly what's in
+  this public repo at the tagged commit, or the whole point of publishing the
+  source is undermined.
+- **If your source lives in a separate working checkout, promote it with that
+  checkout's `tools/sync_clean_repo.py` -- not by hand.** One command, run
+  from the working checkout:
+
+  ```
+  python tools/sync_clean_repo.py --clean-repo <path to this repo> --plan-only
+  python tools/sync_clean_repo.py --clean-repo <path to this repo> --commit
+  ```
+
+  It takes the payload from a *commit* rather than a working tree (the same
+  rule as the bullet above, applied one level up), copies only the curated
+  source set -- `patches/`, `platform/`, `platforms/`, `res/`, `setup/`,
+  `shim/`, `CMakeLists.txt`, the `setup.*` launchers, `VERSION`,
+  `VERSION_CODE`, `.gitattributes`, and the tools this repo carries -- and
+  never touches `docs/`, `web/`, `.github/`, `README.md` or `.gitignore`,
+  which are authored here. It prints the whole add/update/delete plan before
+  writing anything, refuses to run against a dirty checkout of this repo
+  unless you pass `--clobber-dirty`, and hard-fails rather than proceeding if
+  the payload carries anything that does not belong in a public repository.
+  Hand-copying skips all of that; the last hand-sync was interrupted partway
+  and left 139 uncommitted files here in a state nobody could verify.
+
+  The resulting commit's subject is
+  `source sync: engine snapshot at <working-checkout commit>`, so a release
+  tag can always be traced back to the exact source that produced it. Push
+  it *before* you build anything for release.
 - Clean build directories (`build/`, `platforms/android/app/build/`, etc.)
   before building release artifacts, so nothing stale leaks in:
   `python tools/build.py --clean`.
