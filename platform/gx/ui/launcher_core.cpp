@@ -29,6 +29,8 @@
 #include <zlib.h> /* title.bin entry inflate (same zlib-ng build game/decode.c links) */
 
 #include <chrono>
+#include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -37,6 +39,7 @@
 #include <span>
 
 #include "launcher_state.hpp"
+#include "launcher_hsf_safe.h"
 #include "overlay.hpp"
 #include "prelaunch.hpp"
 #include "settings.hpp" /* the persistent in-game menu instance (section 9) */
@@ -44,6 +47,9 @@
 
 extern "C" {
 #include "host.h" /* mp6_host_monotonic_ns / mp6_host_sleep_ns / mp6_host_save_dir */
+#include "mp6_json.h" /* strict, complete JSON lexical validation */
+#include "mp6_path.h" /* checked operational path copy/join */
+#include "mp6_utf8_file.h" /* Windows UTF-8 config/content files */
 #include "mp6_savestate.h" /* in-game menu: savestate result toasts (section 9) */
 
 /* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
@@ -58,10 +64,18 @@ extern "C" {
 #include "mp6_host_section.h"
 
 
-/* Additive hooks in existing platform files (see their own comments): */
-void mp6_dvd_set_root_override(const char *filesRoot, const char *fstPath); /* platform/dvd/dvd_files.c */
-int mp6_dvd_probe_root(char *filesRootOut, size_t n);                       /* platform/dvd/dvd_files.c */
+/* Additive hooks in existing platform files (see their own comments). Kept
+ * as narrow declarations here so this Aurora-header TU never imports the
+ * decomp's competing dolphin.h universe. */
+int mp6_dvd_set_root_override(const char *filesRoot, const char *fstPath);
+int mp6_dvd_probe_root(char *filesRootOut, size_t n);
+int mp6_dvd_validate_disc_root(const char *discRoot, char *err, size_t errn);
+int mp6_import_recover_disc_root(const char *destDiscRoot);
 void mp6_audio_set_master_gain(float gain);                                 /* platform/audio/audio_out_sdl.c */
+#ifdef __ANDROID__
+const char *SDL_GetAndroidExternalStoragePath(void);
+const char *SDL_GetAndroidInternalStoragePath(void);
+#endif
 }
 
 #ifndef MP6_PORT_VERSION
@@ -97,100 +111,172 @@ static void mp6_launcher_defaults(void)
 }
 
 /* =======================================================================
- * 2. Flat JSON read/write (tolerant by construction: unknown keys are
- * ignored, malformed input keeps defaults for the rest).
+ * 2. Flat JSON read/write. Unknown keys are ignored, but syntax is strict
+ * and the parse is transactional: malformed input applies no prefix of
+ * settings and leaves the caller's defaults intact.
  * ======================================================================= */
 
-static const char *js_skip_ws(const char *p)
+enum Mp6ConfigKeyBit : uint32_t {
+    MP6_CFG_SKIP = 1u << 0,
+    MP6_CFG_WINDOW_MODE = 1u << 1,
+    MP6_CFG_WINDOW_SCALE = 1u << 2,
+    MP6_CFG_VSYNC = 1u << 3,
+    MP6_CFG_BACKEND = 1u << 4,
+    MP6_CFG_SHOW_FPS = 1u << 5,
+    MP6_CFG_FPS_CORNER = 1u << 6,
+    MP6_CFG_TICK_HZ = 1u << 7,
+    MP6_CFG_CONTENT_ROOT = 1u << 8,
+    MP6_CFG_MASTER_VOLUME = 1u << 9,
+    MP6_CFG_WIDESCREEN = 1u << 10,
+    MP6_CFG_SHADOW_QUALITY = 1u << 11,
+    MP6_CFG_UNLOCKED_FPS = 1u << 12,
+    MP6_CFG_AA = 1u << 13,
+    MP6_CFG_OLD_MSAA = 1u << 14,
+};
+
+static uint32_t js_known_key_bit(const char *key)
 {
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ',') p++;
-    return p;
+    if (strcmp(key, "launcher.skip") == 0) return MP6_CFG_SKIP;
+    if (strcmp(key, "video.window_mode") == 0) return MP6_CFG_WINDOW_MODE;
+    if (strcmp(key, "video.window_scale") == 0) return MP6_CFG_WINDOW_SCALE;
+    if (strcmp(key, "video.vsync") == 0) return MP6_CFG_VSYNC;
+    if (strcmp(key, "video.backend") == 0) return MP6_CFG_BACKEND;
+    if (strcmp(key, "video.show_fps") == 0) return MP6_CFG_SHOW_FPS;
+    if (strcmp(key, "video.fps_corner") == 0) return MP6_CFG_FPS_CORNER;
+    if (strcmp(key, "game.tick_hz") == 0) return MP6_CFG_TICK_HZ;
+    if (strcmp(key, "game.content_root") == 0) return MP6_CFG_CONTENT_ROOT;
+    if (strcmp(key, "audio.master_volume") == 0) return MP6_CFG_MASTER_VOLUME;
+    if (strcmp(key, "video.widescreen") == 0) return MP6_CFG_WIDESCREEN;
+    if (strcmp(key, "video.shadow_quality") == 0) return MP6_CFG_SHADOW_QUALITY;
+    if (strcmp(key, "video.unlocked_fps") == 0) return MP6_CFG_UNLOCKED_FPS;
+    if (strcmp(key, "video.aa") == 0) return MP6_CFG_AA;
+    if (strcmp(key, "video.msaa") == 0) return MP6_CFG_OLD_MSAA;
+    return 0;
 }
 
-static const char *js_parse_string(const char *p, char *buf, size_t n)
+static bool js_known_string_key(uint32_t bit)
 {
-    size_t i = 0;
-    if (*p != '"') return NULL;
-    p++;
-    while (*p && *p != '"') {
-        char c = *p++;
-        if (c == '\\' && (*p == '"' || *p == '\\' || *p == '/')) {
-            c = *p++;
-        }
-        if (i + 1 < n) buf[i++] = c;
-    }
-    if (*p != '"') return NULL;
-    buf[i] = '\0';
-    return p + 1;
+    return bit == MP6_CFG_WINDOW_MODE || bit == MP6_CFG_BACKEND ||
+           bit == MP6_CFG_CONTENT_ROOT;
 }
 
-static void mp6_launcher_parse_config(const char *text)
+static bool js_backend_valid(const char *value)
 {
+    return strcmp(value, "auto") == 0 || strcmp(value, "d3d12") == 0 ||
+           strcmp(value, "d3d11") == 0 || strcmp(value, "vulkan") == 0 ||
+           strcmp(value, "metal") == 0 || strcmp(value, "opengl") == 0 ||
+           strcmp(value, "opengles") == 0 || strcmp(value, "webgpu") == 0;
+}
+
+static int mp6_launcher_parse_config(const char *text)
+{
+    enum ValueKind { VALUE_OTHER, VALUE_STRING, VALUE_BOOL, VALUE_NUMBER };
+    Mp6LauncherConfig parsed = g_cfg;
     char key[64];
     char sval[1024];
-    const char *p = js_skip_ws(text);
+    const char *p = mp6_json_skip_ws(text);
+    uint32_t seen = 0;
+    bool first = true;
 
-    if (*p != '{') {
-        printf("[LAUNCHER] config.json does not start with '{' -- using defaults\n");
-        return;
-    }
-    p = js_skip_ws(p + 1);
+    if (p == nullptr || *p != '{') goto malformed;
+    p = mp6_json_skip_ws(p + 1);
 
-    while (*p && *p != '}') {
-        p = js_parse_string(p, key, sizeof(key));
-        if (p == NULL) { printf("[LAUNCHER] config.json: malformed key -- stopping parse, defaults kept for the rest\n"); return; }
-        p = js_skip_ws(p);
-        if (*p != ':') { printf("[LAUNCHER] config.json: missing ':' after \"%s\" -- stopping parse\n", key); return; }
-        p = js_skip_ws(p + 1);
+    while (*p != '}') {
+        uint32_t bit;
+        uint32_t seenBefore;
+        ValueKind kind = VALUE_OTHER;
+        bool boolValue = false;
+        double numberValue = 0.0;
+        const char *valueEnd = nullptr;
+
+        if (*p == '\0') goto malformed;
+        if (!first) {
+            if (*p != ',') goto malformed;
+            p = mp6_json_skip_ws(p + 1);
+            if (*p == '}') goto malformed; /* no trailing comma */
+        }
+        first = false;
+        p = mp6_json_parse_string(p, key, sizeof(key));
+        if (p == nullptr) goto malformed;
+        bit = js_known_key_bit(key);
+        seenBefore = seen;
+        if (bit != 0 && (seen & bit) != 0) goto malformed; /* ambiguous duplicate */
+        seen |= bit;
+        p = mp6_json_skip_ws(p);
+        if (*p != ':') goto malformed;
+        p = mp6_json_skip_ws(p + 1);
 
         if (*p == '"') { /* string value */
-            p = js_parse_string(p, sval, sizeof(sval));
-            if (p == NULL) { printf("[LAUNCHER] config.json: malformed string for \"%s\" -- stopping parse\n", key); return; }
-            if (strcmp(key, "video.window_mode") == 0) {
-                g_cfg.windowMode = (strcmp(sval, "fullscreen") == 0) ? MP6_WINMODE_FULLSCREEN : MP6_WINMODE_WINDOWED;
-            } else if (strcmp(key, "video.backend") == 0) {
-                snprintf(g_cfg.backend, sizeof(g_cfg.backend), "%s", sval);
-            } else if (strcmp(key, "game.content_root") == 0) {
-                snprintf(g_cfg.contentRoot, sizeof(g_cfg.contentRoot), "%s", sval);
-            } /* unknown string keys: ignored */
-        } else if (strncmp(p, "true", 4) == 0 || strncmp(p, "false", 5) == 0) {
-            int v = (*p == 't');
-            p += v ? 4 : 5;
+            valueEnd = mp6_json_parse_string(p,
+                                              js_known_string_key(bit) ? sval : nullptr,
+                                              js_known_string_key(bit) ? sizeof(sval) : 0);
+            if (valueEnd == nullptr) goto malformed;
+            kind = VALUE_STRING;
+        } else if (strncmp(p, "true", 4) == 0) {
+            valueEnd = p + 4;
+            boolValue = true;
+            kind = VALUE_BOOL;
+        } else if (strncmp(p, "false", 5) == 0) {
+            valueEnd = p + 5;
+            boolValue = false;
+            kind = VALUE_BOOL;
+        } else if (*p == '-' || (*p >= '0' && *p <= '9')) {
+            valueEnd = mp6_json_parse_number(p, &numberValue);
+            if (valueEnd == nullptr) goto malformed;
+            kind = VALUE_NUMBER;
+        } else {
+            valueEnd = mp6_json_skip_value(p); /* strict object/array/null for unknown/future keys */
+            if (valueEnd == nullptr) goto malformed;
+        }
+
+        if (kind == VALUE_STRING) {
+            if (bit == MP6_CFG_WINDOW_MODE) {
+                parsed.windowMode = strcmp(sval, "fullscreen") == 0
+                                        ? MP6_WINMODE_FULLSCREEN : MP6_WINMODE_WINDOWED;
+            } else if (bit == MP6_CFG_BACKEND) {
+                snprintf(parsed.backend, sizeof(parsed.backend), "%s",
+                         js_backend_valid(sval) ? sval : "auto");
+            } else if (bit == MP6_CFG_CONTENT_ROOT) {
+                if (mp6_path_copy_checked(parsed.contentRoot,
+                                          sizeof(parsed.contentRoot), sval) != 0) {
+                    printf("[LAUNCHER] config.json: game.content_root is too long -- keeping auto resolution\n");
+                    parsed.contentRoot[0] = '\0';
+                }
+            }
+        } else if (kind == VALUE_BOOL) {
             /* "video.aspect_locked" is deliberately NOT read anymore (the
              * "Lock 4:3" row was removed -- Widescreen is the one aspect
              * switch); an old config's key falls through to the tolerant
              * unknown-key ignore below, and the built-in default (locked
              * whenever Widescreen is off) applies. */
-            if      (strcmp(key, "launcher.skip") == 0)       g_cfg.skipLauncher = v;
-            else if (strcmp(key, "video.vsync") == 0)         g_cfg.vsync = v;
-            else if (strcmp(key, "video.show_fps") == 0)      g_cfg.showFps = v;
-            else if (strcmp(key, "video.widescreen") == 0)    g_cfg.widescreen = v; /* additive, backward-compatible -- absent in any older config.json, tolerant parser default (0) applies */
-            else if (strcmp(key, "video.unlocked_fps") == 0)  g_cfg.unlockedFps = v; /* Unlocked FPS: additive, same tolerant-absent-defaults-off shape as widescreen */
-        } else { /* number */
-            char *end = NULL;
-            double v = strtod(p, &end);
-            if (end == p) { printf("[LAUNCHER] config.json: malformed value for \"%s\" -- stopping parse\n", key); return; }
-            p = end;
-            if      (strcmp(key, "video.window_scale") == 0)  g_cfg.windowScale = (float)v;
-            else if (strcmp(key, "video.fps_corner") == 0) {
-                g_cfg.fpsCorner = (int)v;
-                if (g_cfg.fpsCorner < 0 || g_cfg.fpsCorner > 3) g_cfg.fpsCorner = 0;
+            if      (bit == MP6_CFG_SKIP)          parsed.skipLauncher = boolValue;
+            else if (bit == MP6_CFG_VSYNC)         parsed.vsync = boolValue;
+            else if (bit == MP6_CFG_SHOW_FPS)      parsed.showFps = boolValue;
+            else if (bit == MP6_CFG_WIDESCREEN)    parsed.widescreen = boolValue;
+            else if (bit == MP6_CFG_UNLOCKED_FPS)  parsed.unlockedFps = boolValue;
+        } else if (kind == VALUE_NUMBER) {
+            const double v = numberValue;
+            if      (bit == MP6_CFG_WINDOW_SCALE) {
+                parsed.windowScale = (v >= 0.0 && v <= 16.0) ? (float)v : 0.0f;
             }
-            else if (strcmp(key, "game.tick_hz") == 0)        g_cfg.tickHz = (v >= 0.0 ? v : 60.0);
-            else if (strcmp(key, "audio.master_volume") == 0) {
-                g_cfg.masterVolume = (int)v;
-                if (g_cfg.masterVolume < 0) g_cfg.masterVolume = 0;
-                if (g_cfg.masterVolume > 100) g_cfg.masterVolume = 100;
+            else if (bit == MP6_CFG_FPS_CORNER) {
+                parsed.fpsCorner = (v >= 0.0 && v <= 3.0 && v == std::floor(v)) ? (int)v : 0;
             }
-            else if (strcmp(key, "video.shadow_quality") == 0) {
+            else if (bit == MP6_CFG_TICK_HZ) {
+                parsed.tickHz = (v == 0.0 || (v >= 1.0 && v <= 1000.0)) ? v : 60.0;
+            }
+            else if (bit == MP6_CFG_MASTER_VOLUME) {
+                parsed.masterVolume = (v >= 0.0 && v <= 100.0 && v == std::floor(v))
+                                          ? (int)v : 100;
+            }
+            else if (bit == MP6_CFG_SHADOW_QUALITY) {
                 /* Tolerant by construction (this file's own header
                  * comment): anything outside the five valid scales --
                  * missing key, a future downgrade, or hand-edited JSON --
                  * falls back to 1 (native), never a crash or an
                  * out-of-range shadowP->size downstream. */
-                int sq = (int)v;
-                if (sq != 1 && sq != 2 && sq != 4 && sq != 8 && sq != 16) sq = 1;
-                g_cfg.shadowQuality = sq;
+                parsed.shadowQuality = (v == 1.0 || v == 2.0 || v == 4.0 ||
+                                        v == 8.0 || v == 16.0) ? (int)v : 1;
             }
             /* "video.fi_mode" is deliberately NOT read anymore (the "FPS
              * Smoothing Mode" row was removed -- model-level interpolation is
@@ -199,53 +285,69 @@ static void mp6_launcher_parse_config(const char *text)
              * of this chain, exactly like the retired "video.aspect_locked"
              * above: the value is consumed by strtod and discarded, no error,
              * no parse stop. */
-            else if (strcmp(key, "video.aa") == 0) {
+            else if (bit == MP6_CFG_AA) {
                 /* Anti-Aliasing (Mp6AaMode): tolerant by construction, same
                  * shape as shadow_quality just above -- anything outside the
                  * known modes (missing key, a future value, hand-edited JSON)
                  * falls back to OFF, never a bogus mechanism downstream. */
-                int a = (int)v;
-                if (a != MP6_AA_OFF && a != MP6_AA_MSAA4X && a != MP6_AA_FXAA &&
-                    a != MP6_AA_SSAA15 && a != MP6_AA_SSAA2X) a = MP6_AA_OFF;
-                g_cfg.aa = a;
+                if (v == (double)MP6_AA_OFF || v == (double)MP6_AA_MSAA4X ||
+                    v == (double)MP6_AA_FXAA || v == (double)MP6_AA_SSAA15 ||
+                    v == (double)MP6_AA_SSAA2X) {
+                    parsed.aa = (int)v;
+                } else {
+                    parsed.aa = MP6_AA_OFF;
+                }
             }
-            else if (strcmp(key, "video.msaa") == 0) {
+            else if (bit == MP6_CFG_OLD_MSAA) {
                 /* Backward-compat migration: P1 shipped a standalone
                  * video.msaa key; an existing pre-unification config carries
                  * msaa=4 and no video.aa. Map that onto the unified enum.
                  * Upgrade-only (never clobbers a video.aa the same file might
                  * also carry); new configs write video.aa exclusively. */
-                if ((int)v == 4) g_cfg.aa = MP6_AA_MSAA4X;
+                if ((seenBefore & MP6_CFG_AA) == 0 && v == 4.0) {
+                    parsed.aa = MP6_AA_MSAA4X;
+                }
             }
         }
-        p = js_skip_ws(p);
+        p = mp6_json_skip_ws(valueEnd);
+        if (*p != ',' && *p != '}') goto malformed;
     }
-}
+    p = mp6_json_skip_ws(p + 1);
+    if (*p != '\0') goto malformed;
+    g_cfg = parsed;
+    return 1;
 
-static void js_escape(const char *src, char *dst, size_t n)
-{
-    size_t i = 0;
-    for (; *src && i + 2 < n; src++) {
-        if (*src == '"' || *src == '\\') dst[i++] = '\\';
-        dst[i++] = *src;
-    }
-    dst[i] = '\0';
+malformed:
+    printf("[LAUNCHER] config.json is malformed, ambiguous, or out of range -- using defaults\n");
+    return 0;
 }
 
 static void mp6_launcher_config_save(void)
 {
-    char rootEsc[2048];
-    FILE *f;
+    char rootEsc[sizeof(g_cfg.contentRoot) * 6u + 1u];
+    char temporary[sizeof(g_configPath) + 32u];
+    FILE *f = nullptr;
+    unsigned int attempt;
+    int failed;
     if (g_configPath[0] == '\0') return;
-    f = fopen(g_configPath, "wb");
-    if (f == NULL) {
-        printf("[LAUNCHER] could not write %s\n", g_configPath);
+    if (!mp6_json_escape_string(g_cfg.contentRoot, rootEsc, sizeof(rootEsc))) {
+        printf("[LAUNCHER] content path is too large to encode in config.json\n");
         return;
     }
-    js_escape(g_cfg.contentRoot, rootEsc, sizeof(rootEsc));
+    for (attempt = 0; attempt < 32u; ++attempt) {
+        int written = snprintf(temporary, sizeof(temporary), "%s.tmp.%02u",
+                               g_configPath, attempt);
+        if (written < 0 || (size_t)written >= sizeof(temporary)) break;
+        f = mp6_fopen_utf8(temporary, "wbx");
+        if (f != nullptr) break;
+    }
+    if (f == NULL) {
+        printf("[LAUNCHER] could not create a temporary config for %s\n", g_configPath);
+        return;
+    }
     /* "video.aspect_locked" is no longer written (row removed; the key in
      * an existing file is ignored on read, so old configs stay valid). */
-    fprintf(f,
+    failed = fprintf(f,
             "{\n"
             "    \"launcher.skip\": %s,\n"
             "    \"video.window_mode\": \"%s\",\n"
@@ -275,8 +377,13 @@ static void mp6_launcher_config_save(void)
             g_cfg.widescreen ? "true" : "false", /* additive key */
             g_cfg.shadowQuality, /* Shadow Quality: additive key */
             g_cfg.unlockedFps ? "true" : "false", /* Unlocked FPS: additive key */
-            g_cfg.aa); /* Anti-Aliasing: unified video.aa enum, appended last so any external tooling scraping the first N keys positionally (none known) is unaffected */
-    fclose(f);
+            g_cfg.aa) < 0; /* Anti-Aliasing: unified video.aa enum, appended last so any external tooling scraping the first N keys positionally (none known) is unaffected */
+    if (fflush(f) != 0 || ferror(f)) failed = 1;
+    if (fclose(f) != 0) failed = 1;
+    if (failed || mp6_replace_utf8(temporary, g_configPath) != 0) {
+        (void)mp6_remove_utf8(temporary);
+        printf("[LAUNCHER] config save failed; previous config is unchanged\n");
+    }
 }
 
 /* =======================================================================
@@ -293,33 +400,45 @@ static void mp6_launcher_resolve_paths(void)
      * MP6_HOST_BASE BEFORE aurora_main runs. */
     const char *hostBase = getenv("MP6_HOST_BASE");
     if (hostBase != NULL && hostBase[0] != '\0') {
-        snprintf(g_configPath, sizeof(g_configPath), "%s/mp6_config.json", hostBase);
+        if (mp6_path_join_checked(g_configPath, sizeof(g_configPath), hostBase,
+                                  "mp6_config.json") != 0) {
+            printf("[LAUNCHER] MP6_HOST_BASE is too long for config path -- config disabled\n");
+        }
     } else {
         g_configPath[0] = '\0'; /* no writable base: defaults only, no save */
     }
 #else
     const char *base = SDL_GetBasePath();
     if (base != NULL && base[0] != '\0') {
-        snprintf(g_configPath, sizeof(g_configPath), "%smp6_config.json", base);
+        if (mp6_path_join_checked(g_configPath, sizeof(g_configPath), base,
+                                  "mp6_config.json") != 0) {
+            printf("[LAUNCHER] executable path is too long for config path -- config disabled\n");
+        }
     } else {
-        snprintf(g_configPath, sizeof(g_configPath), "mp6_config.json"); /* cwd fallback */
+        mp6_path_copy_checked(g_configPath, sizeof(g_configPath), "mp6_config.json"); /* cwd fallback */
     }
 #endif
 
     {
-        char rel[64];
-        if (mp6_host_save_dir(rel, sizeof(rel)) != 0) snprintf(rel, sizeof(rel), "saves");
 #if defined(__ANDROID__)
-        /* Display-only: saves resolve under MP6_HOST_BASE on device
-         * (see aurora_bridge.c's own section-6 console-repositioning note). */
-        const char *saveBase = getenv("MP6_HOST_BASE");
-        if (saveBase != NULL && saveBase[0] != '\0') {
-            snprintf(g_saveDirAbs, sizeof(g_saveDirAbs), "%s/%s", saveBase, rel);
-        } else
-#elif defined(_WIN32)
-        if (_fullpath(g_saveDirAbs, rel, sizeof(g_saveDirAbs)) == NULL)
+        /* Android's host seam already returns the complete absolute
+         * <MP6_HOST_BASE>/saves target. Never prefix the base a second time. */
+        if (mp6_host_save_dir(g_saveDirAbs, sizeof(g_saveDirAbs)) != 0) {
+            g_saveDirAbs[0] = '\0';
+        }
+#else
+        char rel[64];
+        if (mp6_host_save_dir(rel, sizeof(rel)) != 0) {
+            mp6_path_copy_checked(rel, sizeof(rel), "saves");
+        }
+#if defined(_WIN32)
+        if (mp6_fullpath_utf8(g_saveDirAbs, sizeof(g_saveDirAbs), rel) != 0) {
+            mp6_path_copy_checked(g_saveDirAbs, sizeof(g_saveDirAbs), rel);
+        }
+#else
+        mp6_path_copy_checked(g_saveDirAbs, sizeof(g_saveDirAbs), rel);
 #endif
-            snprintf(g_saveDirAbs, sizeof(g_saveDirAbs), "%s", rel);
+#endif
     }
 }
 
@@ -362,14 +481,24 @@ extern "C" int mp6_launcher_decide_mode(int hasNumericArg, int hasInputScript, i
         FILE *f;
         mp6_launcher_defaults();
         mp6_launcher_resolve_paths();
-        f = fopen(g_configPath, "rb");
+        f = mp6_fopen_utf8(g_configPath, "rb");
         if (f != NULL) {
             static char text[8192];
             size_t got = fread(text, 1, sizeof(text) - 1, f);
+            int extra = fgetc(f);
+            int readFailed = ferror(f);
             text[got] = '\0';
             fclose(f);
-            mp6_launcher_parse_config(text);
-            printf("[LAUNCHER] config loaded from %s\n", g_configPath);
+            if (readFailed || extra != EOF) {
+                printf("[LAUNCHER] config rejected: file exceeds %zu bytes or could not be read completely\n",
+                       sizeof(text) - 1);
+            } else {
+                if (mp6_launcher_parse_config(text)) {
+                    printf("[LAUNCHER] config loaded from %s\n", g_configPath);
+                } else {
+                    printf("[LAUNCHER] config rejected; defaults retained for this launch\n");
+                }
+            }
         } else {
             printf("[LAUNCHER] no config at %s -- defaults (file is created on first settings change)\n",
                    g_configPath);
@@ -659,26 +788,13 @@ static void mp6_launcher_apply_volume(void)
     mp6_audio_set_master_gain((float)g_cfg.masterVolume / 100.0f);
 }
 
-/* Content-root override validation: the load-bearing file
- * is <root>/sys/fst.bin plus a <root>/files directory. */
+/* Content-root override validation uses the same parser and mandatory-file
+ * manifest as the runtime DVD layer. This keeps a malformed/partial FST from
+ * becoming "ready" in the launcher and crashing later in GameMain. */
 static int mp6_launcher_validate_root(const char *root, char *err, size_t errn)
 {
-    char path[1200];
-    SDL_PathInfo info;
     if (root[0] == '\0') { if (errn) err[0] = '\0'; return 0; }
-
-    snprintf(path, sizeof(path), "%s/sys/fst.bin", root);
-    if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_FILE) {
-        snprintf(err, errn, "not found: %s", path);
-        return -1;
-    }
-    snprintf(path, sizeof(path), "%s/files", root);
-    if (!SDL_GetPathInfo(path, &info) || info.type != SDL_PATHTYPE_DIRECTORY) {
-        snprintf(err, errn, "not found: %s (directory)", path);
-        return -1;
-    }
-    if (errn) err[0] = '\0';
-    return 1;
+    return mp6_dvd_validate_disc_root(root, err, errn) ? 1 : -1;
 }
 
 extern "C" void mp6_launcher_apply_game_settings(void)
@@ -700,9 +816,11 @@ extern "C" void mp6_launcher_apply_game_settings(void)
         char err[1200];
         if (mp6_launcher_validate_root(g_cfg.contentRoot, err, sizeof(err)) > 0) {
             char files[1100], fst[1100];
-            snprintf(files, sizeof(files), "%s/files", g_cfg.contentRoot);
-            snprintf(fst, sizeof(fst), "%s/sys/fst.bin", g_cfg.contentRoot);
-            mp6_dvd_set_root_override(files, fst);
+            if (mp6_path_join_checked(files, sizeof(files), g_cfg.contentRoot, "files") != 0 ||
+                mp6_path_join_checked(fst, sizeof(fst), g_cfg.contentRoot, "sys/fst.bin") != 0 ||
+                mp6_dvd_set_root_override(files, fst) != 0) {
+                printf("[LAUNCHER] configured game.content_root paths are too long -- using automatic resolution\n");
+            }
         } else {
             printf("[LAUNCHER] configured game.content_root failed validation (%s) -- using automatic resolution\n", err);
         }
@@ -719,19 +837,54 @@ extern "C" void mp6_launcher_apply_game_settings(void)
 
 static int g_rootState = -2;       /* -2 unprobed; else validate_root() result for the CONFIGURED root */
 static int g_autoRootOk = 0;
-static char g_autoRoot[1100];
+static char g_autoRoot[1200];
 static char g_rootErr[1200];
-static char g_activeRootDisplay[1100];
+static char g_activeRootDisplay[1200];
+
+static void mp6_recover_known_content_roots(void)
+{
+    if (g_cfg.contentRoot[0] != '\0') {
+        mp6_import_recover_disc_root(g_cfg.contentRoot);
+    }
+#ifdef __ANDROID__
+    {
+        const char *bases[] = { SDL_GetAndroidExternalStoragePath(), SDL_GetAndroidInternalStoragePath() };
+        for (const char *base : bases) {
+            if (base != nullptr && base[0] != '\0') {
+                char root[1200];
+                if (mp6_path_join_checked(root, sizeof(root), base, "mp6/GP6E01") == 0) {
+                    mp6_import_recover_disc_root(root);
+                }
+            }
+        }
+    }
+#else
+    {
+        const char *base = SDL_GetBasePath();
+        if (base != nullptr && base[0] != '\0') {
+            char root[1200];
+            if (mp6_path_join_checked(root, sizeof(root), base, "content/GP6E01") == 0) {
+                mp6_import_recover_disc_root(root);
+            }
+        }
+    }
+#endif
+}
 
 static void mp6_refresh_content_state(void)
 {
+    mp6_recover_known_content_roots();
     g_rootState = mp6_launcher_validate_root(g_cfg.contentRoot, g_rootErr, sizeof(g_rootErr));
     g_autoRootOk = mp6_dvd_probe_root(g_autoRoot, sizeof(g_autoRoot)) != 0;
     if (g_rootState > 0) {
-        snprintf(g_activeRootDisplay, sizeof(g_activeRootDisplay), "%s", g_cfg.contentRoot);
+        mp6_path_copy_checked(g_activeRootDisplay, sizeof(g_activeRootDisplay), g_cfg.contentRoot);
     } else if (g_autoRootOk) {
         /* auto root is the FILES dir; display its parent (the disc root) */
-        snprintf(g_activeRootDisplay, sizeof(g_activeRootDisplay), "%s", g_autoRoot);
+        if (mp6_path_copy_checked(g_activeRootDisplay, sizeof(g_activeRootDisplay), g_autoRoot) != 0) {
+            g_autoRootOk = 0;
+            g_activeRootDisplay[0] = '\0';
+            return;
+        }
         size_t len = strlen(g_activeRootDisplay);
         if (len > 6 && strcmp(g_activeRootDisplay + len - 6, "/files") == 0) g_activeRootDisplay[len - 6] = '\0';
     } else {
@@ -758,8 +911,7 @@ static int mp6_active_files_root(char *buf, size_t n)
 {
     char err[8];
     if (g_cfg.contentRoot[0] != '\0' && mp6_launcher_validate_root(g_cfg.contentRoot, err, sizeof(err)) > 0) {
-        snprintf(buf, n, "%s/files", g_cfg.contentRoot);
-        return 1;
+        return mp6_path_join_checked(buf, n, g_cfg.contentRoot, "files") == 0;
     }
     return mp6_dvd_probe_root(buf, n) != 0;
 }
@@ -867,39 +1019,15 @@ static unsigned char *mp6_titlebin_entry(FILE *f, int idx, unsigned *outLen)
  * malloc'd RGBA8 buffer (caller frees/retains) or NULL. */
 static unsigned char *mp6_hsf_find_rgb5a3(const unsigned char *blob, unsigned len, const char *name, int *outW, int *outH)
 {
-    if (len < 176 || memcmp(blob, "HSFV", 4) != 0) return NULL;
-    unsigned bmpOfs = mp6_be32(blob + 8 + 9 * 8);
-    int bmpNum = (int)mp6_be32(blob + 12 + 9 * 8);
-    unsigned strOfs = mp6_be32(blob + 8 + 20 * 8);
-    if (bmpNum <= 0 || bmpNum > 4096 || bmpOfs >= len || strOfs >= len) return NULL;
-
-    for (int i = 0; i < bmpNum; i++) {
-        unsigned rec = bmpOfs + (unsigned)i * 32u;
-        if (rec + 32 > len) return NULL;
-        unsigned nameOfs = mp6_be32(blob + rec);
-        if (strOfs + nameOfs >= len) continue;
-        const char *bmpName = (const char *)(blob + strOfs + nameOfs);
-        size_t maxN = len - (strOfs + nameOfs);
-        if (strncmp(bmpName, name, maxN) != 0) continue;
-
-        unsigned dataFmt = blob[rec + 8];
-        unsigned pixSize = blob[rec + 9];
-        int w = (int)mp6_be16(blob + rec + 10);
-        int h = (int)mp6_be16(blob + rec + 12);
-        unsigned dataOfs = mp6_be32(blob + rec + 28);
-        if (dataFmt != 5 /* HSF_BMPFMT_RGB5A3 */ || pixSize != 16 || w <= 0 || h <= 0 || w > 2048 || h > 2048) return NULL;
-        unsigned pool = bmpOfs + (unsigned)bmpNum * 32u;
-        unsigned nbytes = (unsigned)w * (unsigned)h * 2u;
-        if (pool + dataOfs + nbytes > len) return NULL;
-
-        unsigned char *rgba = (unsigned char *)malloc((size_t)w * h * 4);
-        if (rgba == NULL) return NULL;
-        mp6_decode_rgb5a3(blob + pool + dataOfs, w, h, rgba);
-        *outW = w;
-        *outH = h;
-        return rgba;
-    }
-    return NULL;
+    Mp6LauncherRgb5a3View view;
+    unsigned char *rgba;
+    if (!mp6_launcher_hsf_find_rgb5a3_view(blob, len, name, &view)) return NULL;
+    rgba = (unsigned char *)malloc((size_t)view.width * (size_t)view.height * 4u);
+    if (rgba == NULL) return NULL;
+    mp6_decode_rgb5a3(view.pixels, view.width, view.height, rgba);
+    *outW = view.width;
+    *outH = view.height;
+    return rgba;
 }
 
 /* Sets the interactive window title + icon. Launcher mode only; automation
@@ -945,8 +1073,12 @@ static void mp6_logo_ensure(void)
         return;
     }
     char binPath[1200];
-    snprintf(binPath, sizeof(binPath), "%s/data/title.bin", filesRoot);
-    FILE *f = fopen(binPath, "rb");
+    if (mp6_path_join_checked(binPath, sizeof(binPath), filesRoot, "data/title.bin") != 0) {
+        printf("[LAUNCHER] wordmark: content path is too long -- using text fallback\n");
+        fflush(stdout);
+        return;
+    }
+    FILE *f = mp6_fopen_utf8(binPath, "rb");
     if (f == NULL) {
         printf("[LAUNCHER] wordmark: %s not found -- using text fallback\n", binPath);
         fflush(stdout);
@@ -1044,24 +1176,26 @@ static const char *mp6_resource_base(void)
      * config.resourcesPath to "" so aurora never prefixes SDL's "./"
      * base path onto asset paths (AAssetManager does no "./"
      * normalization). partyboard ships this exact mechanism. */
-    snprintf(g_resBase, sizeof(g_resBase), "res");
+    if (mp6_path_copy_checked(g_resBase, sizeof(g_resBase), "res") != 0) return NULL;
     return g_resBase;
 #else
     char probe[1400];
     SDL_PathInfo info;
 
-    snprintf(probe, sizeof(probe), "res/rml/window.rcss");
+    if (mp6_path_copy_checked(probe, sizeof(probe), "res/rml/window.rcss") != 0) return NULL;
     if (SDL_GetPathInfo(probe, &info) && info.type == SDL_PATHTYPE_FILE) {
         char abs[1200];
 #ifdef _WIN32
-        if (_fullpath(abs, "res", sizeof(abs)) != NULL) {
-            snprintf(g_resBase, sizeof(g_resBase), "%s", abs);
+        if (mp6_fullpath_utf8(abs, sizeof(abs), "res") == 0) {
+            if (mp6_path_copy_checked(g_resBase, sizeof(g_resBase), abs) != 0) return NULL;
         } else
 #endif
-            snprintf(g_resBase, sizeof(g_resBase), "res");
+            if (mp6_path_copy_checked(g_resBase, sizeof(g_resBase), "res") != 0) return NULL;
     } else {
         const char *base = SDL_GetBasePath();
-        snprintf(g_resBase, sizeof(g_resBase), "%sres", base != NULL ? base : "");
+        if (mp6_path_join_checked(g_resBase, sizeof(g_resBase), base != NULL ? base : "", "res") != 0) {
+            return NULL;
+        }
     }
     for (char *p = g_resBase; *p; p++) {
         if (*p == '\\') *p = '/';

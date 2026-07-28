@@ -77,8 +77,34 @@ import sys
 
 NATIVE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../mp6-native
 PORT_ROOT = os.path.dirname(NATIVE_ROOT)
-DEFAULT_DECOMP = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6"))
+
+
+def _default_decomp():
+    """The decomp checkout to patch FROM, honouring MP6_DECOMP_DIR.
+
+    tools/build.py always passes decomp_root= explicitly (it resolves the
+    same override through setup/lib/common.py's DECOMP_DIR), but this module
+    is also run standalone (`python tools/apply_patches.py`) and imported by
+    tests -- those used to hard-code the sibling `marioparty6` checkout and
+    would read a DIFFERENT tree than the build, silently patching (or, when
+    that tree lacks a patched file such as src/REL/w01Dll/world01.c,
+    crashing with FileNotFoundError). Resolution mirrors
+    setup/lib/common.py::_workspace_path_override exactly -- relative values
+    are rooted at NATIVE_ROOT, never at the process cwd -- so both entry
+    points can never select different trees.
+    """
+    default = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6"))
+    value = os.environ.get("MP6_DECOMP_DIR", "").strip()
+    if not value:
+        value = default
+    elif not os.path.isabs(value):
+        value = os.path.join(NATIVE_ROOT, value)
+    return os.path.normpath(os.path.abspath(os.path.expanduser(value)))
+
+
+DEFAULT_DECOMP = _default_decomp()
 DEFAULT_PATCHES_DIR = os.path.join(NATIVE_ROOT, "patches", "decomp")
+DEFAULT_PATCH_FRAGMENTS_DIR = os.path.join(NATIVE_ROOT, "patches", "decomp-fragments")
 DEFAULT_OUT_DIR = os.path.join(NATIVE_ROOT, "build", "patched-src")
 
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -240,9 +266,40 @@ def discover_patches(patches_dir):
     return sorted(out)
 
 
-def apply_all(decomp_root=DEFAULT_DECOMP, patches_dir=DEFAULT_PATCHES_DIR, out_dir=DEFAULT_OUT_DIR):
+def discover_patch_fragments(fragments_dir):
+    """Returns {decomp-relative path: [ordered fragment patch paths]}.
+
+    Fragment names mirror the target and end in ``.patch.<order>``.  They
+    apply after the ordinary patch and are authored against that patched
+    output.  This lets a small UTF-8 review fix extend a legacy patch that
+    itself losslessly carries a stray non-UTF-8 source byte, without rewriting
+    the whole historical patch merely to change its encoding.
+    """
+    out = {}
+    if not fragments_dir or not os.path.isdir(fragments_dir):
+        return out
+    for root, _dirs, files in os.walk(fragments_dir):
+        for filename in files:
+            marker = ".patch."
+            if marker not in filename:
+                continue
+            absolute = os.path.join(root, filename)
+            relative = os.path.relpath(absolute, fragments_dir).replace(os.sep, "/")
+            target, _order = relative.rsplit(marker, 1)
+            out.setdefault(target, []).append(absolute)
+    for paths in out.values():
+        paths.sort()
+    return out
+
+
+def apply_all(decomp_root=DEFAULT_DECOMP, patches_dir=DEFAULT_PATCHES_DIR, out_dir=DEFAULT_OUT_DIR,
+              fragments_dir=None):
+    if fragments_dir is None and os.path.normcase(os.path.abspath(patches_dir)) == os.path.normcase(
+            os.path.abspath(DEFAULT_PATCHES_DIR)):
+        fragments_dir = DEFAULT_PATCH_FRAGMENTS_DIR
+    fragments = discover_patch_fragments(fragments_dir)
     results = []
-    for rel in discover_patches(patches_dir):
+    for rel in sorted(set(discover_patches(patches_dir)) | set(fragments)):
         src_path = os.path.join(decomp_root, rel.replace("/", os.sep))
         patch_path = os.path.join(patches_dir, rel.replace("/", os.sep) + ".patch")
         out_path = os.path.join(out_dir, rel.replace("/", os.sep))
@@ -256,9 +313,19 @@ def apply_all(decomp_root=DEFAULT_DECOMP, patches_dir=DEFAULT_PATCHES_DIR, out_d
         # of being silently rewritten the way errors="replace" would.
         with open(src_path, "r", encoding="utf-8", errors="surrogateescape") as f:
             original = f.read()
-        with open(patch_path, "r", encoding="utf-8", errors="surrogateescape") as f:
-            patch_text = f.read()
-        patched = apply_unified_diff(original, patch_text, label=rel)
+        patched = original
+        if os.path.isfile(patch_path):
+            with open(patch_path, "r", encoding="utf-8", errors="surrogateescape") as f:
+                patch_text = f.read()
+            patched = apply_unified_diff(patched, patch_text, label=rel)
+        for fragment_path in fragments.get(rel, ()):
+            with open(fragment_path, "r", encoding="utf-8") as f:
+                fragment_text = f.read()
+            patched = apply_unified_diff(
+                patched,
+                fragment_text,
+                label=f"{rel} fragment {os.path.basename(fragment_path)}",
+            )
         changed = _write_if_changed(out_path, patched)
         results.append((rel, out_path, changed))
     return results

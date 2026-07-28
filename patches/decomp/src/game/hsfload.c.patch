@@ -6,6 +6,18 @@
 +#include "mp6_shim_log.h"
 +#include "mp6_hsf_native.h"
 +#include <stdlib.h>
+@@ -5,0 +9,8 @@
++/* The original 32-bit, big-endian in-place loader is not a callable native
++ * fallback: LoadHSF below unconditionally routes real input through the
++ * checked native deserializer. Keep the original implementation in the
++ * source patch as format provenance, but do not compile pointer-truncating
++ * dead code into the 64-bit port. */
++#if 0
+@@ -58,0 +70,5 @@ static char *GetMotionString(u16 *strOfs);
++#endif
++char *StringTable;
++static s32 SearchObjectSetName(HSF_DATA *data, char *name);
++static char *GetString(u32 *strOfs);
 @@ -62,28 +66,74 @@
 -    HSF_DATA *hsf;
 -    Model.root = NULL;
@@ -44,10 +56,10 @@
 +     * stub: calling any of the *Load() functions below directly on this
 +     * port's raw (unswapped, wrong-stride-on-64-bit) bytes is what
 +     * produced that stub's genuine Windows access violation a few
-+     * seconds after the Nintendo logo. The functions below stay defined
-+     * (never called anymore) only because they double as this format's
-+     * own documentation -- see hsf_load_native.c's own header comment for
-+     * exactly how each one's logic was ported.
++     * seconds after the Nintendo logo. The legacy functions remain visible
++     * below under #if 0 as format provenance; compiling them would retain
++     * unreachable 32-bit pointer truncations in this 64-bit build. See
++     * hsf_load_native.c for the checked logic that replaced them.
 +     *
 +     * MP6_HSF_STUB=1 (checked once per call, negligible cost) selects the
 +     * OLD, always-empty, M2-era inert stub instead -- kept only so a
@@ -64,6 +76,10 @@
 +
 +        hsf = HuMemDirectMalloc(HEAP_MODEL, sizeof(HSF_DATA));
 +        root = HuMemDirectMalloc(HEAP_MODEL, sizeof(HSF_OBJECT));
++        if (hsf == NULL || root == NULL) {
++            OSReport("[FATAL] LoadHSF forced-stub allocation failed\n");
++            _Exit(EXIT_FAILURE);
++        }
 +        memset(hsf, 0, sizeof(HSF_DATA));
 +        memset(root, 0, sizeof(HSF_OBJECT));
 +        root->type = HSF_OBJ_ROOT;
@@ -71,15 +87,16 @@
 +        hsf->root = root;
 +        hsf->object = root;
 +        hsf->objectNum = 0;
-+        if (data) {
-+            memcpy(hsf->magic, data, sizeof(hsf->magic));
-+        }
++        /* The forced stub deliberately does not inspect `data`: unlike the
++         * real loader it has no validated length.  Do not turn a diagnostic
++         * fallback into an unbounded 8-byte read. */
++        StringTable = NULL;
 +        return hsf;
 +    }
 +    /* Replicates the ONE global side effect of the original FileLoad()
-+     * that this body-replacement dropped: `StringTable = (char
-+     * *)((u32)fileptr + head.string.ofs);` (this file's own original
-+     * line, run on EVERY HSF load). The native deserializer keeps a
++     * that this body-replacement dropped, but only after the native loader
++     * has validated the allocation, full section graph, and string extent.
++     * The native deserializer keeps a
 +     * MotionOnly (standalone joint-motion) file's HSF_TRACK.target as the
 +     * RAW 16-bit string offset -- deliberately and faithfully, mirroring
 +     * the original MotionLoadTransform's own `if(objtop)` gate (see
@@ -93,15 +110,74 @@
 +     * reached by mdseldll's fn_1_88D0 (mode select is the first flow to
 +     * use standalone joint-motion files); with the global stuck NULL the
 +     * checked build panics ("applying non-zero offset 14 to null
-+     * pointer"). Explicit big-endian decode of head.string.ofs -- header
-+     * layout: magic[8] + 21 HSF_SECTIONs of {s32 ofs; s32 num}, `string`
-+     * is section index 20, so its ofs field sits at byte 8 + 20*8 = 168
-+     * -- since unlike hardware this build can't read the BE header
-+     * through the struct. */
-+    if (data != NULL) {
-+        const unsigned char *mp6Hdr = (const unsigned char *)data;
-+        u32 mp6StrOfs = ((u32)mp6Hdr[168] << 24) | ((u32)mp6Hdr[169] << 16)
-+                      | ((u32)mp6Hdr[170] << 8) | (u32)mp6Hdr[171];
-+        StringTable = (char *)data + mp6StrOfs;
++     * pointer"). MP6_LoadHSFNative clears the out-pointer before preflight;
++     * malformed input therefore leaves this global NULL and returns a safe
++     * inert model instead of publishing an attacker-controlled address. */
++    return MP6_LoadHSFNative(data, &StringTable);
+@@ -111,0 +169 @@ void ClusterAdjustObject(HSF_DATA *model, HSF_DATA *srcModel)
++#if 0
+@@ -168,0 +227 @@ static HSF_DATA *SetHsfModel(void)
++#endif
+@@ -174,0 +234 @@ char *SetName(u32 *strOfs)
++#if 0
+@@ -973,0 +1034 @@ static void PaletteLoad(void)
++#endif
+@@ -975,36 +1037,42 @@ char *MakeObjectName(s8 *name)
+ char *MakeObjectName(s8 *name)
+ {
+     static char buf[768];
+     s32 index, numSeparate;
+     char *nameP;
++    if(name == NULL) {
++        buf[0] = '\0';
++        return buf;
 +    }
-+    return MP6_LoadHSFNative(data);
+     numSeparate = 0;
+     index = 0;
+     nameP = (char *)name;
+     while(*nameP) {
+         if(*nameP == '-') {
+-            name = (s8 *)nameP+1;
++            name = (s8 *)nameP + 1;
+             break;
+         }
+         nameP++;
+     }
+-    while(*name) {
++    while(*name && (size_t)index < sizeof(buf) - 1u) {
+         if(numSeparate != 0) {
+             break;
+         }
+-        if(*name == '_' && !isalpha(name[1])) {
++        if(*name == '_' && !isalpha((unsigned char)name[1])) {
+             numSeparate++;
+             break;
+         }
+         buf[index] = *name;
+         name++;
+         index++;
+     }
+     buf[index] = '\0';
+     return buf;
+ }
+ 
+ s32 CmpObjectName(char *name1, char *name2)
+ {
+-    s32 temp = 0;
++    if(name1 == NULL || name2 == NULL) {
++        return name1 == name2 ? 0 : (name1 == NULL ? -1 : 1);
++    }
+     return strcmp(name1, name2);
+ }
+@@ -1010,0 +1077 @@ s32 CmpObjectName(char *name1, char *name2)
++#if 0
+@@ -1409,0 +1470 @@ static void MatrixLoad(void)
++#endif
+@@ -1422,0 +1484 @@ static s32 SearchObjectSetName(HSF_DATA *data, char *name)
++#if 0
+@@ -1521,0 +1584 @@ static HSF_BITMAP *SearchBitmapPtr(s32 id)
++#endif
+@@ -1527,0 +1591 @@ static char *GetString(u32 *strOfs)
++#if 0
+@@ -1533,0 +1598 @@ static char *GetMotionString(u16 *strOfs)
++#endif

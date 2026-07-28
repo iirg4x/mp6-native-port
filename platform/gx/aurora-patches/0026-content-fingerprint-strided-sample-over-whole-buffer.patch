@@ -1,0 +1,91 @@
+Depends on patches 0005 and 0006 (apply those first) -- this diff is against
+the post-0006 state of the file. It REPLACES 0006's own head/tail-only content
+fingerprint with an evenly-spread strided sample of the same bounded cost; the
+comment inside the diff carries the measured MP6 case that proved 0006's window
+collides for a whole class of real game textures.
+
+diff --git a/lib/dolphin/gx/GXTexture.cpp b/lib/dolphin/gx/GXTexture.cpp
+--- a/lib/dolphin/gx/GXTexture.cpp
++++ b/lib/dolphin/gx/GXTexture.cpp
+@@ -103,20 +103,73 @@
+  * already used throughout this codebase for pipeline/bind-group cache
+  * keys (gfx/common.hpp's xxh3_hash_s). id/version 0 stays reserved
+  * ("uncached"/mismatch-by-construction) as before. */
++/* mp6-port patch 0026 (follows patch 0006 directly above): patch 0006's
++ * head/tail-only sampling window is not discriminating enough for a whole
++ * CLASS of real game textures, and the failure is silent + visually wrong.
++ *
++ * Measured, not theorised. MP6's board player-status panels carry a
++ * per-character portrait ("kao", DATA_board 0x36..0x43): all 14 are
++ * 56x56 RGB5A3, all exactly 6272 bytes, and every one of them has the
++ * SAME fully-transparent texels in its first and last GX tile -- so
++ * patch 0006's own window (first 64 bytes + last 64 bytes + byteSize)
++ * hashes IDENTICALLY for every character, while the images obviously
++ * differ. Instrumented directly on the retail Party route (board/status.c
++ * under MP6_STATUS_DIAG): four different portraits, four different
++ * full-buffer hashes (36d850de / 730928b0 / ccf8dd85 / a56c7f13), ONE
++ * shared head/tail fingerprint (ec7d8e8d).
++ *
++ * That alone is harmless until the address is reused, which the board
++ * opening does routinely: the turn-order dice permute the players
++ * (board/opening.c PlayerOrderSet -> mbPlayerSwap) and mbStatusReset()
++ * then tears every panel down and rebuilds it, so each panel's portrait
++ * buffer is freed and immediately re-allocated -- same allocator, same
++ * size class, same address -- now holding a DIFFERENT character's
++ * pixels. Same address + same dims/format/wrap => same
++ * mp6_stable_obj_id(); identical head/tail => same texDataVersion; so
++ * gx.cpp's resolve_static_texture() serves the PREVIOUS character's
++ * converted texture. Observed on screen as the four status panels
++ * keeping their pre-dice faces (Mario still top-left) while every other
++ * field on the same panel -- rank, coins, the CPU badge -- correctly
++ * followed the new turn order.
++ *
++ * Fix: keep the same constant-cost contract (this still runs on EVERY
++ * GXInitTexObj, i.e. potentially hundreds of times per frame, so the
++ * whole buffer is still deliberately NOT hashed), but spread the sample
++ * over the ENTIRE buffer instead of clustering it at the two ends, where
++ * transparent borders make textures look alike. Up to 64 evenly-spaced
++ * 32-byte chunks (2 KB sampled, bounded regardless of texture size),
++ * still including offset 0 and the final chunk, so this window is a
++ * strict superset of patch 0006's discriminating power, plus 62 interior
++ * probes through the region where two different images actually differ.
++ * Buffers at or below the sample budget are hashed whole, which is
++ * strictly better than sampling them. Unchanged content still yields an
++ * identical fingerprint, so patch 0005's per-frame cache-hit behaviour
++ * (the reason any of this is sampled rather than counted) is intact. */
+ static u32 mp6_content_fingerprint(const void* data, u32 byteSize) {
+   if (data == nullptr || byteSize == 0 || (uintptr_t)data < 0x10000) {
+     return 1u; // no real data yet -- stable, distinct from 0 ("uncached")
+   }
++  constexpr u32 kChunkLen = 32;
++  constexpr u32 kChunks = 64;
++  constexpr u32 kSampleMax = kChunkLen * kChunks; // 2 KB, size-independent
++
+   const auto* p = static_cast<const u8*>(data);
+-  u8 scratch[136];
++  u8 scratch[kSampleMax + sizeof(u32)];
+   u32 n = 0;
+-  const u32 headLen = std::min<u32>(byteSize, 64);
+-  memcpy(scratch + n, p, headLen);
+-  n += headLen;
+-  if (byteSize > headLen) {
+-    const u32 tailLen = std::min<u32>(byteSize - headLen, 64);
+-    memcpy(scratch + n, p + (byteSize - tailLen), tailLen);
+-    n += tailLen;
++
++  if (byteSize <= kSampleMax) {
++    memcpy(scratch, p, byteSize);
++    n = byteSize;
++  } else {
++    // Chunk i starts at floor(span * i / (kChunks - 1)) with span =
++    // byteSize - kChunkLen, so i==0 is the head, i==kChunks-1 is the tail,
++    // and the remaining probes are spread uniformly across the interior.
++    const u64 span = static_cast<u64>(byteSize) - kChunkLen;
++    for (u32 i = 0; i < kChunks; ++i) {
++      const u32 off = static_cast<u32>(span * i / (kChunks - 1));
++      memcpy(scratch + n, p + off, kChunkLen);
++      n += kChunkLen;
++    }
+   }
+   memcpy(scratch + n, &byteSize, sizeof(byteSize));
+   n += sizeof(byteSize);

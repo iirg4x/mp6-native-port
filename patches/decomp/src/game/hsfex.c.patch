@@ -1,0 +1,42 @@
+--- a/src/game/hsfex.c
++++ b/src/game/hsfex.c
+@@ -502,7 +502,7 @@ void CamMotionExPath(s16 cameraBit, CAM_MOTION_WORK *workBuf, int num)
+ {
+     CAM_MOTION_WORK *work;
+     s16 i, j;
+-    HU3D_CAMERA *cameraP;
++    HU3D_CAMERA *cameraP = NULL;
+     float time;
+     float timeEnd;
+@@ -511,12 +511,18 @@ void CamMotionExPath(s16 cameraBit, CAM_MOTION_WORK *workBuf, int num)
+     float p2[4];
+     float p1[4];
+     
++    /* The interval search reads work[1], so a usable path has at least two
++     * keys. An empty/out-of-range camera mask otherwise leaves cameraP
++     * indeterminate before the pointer table below is built. */
++    if(workBuf == NULL || num < 2) {
++        return;
++    }
+     for(i=0; i<HU3D_CAM_MAX; i++) {
+         if(cameraBit & (1 << i)) {
+             cameraP = &Hu3DCamera[i];
+             break;
+         }
+     }
++    if(cameraP == NULL) return;
+     timeEnd = workBuf[num-1].time;
+@@ -530,12 +536,12 @@ void CamMotionExPath(s16 cameraBit, CAM_MOTION_WORK *workBuf, int num)
+     ptrOut[9] = &cameraP->target.z;
+     for(time=0; time<=timeEnd; time++) {
+         work = workBuf;
+-        for(i=0; i<num; i++, work++) {
++        for(i=0; i<num-1; i++, work++) {
+             if(work[0].time <= time && work[1].time > time) {
+                 break;
+             }
+         }
+-        if(i == num) {
++        if(i >= num-1) {
+             break;
+         }

@@ -31,6 +31,7 @@
 #include <fmt/format.h>
 
 #include "mp6_freecam.h"   /* [MP6] Mods tab: freecam toggle (shim/include) */
+#include "mp6_path.h"      /* checked content-root assignment */
 #include "mp6_savestate.h" /* [MP6] Save States tab: slot request/probe seam */
 
 /* [MP6] Mods tab, live Widescreen flip (aurora_bridge.c; see the Mods tab
@@ -493,7 +494,7 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
                             cfg_save();
                         });
                 }
-                pane.add_rml("<br/>Anti-aliasing smooths jagged edges. Only one mode runs at a "
+                Rml::String aaHelp = "<br/>Anti-aliasing smooths jagged edges. Only one mode runs at a "
                              "time. <b>MSAA 4x</b> multisamples polygon edges (takes effect next "
                              "launch). <b>FXAA</b> is a fast post-process with near-zero cost; it "
                              "applies immediately, except when this session started with "
@@ -509,7 +510,31 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
 #endif
                              " <b>Off</b> is the original game's own rendering (byte-identical)."
                              "<br/><br/>Disabled while the MP6_MSAA / MP6_FXAA / MP6_SSAA "
-                             "environment levers are set (they win).");
+                             "environment levers are set (they override video.aa). If several "
+                             "request enabled modes: MP6_MSAA &gt; MP6_SSAA &gt; MP6_FXAA.";
+#ifdef __ANDROID__
+                if (cfg().aa == MP6_AA_MSAA4X) {
+                    /* Make the trap visible (savestate-x1): on-device data across
+                     * two Android GPUs shows this is GPU-dependent, not backend-
+                     * dependent -- an earlier wording blamed OpenGL specifically,
+                     * but the collapse (~110fps -> ~30fps on one GPU, not the
+                     * other, same scene) shows up under EVERY graphics backend
+                     * tried on the affected GPU, so the backend was never the
+                     * variable. Consistent with this port's own pass accounting
+                     * (file select: 6 render passes / 5 framebuffer copies vs 3/2
+                     * on a plain screen -- every copy breaks the pass, and under
+                     * MSAA each break carries a full-attachment, sample-count-
+                     * sized resolve): a tile-based GPU with less tile-memory
+                     * headroom pays that traffic every frame; one with more
+                     * absorbs it. No single setting or backend switch fixes it
+                     * for every device, so this only flags the possibility
+                     * rather than naming a culprit that isn't consistently one. */
+                    aaHelp += "<br/><br/>MSAA can be very expensive on some mobile GPUs -- if the "
+                              "framerate drops sharply on certain screens, try FXAA or turn "
+                              "anti-aliasing off.";
+                }
+#endif
+                pane.add_rml(aaHelp);
             });
     });
 
@@ -558,7 +583,14 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
                 .getValue = [] { return Rml::String { cfg().contentRoot }; },
                 .setValue =
                     [](Rml::String value) {
-                        snprintf(cfg().contentRoot, sizeof(cfg().contentRoot), "%s", value.c_str());
+                        char checked[sizeof(cfg().contentRoot)];
+                        if (mp6_path_copy_checked(checked, sizeof(checked), value.c_str()) != 0) {
+                            push_toast({ .type = "content", .title = "Content Root",
+                                .content = "Path is too long; the previous content root was not changed.",
+                                .duration = std::chrono::seconds(4) });
+                            return;
+                        }
+                        memcpy(cfg().contentRoot, checked, strlen(checked) + 1);
                         cfg_save();
                         refresh_content_state();
                     },
@@ -613,7 +645,9 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
 
         leftPane.register_control(leftPane.add_button("Open Save Folder").on_pressed([] {
             char url[1200];
-            snprintf(url, sizeof(url), "file:///%s", save_dir_abs());
+            const char *dir = save_dir_abs();
+            int written = snprintf(url, sizeof(url), "file:///%s", dir != nullptr ? dir : "");
+            if (written < 0 || static_cast<size_t>(written) >= sizeof(url)) return;
             for (char *p = url; *p; p++) {
                 if (*p == '\\') *p = '/';
             }
@@ -711,11 +745,10 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
         /* Unlocked FPS (shim/include/mp6_unlocked_fps.h has the full
          * contract): tick-decoupled presentation. Game logic stays the
          * design-rate 60Hz tick; the tick throttle's idle window presents
-         * extra frames with every live 3D model and camera advanced along
-         * the last two ticks' motion and the renderer re-run on that pose
-         * (platform/hsf/mp6_fi_model.c -- the one and only mechanism; the
-         * former "FPS Smoothing Mode" selector and its stream-level
-         * alternative are gone). Freecam's exact config_bool_select shape;
+         * extra frames from the retained real-tick GX stream, with matrices
+         * paired by stable model/camera identity and advanced along the last
+         * two ticks' motion. Game callbacks are never re-run. Freecam's exact
+         * config_bool_select shape;
          * saved to the config (video.unlocked_fps) and applied live --
          * frame_interp.c re-reads the accessor every tick. */
         config_bool_select(leftPane, rightPane,
@@ -804,15 +837,30 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
             auto &leftPane = add_child<Pane>(content, Pane::Type::Controlled);
             auto &rightPane = add_child<Pane>(content, Pane::Type::Uncontrolled);
 
+            leftPane.add_section("Security");
+            leftPane.register_control(leftPane.add_button("Trusted files only"),
+                rightPane, [](Pane &pane) {
+                    pane.clear();
+                    pane.add_rml("Savestates contain live stacks, pointers, and writable program "
+                                 "data. Treat them like executable files: load only states you "
+                                 "created or received from a fully trusted source. Compatibility "
+                                 "checks prevent accidents, not malicious files.");
+                });
+
             for (int slot = 1; slot <= 5; ++slot) {
                 char path[520];
-                mp6_savestate_slot_file(slot, path, sizeof(path));
-                const Rml::String status = slot_status(path);
+                const bool pathValid = mp6_savestate_slot_file(slot, path, sizeof(path)) == 0;
+                const Rml::String status = pathValid ? slot_status(path) : "invalid path";
                 leftPane.add_section(fmt::format("Slot {} \xE2\x80\x94 {}", slot, status));
 
                 leftPane.register_control(leftPane.add_button("Save").on_pressed([slot] {
                     char p[520];
-                    mp6_savestate_slot_file(slot, p, sizeof(p));
+                    if (mp6_savestate_slot_file(slot, p, sizeof(p)) != 0) {
+                        push_toast({ .type = "savestate", .title = "Save State",
+                            .content = "Savestate path is too long.",
+                            .duration = std::chrono::seconds(4) });
+                        return;
+                    }
                     mp6_savestate_request_save_path(p);
                 }),
                     rightPane, [slot, path = Rml::String(path)](Pane &pane) {
@@ -824,7 +872,12 @@ SettingsWindow::SettingsWindow(bool prelaunch, int initialTab, bool inGame)
 
                 leftPane.register_control(leftPane.add_button("Load").on_pressed([slot] {
                     char p[520];
-                    mp6_savestate_slot_file(slot, p, sizeof(p));
+                    if (mp6_savestate_slot_file(slot, p, sizeof(p)) != 0) {
+                        push_toast({ .type = "savestate", .title = "Load State",
+                            .content = "Savestate path is too long.",
+                            .duration = std::chrono::seconds(4) });
+                        return;
+                    }
                     const int probe = mp6_savestate_probe(p);
                     if (probe == MP6_SAVESTATE_ERR_IO) {
                         push_toast({ .type = "savestate", .title = "Load State",

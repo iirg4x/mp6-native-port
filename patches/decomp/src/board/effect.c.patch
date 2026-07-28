@@ -1,0 +1,86 @@
+--- a/src/board/effect.c
++++ b/src/board/effect.c
+@@ -436,4 +436,68 @@
+ static void ParticleDraw(HU3D_MODEL *modelP, Mtx *mtx);
+ static void ParManFunc(HU3D_MODEL *modelP, MBPARTICLE *particleP, Mtx mtx);
+
++/* Tells the port's GXSetArray bridge the real byte sizes of the three
++ * indexed vertex arrays ParticleDraw() binds, exactly as
++ * game/hsfanim.c's own mp6ParticleArraysRegister() already does for the
++ * GAME-level particle system (Hu3DParticleCreate) and as
++ * platform/hsf/hsf_load_native.c does for every HSF model buffer.
++ *
++ * WHY THIS IS NEEDED HERE TOO. ParticleDraw() re-binds all three arrays
++ * every frame and then draws with GXCallDisplayList(particleP->dl, ...)
++ * -- the display list mbParticleCreate() recorded ONCE, at create time.
++ * There is no immediate-mode GXBegin after those binds, and the
++ * bridge's learned-size fallback (platform/gx/aurora_bridge.c section 1)
++ * only ever grows an array's registered size from the nverts of the next
++ * immediate-mode GXBegin. So for these three arrays the fallback learns
++ * nothing of this draw: they upload 0 bytes (or, worse, whatever
++ * nverts*stride some unrelated later draw happens to contribute), and
++ * the display list's GX_INDEX16 fetches read out of range. Measured
++ * symptom on the retail W01 Party route, at the turn-order dice blocks
++ * (build/framedump_dice_scout, presented frame at tick 7125): the
++ * dice-appear effect renders as a large hard-edged dark quad with
++ * dashed orange/blue stripes plus long thin streaks instead of the
++ * intended sparkle sprites. game/hsfanim.c's patch describes the
++ * identical failure in the same words ("sparkle quads drew as garbage
++ * streaks or nothing at all"); board/effect.c is the same code shape and
++ * was simply never given the same registration.
++ *
++ * The upload windows match ParticleDraw()'s own binds exactly:
++ *   GX_VA_POS  particleP->vertex, stride sizeof(HuVecF), indices
++ *              0..num*4-1 -> num*4*sizeof(HuVecF) (the whole allocation);
++ *   GX_VA_TEX0 particleP->st, stride sizeof(HuVec2f), indices 0..num*4-1
++ *              -> num*4*sizeof(HuVec2f) (the whole allocation);
++ *   GX_VA_CLR0 either particleP->color (stride sizeof(GXColor), indices
++ *              0..num-1 -> the whole allocation) when mbParticleColorCreate
++ *              has run, or &particleP->data->color (stride
++ *              sizeof(MBPARTICLEDATA), indices 0..num-1 ->
++ *              (num-1)*stride + sizeof(GXColor), i.e. exactly the tail of
++ *              data[]'s allocation from that member, never past its end).
++ * Both CLR0 candidates are registered when they exist, since which one
++ * ParticleDraw() binds is decided per frame by particleP->colorF.
++ * Registering a reused heap address updates the entry in place, so a
++ * killed-and-recreated particle model stays correct. Diagnostic-free and
++ * behaviour-identical on real hardware, which needs no sizes at all. */
++#include "mp6_gxarray_registry.h"
++static void mp6ParticleArraysRegister(MBPARTICLE *particleP)
++{
++    if (particleP == NULL || particleP->num <= 0) {
++        return; /* no drawable quads; (num-1) below would underflow */
++    }
++    if (particleP->vertex) {
++        mp6_gxarray_register(particleP->vertex,
++            (uint32_t)particleP->num * 4u * (uint32_t)sizeof(HuVecF));
++    }
++    if (particleP->st) {
++        mp6_gxarray_register(particleP->st,
++            (uint32_t)particleP->num * 4u * (uint32_t)sizeof(HuVec2f));
++    }
++    if (particleP->data) {
++        mp6_gxarray_register(&particleP->data->color,
++            ((uint32_t)particleP->num - 1u) * (uint32_t)sizeof(MBPARTICLEDATA)
++                + (uint32_t)sizeof(GXColor));
++    }
++    if (particleP->color) {
++        mp6_gxarray_register(particleP->color,
++            (uint32_t)particleP->num * (uint32_t)sizeof(GXColor));
++    }
++}
++
+ HU3D_MODELID mbParticleCreate(ANIMDATA *anim, s16 maxCnt)
+@@ -517,2 +581,4 @@
+     particleP->dlSize = GXEndDisplayList();
++    /* See mp6ParticleArraysRegister above -- without this the display
++     * list recorded just now fetches from zero-length uploads. */
++    mp6ParticleArraysRegister(particleP);
+     return modelId;
+@@ -536,3 +602,5 @@
+     if (!particleP->color) {
+         particleP->color = HuMemDirectMallocNum(HEAP_MODEL, particleP->num * sizeof(GXColor), modelP->mallocNo);
+     }
++    /* The per-particle colour array only exists from here on, and it is
++     * what ParticleDraw() binds for GX_VA_CLR0 once colorF is set. */
++    mp6ParticleArraysRegister(particleP);

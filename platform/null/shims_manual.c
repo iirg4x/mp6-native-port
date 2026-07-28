@@ -21,6 +21,9 @@
 #include <math.h>
 #include "zlib.h"
 #include "mp6_savestate.h" /* mp6_savestate_tick() -- per-tick hook below */
+#include "mp6_time_rebase.h"
+#include "mp6_parse.h"
+#include "mp6_events.h" /* OSReport tap -> the game-event bus, see OSReport below */
 #ifdef MP6_LEAKHUNT_DEBUG
 #include "game/memory.h"
 #endif
@@ -40,10 +43,38 @@
  * ------------------------------------------------------------------- */
 void OSReport(const char *msg, ...)
 {
+    /* Formatted into a buffer first, rather than straight to stdout, so the
+     * finished text can also be handed to the game-event bus
+     * (shim/include/mp6_events.h). The game already narrates its own
+     * overlay/DLL lifecycle through this exact function -- objmain.c's
+     * "Start New OVL %d", objdll.c's "Search:dll/...", selmenu.c's
+     * "SMinit:" -- so tapping here republishes that narration as typed,
+     * waitable [EVENT] lines WITHOUT patching a single line of decomp
+     * source to emit parallel markers.
+     *
+     * The buffer is the only cost, and it is bounded: anything that does
+     * not fit falls back to the original direct vfprintf, so no OSReport
+     * output can ever be truncated or lost by this tap (the fallback lines
+     * are simply not scanned -- every pattern the scanner recognises is a
+     * short line far inside the bound). va_copy, not a second va_start,
+     * because the list is consumed by the measuring vsnprintf first. */
+    char buf[512];
+    int written;
     va_list ap;
+    va_list ap2;
+
     va_start(ap, msg);
-    vfprintf(stdout, msg, ap);
+    va_copy(ap2, ap);
+    written = vsnprintf(buf, sizeof(buf), msg, ap);
     va_end(ap);
+
+    if (written >= 0 && (size_t)written < sizeof(buf)) {
+        fputs(buf, stdout);
+        mp6_event_scan_line(buf);
+    } else {
+        vfprintf(stdout, msg, ap2);
+    }
+    va_end(ap2);
     fflush(stdout);
 }
 
@@ -132,13 +163,34 @@ static s64 mp6_os_tick64(void)
         mp6_host_wallclock(&lt);
         secs2000 = (mp6_days_from_civil(lt.year, lt.mon, lt.day) - 10957) * 86400
                  + lt.hour * 3600 + lt.min * 60 + lt.sec; /* 10957 = days 1970-01-01 .. 2000-01-01 */
-        g_rtcBaseTicks = secs2000 * 40500000
-                       + (s64)((double)lt.msec * 40500.0)
-                       - (s64)((double)mp6_host_monotonic_ns() / 1000000000.0 * 40500000.0);
+        g_rtcBaseTicks = secs2000 * MP6_OS_TIMER_HZ
+                       + (s64)lt.msec * 40500
+                       - (s64)mp6_os_monotonic_ticks(mp6_host_monotonic_ns());
         g_timebaseInit = 1;
     }
     /* OS_TIMER_CLOCK = OS_BUS_CLOCK / 4 = 40,500,000 Hz on real hardware. */
-    return g_rtcBaseTicks + (s64)((double)mp6_host_monotonic_ns() / 1000000000.0 * 40500000.0);
+    return g_rtcBaseTicks + (s64)mp6_os_monotonic_ticks(mp6_host_monotonic_ns());
+}
+
+int64_t mp6_os_time_savestate_capture(void)
+{
+    return (int64_t)mp6_os_tick64();
+}
+
+int mp6_os_time_savestate_rebase(int64_t logicalTicks, int64_t *rtcBaseOut)
+{
+    /* Preserve the emulated instant captured in the file, but anchor future
+     * deltas to this process's current monotonic epoch.  Do the checked
+     * subtraction before savestate.c commits any live memory. */
+    return mp6_os_rebased_rtc_base(logicalTicks, mp6_host_monotonic_ns(), rtcBaseOut);
+}
+
+void mp6_os_time_savestate_apply_rebase(int64_t rtcBaseTicks)
+{
+    /* rtcBaseTicks was proven by mp6_os_time_savestate_rebase before commit;
+     * applying it is intentionally infallible. */
+    g_rtcBaseTicks = (s64)rtcBaseTicks;
+    g_timebaseInit = 1;
 }
 
 OSTime OSGetTime(void)
@@ -263,17 +315,16 @@ int mp6_ticks_unlimited = 0; /* aurora build's no-arg (double-click) default -- 
 
 static double mp6_rss_cap_mb(void)
 {
-    static double cap = -1.0;
-    if (cap < 0.0) {
-        const char *env = getenv("MP6_RSS_CAP_MB");
-        double parsed;
-        char *end = NULL;
-        cap = MP6_RSS_CAP_MB_DEFAULT;
-        if (env && env[0]) {
-            parsed = strtod(env, &end);
-            if (end != env && parsed > 0.0) {
-                cap = parsed;
-            }
+    const char *env = getenv("MP6_RSS_CAP_MB");
+    double cap = MP6_RSS_CAP_MB_DEFAULT;
+    double parsed;
+    char *end = NULL;
+    /* Called only once per 600 ticks, so reparsing is effectively free and
+     * avoids any function-static cache that a savestate image can overwrite. */
+    if (env && env[0]) {
+        parsed = strtod(env, &end);
+        if (end != env && *end == '\0' && parsed > 0.0 && isfinite(parsed)) {
+            cap = parsed;
         }
     }
     return cap;
@@ -308,6 +359,18 @@ static void mp6_rss_watchdog_check(void)
 }
 
 #ifdef MP6_HEADLESS_BUILD
+/* GXLoadPosMtxImm is unconditionally renamed to this host bridge name by
+ * dolphin_compat.h so the windowed build can record retained-frame identity.
+ * A clean public tree intentionally does not synchronize generated shims, so
+ * headless needs a source-owned strong fallback that cannot go stale when the
+ * rename is introduced. Aurora provides the real forwarding bridge instead. */
+void mp6_GXLoadPosMtxImm(const void *mtx, u32 id)
+{
+    (void)mtx;
+    (void)id;
+    MP6_LOG_ONCE("GX", "mp6_GXLoadPosMtxImm");
+}
+
 /* C13 (review): MP6_AUTO_START_TICKS used to be consumed ONLY by
  * aurora-only TUs, so the headless build -- the one the savestate
  * regression gate runs -- silently ignored it and never left the
@@ -320,7 +383,7 @@ static void mp6_rss_watchdog_check(void)
  * byte-identically to the weak stub -- same MP6_LOG_ONCE, same return,
  * status untouched. Only an explicitly-set MP6_AUTO_START_TICKS changes
  * behavior, and then only on pad 0. */
-static int g_hlAutoStartTicks[32];
+static int g_hlAutoStartTicks[MP6_SS_AUTO_START_MAX];
 static int g_hlAutoStartCount = -1; /* -1 = not yet parsed */
 
 u32 PADRead(PADStatus *status)
@@ -331,13 +394,27 @@ u32 PADRead(PADStatus *status)
         g_hlAutoStartCount = 0;
         if (env) {
             const char *p = env;
+            int invalid = 0;
             while (*p && g_hlAutoStartCount < (int)(sizeof(g_hlAutoStartTicks) / sizeof(g_hlAutoStartTicks[0]))) {
-                char *end;
-                long v = strtol(p, &end, 10);
-                if (end == p) break;
-                g_hlAutoStartTicks[g_hlAutoStartCount++] = (int)v;
-                p = end;
+                const char *start;
+                uint32_t value;
                 while (*p == ',' || *p == ' ') p++;
+                if (*p == '\0') break;
+                start = p;
+                while (*p && *p != ',' && *p != ' ') p++;
+                if (!mp6_parse_u32_span(start, (size_t)(p - start), 0, INT_MAX, &value)) {
+                    fprintf(stderr, "[MP6-INPUT] invalid MP6_AUTO_START_TICKS token -- schedule disabled\n");
+                    g_hlAutoStartCount = 0;
+                    invalid = 1;
+                    break;
+                }
+                g_hlAutoStartTicks[g_hlAutoStartCount++] = (int)value;
+            }
+            while (*p == ',' || *p == ' ') p++;
+            if (!invalid && *p != '\0') {
+                fprintf(stderr, "[MP6-INPUT] MP6_AUTO_START_TICKS exceeds %d entries -- schedule disabled\n",
+                        MP6_SS_AUTO_START_MAX);
+                g_hlAutoStartCount = 0;
             }
             if (g_hlAutoStartCount > 0) {
                 printf("[MP6-INPUT] MP6_AUTO_START_TICKS active (headless), %d scheduled press(es)\n",
@@ -349,7 +426,7 @@ u32 PADRead(PADStatus *status)
     if (g_hlAutoStartCount > 0 && status != NULL) {
         int i, due = 0;
         for (i = 0; i < g_hlAutoStartCount; i++) {
-            if (g_hlAutoStartTicks[i] == (int)mp6_tick_count) {
+            if ((long)g_hlAutoStartTicks[i] == mp6_tick_count) {
                 due = 1;
                 break;
             }
@@ -369,15 +446,32 @@ u32 PADRead(PADStatus *status)
 }
 #endif /* MP6_HEADLESS_BUILD */
 
+void mp6_shims_savestate_capture_host_config(Mp6SsShimHostConfig *out)
+{
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+#ifdef MP6_HEADLESS_BUILD
+    memcpy(out->autoStartTicks, g_hlAutoStartTicks, sizeof(g_hlAutoStartTicks));
+    out->autoStartCount = g_hlAutoStartCount;
+#endif
+}
+
+void mp6_shims_savestate_apply_host_config(const Mp6SsShimHostConfig *in)
+{
+    if (in == NULL) return;
+#ifdef MP6_HEADLESS_BUILD
+    memcpy(g_hlAutoStartTicks, in->autoStartTicks, sizeof(g_hlAutoStartTicks));
+    g_hlAutoStartCount = (in->autoStartCount >= -1 &&
+                          in->autoStartCount <= MP6_SS_AUTO_START_MAX)
+                             ? in->autoStartCount : -1;
+#endif
+}
+
 int mp6_tick_advance(void)
 {
     mp6_tick_count++;
     mp6_rss_watchdog_check();
     mp6_alloc_census_tick_check(); /* leak hunt -- see mp6_boot.h/malloc_direct.c */
-    /* Checked once, on this very first tick -- late enough that arena/heap
-     * init has already run in both build modes (see mp6_boot.h's own
-     * comment on this function). No-op unless MP6_TEST_LOAD_DLL is set. */
-    mp6_dll_bridge_selftest_check_env();
     /* The one per-tick hook BOTH build modes
      * already call, so the scripted MP6_SAVESTATE_*_AT_TICK levers behave
      * identically headless (where the regression gate runs -- it needs a

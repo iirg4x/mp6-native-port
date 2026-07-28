@@ -2,6 +2,14 @@
 +++ b/src/game/armem.c
 @@ -2,0 +3 @@
 +#include "be.h"
+@@ -257 +258 @@
+-    HuAR_ARAMtoMRAMNum(aMemP, 0);
++    return HuAR_ARAMtoMRAMNum(aMemP, 0);
+@@ -267,2 +268,2 @@
+-    if(HuDataReadChk(block->dir << 16) >= 0) {
+-        return;
++    if(HuDataReadChk(block->dir << 16) >= 0) {
++        return HuDataGetDirPtr(block->dir << 16);
 @@ -327 +328 @@
 -    s32 *dirBuf;
 +    s32 *dirBuf; s32 nextOff; s32 rawLen; s32 decodeType;
@@ -40,3 +48,11 @@
 @@ -371 +395 @@
 -    HuDecodeData(&dirBuf[2], dst, dirBuf[0], dirBuf[1]);
 +    HuDecodeData(&dirBuf[2], dst, rawLen, decodeType);
+@@ -266,0 +267,3 @@
++    if(block == NULL) {
++        return NULL;
++    }
+@@ -270,0 +274,3 @@
++    if(size <= 0) {
++        return NULL;
++    }

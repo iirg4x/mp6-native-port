@@ -10,19 +10,20 @@
  * MP6_HEADLESS_BUILD exactly like platform/null/shims_manual.c already
  * does for mp6_widescreen_enabled()/mp6_widescreen_scale_factor().
  *
- * HOST STATICS (carved): the clamp-log latch below is host-owned log
- * wiring that must not ride savestates, so this TU takes the standard
- * mp6_host_section.h carve-out exactly like select_button.cpp documents.
+ * SAVESTATE OWNERSHIP: the size-latch table below is deterministic game
+ * state tied to the shadow allocations captured in HEAP_MODEL, so this TU is
+ * deliberately NOT put in mp6_host_section.h. Restoring the heap and the
+ * table together preserves the allocation's exact create-time quality. The
+ * clamp-log latch riding along is harmless diagnostic state.
  */
 #include "game/memory.h" /* HEAPID, HuMemHeapPtrGet, HuMemMaxMemorySizeGet */
+#include "mp6_boot.h" /* mp6_heap_block_data_size: restored allocation fingerprint */
 #include "mp6_shadow_quality.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "mp6_host_section.h"
-
-/* One [SHADOW] line per distinct clamp (host log latch, never captured). */
+/* One [SHADOW] line per distinct clamp in the current game timeline. */
 static int loggedRequested;
 
 int mp6_shadow_effective_size(int size)
@@ -74,26 +75,53 @@ int mp6_shadow_effective_size(int size)
  *
  * Tiny fixed LRU table keyed by the buf pointer (only a handful of shadows are
  * ever live). The create site always runs before the first exec, and re-
- * latches when a pointer is reused across scenes. These statics are carved out
- * (this TU includes mp6_host_section.h), matching the pre-fix behavior that a
- * restored shadow re-reads live config -- so no new savestate coupling: a
- * buffer with no latch entry falls back to the live effective size. */
+ * latches when a pointer is reused across scenes. The table lives in ordinary
+ * writable image state and is captured/restored with the game heap. Capacity
+ * is retained as an additional guard for pointer reuse and old savestates: if
+ * an entry and its allocation disagree, reconstruct from the allocation rather
+ * than reusing a stale size or consulting live config. */
 #define MP6_SHADOW_LATCH_SLOTS 16
 static const void *s_latchBuf[MP6_SHADOW_LATCH_SLOTS];
 static int s_latchSize[MP6_SHADOW_LATCH_SLOTS];
+static uint32_t s_latchCapacity[MP6_SHADOW_LATCH_SLOTS];
 static unsigned int s_latchClock[MP6_SHADOW_LATCH_SLOTS];
 static unsigned int s_latchTick;
+
+/* Recover the create-time effective side from the direct-malloc block that
+ * savestates already capture. HuMemDirectMalloc rounds a requested square up
+ * to allocator alignment; testing the supported power-of-two scales from
+ * largest to smallest therefore identifies the exact allocation without
+ * adding host-only data to the savestate format. */
+static int mp6_shadow_size_from_buffer(const void *buf, int nativeSize)
+{
+    uint32_t capacity = mp6_heap_block_data_size(buf);
+    int scale;
+
+    if (nativeSize <= 0 || capacity == 0) {
+        return nativeSize;
+    }
+    for (scale = 16; scale >= 1; scale /= 2) {
+        uint64_t side = (uint64_t)(unsigned int)nativeSize * (uint64_t)(unsigned int)scale;
+        if (side * side <= (uint64_t)capacity) {
+            return (int)side;
+        }
+    }
+    return nativeSize;
+}
 
 void mp6_shadow_latch_size(const void *buf, int effSize)
 {
     int i, victim;
+    uint32_t capacity;
     if (buf == NULL) {
         return;
     }
+    capacity = mp6_heap_block_data_size(buf);
     ++s_latchTick;
     for (i = 0; i < MP6_SHADOW_LATCH_SLOTS; ++i) {
         if (s_latchBuf[i] == buf) { /* re-latch a reused buffer */
             s_latchSize[i] = effSize;
+            s_latchCapacity[i] = capacity;
             s_latchClock[i] = s_latchTick;
             return;
         }
@@ -110,19 +138,57 @@ void mp6_shadow_latch_size(const void *buf, int effSize)
     }
     s_latchBuf[victim] = buf;
     s_latchSize[victim] = effSize;
+    s_latchCapacity[victim] = capacity;
     s_latchClock[victim] = s_latchTick;
 }
 
 int mp6_shadow_latched_size(const void *buf, int nativeSize)
 {
     int i;
+    uint32_t capacity;
+    if (buf == NULL) {
+        return nativeSize;
+    }
+    capacity = mp6_heap_block_data_size(buf);
     for (i = 0; i < MP6_SHADOW_LATCH_SLOTS; ++i) {
         if (s_latchBuf[i] == buf) {
-            s_latchClock[i] = ++s_latchTick;
-            return s_latchSize[i];
+            if (capacity != 0 && capacity == s_latchCapacity[i]) {
+                s_latchClock[i] = ++s_latchTick;
+                return s_latchSize[i];
+            }
+            /* Same address, different allocation. Do not let a stale/evicted
+             * latch size this copy. */
+            s_latchBuf[i] = NULL;
+            s_latchSize[i] = 0;
+            s_latchCapacity[i] = 0;
+            s_latchClock[i] = 0;
+            break;
         }
     }
-    return mp6_shadow_effective_size(nativeSize); /* not latched: live fallback */
+    /* A miss can occur after LRU eviction or pointer reuse. Reconstruct from
+     * the allocation, then cache it; consulting live config here can claim
+     * more texels than the buffer owns. */
+    {
+        int restoredSize = mp6_shadow_size_from_buffer(buf, nativeSize);
+        mp6_shadow_latch_size(buf, restoredSize);
+        return restoredSize;
+    }
+}
+
+static void mp6_shadow_forget_latch(const void *buf)
+{
+    int i;
+    if (buf == NULL) {
+        return;
+    }
+    for (i = 0; i < MP6_SHADOW_LATCH_SLOTS; ++i) {
+        if (s_latchBuf[i] == buf) {
+            s_latchBuf[i] = NULL;
+            s_latchSize[i] = 0;
+            s_latchCapacity[i] = 0;
+            s_latchClock[i] = 0;
+        }
+    }
 }
 
 #ifdef MP6_HEADLESS_BUILD
@@ -130,6 +196,7 @@ int mp6_shadow_latched_size(const void *buf, int nativeSize)
  * these exist so the shared hsfman.c patch links -- see the header. */
 void mp6_shadow_offscreen_begin(int sidePx) { (void)sidePx; }
 void mp6_shadow_offscreen_end(void) {}
+void mp6_shadow_release_buffer(const void *buf) { mp6_shadow_forget_latch(buf); }
 void mp6_shadow_offscreen_scissor(int x, int y, int w, int h)
 {
     (void)x; (void)y; (void)w; (void)h;
@@ -149,6 +216,20 @@ extern void GXRestoreFrameBuffer(void);
 extern void GXSetTexCopyMipGen(unsigned int enable);
 extern void GXSetScissorRender(unsigned int left, unsigned int top,
                                unsigned int wd, unsigned int ht);
+extern void GXDestroyCopyTex(void *dest);
+extern void GXDestroyFrameBufferCache(void);
+
+void mp6_shadow_release_buffer(const void *buf)
+{
+    if (buf == NULL) {
+        return;
+    }
+    mp6_shadow_forget_latch(buf);
+    /* FIFO-ordered renderer retirement: discard every copy geometry for this
+     * CPU destination and the quality-sized offscreen color/depth target. */
+    GXDestroyCopyTex((void *)buf);
+    GXDestroyFrameBufferCache();
+}
 
 void mp6_shadow_offscreen_scissor(int x, int y, int w, int h)
 {

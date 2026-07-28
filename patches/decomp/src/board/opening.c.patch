@@ -1,0 +1,57 @@
+--- a/src/board/opening.c
++++ b/src/board/opening.c
+@@ -25,0 +26,3 @@
++
++#include "mp6_events.h" /* board.diceseat / board.turnorder observability */
++#include <stdio.h>
+@@ -192,0 +196,46 @@
++/* Turn-order observability (port-only; no behavioural effect).
++ *
++ * The board opening's turn-order dice decide the whole game's turn
++ * sequence and then PERMUTE GwPlayer/GwPlayerConf/MBPLAYERWORK in place
++ * (PlayerOrderSet -> mbPlayerSwap just below), which is ALSO what re-seats
++ * the four status panels: mbStatusReset rebuilds every panel from
++ * GwPlayerConf[slot] (board/status.c's StatusSprCreate reads
++ * GwPlayerConf[statusNo].charNo for the face), and mbStatusDispSet gives
++ * player i slot i. So "panel slot == turn position" is a consequence of
++ * this permutation, and nothing in any existing log line made either side
++ * of it visible -- a capture driver had no way to check the panels
++ * on screen against the order that actually won.
++ *
++ * Two lines per board opening, at a genuine state change, exactly the
++ * cost model shim/include/mp6_events.h documents: one BEFORE the
++ * permutation (each seat's forced dice value, i.e. what the player saw
++ * the dice blocks land on) and one AFTER (which character ended up in
++ * each slot). `charNo` is the GW_CHARA_* index; mbPlayerNameGet spells it
++ * for the human-readable line. */
++static void OpeningTurnOrderReport(const char *phase, const int *diceTbl)
++{
++    char buf[MP6_EVENT_VAL_MAX];
++    int used = 0;
++    int i;
++
++    printf("[BOARD] turn-order %s:", phase);
++    for (i = 0; i < GW_PLAYER_MAX; i++) {
++        int charNo = GwPlayerConf[i].charNo;
++
++        if (diceTbl != NULL) {
++            printf(" seat%d=%s(char%d,dice%d)", i, mbPlayerNameGet(i), charNo,
++                diceTbl[i]);
++        } else {
++            printf(" slot%d=%s(char%d)", i, mbPlayerNameGet(i), charNo);
++        }
++        if (used < (int)sizeof(buf) - 4) {
++            used += sprintf(&buf[used], "%s%d", (i != 0) ? "," : "", charNo);
++        }
++    }
++    printf("\n");
++    fflush(stdout);
++    buf[sizeof(buf) - 1] = '\0';
++    mp6_event_post((diceTbl != NULL) ? "board.diceseat" : "board.turnorder",
++        GwSystem.boardNo, buf);
++}
++
+@@ -341,0 +391 @@
++    OpeningTurnOrderReport("dice", orderTbl);
+@@ -342,0 +393 @@
++    OpeningTurnOrderReport("seated", NULL);

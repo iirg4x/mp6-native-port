@@ -1,0 +1,82 @@
+diff --git a/lib/gx/fifo.cpp b/lib/gx/fifo.cpp
+index 1e986e9..9bf820d 100644
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -1,5 +1,6 @@
+ #include "fifo.hpp"
+ #include "command_processor.hpp"
++#include "gx.hpp" // aurora_gx_export_vtx_layout (drain-capture consumers seed their walker from live vtx state)
+ #include "../internal.hpp"
+ 
+ #include <cstdlib>
+@@ -8,6 +9,15 @@
+ namespace aurora::gx::fifo {
+ static Module Log("aurora::gx::fifo");
+ 
++// Drain-capture sink (aurora_gx_set_drain_capture below): when set, every
++// drained chunk is handed to the sink -- exact bytes, exact chunk framing --
++// immediately BEFORE it is processed. Lets an application retain a frame's
++// full command stream (all chunks) and replay it later via
++// aurora_gx_submit_raw. Null (the default) keeps drain() bit-identical to
++// its prior behavior.
++static void (*sDrainCaptureFn)(const void* data, uint32_t size, void* user) = nullptr;
++static void* sDrainCaptureUser = nullptr;
++
+ namespace detail {
+ uint8_t* sBufferData = nullptr;
+ uint32_t sBufferSize = 0;
+@@ -72,6 +82,9 @@ void drain() {
+   if (detail::sBufferSize == 0) {
+     return;
+   }
++  if (sDrainCaptureFn != nullptr) {
++    sDrainCaptureFn(detail::sBufferData, detail::sBufferSize, sDrainCaptureUser);
++  }
+   process(detail::sBufferData, detail::sBufferSize, true);
+   detail::sBufferSize = 0;
+ }
+@@ -81,3 +94,44 @@ uint32_t get_buffer_size() { return detail::sBufferSize; }
+ void clear_buffer() { detail::sBufferSize = 0; }
+ 
+ } // namespace aurora::gx::fifo
++
++// ---------------------------------------------------------------------------
++// C-linkage surface for retained-stream capture/replay (MP6 "Unlocked FPS"
++// frame interpolation; aurora-patches/0015). Deliberately additive and
++// self-contained in this TU: no header change, consumers declare these
++// three prototypes themselves.
++// ---------------------------------------------------------------------------
++extern "C" {
++
++// Register (or clear, fn=nullptr) the drain-capture sink. The sink observes
++// every drained chunk verbatim before it is processed; it must not call back
++// into the GX fifo.
++void aurora_gx_set_drain_capture(void (*fn)(const void* data, uint32_t size, void* user), void* user) {
++  aurora::gx::fifo::sDrainCaptureFn = fn;
++  aurora::gx::fifo::sDrainCaptureUser = user;
++}
++
++// Append raw, already-encoded (big-endian) command-stream bytes to the fifo,
++// exactly as if the corresponding GX* calls had written them. They are
++// processed by the next drain (typically aurora_end_frame).
++void aurora_gx_submit_raw(const void* data, uint32_t size) { aurora::gx::fifo::write_data(data, size); }
++
++// Snapshot the live vertex-layout state (vertex descriptor + per-format
++// attribute component types/counts) a command-stream walker needs to compute
++// draw-command vertex strides. Covers attrs GX_VA_PNMTXIDX..GX_VA_TEX7 (21
++// entries; the ones calculate_last_vtx_size sums). Call between frames --
++// i.e. with the fifo drained -- so the snapshot is exactly the state the
++// NEXT stream starts from.
++void aurora_gx_export_vtx_layout(uint8_t* vtxDescOut /*21*/, uint8_t* vatCntOut /*8x21*/,
++                                 uint8_t* vatTypeOut /*8x21*/) {
++  using aurora::gx::g_gxState;
++  for (int attr = GX_VA_PNMTXIDX; attr <= GX_VA_TEX7; ++attr) {
++    vtxDescOut[attr] = static_cast<uint8_t>(g_gxState.vtxDesc[attr]);
++    for (int fmt = 0; fmt < GX_MAX_VTXFMT; ++fmt) {
++      vatCntOut[fmt * 21 + attr] = static_cast<uint8_t>(g_gxState.vtxFmts[fmt].attrs[attr].cnt);
++      vatTypeOut[fmt * 21 + attr] = static_cast<uint8_t>(g_gxState.vtxFmts[fmt].attrs[attr].type);
++    }
++  }
++}
++
++} // extern "C"

@@ -6,15 +6,14 @@ runnable on a machine that has nothing but a stock Python interpreter, so it
 must not require `pip install` of anything before it can even start reporting
 what's missing.
 
-Path layout (mirrors tools/build.py's own resolution -- this file does NOT
-change that resolution, only replicates it so the setup tool and build.py
-always agree on where things live):
+Path layout (shared directly by tools/build.py so setup and compilation
+always agree on where the read-only decomp checkout lives):
 
     <root>/port/mp6-native[-setup]/setup/lib/common.py   (this file)
     <root>/port/mp6-native[-setup]/                       NATIVE_ROOT
     <root>/port/                                          PORT_ROOT
     <root>/port/toolchain/                                TOOLCHAIN_DIR
-    <root>/external_refs/repos/marioparty6/                DECOMP_DIR
+    <root>/external_refs/repos/marioparty6/                DEFAULT_DECOMP_DIR
     <root>/external_refs/repos/aurora/                     AURORA_DIR
 """
 import ctypes
@@ -35,7 +34,28 @@ PORT_ROOT = os.path.dirname(NATIVE_ROOT)                       # .../port
 WORKSPACE_ROOT = os.path.dirname(PORT_ROOT)                    # the outer project root
 
 TOOLCHAIN_DIR = os.path.join(PORT_ROOT, "toolchain")
-DECOMP_DIR = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6"))
+DEFAULT_DECOMP_DIR = os.path.normpath(
+    os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6")
+)
+
+
+def _workspace_path_override(name, default):
+    """Resolve an optional workspace path without depending on process cwd.
+
+    Absolute values are used as-is. Relative values are deliberately rooted at
+    NATIVE_ROOT rather than the caller's current directory, so setup.py,
+    tools/build.py, and imported tests cannot silently select different trees.
+    Empty values retain the documented sibling checkout.
+    """
+    value = os.environ.get(name, "").strip()
+    if not value:
+        value = default
+    elif not os.path.isabs(value):
+        value = os.path.join(NATIVE_ROOT, value)
+    return os.path.normpath(os.path.abspath(os.path.expanduser(value)))
+
+
+DECOMP_DIR = _workspace_path_override("MP6_DECOMP_DIR", DEFAULT_DECOMP_DIR)
 AURORA_DIR = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "aurora"))
 
 IS_WINDOWS = os.name == "nt"

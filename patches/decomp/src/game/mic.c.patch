@@ -1,0 +1,24 @@
+--- a/src/game/mic.c
++++ b/src/game/mic.c
+@@ -13,0 +14,2 @@
++#include "game/dvd.h"
++#include "game/frand.h"
+@@ -45 +47 @@
+-static void MCExtHandler(void);
++static void MCExtHandler(s32 chan, s32 result);
+@@ -64,0 +67 @@
++int HuMCResponseGet2(void);
+@@ -305,2 +305,2 @@
+-  if (MCResponseBuf != 0) {
+-    return;
++  if (MCResponseBuf != 0) {
++    return 0;
+@@ -955 +958 @@
+-void MCExtHandler(void)
++static void MCExtHandler(s32 chan, s32 result)
+@@ -957,0 +961,2 @@
++  (void)chan;
++  (void)result;
+@@ -2363 +2368 @@
+-  __src = (void *)HuDvdDataRead(param_1);
++  __src = HuDvdDataRead((char *)param_1);

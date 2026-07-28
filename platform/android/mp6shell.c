@@ -48,6 +48,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "mp6_path.h"
+
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
@@ -115,22 +117,56 @@ static void *mp6_logcat_pump_thread(void *arg)
             }
         }
     }
+    if (len) {
+        line[len] = 0;
+        __android_log_write(ANDROID_LOG_INFO, LOG_TAG, line);
+    }
+    close(fd);
     return NULL;
 }
 
 static void mp6_install_logcat_pump(void)
 {
     int fds[2];
+    int savedOut = -1, savedErr = -1;
     pthread_t t;
     if (pipe(fds) != 0) return;
+    savedOut = dup(STDOUT_FILENO);
+    savedErr = dup(STDERR_FILENO);
+    if (savedOut < 0 || savedErr < 0) {
+        if (savedOut >= 0) close(savedOut);
+        if (savedErr >= 0) close(savedErr);
+        close(fds[0]);
+        close(fds[1]);
+        return;
+    }
+    /* Start the drain BEFORE redirecting either producer. If thread creation
+     * fails, stdout/stderr are still untouched; the old ordering could fill
+     * the pipe forever with nobody reading it. */
+    if (pthread_create(&t, NULL, mp6_logcat_pump_thread,
+                       (void *)(intptr_t)fds[0]) != 0) {
+        close(savedOut);
+        close(savedErr);
+        close(fds[0]);
+        close(fds[1]);
+        return;
+    }
+    pthread_detach(t);
+    if (dup2(fds[1], STDOUT_FILENO) < 0 || dup2(fds[1], STDERR_FILENO) < 0) {
+        /* Restore both descriptors even if only the second dup2 failed, then
+         * close the pipe writer so the already-started reader exits at EOF. */
+        dup2(savedOut, STDOUT_FILENO);
+        dup2(savedErr, STDERR_FILENO);
+        close(savedOut);
+        close(savedErr);
+        close(fds[1]);
+        return;
+    }
+    close(savedOut);
+    close(savedErr);
+    close(fds[1]);
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
-    dup2(fds[1], STDOUT_FILENO);
-    dup2(fds[1], STDERR_FILENO);
-    close(fds[1]);
-    if (pthread_create(&t, NULL, mp6_logcat_pump_thread, (void *)(intptr_t)fds[0]) == 0) {
-        pthread_detach(t);
-    }
 }
 
 /* =======================================================================
@@ -170,7 +206,7 @@ typedef jint (*Mp6JniOnLoadFn)(JavaVM *, void *);
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
 {
-    char libPath[1024];
+    char libPath[1200];
     void *soRegion = MAP_FAILED;
     uint64_t soBase = 0;
     void *handle = NULL;
@@ -183,16 +219,25 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     /* ---- libmp6game.so sits next to this .so (the APK's nativeLibraryDir) */
     {
         Dl_info info;
+        char shellPath[1200];
         char *slash;
         if (dladdr((void *)&JNI_OnLoad, &info) && info.dli_fname) {
-            snprintf(libPath, sizeof(libPath), "%s", info.dli_fname);
-            slash = strrchr(libPath, '/');
+            if (mp6_path_copy_checked(shellPath, sizeof(shellPath), info.dli_fname) != 0) {
+                SHELL_LOG("[SHELL] FATAL: nativeLibraryDir path is too long");
+                return JNI_ERR;
+            }
+            slash = strrchr(shellPath, '/');
             if (slash) *slash = 0;
-            strncat(libPath, "/libmp6game.so", sizeof(libPath) - strlen(libPath) - 1);
+            if (slash == NULL ||
+                mp6_path_join_checked(libPath, sizeof(libPath), shellPath,
+                                      "libmp6game.so") != 0) {
+                SHELL_LOG("[SHELL] FATAL: libmp6game.so path is too long or invalid");
+                return JNI_ERR;
+            }
         } else {
             /* Loader-namespace fallback: a bare soname resolves in the
              * app's own nativeLibraryDir. */
-            snprintf(libPath, sizeof(libPath), "libmp6game.so");
+            mp6_path_copy_checked(libPath, sizeof(libPath), "libmp6game.so");
         }
     }
     SHELL_LOG("[SHELL]   lib=%s", libPath);
@@ -255,6 +300,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     SHELL_LOG("[SHELL] chaining libmp6game.so JNI_OnLoad (SDL3 RegisterNatives)");
     {
         jint rc = gameOnLoad(vm, reserved);
+        int surfaceHookRegistered = 0;
+
+        if (rc == JNI_ERR) {
+            SHELL_LOG("[SHELL] FATAL: libmp6game.so JNI_OnLoad failed");
+            return JNI_ERR;
+        }
 
         /* aurora's android lifecycle hook (lib/window.cpp):
          * Java_org_libsdl_app_SDLSurface_auroraNativeSetSurfaceReady gates
@@ -276,15 +327,22 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                 m.fnPtr = fn;
                 if ((*env)->RegisterNatives(env, cls, &m, 1) == 0) {
                     SHELL_LOG("[SHELL] registered SDLSurface.auroraNativeSetSurfaceReady -> low game image");
+                    surfaceHookRegistered = 1;
                 } else {
-                    SHELL_LOG("[SHELL] WARN: RegisterNatives(auroraNativeSetSurfaceReady) failed");
+                    SHELL_LOG("[SHELL] FATAL: RegisterNatives(auroraNativeSetSurfaceReady) failed");
                     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
                 }
             } else {
-                SHELL_LOG("[SHELL] WARN: aurora surface-ready hook unavailable (fn=%p cls=%p)",
+                SHELL_LOG("[SHELL] FATAL: aurora surface-ready hook unavailable (fn=%p cls=%p)",
                           fn, (void *)cls);
             }
             if (cls) (*env)->DeleteLocalRef(env, cls);
+        }
+        /* This hook gates every Android frame. Continuing after registration
+         * failure guarantees an UnsatisfiedLinkError on surfaceCreated, so
+         * fail library load here with the real cause still in the log. */
+        if (!surfaceHookRegistered) {
+            return JNI_ERR;
         }
         return rc;
     }

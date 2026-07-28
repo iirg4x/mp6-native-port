@@ -46,6 +46,9 @@
 #include "dolphin.h"
 #include "mp6_shim_log.h"
 #include "mp6_dvd_files.h"
+#include "mp6_path.h"
+#include "mp6_utf8_file.h"
+#include "../content/content_fst_validate.h"
 #include "be.h"
 #include "host.h" /* mp6_host_disc_root -- see mp6_resolve_dvd_paths() below */
 #include "mp6_savestate.h" /* W2: mp6_dvd_savestate_rehydrate() / open-handle count */
@@ -92,30 +95,230 @@
  * behavior instead of a hard failure.
  * ======================================================================= */
 
-static char g_resolvedFilesRoot[1024];
-static char g_resolvedFstPath[1024];
+#define MP6_DVD_PATH_CAP 1200
+
+static char g_resolvedFilesRoot[MP6_DVD_PATH_CAP];
+static char g_resolvedFstPath[MP6_DVD_PATH_CAP];
 static int g_pathsResolved;
+
+/* Publish the path pair atomically: an oversized member must never leave one
+ * new target paired with one old (or truncated) target. */
+static int mp6_set_resolved_paths(const char *filesRoot, const char *fstPath)
+{
+    char checkedFiles[sizeof(g_resolvedFilesRoot)] = {0};
+    char checkedFst[sizeof(g_resolvedFstPath)] = {0};
+    if (!mp6_utf8_path_supported(filesRoot) || !mp6_utf8_path_supported(fstPath) ||
+        mp6_path_copy_checked(checkedFiles, sizeof(checkedFiles), filesRoot) != 0 ||
+        mp6_path_copy_checked(checkedFst, sizeof(checkedFst), fstPath) != 0) {
+        return -1;
+    }
+    memcpy(g_resolvedFilesRoot, checkedFiles, sizeof(checkedFiles));
+    memcpy(g_resolvedFstPath, checkedFst, sizeof(checkedFst));
+    return 0;
+}
+
+static int mp6_path_file_nonempty(const char *path)
+{
+    FILE *f = mp6_fopen_utf8(path, "rb");
+    long size = -1;
+    if (f == NULL) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    size = ftell(f);
+    fclose(f);
+    return size > 0;
+}
+
+static int mp6_runtime_wanted_file(const char *rel)
+{
+    if (strcmp(rel, "opening.bnr") == 0 || strcmp(rel, "sound/MP6_SND.msm") == 0 ||
+        strcmp(rel, "sound/MP6_Str.pdt") == 0) return 1;
+    return (strncmp(rel, "data", 4) == 0 && (rel[4] == '/' || rel[4] == '\0')) ||
+           (strncmp(rel, "mess", 4) == 0 && (rel[4] == '/' || rel[4] == '\0')) ||
+           (strncmp(rel, "mic", 3) == 0 && (rel[3] == '/' || rel[3] == '\0'));
+}
+
+static int mp6_path_file_exact_size(const char *path, uint32_t expected)
+{
+    FILE *f = mp6_fopen_utf8(path, "rb");
+    long size;
+    if (f == NULL) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    size = ftell(f);
+    fclose(f);
+    return size >= 0 && (uint64_t)size == (uint64_t)expected;
+}
+
+static int mp6_validate_fst_files_walk(const unsigned char *fst, uint32_t dir,
+                                       const char *prefix, const char *filesRoot,
+                                       unsigned int *found, uint64_t *wantedBytes,
+                                       char *err, size_t errn)
+{
+    uint32_t count = mp6_content_fst_be32(fst + 8);
+    const char *strings = (const char *)(fst + (size_t)count * 12u);
+    uint32_t i = dir + 1;
+    uint32_t end = mp6_content_fst_be32(fst + (size_t)dir * 12u + 8);
+    while (i < end) {
+        const unsigned char *entry = fst + (size_t)i * 12u;
+        uint32_t word0 = mp6_content_fst_be32(entry);
+        const char *name = strings + (word0 & 0x00FFFFFFu);
+        int isDir = (word0 & 0xFF000000u) != 0;
+        char rel[1024];
+        char path[1200];
+        int n = prefix[0] ? snprintf(rel, sizeof(rel), "%s/%s", prefix, name)
+                          : snprintf(rel, sizeof(rel), "%s", name);
+        if (n < 0 || n >= (int)sizeof(rel)) {
+            if (err && errn) snprintf(err, errn, "FST path is too long at entry %u", i);
+            return 0;
+        }
+        if (isDir) {
+            if (!mp6_validate_fst_files_walk(fst, i, rel, filesRoot, found,
+                                             wantedBytes, err, errn)) return 0;
+            i = mp6_content_fst_be32(entry + 8);
+        } else {
+            if (mp6_runtime_wanted_file(rel)) {
+                uint32_t fileSize = mp6_content_fst_be32(entry + 8);
+                if ((uint64_t)fileSize > MP6_CONTENT_WANTED_MAX_BYTES - *wantedBytes) {
+                    if (err && errn) snprintf(err, errn, "wanted FST manifest exceeds 1.5 GiB");
+                    return 0;
+                }
+                *wantedBytes += (uint64_t)fileSize;
+                if (mp6_path_join_checked(path, sizeof(path), filesRoot, rel) != 0 ||
+                    !mp6_path_file_exact_size(path, fileSize)) {
+                    if (err && errn) snprintf(err, errn, "missing/truncated FST file: %s", rel);
+                    return 0;
+                }
+                if (fileSize > 0) {
+                    if (strcmp(rel, "opening.bnr") == 0) *found |= 1u << 0;
+                    if (strcmp(rel, "sound/MP6_SND.msm") == 0) *found |= 1u << 1;
+                    if (strcmp(rel, "sound/MP6_Str.pdt") == 0) *found |= 1u << 2;
+                    if (strncmp(rel, "data/", 5) == 0) *found |= 1u << 3;
+                    if (strncmp(rel, "mess/", 5) == 0) *found |= 1u << 4;
+                    if (strncmp(rel, "mic/", 4) == 0) *found |= 1u << 5;
+                }
+            }
+            ++i;
+        }
+    }
+    return 1;
+}
+
+int mp6_dvd_validate_disc_root(const char *discRoot, char *err, size_t errn)
+{
+    static const char *critical[] = {
+        "files/opening.bnr",
+        "files/sound/MP6_SND.msm",
+        "files/sound/MP6_Str.pdt",
+    };
+    char path[1200];
+    char filesRoot[1200];
+    char validationError[256];
+    unsigned char boot[MP6_CONTENT_BOOT_BYTES];
+    unsigned char *fst = NULL;
+    FILE *f = NULL;
+    long size;
+    unsigned int found = 0;
+    uint64_t wantedBytes = 0;
+    int i, ok = 0;
+
+    if (err != NULL && errn > 0) err[0] = '\0';
+    if (discRoot == NULL || discRoot[0] == '\0') {
+        if (err && errn) snprintf(err, errn, "content root is empty");
+        return 0;
+    }
+    if (mp6_path_join_checked(path, sizeof(path), discRoot, "sys/boot.bin") != 0) {
+        if (err && errn) snprintf(err, errn, "content root path is too long");
+        return 0;
+    }
+    f = mp6_fopen_utf8(path, "rb");
+    if (f == NULL || fread(boot, 1, sizeof(boot), f) != sizeof(boot) ||
+        fgetc(f) != EOF || ferror(f)) {
+        if (f) fclose(f);
+        if (err && errn) snprintf(err, errn, "sys/boot.bin must be exactly 0x440 bytes: %s", path);
+        return 0;
+    }
+    fclose(f);
+    f = NULL;
+    if (!mp6_content_boot_validate(boot, sizeof(boot))) {
+        if (err && errn) snprintf(err, errn, "sys/boot.bin is not Mario Party 6 USA (GP6E01)");
+        return 0;
+    }
+
+    if (mp6_path_join_checked(path, sizeof(path), discRoot, "sys/fst.bin") != 0 ||
+        mp6_path_join_checked(filesRoot, sizeof(filesRoot), discRoot, "files") != 0) {
+        if (err && errn) snprintf(err, errn, "content root path is too long");
+        return 0;
+    }
+    f = mp6_fopen_utf8(path, "rb");
+    if (f == NULL || fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 12 ||
+        size > (long)MP6_CONTENT_FST_MAX_BYTES || fseek(f, 0, SEEK_SET) != 0) {
+        if (f) fclose(f);
+        if (err && errn) snprintf(err, errn, "missing or implausible: %s", path);
+        return 0;
+    }
+    fst = (unsigned char *)malloc((size_t)size);
+    if (fst == NULL || fread(fst, 1, (size_t)size, f) != (size_t)size) {
+        fclose(f);
+        free(fst);
+        if (err && errn) snprintf(err, errn, "could not read: %s", path);
+        return 0;
+    }
+    fclose(f);
+    f = NULL;
+    if (!mp6_content_fst_validate(fst, (size_t)size, validationError, sizeof(validationError))) {
+        if (err && errn) snprintf(err, errn, "invalid sys/fst.bin: %s", validationError);
+        goto done;
+    }
+    if (!mp6_validate_fst_files_walk(fst, 0, "", filesRoot, &found,
+                                     &wantedBytes, err, errn)) goto done;
+    if ((found & 0x3fu) != 0x3fu) {
+        if (err && errn) {
+            snprintf(err, errn,
+                     "FST is incomplete (need opening.bnr, both sound banks, and data/mess/mic files)");
+        }
+        goto done;
+    }
+    for (i = 0; i < (int)(sizeof(critical) / sizeof(critical[0])); ++i) {
+        if (mp6_path_join_checked(path, sizeof(path), discRoot, critical[i]) != 0) {
+            if (err && errn) snprintf(err, errn, "content root path is too long");
+            goto done;
+        }
+        if (!mp6_path_file_nonempty(path)) {
+            if (err && errn) snprintf(err, errn, "missing or empty: %s", path);
+            goto done;
+        }
+    }
+    ok = 1;
+done:
+    free(fst);
+    return ok;
+}
 
 static void mp6_resolve_dvd_paths(void)
 {
-    char discRoot[1024];
+    char discRoot[MP6_DVD_PATH_CAP];
+    char filesRoot[MP6_DVD_PATH_CAP];
+    char fstPath[MP6_DVD_PATH_CAP];
 
     if (g_pathsResolved) return;
     g_pathsResolved = 1;
 
-    /* Always-valid fallback first -- every return path below either
-     * overwrites this with a verified-existing runtime-relative path or
-     * leaves it exactly as-is. */
-    snprintf(g_resolvedFilesRoot, sizeof(g_resolvedFilesRoot), "%s", MP6_DVD_FILES_ROOT);
-    snprintf(g_resolvedFstPath, sizeof(g_resolvedFstPath), "%s", MP6_DVD_FST_PATH);
+    /* Build-time paths normally fit. If an unusual checkout path does not,
+     * keep both targets empty rather than operating on truncated names; the
+     * runtime-relative candidate below still gets a chance to replace them. */
+    if (mp6_set_resolved_paths(MP6_DVD_FILES_ROOT, MP6_DVD_FST_PATH) != 0) {
+        g_resolvedFilesRoot[0] = '\0';
+        g_resolvedFstPath[0] = '\0';
+        fprintf(stderr, "[WARN] dvd_files: build-time disc paths are too long -- fallback disabled\n");
+    }
 
     /* The exe-relative walk lives in mp6_host_disc_root (platform/host/),
      * WITH the fst.bin openability probe -- it returns 0 only for a
      * verified-existing disc root, so appending "/files" and
      * "/sys/fst.bin" here always yields usable paths. */
-    if (mp6_host_disc_root(discRoot, sizeof(discRoot)) == 0) {
-        snprintf(g_resolvedFilesRoot, sizeof(g_resolvedFilesRoot), "%s/files", discRoot);
-        snprintf(g_resolvedFstPath, sizeof(g_resolvedFstPath), "%s/sys/fst.bin", discRoot);
+    if (mp6_host_disc_root(discRoot, sizeof(discRoot)) == 0 &&
+        mp6_path_join_checked(filesRoot, sizeof(filesRoot), discRoot, "files") == 0 &&
+        mp6_path_join_checked(fstPath, sizeof(fstPath), discRoot, "sys/fst.bin") == 0 &&
+        mp6_set_resolved_paths(filesRoot, fstPath) == 0) {
         printf("[DVD] resolved the real disc tree relative to the running exe (not cwd): \"%s\"\n",
                g_resolvedFilesRoot);
         fflush(stdout);
@@ -143,17 +346,26 @@ static void mp6_resolve_dvd_paths(void)
  * Returns 1 if the FST is openable, 0 if not. */
 int mp6_dvd_probe_root(char *filesRootOut, size_t n)
 {
-    FILE *f;
+    char root[MP6_DVD_PATH_CAP];
+    char err[256];
+    char *slash, *backslash;
     mp6_resolve_dvd_paths();
-    if (filesRootOut != NULL && n > 0) {
-        snprintf(filesRootOut, n, "%s", g_resolvedFilesRoot);
+    if (filesRootOut != NULL &&
+        mp6_path_copy_checked(filesRootOut, n, g_resolvedFilesRoot) != 0) {
+        return 0;
     }
-    f = fopen(g_resolvedFstPath, "rb");
-    if (f != NULL) {
-        fclose(f);
-        return 1;
-    }
-    return 0;
+    if (mp6_path_copy_checked(root, sizeof(root), g_resolvedFstPath) != 0) return 0;
+    slash = strrchr(root, '/');
+    backslash = strrchr(root, '\\');
+    if (backslash != NULL && (slash == NULL || backslash > slash)) slash = backslash;
+    if (slash == NULL) return 0;
+    *slash = '\0'; /* strip fst.bin */
+    slash = strrchr(root, '/');
+    backslash = strrchr(root, '\\');
+    if (backslash != NULL && (slash == NULL || backslash > slash)) slash = backslash;
+    if (slash == NULL) return 0;
+    *slash = '\0'; /* strip sys/ */
+    return mp6_dvd_validate_disc_root(root, err, sizeof(err));
 }
 
 /* Launcher menu override: replace both resolved paths outright (the
@@ -161,13 +373,17 @@ int mp6_dvd_probe_root(char *filesRootOut, size_t n)
  * before the first file open (the launcher calls it pre-GameMain); also
  * marks resolution done so a later mp6_resolve_dvd_paths() can't
  * overwrite it. */
-void mp6_dvd_set_root_override(const char *filesRoot, const char *fstPath)
+int mp6_dvd_set_root_override(const char *filesRoot, const char *fstPath)
 {
+    if (mp6_set_resolved_paths(filesRoot, fstPath) != 0) {
+        fprintf(stderr, "[DVD] launcher content override rejected: path is too long or invalid\n");
+        fflush(stderr);
+        return -1;
+    }
     g_pathsResolved = 1;
-    snprintf(g_resolvedFilesRoot, sizeof(g_resolvedFilesRoot), "%s", filesRoot);
-    snprintf(g_resolvedFstPath, sizeof(g_resolvedFstPath), "%s", fstPath);
     printf("[DVD] launcher-configured content root: \"%s\"\n", g_resolvedFilesRoot);
     fflush(stdout);
+    return 0;
 }
 
 /* =======================================================================
@@ -245,7 +461,7 @@ static char *fst_dup(const char *s, size_t n)
  * entry, so that approach doesn't generalize here. A single top-down walk
  * building a full reverse-lookup table sidesteps the question entirely
  * (and costs a few KB for this disc's 945 files). */
-static void fst_walk_build(u32 dirIdx, const char *prefix, size_t prefixLen)
+static BOOL fst_walk_build(u32 dirIdx, const char *prefix, size_t prefixLen)
 {
     u32 i = dirIdx + 1;
     u32 end = fst_field2(dirIdx);
@@ -265,31 +481,48 @@ static void fst_walk_build(u32 dirIdx, const char *prefix, size_t prefixLen)
             memcpy(full, name, nameLen + 1);
             fullLen = nameLen;
         } else {
-            /* Absurdly long path for this disc; skip rather than overflow. */
-            i = isDir ? fst_field2(i) : (i + 1);
-            continue;
+            fprintf(stderr, "[WARN] dvd_files: FST entry path exceeds runtime path cap\n");
+            return FALSE;
         }
 
         if (isDir) {
-            fst_walk_build(i, full, fullLen);
+            if (!fst_walk_build(i, full, fullLen)) return FALSE;
             i = fst_field2(i);
         } else {
             g_entryPaths[i] = fst_dup(full, fullLen);
+            if (g_entryPaths[i] == NULL) return FALSE;
             i++;
         }
     }
+    return TRUE;
+}
+
+static void fst_discard_loaded_data(void)
+{
+    u32 i;
+    if (g_entryPaths != NULL) {
+        for (i = 0; i < g_fstMaxEntry; i++) free(g_entryPaths[i]);
+        free(g_entryPaths);
+    }
+    free(g_fstData);
+    g_fstData = NULL;
+    g_fstMaxEntry = 0;
+    g_fstStrings = NULL;
+    g_entryPaths = NULL;
+    g_fstOk = 0;
 }
 
 static void fst_load_once(void)
 {
     FILE *f;
-    long size;
+    long size = -1;
+    char validationError[256];
 
     if (g_fstLoadAttempted) return;
     g_fstLoadAttempted = 1;
 
     mp6_resolve_dvd_paths();
-    f = fopen(g_resolvedFstPath, "rb");
+    f = mp6_fopen_utf8(g_resolvedFstPath, "rb");
     if (!f) {
         fprintf(stderr,
                 "[WARN] dvd_files: couldn't open FST at \"%s\" -- every real-file DVDOpen/"
@@ -297,11 +530,9 @@ static void fst_load_once(void)
                 g_resolvedFstPath);
         return;
     }
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (size < 12) {
-        fprintf(stderr, "[WARN] dvd_files: FST at \"%s\" is implausibly small (%ld bytes)\n",
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 12 ||
+        size > (long)MP6_CONTENT_FST_MAX_BYTES || fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "[WARN] dvd_files: FST at \"%s\" has invalid size/seek (%ld bytes)\n",
                 g_resolvedFstPath, size);
         fclose(f);
         return;
@@ -317,14 +548,33 @@ static void fst_load_once(void)
     }
     fclose(f);
 
+    if (!mp6_content_fst_validate(g_fstData, (size_t)size,
+                                  validationError, sizeof(validationError))) {
+        fprintf(stderr, "[WARN] dvd_files: refusing malformed FST at \"%s\": %s\n",
+                g_resolvedFstPath, validationError);
+        free(g_fstData);
+        g_fstData = NULL;
+        return;
+    }
+
     g_fstMaxEntry = fst_field2(0); /* root dir's own nextEntryOrLength == total entry count */
     g_fstStrings = (const char *)(g_fstData + FST_ENTRY_OFF(g_fstMaxEntry));
-    g_fstOk = 1;
 
     g_entryPaths = (char **)calloc(g_fstMaxEntry, sizeof(char *));
-    if (g_entryPaths) {
-        fst_walk_build(0, "", 0);
+    if (!g_entryPaths) {
+        fprintf(stderr, "[WARN] dvd_files: out of memory building FST path table\n");
+        free(g_fstData);
+        g_fstData = NULL;
+        g_fstStrings = NULL;
+        g_fstMaxEntry = 0;
+        return;
     }
+    if (!fst_walk_build(0, "", 0)) {
+        fprintf(stderr, "[WARN] dvd_files: out of memory/path capacity building FST path table\n");
+        fst_discard_loaded_data();
+        return;
+    }
+    g_fstOk = 1;
     printf("[DVD] fst.bin loaded: %u entries from \"%s\"\n", g_fstMaxEntry, g_resolvedFstPath);
 }
 
@@ -361,6 +611,7 @@ s32 mp6_dvd_path_to_entrynum(const char *path)
     u32 dirLookAt = 0;
     const char *p = path;
 
+    if (path == NULL) return -1;
     fst_load_once();
     if (!g_fstOk) return -1;
 
@@ -430,6 +681,7 @@ static BOOL real_tag(DVDFileInfo *f, FILE *fp, u32 length)
 static int real_lookup(DVDFileInfo *f)
 {
     int i;
+    if (f == NULL) return -1;
     for (i = 0; i < MP6_MAX_OPEN_REAL; i++) {
         if (g_openReal[i].key == f) return i;
     }
@@ -438,16 +690,17 @@ static int real_lookup(DVDFileInfo *f)
 
 static BOOL mp6_dvd_open_relpath(const char *relpath, s32 entrynum, DVDFileInfo *fileInfo)
 {
-    char hostPath[1024];
+    char hostPath[MP6_DVD_PATH_CAP];
     FILE *fp;
     long size;
 
+    if (relpath == NULL || relpath[0] == '\0' || fileInfo == NULL) return FALSE;
     mp6_resolve_dvd_paths();
-    if ((size_t)snprintf(hostPath, sizeof(hostPath), "%s/%s", g_resolvedFilesRoot, relpath) >= sizeof(hostPath)) {
+    if (mp6_path_join_checked(hostPath, sizeof(hostPath), g_resolvedFilesRoot, relpath) != 0) {
         fprintf(stderr, "[WARN] dvd_files: host path too long for \"%s\"\n", relpath);
         return FALSE;
     }
-    fp = fopen(hostPath, "rb");
+    fp = mp6_fopen_utf8(hostPath, "rb");
     if (!fp) {
         /* The FST says this path/entrynum exists, but the real bytes aren't
          * on this checkout -- report an honest, visible "not found" one
@@ -458,10 +711,21 @@ static BOOL mp6_dvd_open_relpath(const char *relpath, s32 entrynum, DVDFileInfo 
                "checkout (looked for \"%s\")\n", relpath, entrynum, hostPath);
         return FALSE;
     }
-    fseek(fp, 0, SEEK_END);
-    size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    if (size < 0) { fclose(fp); return FALSE; }
+    if (fseek(fp, 0, SEEK_END) != 0 || (size = ftell(fp)) < 0 ||
+        (uint64_t)size > UINT32_MAX || fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return FALSE;
+    }
+    if (entrynum < 0 || (u32)entrynum >= g_fstMaxEntry ||
+        (u32)size != fst_field2((u32)entrynum)) {
+        fprintf(stderr,
+                "[WARN] dvd_files: host file size for \"%s\" is %ld, but fst.bin requires %u -- refusing\n",
+                relpath, size,
+                entrynum >= 0 && (u32)entrynum < g_fstMaxEntry
+                    ? (unsigned)fst_field2((u32)entrynum) : 0u);
+        fclose(fp);
+        return FALSE;
+    }
 
     memset(fileInfo, 0, sizeof(*fileInfo));
     if (!real_tag(fileInfo, fp, (u32)size)) {
@@ -475,23 +739,29 @@ static BOOL mp6_dvd_open_relpath(const char *relpath, s32 entrynum, DVDFileInfo 
 
 BOOL mp6_dvd_open_by_path(const char *path, DVDFileInfo *fileInfo)
 {
-    s32 entry = mp6_dvd_path_to_entrynum(path);
+    s32 entry;
+    const char *canonical;
+
+    if (path == NULL || fileInfo == NULL) return FALSE;
+    entry = mp6_dvd_path_to_entrynum(path);
 
     if (entry < 0 || fst_is_dir((u32)entry)) return FALSE;
-    /* The caller already handed us the exact path string -- no need to
-     * reconstruct one from the FST (see mp6_dvd_open_by_entrynum for why
-     * that reconstruction exists at all, and isn't just reused here). A
-     * leading '/' (root-relative) is the only normalization real call
-     * sites could plausibly need; none observed in practice (every real
-     * DATADIR()/dll path is already bare, e.g. "data/title.bin"). */
-    if (*path == '/') path++;
-    return mp6_dvd_open_relpath(path, entry, fileInfo);
+    /* The lookup grammar deliberately supports SDK-style root/current-dir
+     * spellings (leading '/', './', and '../'). Never concatenate that
+     * caller spelling onto the host root: at root, "../opening.bnr" resolves
+     * to the real opening.bnr FST entry but would otherwise open a sibling
+     * outside files/. The validated FST reverse table is the canonical,
+     * traversal-free host-relative identity for both path and entry opens. */
+    canonical = g_entryPaths ? g_entryPaths[entry] : NULL;
+    if (canonical == NULL) return FALSE;
+    return mp6_dvd_open_relpath(canonical, entry, fileInfo);
 }
 
 BOOL mp6_dvd_open_by_entrynum(s32 entrynum, DVDFileInfo *fileInfo)
 {
     const char *relpath;
 
+    if (fileInfo == NULL) return FALSE;
     fst_load_once();
     if (!g_fstOk || entrynum < 0 || (u32)entrynum >= g_fstMaxEntry || fst_is_dir((u32)entrynum)) {
         return FALSE;
@@ -508,7 +778,7 @@ BOOL mp6_dvd_read(DVDFileInfo *fileInfo, void *addr, s32 length, s32 offset)
     long avail;
     size_t toRead;
 
-    if (idx < 0) {
+    if (idx < 0 || (length > 0 && addr == NULL)) {
         fprintf(stderr, "[WARN] dvd_files: read on an untracked DVDFileInfo* %p\n", (void *)fileInfo);
         return FALSE;
     }

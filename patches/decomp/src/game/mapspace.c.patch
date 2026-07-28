@@ -1,0 +1,5 @@
+--- a/src/game/mapspace.c
++++ b/src/game/mapspace.c
+@@ -7,0 +8,2 @@
++/* Native builds need a real prototype: these arguments cross the ABI as floats. */
++void HuSetVecF(Vec *dest, f32 x, f32 y, f32 z);

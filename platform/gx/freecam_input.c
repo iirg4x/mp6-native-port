@@ -29,6 +29,12 @@
 
 #include "mp6_freecam.h"
 
+/* SAVESTATE CARVE-OUT: every mutable static below is live host input, not
+ * deterministic game state.  Keep this include after this TU's own headers
+ * and at preprocessor top level; tools/build.py enforces both membership in
+ * HOST_STATE_SECTION_SOURCES and this placement. */
+#include "mp6_host_section.h"
+
 extern int mp6_launcher_menu_visible(void); /* platform/gx/ui/launcher_core.cpp */
 #ifdef __ANDROID__
 extern int mp6_touch_pad_control_at(float nx, float ny); /* platform/android/touch_pad.cpp */
@@ -64,6 +70,17 @@ typedef struct {
     float x, y;
 } FCFinger;
 static FCFinger g_fingers[FC_MAX_FINGERS];
+
+void mp6_freecam_input_savestate_reset(void)
+{
+    /* The carve-out preserves THIS process's input state across the image
+     * restore.  That is necessary for pointer/process safety, but a finger
+     * or event delta sampled before the load must not move the restored
+     * camera afterwards, so explicitly discard every transient latch. */
+    g_mouseLookYaw = g_mouseLookPitch = g_wheelDolly = 0.0f;
+    g_touchYaw = g_touchPitch = g_touchRight = g_touchUp = g_touchDolly = 0.0f;
+    memset(g_fingers, 0, sizeof(g_fingers));
+}
 
 static FCFinger *fc_find(SDL_FingerID id)
 {
@@ -178,13 +195,11 @@ void mp6_freecam_input_tick(void)
 
     if (!mp6_freecam_enabled()) {
         /* Drop anything stale so a later re-enable starts clean. */
-        g_mouseLookYaw = g_mouseLookPitch = g_wheelDolly = 0.0f;
-        g_touchYaw = g_touchPitch = g_touchRight = g_touchUp = g_touchDolly = 0.0f;
+        mp6_freecam_input_savestate_reset();
         return;
     }
     if (mp6_launcher_menu_visible()) {
-        g_mouseLookYaw = g_mouseLookPitch = g_wheelDolly = 0.0f;
-        g_touchYaw = g_touchPitch = g_touchRight = g_touchUp = g_touchDolly = 0.0f;
+        mp6_freecam_input_savestate_reset();
         return;
     }
 

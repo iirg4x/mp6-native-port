@@ -1,0 +1,206 @@
+diff --git a/lib/gfx/debug_readback.cpp b/lib/gfx/debug_readback.cpp
+index c469b49..29337ff 100644
+--- a/lib/gfx/debug_readback.cpp
++++ b/lib/gfx/debug_readback.cpp
+@@ -21,7 +21,9 @@
+ #include "png_io.hpp"
+ #include "render_worker.hpp"
+ 
++#include <algorithm>
+ #include <cstdint>
++#include <cstring>
+ #include <vector>
+ 
+ extern "C" {
+@@ -140,4 +142,191 @@ bool aurora_gx_debug_dump_copy_png(const void* dest, const char* path) {
+   return ok;
+ }
+ 
++// MP6 "Frame Dump" debug lever (aurora-patches/0025): a host-callable,
++// C-linkage GPU->CPU readback of the frame that was JUST presented.
++//
++// Source is aurora::webgpu::present_source() -- g_frameBuffer, or
++// g_frameBufferResolved when MSAA is on -- i.e. the exact texture
++// aurora::end_frame() blits to the swapchain. That means the captured image
++// is the GAME image at native framebuffer resolution, BEFORE the
++// present-time resample/letterbox pass and BEFORE the ImGui + RmlUi overlay
++// passes (those render straight into the surface texture). For a flicker
++// investigation that is the wanted signal: no FPS counter, no launcher
++// chrome, no aspect-fit black bars, no resampler filtering -- just the
++// frame's own pixels.
++//
++// Contract:
++//   out          destination for tightly-packed rows (w*4 bytes per row).
++//                Pass nullptr to query size/geometry without copying.
++//   outCapacity  bytes available at `out` (ignored when out == nullptr).
++//   rectX/rectY/rectW/rectH
++//                sub-rectangle of the present source to read back, clamped
++//                to the texture. rectW or rectH == 0 means "the whole
++//                frame". The crop happens in the GPU->buffer copy, NOT
++//                afterwards on the CPU, and that is the point: the readback
++//                is the expensive part of this lever, and a small rect is
++//                what lets a burst run without eating the whole idle window
++//                (on MP6 that window is where the Unlocked-FPS layer
++//                presents its interpolated frames -- a full-screen readback
++//                starves them out entirely, so a full-screen burst can only
++//                ever capture tick frames).
++//   outSrcWidth/outSrcHeight  the full present-source size (pre-crop).
++//   outWidth/outHeight        the size actually captured (post-clamp crop).
++//   outFormat    a STABLE code owned by this function, deliberately not the
++//                wgpu enum value (which is version-dependent):
++//                  1 = RGBA8Unorm   2 = RGBA8UnormSrgb
++//                  3 = BGRA8Unorm   4 = BGRA8UnormSrgb
++// All out params are optional and are filled on success (including in the
++// out == nullptr query form). Returns the number of bytes the captured
++// image needs (w*h*4) -- with data actually written only when `out` was
++// non-null AND outCapacity was at least that many bytes. Returns 0 on any
++// failure (no frame yet, unsupported surface format, rect entirely outside
++// the frame, buffer map timeout).
++//
++// Blocking, exactly like the copy-PNG dump above: enqueued on the render
++// worker (so it is ordered strictly AFTER the end_frame work already queued
++// for the frame being captured) and waited on synchronously. Debug tooling
++// only -- it stalls the caller for the whole GPU readback.
++uint32_t aurora_gx_debug_capture_present_frame(void* out, uint32_t outCapacity, uint32_t rectX, uint32_t rectY,
++                                               uint32_t rectW, uint32_t rectH, uint32_t* outSrcWidth,
++                                               uint32_t* outSrcHeight, uint32_t* outWidth, uint32_t* outHeight,
++                                               uint32_t* outFormat) {
++  uint32_t needed = 0;
++
++  aurora::gfx::render_worker::enqueue_work([&]() {
++    using aurora::webgpu::g_device;
++    using aurora::webgpu::g_instance;
++    using aurora::webgpu::g_queue;
++
++    const auto& source = aurora::webgpu::present_source();
++    if (!source.texture) {
++      return;
++    }
++    const uint32_t srcWidth = source.size.width;
++    const uint32_t srcHeight = source.size.height;
++    if (srcWidth == 0 || srcHeight == 0) {
++      return;
++    }
++    if (rectX >= srcWidth || rectY >= srcHeight) {
++      return; // rect entirely outside the frame -- a caller mistake, not a copy
++    }
++    const uint32_t width = (rectW == 0) ? (srcWidth - rectX) : std::min(rectW, srcWidth - rectX);
++    const uint32_t height = (rectH == 0) ? (srcHeight - rectY) : std::min(rectH, srcHeight - rectY);
++    if (width == 0 || height == 0) {
++      return;
++    }
++
++    uint32_t formatCode = 0;
++    switch (source.format) {
++    case wgpu::TextureFormat::RGBA8Unorm:
++      formatCode = 1;
++      break;
++    case wgpu::TextureFormat::RGBA8UnormSrgb:
++      formatCode = 2;
++      break;
++    case wgpu::TextureFormat::BGRA8Unorm:
++      formatCode = 3;
++      break;
++    case wgpu::TextureFormat::BGRA8UnormSrgb:
++      formatCode = 4;
++      break;
++    default:
++      // Anything else is not a 4-byte 8-bit-per-channel format this
++      // readback knows how to describe; refuse rather than emit bytes the
++      // offline converter would misinterpret.
++      return;
++    }
++
++    constexpr uint32_t bytesPerPixel = 4;
++    const uint32_t unpaddedBytesPerRow = width * bytesPerPixel;
++    const uint32_t imageBytes = unpaddedBytesPerRow * height;
++
++    if (outSrcWidth != nullptr) {
++      *outSrcWidth = srcWidth;
++    }
++    if (outSrcHeight != nullptr) {
++      *outSrcHeight = srcHeight;
++    }
++    if (outWidth != nullptr) {
++      *outWidth = width;
++    }
++    if (outHeight != nullptr) {
++      *outHeight = height;
++    }
++    if (outFormat != nullptr) {
++      *outFormat = formatCode;
++    }
++    needed = imageBytes;
++    if (out == nullptr || outCapacity < imageBytes) {
++      return; // size/geometry query, or the caller's buffer is too small
++    }
++
++    // wgpu requires CopyTextureToBuffer's bytesPerRow to be a multiple of 256.
++    const uint32_t bytesPerRow = (unpaddedBytesPerRow + 255u) & ~255u;
++    const uint64_t bufferSize = static_cast<uint64_t>(bytesPerRow) * height;
++
++    const wgpu::BufferDescriptor readbackDescriptor{
++        .label = "Frame Dump Readback Buffer",
++        .usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst,
++        .size = bufferSize,
++    };
++    wgpu::Buffer readback = g_device.CreateBuffer(&readbackDescriptor);
++    if (!readback) {
++      needed = 0;
++      return;
++    }
++
++    // create_render_texture() already requests CopySrc on both frame
++    // buffers (lib/webgpu/gpu.cpp), so no usage-flag change is needed here.
++    wgpu::CommandEncoder encoder = g_device.CreateCommandEncoder();
++    const wgpu::TexelCopyTextureInfo copySrc{
++        .texture = source.texture,
++        .mipLevel = 0,
++        .origin = wgpu::Origin3D{rectX, rectY, 0},
++    };
++    const wgpu::TexelCopyBufferInfo copyDst{
++        .layout =
++            wgpu::TexelCopyBufferLayout{
++                .offset = 0,
++                .bytesPerRow = bytesPerRow,
++                .rowsPerImage = height,
++            },
++        .buffer = readback,
++    };
++    const wgpu::Extent3D copySize{width, height, 1};
++    encoder.CopyTextureToBuffer(&copySrc, &copyDst, &copySize);
++    wgpu::CommandBuffer commands = encoder.Finish();
++    g_queue.Submit(1, &commands);
++
++    wgpu::MapAsyncStatus mapStatus = wgpu::MapAsyncStatus::Error;
++    const auto future = readback.MapAsync(
++        wgpu::MapMode::Read, 0, bufferSize, wgpu::CallbackMode::WaitAnyOnly,
++        [&](wgpu::MapAsyncStatus status, wgpu::StringView) { mapStatus = status; });
++    const auto waitStatus = g_instance.WaitAny(future, 5'000'000'000);
++    if (waitStatus != wgpu::WaitStatus::Success || mapStatus != wgpu::MapAsyncStatus::Success) {
++      needed = 0;
++      return;
++    }
++
++    const auto* mapped = static_cast<const uint8_t*>(readback.GetConstMappedRange(0, bufferSize));
++    if (mapped == nullptr) {
++      readback.Unmap();
++      needed = 0;
++      return;
++    }
++
++    // De-pad: the readback buffer's rows are 256-byte aligned, the caller's
++    // buffer is tightly packed.
++    auto* dst = static_cast<uint8_t*>(out);
++    for (uint32_t y = 0; y < height; ++y) {
++      std::memcpy(dst + static_cast<size_t>(y) * unpaddedBytesPerRow,
++                  mapped + static_cast<uint64_t>(y) * bytesPerRow, unpaddedBytesPerRow);
++    }
++    readback.Unmap();
++  });
++  aurora::gfx::render_worker::synchronize();
++
++  return needed;
++}
++
+ } // extern "C"

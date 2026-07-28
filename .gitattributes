@@ -1,0 +1,146 @@
+# Line-ending policy for the whole repository.
+#
+# Why this file exists, concretely:
+#
+#   setup/lib/step_aurora.build_fingerprint() hashes the RAW BYTES of every
+#   platform/gx/aurora-patches/*.patch ("with open(p, 'rb')"), and
+#   tools/build.py's _require_aurora_artifact_stamp() gates the link on that
+#   fingerprint matching the stamp written next to the Aurora checkout. With
+#   no .gitattributes, a clone made under core.autocrlf=true -- the Git for
+#   Windows default -- materialises those patches with CRLF, so the same
+#   commit that links in a long-lived tree (whose patch files happen to be a
+#   mix of LF and CRLF, depending on whether each was last written by a tool
+#   or by a checkout) fails the provenance gate in a fresh clone. Measured on
+#   15ca11e: stamp 4e99a968..., fresh clone 407905f8...
+#
+#   setup.sh also shipped with CRLF, which makes its "#!/usr/bin/env bash"
+#   line unrunnable on Linux/macOS.
+#
+# The fix is to stop letting the checkout decide the bytes. "eol=lf" is used
+# rather than a bare "text" because "text" alone still defers to
+# core.autocrlf/core.eol for the WORKING TREE, which is exactly the variable
+# that broke the hash; "eol=lf" overrides both.
+#
+# Rule of thumb when adding a file type here: if any tool in this repo hashes
+# it, diffs it, or feeds it to a parser, it belongs in the LF block. Only
+# things Windows itself refuses to read with LF belong in the CRLF block.
+
+# ---------------------------------------------------------------------------
+# Default: normalise anything Git detects as text to LF in the index AND in
+# the working tree, on every platform. Content detection still protects any
+# unlisted binary type from being mangled.
+# ---------------------------------------------------------------------------
+*                       text=auto eol=lf
+
+# ---------------------------------------------------------------------------
+# Text, forced -- no content sniffing. These are the files whose exact bytes
+# the build, the gates, and the patch appliers depend on.
+# ---------------------------------------------------------------------------
+
+# Patch series: platform/gx/aurora-patches/ (byte-hashed into the Aurora
+# provenance fingerprint) and patches/decomp*/ (applied to the read-only
+# decomp checkout).
+*.patch                 text eol=lf
+*.010-host-state        text eol=lf
+
+# Engine and shim sources.
+*.c                     text eol=lf
+*.h                     text eol=lf
+*.cpp                   text eol=lf
+*.hpp                   text eol=lf
+*.inc                   text eol=lf
+
+# Tooling, setup, harnesses.
+*.py                    text eol=lf
+*.sh                    text eol=lf
+
+# Android lane.
+*.java                  text eol=lf
+*.gradle                text eol=lf
+*.properties            text eol=lf
+*.xml                   text eol=lf
+gradlew                 text eol=lf
+
+# UI resources (RmlUi documents/stylesheets) and shaders.
+*.rml                   text eol=lf
+*.rcss                  text eol=lf
+*.wgsl                  text eol=lf
+
+# Documentation, data, build config, version stamps.
+*.md                    text eol=lf
+*.txt                   text eol=lf
+*.json                  text eol=lf
+*.yml                   text eol=lf
+*.yaml                  text eol=lf
+*.toml                  text eol=lf
+*.js                    text eol=lf
+*.cmake                 text eol=lf
+CMakeLists.txt          text eol=lf
+VERSION                 text eol=lf
+VERSION_CODE            text eol=lf
+.gitignore              text eol=lf
+.gitattributes          text eol=lf
+*.gitkeep               text eol=lf
+
+# ---------------------------------------------------------------------------
+# Binary -- never converted, never diffed as text.
+#
+# The first group is every binary extension currently tracked, swept from
+# `git ls-files --eol` (the "i/-text" rows): .png .jpg .dll .ttf .otf .jar
+# .gci. The second group is declared ahead of time so a build artifact or
+# capture that lands in the tree later cannot be silently line-ending
+# mangled by whoever adds it.
+# ---------------------------------------------------------------------------
+*.png                   binary
+*.jpg                   binary
+*.dll                   binary
+*.ttf                   binary
+*.otf                   binary
+*.jar                   binary
+*.gci                   binary
+
+*.jpeg                  binary
+*.gif                   binary
+*.bmp                   binary
+*.tga                   binary
+*.ico                   binary
+*.webp                  binary
+*.apk                   binary
+*.aab                   binary
+*.so                    binary
+*.exe                   binary
+*.pdb                   binary
+*.lib                   binary
+*.a                     binary
+*.o                     binary
+*.obj                   binary
+*.bin                   binary
+*.mfd                   binary
+*.dat                   binary
+*.raw                   binary
+*.hsf                   binary
+*.rel                   binary
+*.dol                   binary
+*.tpl                   binary
+*.iso                   binary
+*.gcm                   binary
+*.zip                   binary
+*.gz                    binary
+*.7z                    binary
+*.wav                   binary
+*.ogg                   binary
+*.mp4                   binary
+*.pdf                   binary
+
+# ---------------------------------------------------------------------------
+# CRLF, deliberately -- Windows-only launchers.
+#
+# cmd.exe's batch parser is the one consumer here that genuinely misbehaves
+# on LF-only input (mid-file labels/goto), and Gradle ships gradlew.bat CRLF
+# upstream. setup.ps1 / tools/winshot.ps1 are kept CRLF alongside them for
+# consistency; nothing hashes either, so this costs nothing. Note the
+# companion POSIX launchers (setup.sh, gradlew) are LF above -- that pairing
+# is the point.
+# ---------------------------------------------------------------------------
+*.bat                   text eol=crlf
+*.ps1                   text eol=crlf

@@ -3,7 +3,7 @@
  * translation unit so the ORIGINAL decomp headers under
  * external_refs/repos/marioparty6/include never need to be touched.
  *
- * Most of dolphin/*.h already tolerates non-MWERKS compilers on its own
+ * Most Dolphin headers already tolerate non-MWERKS compilers on their own
  * (AT_ADDRESS(x) -> empty, ATTRIBUTE_ALIGN -> __attribute__, TARGET_PC
  * branches for types.h/vi.h/pad.h/gx headers). The handful of spots that
  * do NOT degrade gracefully are pre-empted here via the include-guard
@@ -409,6 +409,14 @@ static inline void GXFastCallDisplayList(void *list, u32 size)
  * matching mp6_GXSetArray3's own precedent. */
 #define GXBegin mp6_GXBegin
 #define GXEnd mp6_GXEnd
+
+/* Windowed-only retained-frame identity tap.  Decomp GXLoadPosMtxImm calls
+ * pass through aurora_bridge.c so frame_interp.c can record the active
+ * (camera, model generation, per-draw ordinal) beside the FIFO bytes.  The
+ * wrapper immediately calls Aurora's real function.  The game's objects are
+ * shared between windowed/headless builds, so the rename is unconditional;
+ * gen_shims.py emits the resolved-name null shim for headless. */
+#define GXLoadPosMtxImm mp6_GXLoadPosMtxImm
 
 #ifdef __cplusplus
 }

@@ -34,6 +34,14 @@ static const Case kCases[] = {
     { "data\\sub\\evil", 0 },
     { "data/sub/../../../x", 0 },
     { "data/e\nvil", 0 }, /* control byte */
+    { "data/NUL", 0 },
+    { "data/con.txt", 0 },
+    { "data/COM1.bin", 0 },
+    { "data/Lpt9", 0 },
+    { "data/foo.", 0 },
+    { "data/foo ", 0 },
+    { "data/a?b", 0 },
+    { "data/\xC3\xA9.bin", 0 }, /* avoid cross-host Unicode normalization aliases */
     { "", 0 },
     /* legitimate wanted-set paths: all ACCEPTED */
     { "data/x.bin", 1 },
@@ -61,6 +69,12 @@ int main(void)
      * (empty) is covered above; verify a benign but tricky name too. */
     if (!mp6_content_path_is_safe_rel("data/a.b.c")) {
         printf("  FAIL: \"data/a.b.c\" should be accepted\n");
+        ++failures;
+    }
+    if (!mp6_content_path_is_safe_component("file.bin") ||
+        mp6_content_path_is_safe_component("dir/file.bin") ||
+        mp6_content_path_is_safe_component("CONOUT$.txt")) {
+        printf("  FAIL: single-component display/FST-name validation disagrees with path rules\n");
         ++failures;
     }
     if (failures) {

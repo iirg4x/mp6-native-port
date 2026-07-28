@@ -57,6 +57,13 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
+
+/* SAVESTATE CARVE-OUT: layout and finger/latch state describe the live SDL
+ * surface and input stream.  They must never be restored from a captured
+ * process.  Keep this after all headers and at preprocessor top level;
+ * tools/build.py checks the source-list contract. */
+#include "mp6_host_section.h"
 
 /* ------------------------------------------------------------------ */
 /* Layout -- height-relative units anchored to the window edges, so the
@@ -129,6 +136,18 @@ static bool g_layoutLogged = false;
 static unsigned short g_downLatchMask = 0;
 static signed char g_downLatchSX = 0;
 static signed char g_downLatchSY = 0;
+
+extern "C" void mp6_touch_pad_savestate_reset(void)
+{
+    /* Preserve g_layout: it is derived from THIS process's current surface.
+     * Only input sampled before the load is invalid at the restored frame. */
+    memset(g_fingers, 0, sizeof(g_fingers));
+    g_downLatchMask = 0;
+    g_downLatchSX = 0;
+    g_downLatchSY = 0;
+    g_lastLoggedMask = 0;
+    g_lastLogValid = false;
+}
 
 static void tp_layout_update(float w, float h)
 {

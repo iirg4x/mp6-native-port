@@ -24,11 +24,18 @@
  */
 #include "mp6_savestate.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/types.h>
+#include <unistd.h>
+#endif
 
 #include "host.h"
+#include "mp6_dvd_files.h"
+#include "mp6_utf8_file.h"
 #include "zlib.h"
 #include "mp6_boot.h" /* mp6_max_ticks/mp6_ticks_unlimited -- latched across restore */
 
@@ -126,7 +133,8 @@ typedef struct {
     uint64_t coroPoolSize;
     uint64_t imageBase;
     uint32_t regionCount;
-    uint32_t reserved;
+    uint32_t integrityCrc32; /* CRC32(header with this field zero + region table + ws tail) */
+    int64_t  osTimeTicks;      /* logical OSGetTime at capture; rebased on restore */
     uint64_t rawBytes;        /* sum of region sizes, for the decompress buffer */
     uint64_t compressedBytes; /* deflate stream length that follows the table --
                                * ALSO the offset key for the widescreen blob
@@ -141,6 +149,16 @@ typedef struct {
      * all (the playing BGM stream id exists nowhere else in the process). */
     Mp6SsAudioShadow audio;
 } Mp6SavestateHeader;
+
+static int mp6_ss_seek_abs(FILE *f, uint64_t offset)
+{
+    if (f == NULL || offset > (uint64_t)INT64_MAX) return -1;
+#ifdef _WIN32
+    return _fseeki64(f, (int64_t)offset, SEEK_SET);
+#else
+    return fseeko(f, (off_t)offset, SEEK_SET);
+#endif
+}
 
 /* ------------------------------------------------------------------ */
 
@@ -169,6 +187,20 @@ static uint64_t mp6_ss_image_base_proxy(void)
     return (uint64_t)(uintptr_t)&kImageAnchor[0];
 }
 
+static int mp6_ss_accumulate_region(uint64_t *raw, uint64_t size)
+{
+    /* zlib's avail_in/avail_out are uInt.  Capture feeds one whole region at
+     * a time and restore inflates into one bounded window, so both every
+     * region and the aggregate must remain exactly representable rather than
+     * narrowing silently when a future arena/coroutine size grows. */
+    if (raw == NULL || size == 0 || size > (uint64_t)UINT_MAX ||
+        *raw >= (uint64_t)UINT_MAX || size >= (uint64_t)UINT_MAX - *raw) {
+        return 0;
+    }
+    *raw += size;
+    return 1;
+}
+
 /* Collects the regions this build would capture. Shared by capture and
  * restore so the two can never disagree about what the set should be --
  * restore then checks the file's table against this. */
@@ -195,7 +227,7 @@ static int mp6_ss_collect_regions(Mp6SavestateRegion *out, int maxOut, uint64_t 
     out[n].addr = (uint64_t)(uintptr_t)mp6_arena_base();
     out[n].size = (uint64_t)mp6_arena_size();
     snprintf(out[n].name, sizeof(out[n].name), "arena");
-    raw += out[n].size;
+    if (!mp6_ss_accumulate_region(&raw, out[n].size)) return -1;
     n++;
 
     /* 2. Every writable image section EXCEPT the host-owned carve-out. */
@@ -222,7 +254,7 @@ static int mp6_ss_collect_regions(Mp6SavestateRegion *out, int maxOut, uint64_t 
         out[n].addr = (uint64_t)(uintptr_t)sections[i].addr;
         out[n].size = (uint64_t)sections[i].size;
         snprintf(out[n].name, sizeof(out[n].name), "%s", sections[i].name);
-        raw += out[n].size;
+        if (!mp6_ss_accumulate_region(&raw, out[n].size)) return -1;
         n++;
     }
 
@@ -247,7 +279,7 @@ static int mp6_ss_collect_regions(Mp6SavestateRegion *out, int maxOut, uint64_t 
             out[n].addr = (uint64_t)(uintptr_t)aram;
             out[n].size = (uint64_t)aramSize;
             snprintf(out[n].name, sizeof(out[n].name), "aram");
-            raw += out[n].size;
+            if (!mp6_ss_accumulate_region(&raw, out[n].size)) return -1;
             n++;
         }
     }
@@ -263,7 +295,7 @@ static int mp6_ss_collect_regions(Mp6SavestateRegion *out, int maxOut, uint64_t 
         out[n].addr = (uint64_t)(uintptr_t)mp6_coro_slot_addr(i);
         out[n].size = (uint64_t)mp6_coro_slot_size();
         snprintf(out[n].name, sizeof(out[n].name), "coro%d", i);
-        raw += out[n].size;
+        if (!mp6_ss_accumulate_region(&raw, out[n].size)) return -1;
         n++;
     }
 
@@ -287,6 +319,7 @@ int mp6_savestate_capture(const char *path)
     const size_t kChunk = 1u << 20;
     int zInit = 0;
     char tmpPath[560];
+    uLong integrityCrc;
 
     if (path == NULL) {
         return MP6_SAVESTATE_ERR_IO;
@@ -308,6 +341,15 @@ int mp6_savestate_capture(const char *path)
          * corruption for a file that was never opened. */
         return MP6_SAVESTATE_ERR_UNSUPPORTED;
     }
+    {
+        int coroRegions = 0;
+        for (i = 0; i < nRegion; ++i) {
+            if (regions[i].kind == MP6_SS_REGION_CORO) ++coroRegions;
+        }
+        if (coroRegions == 0) {
+            return MP6_SAVESTATE_ERR_UNSUPPORTED;
+        }
+    }
 
     /* A load-bearing assumption, checked instead of trusted: the DVD
      * layer's open-handle table must be empty at any capture point, because
@@ -319,11 +361,12 @@ int mp6_savestate_capture(const char *path)
      * loudly, at capture, rather than as a mystery corruption on load. */
     if (mp6_dvd_open_handle_count() != 0) {
         fprintf(stderr,
-                "[SAVESTATE] WARNING: %d DVD file handle(s) open at capture. Restored state "
-                "will refer to files this savestate cannot reopen (the table needs splitting "
-                "into {key,entrynum} + a carved-out {FILE*}).\n",
+                "[SAVESTATE] refusing capture: %d DVD file handle(s) are open and cannot "
+                "be rehydrated (the table needs splitting into {key,entrynum} + a "
+                "carved-out {FILE*}).\n",
                 mp6_dvd_open_handle_count());
         fflush(stderr);
+        return MP6_SAVESTATE_ERR_UNSUPPORTED;
     }
 
     memset(&hdr, 0, sizeof(hdr));
@@ -338,15 +381,27 @@ int mp6_savestate_capture(const char *path)
     hdr.regionCount = (uint32_t)nRegion;
     hdr.rawBytes = rawBytes;
     hdr.compressedBytes = 0; /* patched below once known */
-    mp6_msm_savestate_capture(&hdr.audio);
+    hdr.osTimeTicks = mp6_os_time_savestate_capture();
+    if (mp6_msm_savestate_capture(&hdr.audio) != 0) {
+        /* The fixed-size header must describe every resident dynamic group.
+         * Abort before opening the temp file, preserving the previous slot. */
+        return MP6_SAVESTATE_ERR_UNSUPPORTED;
+    }
 
     /* S2 (review): write to a TEMP file and rename over the slot only after
      * the whole capture is proven on disk. fopen(path,"wb") truncated the
      * user's existing good state in place, so a failed capture -- disk full,
      * AV lock, a crash mid-deflate -- destroyed the very repro they meant to
      * keep. save and load share one slot path, which makes that loss total. */
-    snprintf(tmpPath, sizeof(tmpPath), "%s.tmp", path);
-    f = fopen(tmpPath, "wb");
+    {
+        int tmpLen = snprintf(tmpPath, sizeof(tmpPath), "%s.tmp.%llu", path,
+                              (unsigned long long)mp6_host_process_id());
+        if (tmpLen < 0 || (size_t)tmpLen >= sizeof(tmpPath)) {
+            fprintf(stderr, "[SAVESTATE] slot path is too long to form a safe temporary name\n");
+            return MP6_SAVESTATE_ERR_IO;
+        }
+    }
+    f = mp6_fopen_utf8(tmpPath, "wb");
     if (f == NULL) {
         return MP6_SAVESTATE_ERR_IO;
     }
@@ -423,19 +478,33 @@ int mp6_savestate_capture(const char *path)
      * it is KBs against a multi-MB file. */
     {
         size_t wsSize = mp6_widescreen_savestate_blob_size();
-        void *wsBuf = malloc(wsSize > 0 ? wsSize : 1);
+        void *wsBuf;
+        if (wsSize > (64u << 20) || wsSize > (size_t)UINT_MAX) {
+            rc = MP6_SAVESTATE_ERR_UNSUPPORTED;
+            goto done;
+        }
+        wsBuf = malloc(wsSize > 0 ? wsSize : 1);
         if (wsBuf == NULL) {
             rc = MP6_SAVESTATE_ERR_NOMEM;
             goto done;
         }
         mp6_widescreen_savestate_blob_write(wsBuf);
+        hdr.wsNativeBytes = (uint64_t)wsSize;
+        hdr.integrityCrc32 = 0;
+        integrityCrc = crc32(0L, Z_NULL, 0);
+        integrityCrc = crc32(integrityCrc, (const Bytef *)&hdr, (uInt)sizeof(hdr));
+        integrityCrc = crc32(integrityCrc, (const Bytef *)regions,
+                             (uInt)((size_t)nRegion * sizeof(regions[0])));
+        if (wsSize > 0) {
+            integrityCrc = crc32(integrityCrc, (const Bytef *)wsBuf, (uInt)wsSize);
+        }
+        hdr.integrityCrc32 = (uint32_t)integrityCrc;
         if (wsSize > 0 && fwrite(wsBuf, 1, wsSize, f) != wsSize) {
             free(wsBuf);
             rc = MP6_SAVESTATE_ERR_IO;
             goto done;
         }
         free(wsBuf);
-        hdr.wsNativeBytes = (uint64_t)wsSize;
     }
 
     if (fseek(f, 0, SEEK_SET) != 0 || fwrite(&hdr, sizeof(hdr), 1, f) != 1) {
@@ -447,20 +516,27 @@ int mp6_savestate_capture(const char *path)
      * only reach the disk at flush/close -- check BOTH before claiming
      * success, or a disk-full/AV-lock truncation ships as a "captured"
      * file that fails on the recipient's machine with a corruption error. */
-    if (fflush(f) != 0 || ferror(f) || fclose(f) != 0) {
-        f = NULL; /* closed (or unusable) either way -- don't double-close */
+    {
+        int flushFailed = fflush(f) != 0 || ferror(f);
+        int closeFailed = fclose(f) != 0; /* unconditional: never leak on a flush error */
+        f = NULL;
+        if (flushFailed || closeFailed) {
+            mp6_remove_utf8(tmpPath);
+            rc = MP6_SAVESTATE_ERR_IO;
+            goto done;
+        }
+    }
+    if (mp6_host_sync_file_path(tmpPath) != 0) {
+        mp6_remove_utf8(tmpPath);
         rc = MP6_SAVESTATE_ERR_IO;
         goto done;
     }
-    f = NULL;
-    /* Atomic-enough publish: drop any previous slot content, then rename the
-     * fully-written temp into place. On any failure the old state may already
-     * be gone (remove succeeded, rename failed -- a genuinely torn window),
-     * but the temp file still holds the complete new capture, and the error
-     * message names it so nothing is lost. */
-    remove(path);
-    if (rename(tmpPath, path) != 0) {
-        fprintf(stderr, "[SAVESTATE] rename failed -- the capture is intact at %s\n", tmpPath);
+    /* One host-atomic replace: never delete the user's previous good slot
+     * before the new file has taken its place. On publish failure both the
+     * old destination and complete temp remain available. */
+    if (mp6_host_atomic_replace_file(tmpPath, path) != 0) {
+        fprintf(stderr, "[SAVESTATE] atomic replace failed -- old slot is unchanged and "
+                        "the new capture is intact at %s\n", tmpPath);
         rc = MP6_SAVESTATE_ERR_IO;
         goto done;
     }
@@ -478,7 +554,7 @@ done:
     free(outBuf);
     if (f) {
         fclose(f);
-        remove(tmpPath); /* failed capture: clean up the partial temp, leave the old slot alone */
+        mp6_remove_utf8(tmpPath); /* failed capture: clean up the partial temp, leave the old slot alone */
     }
     return rc;
 }
@@ -492,15 +568,20 @@ int mp6_savestate_restore(const char *path)
     FILE *f = NULL;
     unsigned char *raw = NULL;
     unsigned char *inBuf = NULL;
+    void *wsBlob = NULL;
+    size_t wsSize = 0;
     z_stream zs;
     int zInit = 0, rc = MP6_SAVESTATE_OK, i;
+    int64_t rebasedRtcBase = 0;
+    uint32_t expectedIntegrity = 0;
+    uLong integrityCrc = 0;
     uint64_t off;
     const size_t kChunk = 1u << 20;
 
     if (path == NULL) {
         return MP6_SAVESTATE_ERR_IO;
     }
-    f = fopen(path, "rb");
+    f = mp6_fopen_utf8(path, "rb");
     if (f == NULL) {
         return MP6_SAVESTATE_ERR_IO;
     }
@@ -513,9 +594,15 @@ int mp6_savestate_restore(const char *path)
         rc = MP6_SAVESTATE_ERR_FORMAT;
         goto done;
     }
+    expectedIntegrity = hdr.integrityCrc32;
+    hdr.integrityCrc32 = 0;
+    if (memchr(hdr.buildStamp, '\0', sizeof(hdr.buildStamp)) == NULL) {
+        rc = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
     if (strncmp(hdr.buildStamp, mp6_link_stamp, sizeof(hdr.buildStamp)) != 0) {
-        fprintf(stderr, "[SAVESTATE] refusing: state built %s, this exe built %s\n",
-                hdr.buildStamp, mp6_link_stamp);
+        fprintf(stderr, "[SAVESTATE] refusing: state built %.*s, this exe built %s\n",
+                (int)sizeof(hdr.buildStamp), hdr.buildStamp, mp6_link_stamp);
         rc = MP6_SAVESTATE_ERR_BINARY_MISMATCH;
         goto done;
     }
@@ -529,6 +616,7 @@ int mp6_savestate_restore(const char *path)
     if (hdr.arenaBase != (uint64_t)(uintptr_t)mp6_arena_base() ||
         hdr.arenaSize != (uint64_t)mp6_arena_size() ||
         hdr.coroPoolBase != (uint64_t)(uintptr_t)mp6_coro_pool_base() ||
+        hdr.coroPoolSize != (uint64_t)mp6_coro_pool_size() ||
         hdr.imageBase != mp6_ss_image_base_proxy()) {
         fprintf(stderr,
                 "[SAVESTATE] refusing: address layout differs from capture "
@@ -564,6 +652,7 @@ int mp6_savestate_restore(const char *path)
         Mp6SavestateRegion expect[MP6_SAVESTATE_MAX_REGIONS];
         uint64_t expectRaw = 0, sum = 0;
         int nExpect, e = 0, coroSeen = 0;
+        uint32_t lastCoroIndex = 0;
 
         memset(expect, 0, sizeof(expect));
         nExpect = mp6_ss_collect_regions(expect, MP6_SAVESTATE_MAX_REGIONS, &expectRaw);
@@ -582,7 +671,14 @@ int mp6_savestate_restore(const char *path)
             sum += fr->size;
             if (fr->kind == MP6_SS_REGION_CORO) {
                 void *slotAddr = mp6_coro_slot_addr((int)fr->index);
+                if (coroSeen && fr->index <= lastCoroIndex) {
+                    fprintf(stderr, "[SAVESTATE] refusing: coro slots are duplicate or out of order "
+                                    "(%u after %u)\n", fr->index, lastCoroIndex);
+                    rc = MP6_SAVESTATE_ERR_FORMAT;
+                    goto done;
+                }
                 coroSeen = 1;
+                lastCoroIndex = fr->index;
                 if (slotAddr == NULL ||
                     (uint64_t)(uintptr_t)slotAddr != fr->addr ||
                     fr->size != (uint64_t)mp6_coro_slot_size()) {
@@ -632,6 +728,11 @@ int mp6_savestate_restore(const char *path)
             rc = MP6_SAVESTATE_ERR_LAYOUT_MISMATCH;
             goto done;
         }
+        if (!coroSeen) {
+            fprintf(stderr, "[SAVESTATE] refusing: state has no coroutine stack regions\n");
+            rc = MP6_SAVESTATE_ERR_FORMAT;
+            goto done;
+        }
         if (sum != hdr.rawBytes) {
             fprintf(stderr, "[SAVESTATE] refusing: region sizes sum to %llu but header says %llu\n",
                     (unsigned long long)sum, (unsigned long long)hdr.rawBytes);
@@ -640,13 +741,12 @@ int mp6_savestate_restore(const char *path)
         }
     }
 
-    /* the audio shadow is header data no other check covers --
-     * clamp its counts before anything iterates them. Capture clamps on
-     * write, so an out-of-range value here can only mean corruption. */
-    if (hdr.audio.chanCount < 0 || hdr.audio.chanCount > MP6_SS_AUDIO_MAX_CHAN ||
-        hdr.audio.groupCount < 0 || hdr.audio.groupCount > MP6_SS_AUDIO_MAX_GROUPS) {
-        fprintf(stderr, "[SAVESTATE] refusing: audio shadow counts out of range (chan=%d group=%d)\n",
-                (int)hdr.audio.chanCount, (int)hdr.audio.groupCount);
+    /* Header audio is outside the checksummed deflate stream.  Validate the
+     * complete shadow against this process's parsed bank/stream directories
+     * before decompression, including IDs, owner groups, exact handles,
+     * volumes, and finite/coherent fade envelopes. */
+    if (mp6_msm_savestate_validate(&hdr.audio) != 0) {
+        fprintf(stderr, "[SAVESTATE] refusing: audio shadow is invalid or not replayable\n");
         rc = MP6_SAVESTATE_ERR_FORMAT;
         goto done;
     }
@@ -661,14 +761,24 @@ int mp6_savestate_restore(const char *path)
      * test was vacuous on win64 and a >4GB state would have truncated the
      * window and failed with a misleading ERR_FORMAT. Latent today
      * (~300MB), but the failure it names is a size threshold, so name it. */
-    if (hdr.rawBytes == 0 || hdr.rawBytes > 0xFFFFFFFFull) {
-        fprintf(stderr, "[SAVESTATE] refusing: rawBytes %llu exceeds the 4GB single-shot "
+    if (hdr.rawBytes == 0 || hdr.rawBytes >= 0xFFFFFFFFull) {
+        fprintf(stderr, "[SAVESTATE] refusing: rawBytes %llu exceeds the bounded single-shot "
                         "inflate limit\n",
                 (unsigned long long)hdr.rawBytes);
         rc = MP6_SAVESTATE_ERR_FORMAT;
         goto done;
     }
-    raw = (unsigned char *)malloc((size_t)hdr.rawBytes);
+    integrityCrc = crc32(0L, Z_NULL, 0);
+    integrityCrc = crc32(integrityCrc, (const Bytef *)&hdr, (uInt)sizeof(hdr));
+    integrityCrc = crc32(integrityCrc, (const Bytef *)fileRegions,
+                         (uInt)((size_t)hdr.regionCount * sizeof(fileRegions[0])));
+    if (hdr.compressedBytes == 0 || hdr.compressedBytes > 0xFFFFFFFFull ||
+        hdr.wsNativeBytes > (64u << 20)) {
+        fprintf(stderr, "[SAVESTATE] refusing: payload lengths are outside format limits\n");
+        rc = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+    raw = (unsigned char *)malloc((size_t)hdr.rawBytes + 1u);
     inBuf = (unsigned char *)malloc(kChunk);
     if (raw == NULL || inBuf == NULL) {
         rc = MP6_SAVESTATE_ERR_NOMEM;
@@ -681,29 +791,94 @@ int mp6_savestate_restore(const char *path)
     }
     zInit = 1;
     zs.next_out = raw;
-    zs.avail_out = (uInt)hdr.rawBytes;
-    for (;;) {
-        size_t got = fread(inBuf, 1, kChunk, f);
+    zs.avail_out = (uInt)hdr.rawBytes + 1u;
+    {
+        uint64_t compressedLeft = hdr.compressedBytes;
+        for (;;) {
+        uLong beforeIn, beforeOut;
         int zr;
-        if (got == 0) {
-            rc = MP6_SAVESTATE_ERR_FORMAT; /* ran out of input before Z_STREAM_END */
-            goto done;
+        if (zs.avail_in == 0) {
+            size_t want, got;
+            if (compressedLeft == 0) {
+                rc = MP6_SAVESTATE_ERR_FORMAT; /* exact declared stream ended before trailer */
+                goto done;
+            }
+            want = compressedLeft < kChunk ? (size_t)compressedLeft : kChunk;
+            got = fread(inBuf, 1, want, f);
+            if (got != want) {
+                rc = MP6_SAVESTATE_ERR_FORMAT; /* exact early EOF / read error */
+                goto done;
+            }
+            compressedLeft -= got;
+            zs.next_in = inBuf;
+            zs.avail_in = (uInt)got;
         }
-        zs.next_in = inBuf;
-        zs.avail_in = (uInt)got;
+        beforeIn = zs.total_in;
+        beforeOut = zs.total_out;
         zr = inflate(&zs, Z_NO_FLUSH);
         if (zr == Z_STREAM_END) {
+            if (compressedLeft != 0 || zs.avail_in != 0) {
+                rc = MP6_SAVESTATE_ERR_FORMAT; /* header includes bytes outside the stream */
+                goto done;
+            }
             break;
         }
-        if (zr != Z_OK) {
+        if (zr != Z_OK || zs.avail_out == 0 ||
+            (zs.total_in == beforeIn && zs.total_out == beforeOut)) {
             rc = MP6_SAVESTATE_ERR_FORMAT;
             goto done;
+        }
         }
     }
     if (zs.total_out != hdr.rawBytes) {
         rc = MP6_SAVESTATE_ERR_FORMAT;
         goto done;
     }
+
+    /* Validate and materialize the entire tail before touching live memory.
+     * The prior ordering committed first, then quietly substituted a NULL
+     * widescreen blob when this tail was truncated. */
+    wsSize = (size_t)hdr.wsNativeBytes;
+    if (wsSize > 0) {
+        wsBlob = malloc(wsSize);
+        if (wsBlob == NULL) {
+            rc = MP6_SAVESTATE_ERR_NOMEM;
+            goto done;
+        }
+        if (fread(wsBlob, 1, wsSize, f) != wsSize) {
+            rc = MP6_SAVESTATE_ERR_FORMAT;
+            goto done;
+        }
+        integrityCrc = crc32(integrityCrc, (const Bytef *)wsBlob, (uInt)wsSize);
+    }
+    if (fgetc(f) != EOF || ferror(f)) {
+        rc = MP6_SAVESTATE_ERR_FORMAT; /* version 6 has no trailing extensions */
+        goto done;
+    }
+    if ((uint32_t)integrityCrc != expectedIntegrity) {
+        fprintf(stderr, "[SAVESTATE] refusing: metadata/widescreen integrity checksum mismatch\n");
+        rc = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+    if (!mp6_widescreen_savestate_validate_natives(wsBlob, wsSize)) {
+        fprintf(stderr, "[SAVESTATE] refusing: malformed widescreen snapshot structure\n");
+        rc = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+
+    /* The raw header also owns the logical RTC tick.  Compute the checked
+     * rebased value now, before the first live write; INT64_MIN minus a host
+     * uptime used to invoke signed overflow on a corrupt state file. */
+    if (!mp6_os_time_savestate_rebase(hdr.osTimeTicks, &rebasedRtcBase)) {
+        fprintf(stderr, "[SAVESTATE] refusing: RTC tick cannot be safely rebased\n");
+        rc = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+
+    fprintf(stderr,
+            "[SAVESTATE] WARNING: loading trusted process memory from %s; never load an "
+            "untrusted .mp6state file\n", path);
+    fflush(stderr);
 
     /* Commit. From here on there is no failure path -- every destination
      * was validated above, and the source is fully materialized. */
@@ -721,6 +896,7 @@ int mp6_savestate_restore(const char *path)
     {
         size_t latchedAramSize = 0;
         void *latchedAram = mp6_aram_savestate_buffer(&latchedAramSize);
+        size_t fileAramSize = 0;
         /* the tick BUDGET is a host run-parameter, not game
          * state -- it describes how long THIS invocation was asked to run
          * (a CLI arg, or "unlimited" for a double-click session). It lives
@@ -734,6 +910,24 @@ int mp6_savestate_restore(const char *path)
          * and for determinism. */
         int latchedMaxTicks = mp6_max_ticks;
         int latchedUnlimited = mp6_ticks_unlimited;
+        Mp6SsShimHostConfig latchedShimConfig;
+        Mp6SsAllocDiagHostConfig latchedAllocConfig;
+        mp6_shims_savestate_capture_host_config(&latchedShimConfig);
+        mp6_malloc_savestate_capture_host_config(&latchedAllocConfig);
+
+        for (i = 0; i < (int)hdr.regionCount; ++i) {
+            if (fileRegions[i].kind == MP6_SS_REGION_ARAM) {
+                fileAramSize = (size_t)fileRegions[i].size;
+                break;
+            }
+        }
+        if (latchedAram == NULL || fileAramSize == 0 || latchedAramSize != fileAramSize) {
+            fprintf(stderr, "[SAVESTATE] refusing before commit: ARAM buffer unavailable or "
+                            "size mismatch (live=%zu file=%zu)\n",
+                    latchedAramSize, fileAramSize);
+            rc = MP6_SAVESTATE_ERR_LAYOUT_MISMATCH;
+            goto done;
+        }
 
     /* free THIS process's widescreen native snapshots while the live
      * registry pointers are still valid -- the commit loop is about to
@@ -751,13 +945,7 @@ int mp6_savestate_restore(const char *path)
              * Size must agree exactly -- a differing size means a different
              * build's ARAM constant, which the build stamp should already
              * have rejected, so this is belt-and-braces. */
-            if (latchedAram != NULL && latchedAramSize == (size_t)fileRegions[i].size) {
-                memcpy(latchedAram, raw + off, latchedAramSize);
-            } else {
-                fprintf(stderr, "[SAVESTATE] WARNING: ARAM buffer unavailable or size "
-                                "mismatch (live=%zu file=%llu) -- ARAM contents NOT restored\n",
-                        latchedAramSize, (unsigned long long)fileRegions[i].size);
-            }
+            memcpy(latchedAram, raw + off, latchedAramSize);
         } else {
             memcpy((void *)(uintptr_t)fileRegions[i].addr, raw + off, (size_t)fileRegions[i].size);
         }
@@ -777,9 +965,12 @@ int mp6_savestate_restore(const char *path)
     /* put the RUNNING invocation's tick budget back (latched above). */
     mp6_max_ticks = latchedMaxTicks;
     mp6_ticks_unlimited = latchedUnlimited;
+    mp6_shims_savestate_apply_host_config(&latchedShimConfig);
+    mp6_malloc_savestate_apply_host_config(&latchedAllocConfig);
     }
 
     mp6_dvd_savestate_rehydrate();
+    mp6_os_time_savestate_apply_rebase(rebasedRtcBase);
 
 #ifndef MP6_HEADLESS_BUILD
     /* FINDING #1 (savestate-x1): drop the Unlocked FPS interpolation state on
@@ -793,6 +984,12 @@ int mp6_savestate_restore(const char *path)
         extern void mp6_fi_savestate_reset(void);
         mp6_fi_savestate_reset();
     }
+
+    /* Host input TUs are carved out so a cross-process restore cannot copy
+     * stale SDL/finger state into them.  Clear THIS process's pending input
+     * too: deltas and down-edge latches sampled before the load belong to the
+     * abandoned timeline and must not reach the first restored tick. */
+    mp6_aurora_input_reset_transients();
 #endif
 
     /* rebuild the widescreen native snapshots from the file's blob
@@ -800,24 +997,11 @@ int mp6_savestate_restore(const char *path)
      * key -- its first real consumer). Every entry the blob cannot cover
      * fails soft to the apply early-out: frozen geometry, never corruption
      * and never a foreign pointer. */
-    {
-        long blobOff = (long)(sizeof(Mp6SavestateHeader)
-                              + (size_t)hdr.regionCount * sizeof(Mp6SavestateRegion)
-                              + (size_t)hdr.compressedBytes);
-        void *wsBlob = NULL;
-        size_t wsSize = (size_t)hdr.wsNativeBytes;
-        if (wsSize > 0 && wsSize < (64u << 20) && fseek(f, blobOff, SEEK_SET) == 0) {
-            wsBlob = malloc(wsSize);
-            if (wsBlob != NULL && fread(wsBlob, 1, wsSize, f) != wsSize) {
-                free(wsBlob);
-                wsBlob = NULL;
-            }
-        }
-        /* Called even with a NULL blob: it must still clear the foreign
-         * pointers the image restore just installed. */
-        mp6_widescreen_savestate_apply_natives(wsBlob, wsBlob ? wsSize : 0);
-        free(wsBlob);
-    }
+    /* Called even with a NULL blob: it must still clear the foreign pointers
+     * the image restore just installed. The blob was fully read before commit. */
+    mp6_widescreen_savestate_apply_natives(wsBlob, wsSize);
+    free(wsBlob);
+    wsBlob = NULL;
     /* Audio LAST: re-establishing a stream issues DVD reads (msmStreamPlay ->
      * decode_substream -> path resolution -> the FST), so it depends on the
      * DVD layer above already being rehydrated. */
@@ -834,6 +1018,7 @@ done:
     }
     free(raw);
     free(inBuf);
+    free(wsBlob);
     if (f) {
         fclose(f);
     }
@@ -869,12 +1054,15 @@ static long g_loadAtTick = -1;
 static int g_saveFired;
 static int g_loadFired;
 static char g_slotPath[512];
+static int g_slotPathParsed;
+static int g_slotPathValid;
 /* UI slot-request extension (mp6_savestate.h "Slot-file UI seam"): the
  * pending request's target path (empty = default slot path), and the
  * one-shot last-result pickup the in-game Save States page consumes. All
  * carved-out for the same reason g_pending is: they describe the RUNNING
  * process's UI conversation, which a restored image must not overwrite. */
 static char g_requestPath[520];
+static int g_requestPathInvalid;
 static int g_lastResultValid;
 static int g_lastResultWasSave;
 static int g_lastResultCode;
@@ -886,12 +1074,20 @@ extern long mp6_tick_count;
 
 static const char *mp6_ss_slot_path(void)
 {
-    if (g_slotPath[0] == '\0') {
+    if (!g_slotPathParsed) {
         const char *env = getenv("MP6_SAVESTATE_PATH");
-        snprintf(g_slotPath, sizeof(g_slotPath), "%s",
-                 (env && env[0]) ? env : "mp6_savestate.mp6state");
+        const char *value = (env && env[0]) ? env : "mp6_savestate.mp6state";
+        int written = snprintf(g_slotPath, sizeof(g_slotPath), "%s", value);
+        g_slotPathParsed = 1;
+        g_slotPathValid = written >= 0 && (size_t)written < sizeof(g_slotPath) &&
+                          mp6_utf8_path_supported(g_slotPath);
+        if (!g_slotPathValid) {
+            g_slotPath[0] = '\0';
+            fprintf(stderr, "[SAVESTATE] MP6_SAVESTATE_PATH is too long -- path disabled\n");
+            fflush(stderr);
+        }
     }
-    return g_slotPath;
+    return g_slotPathValid ? g_slotPath : NULL;
 }
 
 void mp6_savestate_request_save(void) { mp6_savestate_request_save_path(NULL); }
@@ -899,52 +1095,123 @@ void mp6_savestate_request_load(void) { mp6_savestate_request_load_path(NULL); }
 
 void mp6_savestate_request_save_path(const char *path)
 {
-    snprintf(g_requestPath, sizeof(g_requestPath), "%s", (path && path[0]) ? path : "");
+    int written = snprintf(g_requestPath, sizeof(g_requestPath), "%s",
+                           (path && path[0]) ? path : "");
+    g_requestPathInvalid = written < 0 || (size_t)written >= sizeof(g_requestPath);
+    if (!g_requestPathInvalid && g_requestPath[0] != '\0' &&
+        !mp6_utf8_path_supported(g_requestPath)) g_requestPathInvalid = 1;
+    if (g_requestPathInvalid) g_requestPath[0] = '\0';
     g_pending = MP6_SS_PENDING_SAVE;
 }
 
 void mp6_savestate_request_load_path(const char *path)
 {
-    snprintf(g_requestPath, sizeof(g_requestPath), "%s", (path && path[0]) ? path : "");
+    int written = snprintf(g_requestPath, sizeof(g_requestPath), "%s",
+                           (path && path[0]) ? path : "");
+    g_requestPathInvalid = written < 0 || (size_t)written >= sizeof(g_requestPath);
+    if (!g_requestPathInvalid && g_requestPath[0] != '\0' &&
+        !mp6_utf8_path_supported(g_requestPath)) g_requestPathInvalid = 1;
+    if (g_requestPathInvalid) g_requestPath[0] = '\0';
     g_pending = MP6_SS_PENDING_LOAD;
 }
 
-void mp6_savestate_slot_file(int slot, char *buf, size_t n)
+int mp6_savestate_slot_file(int slot, char *buf, size_t n)
 {
-    const char *base = mp6_ss_slot_path();
-    size_t len = strlen(base);
+    const char *base;
+    size_t len;
     const char *suffix = ".mp6state";
     size_t sufLen = strlen(suffix);
+    int written;
+    if (buf == NULL || n == 0) return -1;
+    buf[0] = '\0';
+    base = mp6_ss_slot_path();
+    if (base == NULL) return -1;
+    len = strlen(base);
     if (len > sufLen && strcmp(base + len - sufLen, suffix) == 0) {
-        snprintf(buf, n, "%.*s_slot%d%s", (int)(len - sufLen), base, slot, suffix);
+        written = snprintf(buf, n, "%.*s_slot%d%s", (int)(len - sufLen), base, slot, suffix);
     } else {
-        snprintf(buf, n, "%s_slot%d", base, slot);
+        written = snprintf(buf, n, "%s_slot%d", base, slot);
     }
+    if (written < 0 || (size_t)written >= n) {
+        buf[0] = '\0';
+        return -1;
+    }
+    return 0;
 }
 
 int mp6_savestate_probe(const char *path)
 {
     Mp6SavestateHeader hdr;
+    Mp6SavestateRegion regions[MP6_SAVESTATE_MAX_REGIONS];
+    unsigned char tailBuf[64u << 10];
     FILE *f;
+    uint32_t expectedIntegrity;
+    uLong integrityCrc;
+    uint64_t tableBytes, tailOffset, tailLeft;
+    int result = MP6_SAVESTATE_OK;
     if (path == NULL) {
         return MP6_SAVESTATE_ERR_IO;
     }
-    f = fopen(path, "rb");
+    f = mp6_fopen_utf8(path, "rb");
     if (f == NULL) {
         return MP6_SAVESTATE_ERR_IO;
     }
     if (fread(&hdr, sizeof(hdr), 1, f) != 1) {
-        fclose(f);
-        return MP6_SAVESTATE_ERR_FORMAT;
+        result = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
     }
-    fclose(f);
-    if (hdr.magic != MP6_SAVESTATE_MAGIC || hdr.version != MP6_SAVESTATE_VERSION) {
-        return MP6_SAVESTATE_ERR_FORMAT;
+    if (hdr.magic != MP6_SAVESTATE_MAGIC || hdr.version != MP6_SAVESTATE_VERSION ||
+        hdr.regionCount == 0 || hdr.regionCount > MP6_SAVESTATE_MAX_REGIONS ||
+        hdr.rawBytes == 0 || hdr.rawBytes >= (uint64_t)UINT_MAX ||
+        hdr.compressedBytes == 0 || hdr.compressedBytes > (uint64_t)UINT_MAX ||
+        hdr.wsNativeBytes > (64u << 20)) {
+        result = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+    if (memchr(hdr.buildStamp, '\0', sizeof(hdr.buildStamp)) == NULL) {
+        result = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
     }
     if (strncmp(hdr.buildStamp, mp6_link_stamp, sizeof(hdr.buildStamp)) != 0) {
-        return MP6_SAVESTATE_ERR_BINARY_MISMATCH;
+        result = MP6_SAVESTATE_ERR_BINARY_MISMATCH;
+        goto done;
     }
-    return MP6_SAVESTATE_OK;
+    if (fread(regions, sizeof(regions[0]), hdr.regionCount, f) != hdr.regionCount) {
+        result = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+    expectedIntegrity = hdr.integrityCrc32;
+    hdr.integrityCrc32 = 0;
+    integrityCrc = crc32(0L, Z_NULL, 0);
+    integrityCrc = crc32(integrityCrc, (const Bytef *)&hdr, (uInt)sizeof(hdr));
+    tableBytes = (uint64_t)hdr.regionCount * sizeof(regions[0]);
+    integrityCrc = crc32(integrityCrc, (const Bytef *)regions, (uInt)tableBytes);
+    if (hdr.compressedBytes > UINT64_MAX - sizeof(hdr) - tableBytes) {
+        result = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+    tailOffset = sizeof(hdr) + tableBytes + hdr.compressedBytes;
+    if (mp6_ss_seek_abs(f, tailOffset) != 0) {
+        result = MP6_SAVESTATE_ERR_FORMAT;
+        goto done;
+    }
+    tailLeft = hdr.wsNativeBytes;
+    while (tailLeft > 0) {
+        size_t want = tailLeft < sizeof(tailBuf) ? (size_t)tailLeft : sizeof(tailBuf);
+        if (fread(tailBuf, 1, want, f) != want) {
+            result = MP6_SAVESTATE_ERR_FORMAT;
+            goto done;
+        }
+        integrityCrc = crc32(integrityCrc, tailBuf, (uInt)want);
+        tailLeft -= want;
+    }
+    if (fgetc(f) != EOF || ferror(f) || (uint32_t)integrityCrc != expectedIntegrity) {
+        result = MP6_SAVESTATE_ERR_FORMAT;
+    }
+
+done:
+    fclose(f);
+    return result;
 }
 
 int mp6_savestate_take_last_result(int *wasSave, int *result)
@@ -1026,20 +1293,21 @@ void mp6_savestate_tick(void)
          * these carved-out statics anyway) can never confuse it. */
         const char *path = g_requestPath[0] ? g_requestPath : mp6_ss_slot_path();
         int r;
-        if (action == MP6_SS_PENDING_SAVE) {
+        if (g_requestPathInvalid || path == NULL || path[0] == '\0') {
+            r = MP6_SAVESTATE_ERR_IO;
+        } else if (action == MP6_SS_PENDING_SAVE) {
             r = mp6_savestate_capture(path);
-            if (r != MP6_SAVESTATE_OK) {
-                fprintf(stderr, "[SAVESTATE] save failed: %s\n", mp6_savestate_strerror(r));
-                fflush(stderr);
-            }
         } else {
             r = mp6_savestate_restore(path);
-            if (r != MP6_SAVESTATE_OK) {
-                fprintf(stderr, "[SAVESTATE] load failed: %s\n", mp6_savestate_strerror(r));
-                fflush(stderr);
-            }
+        }
+        if (r != MP6_SAVESTATE_OK) {
+            fprintf(stderr, "[SAVESTATE] %s failed: %s\n",
+                    action == MP6_SS_PENDING_SAVE ? "save" : "load",
+                    mp6_savestate_strerror(r));
+            fflush(stderr);
         }
         g_requestPath[0] = '\0';
+        g_requestPathInvalid = 0;
         g_lastResultWasSave = (action == MP6_SS_PENDING_SAVE);
         g_lastResultCode = r;
         g_lastResultValid = 1;

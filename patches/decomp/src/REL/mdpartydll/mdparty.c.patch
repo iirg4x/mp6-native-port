@@ -1,5 +1,13 @@
 --- a/src/REL/mdpartydll/mdparty.c
 +++ b/src/REL/mdpartydll/mdparty.c
+@@ -5549,2 +5549,3 @@
+     }
++    return 0;
+ }
+@@ -6202,2 +6203,3 @@
+     fn_1_D6B0(fn_1_23AC0);
++    return 0;
+ }
 @@ -21,0 +22 @@
 +#include "mp6_widescreen.h" /* widescreen support: camera + model extrusion helpers below */
 @@ -877,3 +878,25 @@

@@ -89,6 +89,9 @@
                                * (platform/gx/frame_interp.c); hooks at the frame boundaries
                                * + the tick throttle's idle window below, all single-compare
                                * no-ops while the feature is off */
+#include "mp6_frame_gate.h" /* Android: no simulation work without a presentable frame */
+#include "mp6_parse.h" /* strict operational env/script numbers */
+#include "mp6_events.h" /* the game-event bus the input script's waitev/pressuntil steps block on */
 #include "host.h" /* mp6_host_monotonic_ns/mp6_host_sleep_ns/mp6_host_init
                    * -- the tick throttle's OS primitives
                    * (QPC/Sleep/timeBeginPeriod) live behind the host
@@ -162,6 +165,21 @@
  * loudly instead of silently reintroducing a stack overflow. */
 _Static_assert(sizeof(GXTexObj) == 64, "Aurora's real GXTexObj grew past decomp's oversized-but-fixed 88-byte shadow (include/dolphin/gx/GXStruct.h) -- audit game/hsfdraw.c & co.'s local GXTexObj usage for overflow");
 _Static_assert(sizeof(GXTlutObj) == 40, "Aurora's real GXTlutObj changed size -- re-check tools/build.py's HEADER_CONTENT_PATCHES GXTlutObj dummy[10] shadow-header fix still matches");
+
+/* Live adapter capability, parsed by main_native.c from Aurora's own startup
+ * log.  This TU is in the savestate host-state carve-out, so a state captured
+ * on another GPU cannot overwrite the limit negotiated by this process. */
+static int g_mp6AuroraMaxTextureDimension2D;
+
+void mp6_aurora_record_max_texture_dimension_2d(int dimension)
+{
+    g_mp6AuroraMaxTextureDimension2D = dimension;
+}
+
+int mp6_aurora_queried_max_texture_dimension_2d(void)
+{
+    return g_mp6AuroraMaxTextureDimension2D;
+}
 
 /* ---------------------------------------------------------------------
  * 1. GXSetArray arity bridge.
@@ -439,6 +457,16 @@ void mp6_GXSetArray3(GXAttr attr, void *data, u8 stride)
     }
 }
 
+/* Retained-frame interpolation identity tap.  The forced-include compatibility
+ * header renames only decomp/windowed GXLoadPosMtxImm call sites to this name;
+ * this TU sees Aurora's real declaration and forwards immediately after
+ * recording the active Hu3D camera/model context. */
+void mp6_GXLoadPosMtxImm(const void *mtx, u32 id)
+{
+    mp6_fi_stream_note_pos_mtx();
+    GXLoadPosMtxImm((void *)mtx, id);
+}
+
 /* ---------------------------------------------------------------------
  * GXBeginDisplayList/GXEndDisplayList
  * recording-bracket wrappers -- the same PURE-rename mechanism as
@@ -625,13 +653,27 @@ static void mp6_parse_auto_start_ticks(void)
     if (!env) return;
     {
         const char *p = env;
+        int invalid = 0;
         while (*p && g_autoStartCount < MP6_AUTO_START_MAX) {
-            char *end;
-            long v = strtol(p, &end, 10);
-            if (end == p) break;
-            g_autoStartTicks[g_autoStartCount++] = (int)v;
-            p = end;
+            const char *start;
+            uint32_t value;
             while (*p == ',' || *p == ' ') p++;
+            if (*p == '\0') break;
+            start = p;
+            while (*p && *p != ',' && *p != ' ') p++;
+            if (!mp6_parse_u32_span(start, (size_t)(p - start), 0, INT_MAX, &value)) {
+                fprintf(stderr, "[MP6-INPUT] invalid MP6_AUTO_START_TICKS token -- schedule disabled\n");
+                g_autoStartCount = 0;
+                invalid = 1;
+                break;
+            }
+            g_autoStartTicks[g_autoStartCount++] = (int)value;
+        }
+        while (*p == ',' || *p == ' ') p++;
+        if (!invalid && *p != '\0') {
+            fprintf(stderr, "[MP6-INPUT] MP6_AUTO_START_TICKS exceeds %d entries -- schedule disabled\n",
+                    MP6_AUTO_START_MAX);
+            g_autoStartCount = 0;
         }
     }
     if (g_autoStartCount > 0) {
@@ -648,7 +690,7 @@ static bool mp6_auto_start_due_now(void)
     int i;
     if (g_autoStartCount < 0) mp6_parse_auto_start_ticks();
     for (i = 0; i < g_autoStartCount; i++) {
-        if (g_autoStartTicks[i] == (int)mp6_tick_count) return true;
+        if ((long)g_autoStartTicks[i] == mp6_tick_count) return true;
     }
     return false;
 }
@@ -767,6 +809,19 @@ static void mp6_pad_motor_apply_pending(void)
  * instead of) the plain state poll. */
 static u16 g_padKeyLatch = 0;
 
+/* Drop host input sampled on a timeline that will not advance.  Used by both
+ * savestate restore and Android's background/surface-loss gate: the collector
+ * TUs are correctly carved out of the game image, so their live fingers and
+ * deltas must be cleared explicitly at either discontinuity. */
+void mp6_aurora_input_reset_transients(void)
+{
+    g_padKeyLatch = 0;
+    mp6_freecam_input_savestate_reset();
+#ifdef __ANDROID__
+    mp6_touch_pad_savestate_reset();
+#endif
+}
+
 static void mp6_latch_key_down_event(const SDL_Event *sdlEvent)
 {
     size_t i;
@@ -877,14 +932,80 @@ static void mp6_latch_menu_key_event(const SDL_Event *sdlEvent)
  *               REL/fileseldll/filename.c) read ONLY HuPadDStkRep --
  *               game/pad.c's PadADConv derives that from the analog
  *               stick alone, so press:up/down/left/right (dpad BUTTON
- *               bits) can never move those cursors. */
-typedef enum { MP6_SCRIPT_WAIT, MP6_SCRIPT_PRESS, MP6_SCRIPT_STICK } MP6ScriptStepType;
+ *               bits) can never move those cursors.
+ *
+ * EVENT-BOUND STEPS -- why wait:N is not enough
+ * --------------------------------------------
+ * wait:N is a TICK OFFSET, and tick offsets are the wrong unit for
+ * driving this game. The boot/menu path interleaves frame-counted waits
+ * with wall-clock waits (boot.c: `for (frame = 0; frame < 90; frame++)`
+ * next to `while (OSTicksToMilliseconds(OSGetTick() - start) < 1500)`),
+ * so the tick at which any screen becomes input-ready moves with host CPU
+ * speed, host-file latency, GPU frame pacing and first-run shader
+ * compilation. A press scheduled at a guessed tick lands in the wrong
+ * screen and is silently swallowed -- the single most common failure mode
+ * of every tick-offset route tried against this port.
+ *
+ * The following steps bind input to OBSERVED GAME STATE instead
+ * (shim/include/mp6_events.h owns the event vocabulary). `/` separates a
+ * step's sub-arguments, since `:` already separates keyword from value:
+ *
+ *   waitev:<key>          -- block until event <key> fires (strictly after
+ *                            this step began -- an event that already fired
+ *                            earlier does NOT satisfy it, so a route can
+ *                            wait on the same key twice).
+ *   waitev:<key>/<value>  -- block until <key>'s latest value equals
+ *                            <value>. Value matching accepts either the
+ *                            event's string form or its numeric form, so
+ *                            "waitev:ovl.start/w01dll" and
+ *                            "waitev:ovl.start/123" are the same wait.
+ *                            Unlike the bare form this is satisfied
+ *                            immediately if the key ALREADY holds that
+ *                            value -- it asserts a state, not an edge.
+ *   pressuntil:<btn>/<key>[/<value>]
+ *                         -- press <btn> every `period` ticks until that
+ *                            same condition holds. This is the timing-
+ *                            immune confirm: if the screen was not ready
+ *                            yet, the press simply repeats. Nothing about
+ *                            it depends on knowing when the screen came up.
+ *   period:<N>            -- ticks between repeats for subsequent
+ *                            pressuntil steps (default 60 = ~1s).
+ *   timeout:<N>           -- tick cap for subsequent waitev/pressuntil
+ *                            steps (default 5400 = ~90s). On expiry the
+ *                            step prints "[EVENT] script.timeout=<key>"
+ *                            and the script CONTINUES to the next step
+ *                            rather than hanging. That is deliberate: a
+ *                            stalled route must still terminate and must
+ *                            leave, in the log, the exact event it was
+ *                            waiting for -- which is precisely the "report
+ *                            the furthest state reached" evidence a failed
+ *                            run needs.
+ *
+ * A fully event-bound route therefore contains no tick guesses at all,
+ * e.g.:
+ *   "waitev:selmenu.ready;stick:right;...;pressuntil:a/ovl.start/w01dll"
+ */
+typedef enum {
+    MP6_SCRIPT_WAIT,
+    MP6_SCRIPT_PRESS,
+    MP6_SCRIPT_STICK,
+    MP6_SCRIPT_WAITEV,
+    MP6_SCRIPT_PRESSUNTIL,
+    MP6_SCRIPT_SET_PERIOD,
+    MP6_SCRIPT_SET_TIMEOUT
+} MP6ScriptStepType;
+
+#define MP6_SCRIPT_EVKEY_MAX 24
+#define MP6_SCRIPT_EVVAL_MAX 40
+
 typedef struct {
     MP6ScriptStepType type;
-    u32 waitFrames; /* MP6_SCRIPT_WAIT */
-    u16 button;     /* MP6_SCRIPT_PRESS */
+    u32 waitFrames; /* MP6_SCRIPT_WAIT / SET_PERIOD / SET_TIMEOUT */
+    u16 button;     /* MP6_SCRIPT_PRESS / MP6_SCRIPT_PRESSUNTIL */
     s8 stickX;      /* MP6_SCRIPT_STICK */
     s8 stickY;      /* MP6_SCRIPT_STICK */
+    char evKey[MP6_SCRIPT_EVKEY_MAX]; /* WAITEV / PRESSUNTIL */
+    char evVal[MP6_SCRIPT_EVVAL_MAX]; /* "" == any-fire (edge) form */
 } MP6ScriptStep;
 
 #define MP6_SCRIPT_MAX_STEPS 256
@@ -893,6 +1014,18 @@ static int g_scriptStepCount = 0;
 static int g_scriptCursor = 0;
 static u32 g_scriptWaitRemaining = 0;
 static bool g_scriptActive = false;
+
+/* Event-bound step state (see the spec comment above). g_scriptEvBaseSeq is
+ * the global event sequence sampled when the CURRENT waitev/pressuntil step
+ * was entered -- that is what makes the bare "waitev:<key>" form an EDGE
+ * ("fires from now on") rather than a level ("has ever fired"), so a route
+ * may wait on the same key repeatedly. g_scriptEvElapsed is the per-step
+ * tick counter both the timeout and the pressuntil repeat period run off. */
+static bool g_scriptEvEntered = false;
+static unsigned long g_scriptEvBaseSeq = 0;
+static u32 g_scriptEvElapsed = 0;
+static u32 g_scriptEvPeriod = 60;    /* period:N default -- ~1s between repeats */
+static u32 g_scriptEvTimeout = 5400; /* timeout:N default -- ~90s cap per wait */
 
 static u16 mp6_script_button_from_name(const char *name, size_t len)
 {
@@ -908,6 +1041,31 @@ static u16 mp6_script_button_from_name(const char *name, size_t len)
     return 0;
 }
 
+/* Splits an event argument span "<key>" or "<key>/<value>" into the step's
+ * two bounded fields. Both are truncated rather than rejected on overflow:
+ * an over-long key simply never matches a real event, which surfaces as a
+ * clean, logged wait timeout instead of a parse-time abort. */
+static void mp6_script_copy_ev_args(MP6ScriptStep *st, const char *span, size_t spanLen)
+{
+    const char *slash = (const char *)memchr(span, '/', spanLen);
+    size_t keyLen = slash ? (size_t)(slash - span) : spanLen;
+    size_t valLen = slash ? spanLen - keyLen - 1 : 0;
+
+    if (keyLen >= sizeof(st->evKey)) {
+        keyLen = sizeof(st->evKey) - 1;
+    }
+    memcpy(st->evKey, span, keyLen);
+    st->evKey[keyLen] = '\0';
+
+    if (valLen >= sizeof(st->evVal)) {
+        valLen = sizeof(st->evVal) - 1;
+    }
+    if (valLen > 0) {
+        memcpy(st->evVal, slash + 1, valLen);
+    }
+    st->evVal[valLen] = '\0';
+}
+
 void mp6_input_script_init(const char *spec)
 {
     const char *p = spec;
@@ -921,9 +1079,14 @@ void mp6_input_script_init(const char *spec)
             const char *valStart = colon + 1;
             size_t valLen = stepLen - keyLen - 1;
             if (keyLen == 4 && strncmp(p, "wait", 4) == 0) {
-                g_script[g_scriptStepCount].type = MP6_SCRIPT_WAIT;
-                g_script[g_scriptStepCount].waitFrames = (u32)atoi(valStart);
-                g_scriptStepCount++;
+                uint32_t waitFrames;
+                if (mp6_parse_u32_span(valStart, valLen, 0, 10000000u, &waitFrames)) {
+                    g_script[g_scriptStepCount].type = MP6_SCRIPT_WAIT;
+                    g_script[g_scriptStepCount].waitFrames = waitFrames;
+                    g_scriptStepCount++;
+                } else {
+                    printf("[TEST] input-script: invalid wait (expected 0..10000000 ticks)\n");
+                }
             } else if (keyLen == 5 && strncmp(p, "press", 5) == 0) {
                 g_script[g_scriptStepCount].type = MP6_SCRIPT_PRESS;
                 g_script[g_scriptStepCount].button = mp6_script_button_from_name(valStart, valLen);
@@ -941,6 +1104,44 @@ void mp6_input_script_init(const char *spec)
                 else if (valLen == 5 && strncmp(valStart, "right", 5) == 0) st->stickX = 72;
                 else { printf("[TEST] input-script: unrecognized stick direction (len=%zu)\n", valLen); }
                 g_scriptStepCount++;
+            } else if (keyLen == 6 && strncmp(p, "waitev", 6) == 0) {
+                /* waitev:<key>[/<value>] -- see the spec comment above. */
+                MP6ScriptStep *st = &g_script[g_scriptStepCount];
+                st->type = MP6_SCRIPT_WAITEV;
+                st->button = 0;
+                mp6_script_copy_ev_args(st, valStart, valLen);
+                g_scriptStepCount++;
+            } else if (keyLen == 10 && strncmp(p, "pressuntil", 10) == 0) {
+                /* pressuntil:<btn>/<key>[/<value>] */
+                const char *slash = (const char *)memchr(valStart, '/', valLen);
+                if (slash == NULL) {
+                    printf("[TEST] input-script: pressuntil needs <button>/<event-key>[/<value>]\n");
+                } else {
+                    MP6ScriptStep *st = &g_script[g_scriptStepCount];
+                    size_t btnLen = (size_t)(slash - valStart);
+                    st->type = MP6_SCRIPT_PRESSUNTIL;
+                    st->button = mp6_script_button_from_name(valStart, btnLen);
+                    mp6_script_copy_ev_args(st, slash + 1, valLen - btnLen - 1);
+                    g_scriptStepCount++;
+                }
+            } else if (keyLen == 6 && strncmp(p, "period", 6) == 0) {
+                uint32_t ticks;
+                if (mp6_parse_u32_span(valStart, valLen, 1, 100000u, &ticks)) {
+                    g_script[g_scriptStepCount].type = MP6_SCRIPT_SET_PERIOD;
+                    g_script[g_scriptStepCount].waitFrames = ticks;
+                    g_scriptStepCount++;
+                } else {
+                    printf("[TEST] input-script: invalid period (expected 1..100000 ticks)\n");
+                }
+            } else if (keyLen == 7 && strncmp(p, "timeout", 7) == 0) {
+                uint32_t ticks;
+                if (mp6_parse_u32_span(valStart, valLen, 1, 10000000u, &ticks)) {
+                    g_script[g_scriptStepCount].type = MP6_SCRIPT_SET_TIMEOUT;
+                    g_script[g_scriptStepCount].waitFrames = ticks;
+                    g_scriptStepCount++;
+                } else {
+                    printf("[TEST] input-script: invalid timeout (expected 1..10000000 ticks)\n");
+                }
             } else {
                 printf("[TEST] input-script: unrecognized step keyword (len=%zu)\n", keyLen);
             }
@@ -982,6 +1183,65 @@ static u16 mp6_input_script_advance(void)
                 g_scriptCursor++;
             }
             break; /* this tick is spent on the wait either way */
+        } else if (step->type == MP6_SCRIPT_SET_PERIOD) {
+            g_scriptEvPeriod = step->waitFrames;
+            g_scriptCursor++;
+            continue; /* configuration only -- costs no tick */
+        } else if (step->type == MP6_SCRIPT_SET_TIMEOUT) {
+            g_scriptEvTimeout = step->waitFrames;
+            g_scriptCursor++;
+            continue; /* configuration only -- costs no tick */
+        } else if (step->type == MP6_SCRIPT_WAITEV || step->type == MP6_SCRIPT_PRESSUNTIL) {
+            /* The event-bound steps -- the whole point of this engine (see
+             * the spec comment). Both share one condition evaluator; the
+             * only difference is that PRESSUNTIL also emits its button on
+             * entry and then once per `period` ticks while it waits. */
+            bool satisfied;
+            if (!g_scriptEvEntered) {
+                g_scriptEvEntered = true;
+                g_scriptEvBaseSeq = mp6_event_seq();
+                g_scriptEvElapsed = 0;
+                printf("[EVENT] script.wait=%s num=0 tick=%ld seq=%lu\n",
+                       step->evKey, mp6_tick_count, g_scriptEvBaseSeq);
+                fflush(stdout);
+                if (step->type == MP6_SCRIPT_PRESSUNTIL) {
+                    pressedThisTick |= step->button; /* first attempt lands immediately */
+                }
+            }
+            if (step->evVal[0] != '\0') {
+                /* Value form asserts a STATE: satisfied the moment the key
+                 * holds that value, even if it got there before this step
+                 * (a route that says "be in overlay X" is already right if
+                 * it is already in overlay X). */
+                satisfied = mp6_event_matches(step->evKey, step->evVal) != 0;
+            } else {
+                /* Bare form asserts an EDGE: only a fire strictly after
+                 * this step began counts. */
+                satisfied = mp6_event_last_seq(step->evKey) > g_scriptEvBaseSeq;
+            }
+            if (satisfied) {
+                printf("[EVENT] script.satisfied=%s num=%u tick=%ld seq=%lu\n",
+                       step->evKey, (unsigned)g_scriptEvElapsed, mp6_tick_count, mp6_event_seq());
+                fflush(stdout);
+                g_scriptEvEntered = false;
+                g_scriptCursor++;
+                break; /* the satisfying tick is spent; next step starts next tick */
+            }
+            g_scriptEvElapsed++;
+            if (step->type == MP6_SCRIPT_PRESSUNTIL &&
+                g_scriptEvPeriod != 0 && (g_scriptEvElapsed % g_scriptEvPeriod) == 0) {
+                pressedThisTick |= step->button;
+            }
+            if (g_scriptEvElapsed >= g_scriptEvTimeout) {
+                /* Deliberately non-fatal: the run must still terminate and
+                 * the log must name the exact event it never saw. */
+                printf("[EVENT] script.timeout=%s num=%u tick=%ld seq=%lu\n",
+                       step->evKey, (unsigned)g_scriptEvElapsed, mp6_tick_count, mp6_event_seq());
+                fflush(stdout);
+                g_scriptEvEntered = false;
+                g_scriptCursor++;
+            }
+            break; /* this tick is spent waiting either way */
         } else if (step->type == MP6_SCRIPT_STICK) {
             g_scriptTickStickX = step->stickX; /* last stick step this tick wins */
             g_scriptTickStickY = step->stickY;
@@ -1202,6 +1462,8 @@ static void mp6_clean_shutdown_exit(const char *reason)
  * lateness -- a permanent env-gated diagnostic, zero overhead when unset.
  * --------------------------------------------------------------------- */
 #define MP6_TICK_HZ_DEFAULT      60.0
+#define MP6_TICK_HZ_MIN          0.01
+#define MP6_TICK_HZ_MAX          1000.0
 #define MP6_TICK_RESNAP_PERIODS  4
 #define MP6_TICK_SPIN_WINDOW_MS  2.0
 
@@ -1226,13 +1488,13 @@ static void mp6_tick_throttle_init(void)
     int fromEnv = (env != NULL && *env != '\0');
     double hz;
     if (fromEnv) {
-        char *end = NULL;
-        double v = strtod(env, &end);
-        if (end != env && v >= 0.0) {
+        double v;
+        if (mp6_parse_double_strict(env, 0.0, MP6_TICK_HZ_MAX, &v) &&
+            (v == 0.0 || v >= MP6_TICK_HZ_MIN)) {
             hz = v; /* explicit, incl. 0 = disable -- see the env contract above */
         } else {
-            printf("[MP6-TICK] MP6_TICK_HZ='%s' is not a number >= 0 -- using the default %g Hz\n",
-                   env, MP6_TICK_HZ_DEFAULT);
+            printf("[MP6-TICK] MP6_TICK_HZ='%s' is invalid (expected 0 or %.2f..%.0f) -- using the default %g Hz\n",
+                   env, MP6_TICK_HZ_MIN, MP6_TICK_HZ_MAX, MP6_TICK_HZ_DEFAULT);
             hz = MP6_TICK_HZ_DEFAULT;
             fromEnv = 0;
         }
@@ -1254,7 +1516,6 @@ static void mp6_tick_throttle_init(void)
         return;
     }
     g_tickPeriodNs = (int64_t)((double)MP6_TICK_NS_PER_SEC / hz + 0.5);
-    if (g_tickPeriodNs < 1) g_tickPeriodNs = 1; /* absurd MP6_TICK_HZ (> 1e9) -- degenerate but safe */
     {
         /* The lazy timer-resolution push (winmm timeBeginPeriod(1) +
          * atexit timeEndPeriod) lives in mp6_host_init(); its return is
@@ -1277,6 +1538,28 @@ static int64_t g_tickLateMaxNs = 0;
 static int64_t g_tickLateSumNs = 0;
 static long    g_tickLateSamples = 0;
 
+static int mp6_tick_clock_now(int64_t *out)
+{
+    uint64_t now = mp6_host_monotonic_ns();
+    if (out == NULL || now > (uint64_t)INT64_MAX) return 0;
+    *out = (int64_t)now;
+    return 1;
+}
+
+static int mp6_tick_deadline_add(int64_t base, int64_t delta, int64_t *out)
+{
+    if (out == NULL || base < 0 || delta <= 0 || base > INT64_MAX - delta) return 0;
+    *out = base + delta;
+    return 1;
+}
+
+static void mp6_tick_throttle_overflow(void)
+{
+    fprintf(stderr, "[MP6-TICK] monotonic deadline range exhausted -- disabling throttle safely\n");
+    g_tickHz = 0.0;
+    g_tickNextDeadline = 0;
+}
+
 static void mp6_tick_throttle_wait(void)
 {
     int64_t now;
@@ -1286,25 +1569,40 @@ static void mp6_tick_throttle_wait(void)
     if (g_tickHz <= 0.0) {
         return; /* MP6_TICK_HZ=0: the legacy free-run timing path */
     }
-    now = (int64_t)mp6_host_monotonic_ns();
+    if (!mp6_tick_clock_now(&now)) {
+        mp6_tick_throttle_overflow();
+        return;
+    }
     if (g_tickNextDeadline == 0) {
         /* First throttled tick: anchor the schedule one period out and let
          * this tick through immediately -- there is no meaningful "previous
          * tick" to pace against yet. */
-        g_tickNextDeadline = now + g_tickPeriodNs;
+        if (!mp6_tick_deadline_add(now, g_tickPeriodNs, &g_tickNextDeadline)) {
+            mp6_tick_throttle_overflow();
+        }
         return;
     }
-    g_tickNextDeadline += g_tickPeriodNs;
-    if (now - g_tickNextDeadline > (int64_t)MP6_TICK_RESNAP_PERIODS * g_tickPeriodNs) {
+    if (!mp6_tick_deadline_add(g_tickNextDeadline, g_tickPeriodNs,
+                               &g_tickNextDeadline)) {
+        mp6_tick_throttle_overflow();
+        return;
+    }
+    if (now > g_tickNextDeadline &&
+        now - g_tickNextDeadline > (int64_t)MP6_TICK_RESNAP_PERIODS * g_tickPeriodNs) {
         /* Late by more than the resnap budget (debugger pause, load stall,
          * window drag): re-anchor rather than fast-forward -- see the
          * section comment's LATE/RESNAP RULE. */
-        g_tickNextDeadline = now + g_tickPeriodNs;
+        if (!mp6_tick_deadline_add(now, g_tickPeriodNs, &g_tickNextDeadline)) {
+            mp6_tick_throttle_overflow();
+        }
         return; /* already past even the NEW deadline's start point -- run now */
     }
     for (;;) {
         int64_t remain;
-        now = (int64_t)mp6_host_monotonic_ns();
+        if (!mp6_tick_clock_now(&now)) {
+            mp6_tick_throttle_overflow();
+            return;
+        }
         remain = g_tickNextDeadline - now;
         if (remain <= 0) {
             break;
@@ -1314,15 +1612,14 @@ static void mp6_tick_throttle_wait(void)
             if (remainMs > MP6_TICK_SPIN_WINDOW_MS) {
                 /* Unlocked FPS (shim/include/mp6_unlocked_fps.h): spend the
                  * idle window presenting interpolated frames instead of
-                 * sleeping through it. Each successful present blocks on the
-                 * display's own vsync cadence (aurora's 2-slot render worker
-                 * backpressure), so this needs no pacing of its own -- loop
-                 * back and re-read the clock. Declines (feature off, snapshots
-                 * not ready, window too small for one more present) fall
-                 * through to the ordinary sleep below; with the feature off
-                 * this is a single cheap call that returns immediately, and
-                 * the sub-2ms spin tail below never attempts a present. */
-                if (mp6_fi_idle_present(remain, g_tickPeriodNs)) {
+                 * sleeping through it. Pass the throttle's actual absolute
+                 * deadline, not this iteration's relative remainder: replay
+                 * admission re-samples the clock after spacing/rewrite/event
+                 * work and must never manufacture extra simulation slack.
+                 * Declines (feature off, snapshots not ready, or insufficient
+                 * time/resources) fall through to the ordinary sleep below;
+                 * the sub-2ms spin tail never attempts a present. */
+                if (mp6_fi_idle_present(g_tickNextDeadline, g_tickPeriodNs)) {
                     continue;
                 }
                 uint32_t sleepMs = (uint32_t)(remainMs - MP6_TICK_SPIN_WINDOW_MS);
@@ -1351,7 +1648,8 @@ static void mp6_tick_throttle_wait(void)
         int64_t late = now - g_tickNextDeadline;
         if (late < 0) late = 0;
         if (late > g_tickLateMaxNs) g_tickLateMaxNs = late;
-        g_tickLateSumNs += late;
+        if (late > INT64_MAX - g_tickLateSumNs) g_tickLateSumNs = INT64_MAX;
+        else g_tickLateSumNs += late;
         g_tickLateSamples++;
     }
 }
@@ -1505,7 +1803,10 @@ static void mp6_dll_stub_draw_black_screen(void)
     MTXOrtho(proj, 0, 480, 0, w, 0, 10);
     GXSetProjection(proj, GX_ORTHOGRAPHIC);
     MTXIdentity(modelview);
-    GXLoadPosMtxImm(modelview, GX_PNMTX0);
+    /* Route through the same FI identity seam as decomp calls. This host-only
+     * black-screen draw records an explicit invalid key, keeping the retained
+     * stream's matrix/key cardinality aligned without making it interpolable. */
+    mp6_GXLoadPosMtxImm(modelview, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
     GXSetViewport(0, 0, w, 480, 0, 1);
     GXSetScissor(0, 0, w, 480);
@@ -1538,49 +1839,8 @@ static void mp6_dll_stub_draw_black_screen(void)
     GXEnd();
 }
 
-void VIWaitForRetrace(void)
+static void mp6_dispatch_aurora_events(const AuroraEvent *event)
 {
-    if (g_frameOpen) {
-        if (mp6_dll_stub_black_screen_active) {
-            mp6_dll_stub_draw_black_screen();
-        }
-        /* Optional FPS overlay -- ImGui is already live between
-         * aurora_begin_frame()/aurora_end_frame(), so this composits into
-         * the frame about to present. Two-load early-out unless the user
-         * enabled it in the launcher menu; automation runs (launcher
-         * skipped) can never draw it. Runs on Android too now that the
-         * launcher TUs compile there -- the same launcher-mode-only guard
-         * inside means straight_boot/automation launches never touch it
-         * on either platform. */
-        { extern void mp6_launcher_frame_overlay(void); mp6_launcher_frame_overlay(); }
-        mp6_gx_close_stale_primitive("closing it before aurora_end_frame()");
-        aurora_end_frame();
-        mp6_present_counters_add(0, 1); /* MP6_PRESENT_RATE_LOG accounting */
-        mp6_fi_note_frame_end(); /* Unlocked FPS: snapshot tick N's model/camera pose
-                                  * and timestamp its present -- the alpha reference for
-                                  * every interpolated frame in the idle window below */
-        { extern void mp6_fs_frame_end(void); mp6_fs_frame_end(); } /* framescope */
-        { /* MP6_SHADOW_DUMP (shim/include/mp6_shadow_dump.h): right after
-           * aurora_end_frame(), same hook point as framescope right above --
-           * any shadow copy THIS tick made is guaranteed already resolved. */
-            extern void mp6_shadow_dump_tick(void);
-            mp6_shadow_dump_tick();
-        }
-        g_frameOpen = false;
-    }
-
-    /* Pace ticks to the design rate (section 8 above; default 60Hz,
-     * MP6_TICK_HZ=0 restores the legacy free-run path).
-     * Placed AFTER the present (frame N reaches the display as early as
-     * possible; the vsync block it just paid is absorbed by the absolute
-     * deadline) and BEFORE the event pump/keyboard-PAD refresh below, so
-     * tick N+1's input is sampled at the START of its real 16.67ms slot,
-     * not up to a full period stale. */
-    mp6_tick_throttle_wait();
-    mp6_tick_rate_log();
-    mp6_present_rate_log();
-
-    const AuroraEvent *event = aurora_update();
     while (event != NULL && event->type != AURORA_NONE) {
         if (event->type == AURORA_EXIT) {
             mp6_clean_shutdown_exit("window closed");
@@ -1602,11 +1862,122 @@ void VIWaitForRetrace(void)
         }
         ++event;
     }
+}
+
 #ifdef __ANDROID__
+typedef struct {
+    const AuroraEvent *events;
+} Mp6AndroidFrameGate;
+
+static void mp6_frame_gate_pump_events(void *user)
+{
+    Mp6AndroidFrameGate *gate = (Mp6AndroidFrameGate *)user;
+    const AuroraEvent *event;
+    gate->events = aurora_update();
+    /* Exit is a host lifecycle event and must remain responsive even while no
+     * surface exists.  Game-facing key/touch/freecam delivery is deferred to
+     * the successful try-begin below. */
+    for (event = gate->events; event != NULL && event->type != AURORA_NONE; ++event) {
+        if (event->type == AURORA_EXIT) mp6_clean_shutdown_exit("window closed");
+    }
+}
+
+static int mp6_frame_gate_try_begin(void *user)
+{
+    Mp6AndroidFrameGate *gate = (Mp6AndroidFrameGate *)user;
+    if (!aurora_begin_frame()) {
+        /* Events pumped while there is no presentable frame are deliberately
+         * not delivered to game/UI callbacks.  Also forget pre-suspend finger
+         * state and one-tick latches: their UP/CANCELED events may be among the
+         * discarded batches, and retaining them would create a stuck input on
+         * the first resumed tick. */
+        mp6_aurora_input_reset_transients();
+        return 0;
+    }
+    mp6_dispatch_aurora_events(gate->events);
+    return 1;
+}
+
+static void mp6_frame_gate_idle(void *user)
+{
+    (void)user;
+    /* Keep a failed surface-refresh/admission loop from busy-spinning while
+     * still pumping AURORA_EXIT with millisecond-scale responsiveness. */
+    mp6_host_sleep_ns(1000000ull);
+}
+#endif
+
+void VIWaitForRetrace(void)
+{
+    int frameBegan = 0;
+#ifdef __ANDROID__
+    Mp6AndroidFrameGate androidGate = { NULL };
+#endif
+    if (g_frameOpen) {
+        if (mp6_dll_stub_black_screen_active) {
+            mp6_dll_stub_draw_black_screen();
+        }
+        /* Optional FPS overlay -- ImGui is already live between
+         * aurora_begin_frame()/aurora_end_frame(), so this composits into
+         * the frame about to present. Two-load early-out unless the user
+         * enabled it in the launcher menu; automation runs (launcher
+         * skipped) can never draw it. Runs on Android too now that the
+         * launcher TUs compile there -- the same launcher-mode-only guard
+         * inside means straight_boot/automation launches never touch it
+         * on either platform. */
+        { extern void mp6_launcher_frame_overlay(void); mp6_launcher_frame_overlay(); }
+        mp6_gx_close_stale_primitive("closing it before aurora_end_frame()");
+        aurora_end_frame();
+        mp6_present_counters_add(0, 1); /* MP6_PRESENT_RATE_LOG accounting */
+        mp6_fi_note_frame_end(); /* Unlocked FPS: seal tick N's retained GX stream,
+                                  * snapshot camera-cut history, and timestamp its present */
+        { extern void mp6_fs_frame_end(void); mp6_fs_frame_end(); } /* framescope */
+        { /* MP6_FRAME_DUMP (shim/include/mp6_frame_dump.h): capture the frame
+           * that was just presented. Same hook point as framescope right
+           * above -- after aurora_end_frame(), so the readback the lever
+           * enqueues is ordered strictly behind this frame's own work.
+           * replayFrame=0: this is the real per-tick frame; frame_interp.c
+           * makes the same call with 1 for each interpolated present, so a
+           * burst captures the true presented sequence, not just the ticks. */
+            extern void mp6_frame_dump_present(int replayFrame);
+            mp6_frame_dump_present(0);
+        }
+        { /* MP6_SHADOW_DUMP (shim/include/mp6_shadow_dump.h): right after
+           * aurora_end_frame(), same hook point as framescope right above --
+           * any shadow copy THIS tick made is guaranteed already resolved. */
+            extern void mp6_shadow_dump_tick(void);
+            mp6_shadow_dump_tick();
+        }
+        g_frameOpen = false;
+    }
+
+    /* Pace ticks to the design rate (section 8 above; default 60Hz,
+     * MP6_TICK_HZ=0 restores the legacy free-run path).
+     * Placed AFTER the present (frame N reaches the display as early as
+     * possible; the vsync block it just paid is absorbed by the absolute
+     * deadline) and BEFORE the event pump/keyboard-PAD refresh below, so
+     * tick N+1's input is sampled at the START of its real 16.67ms slot,
+     * not up to a full period stale. */
+    mp6_tick_throttle_wait();
+    mp6_tick_rate_log();
+    mp6_present_rate_log();
+
+#ifdef __ANDROID__
+    /* SDL/Aurora blocks here while the activity is paused.  If a transient
+     * surface loss makes begin_frame decline, stay in this host-only gate and
+     * pump lifecycle events until a real frame opens.  No retrace callback,
+     * PAD sample, Freecam integration, widescreen/game write, or tick advance
+     * occurs inside the gate. */
+    (void)mp6_frame_gate_wait(mp6_frame_gate_pump_events,
+                              mp6_frame_gate_try_begin,
+                              mp6_frame_gate_idle, &androidGate);
+    frameBegan = 1;
     /* Apply deferred motor commands from main-loop context (see the
      * mp6_PADControlMotor queue above) -- right after the event pump, on
      * the thread's real stack, where a JNI-reaching rumble is legal. */
     mp6_pad_motor_apply_pending();
+#else
+    mp6_dispatch_aurora_events(aurora_update());
 #endif
 
     /* Runs every tick (not just on a detected resize event) --
@@ -1635,12 +2006,13 @@ void VIWaitForRetrace(void)
         g_preRetraceCB((u32)mp6_tick_count);
     }
 
-    if (aurora_begin_frame()) {
+#ifndef __ANDROID__
+    frameBegan = aurora_begin_frame() ? 1 : 0;
+#endif
+    if (frameBegan) {
         g_frameOpen = true;
         mp6_present_counters_add(1, 0); /* MP6_PRESENT_RATE_LOG accounting */
-        mp6_fi_note_frame_begin(); /* Unlocked FPS: reserved per-tick hook inside the
-                                    * just-opened frame (currently a no-op -- the
-                                    * snapshot is a frame-END operation) */
+        mp6_fi_note_frame_begin(); /* Unlocked FPS: arm retained-stream capture */
 #ifdef __ANDROID__
         /* Draw the touch overlay into the just-opened ImGui frame
          * (aurora ran ImGui::NewFrame inside the successful
@@ -1674,12 +2046,13 @@ void VIWaitForRetrace(void)
         fflush(stdout);
     }
     g_mp6DrawIndex = 0;
-    /* aurora_begin_frame() returning false (window minimized, etc.) just
+    /* On Windows, aurora_begin_frame() returning false (window minimized, etc.) just
      * means this logical tick renders nothing new -- the NEXT call's step
      * 1 correctly sees g_frameOpen still false and skips ending a frame
      * that was never opened, then tries begin_frame() again. In a
      * normal run this returns true on every tick -- the frame loop
-     * genuinely cycles. */
+     * genuinely cycles. Android never reaches this point without a successful
+     * begin: its lifecycle gate above suspends the logical tick instead. */
 
     { /* freecam: sample keyboard/stick + drain event deltas ONCE per tick,
        * at the same input-sampling point as the keyboard-PAD pump below

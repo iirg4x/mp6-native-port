@@ -10,6 +10,8 @@
  * meaning, kept in the one aurora-flavor TU that owns the window.
  */
 #include "host.h"
+#include "mp6_path.h"
+#include "mp6_utf8_file.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -138,8 +140,8 @@ void mp6_host_wallclock(Mp6DateTime *out)
  * arena (platform/os/arena.c, which keeps the FATAL/exit policy and the
  * [BOOT] banner) and the coroutine stack pool
  * (platform/host/coro_arena.c). They are separate reservations; either
- * can fall back to an OS-picked address independently, which is why the
- * [WARN] below names this function rather than either caller.
+ * can fall back to an OS-picked address independently. Every successful
+ * reservation is verified as a whole before it leaves this seam.
  * ======================================================================= */
 
 void *mp6_host_arena_reserve(size_t size)
@@ -163,17 +165,25 @@ void *mp6_host_arena_reserve(size_t size)
     for (i = 0; i < sizeof(kCandidateBases) / sizeof(kCandidateBases[0]); i++) {
         void *want = (void *)kCandidateBases[i];
         got = VirtualAlloc(want, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        if (got) break;
+        if (got && mp6_host_range_below_4gb(got, size)) break;
+        if (got) {
+            VirtualFree(got, 0, MEM_RELEASE);
+            got = NULL;
+        }
     }
     if (!got) {
         got = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         if (!got) {
             return NULL; /* caller (arena.c) keeps its own FATAL+exit policy */
         }
-        fprintf(stderr,
-                "[WARN] mp6_host_arena_reserve: no candidate low(<4GB) base free; OS picked %p -- "
-                "u32 pointer round-trips may break if this is >=4GB\n",
-                got);
+        if (!mp6_host_range_below_4gb(got, size)) {
+            fprintf(stderr,
+                    "[ERROR] mp6_host_arena_reserve: OS-picked range %p (+%zu bytes) is not "
+                    "entirely below 4GB; refusing it\n",
+                    got, size);
+            VirtualFree(got, 0, MEM_RELEASE);
+            return NULL;
+        }
     }
     return got;
 }
@@ -188,7 +198,7 @@ int mp6_host_image_below_4gb(void)
     if (!GetModuleInformation(GetCurrentProcess(), hMod, &modInfo, sizeof(modInfo))) {
         return 0; /* cannot prove the invariant */
     }
-    return ((uintptr_t)hMod + modInfo.SizeOfImage) <= 0xFFFFFFFFu;
+    return mp6_host_range_below_4gb((const void *)hMod, modInfo.SizeOfImage);
 }
 
 /* Enumerates this image's own WRITABLE
@@ -268,28 +278,30 @@ int mp6_host_image_writable_sections(Mp6HostImageSection *out, int maxOut)
  * fallback paths to stop matching reality. This workspace's layout
  * (port/mp6-native/build/mp6native.exe with external_refs/repos/
  * marioparty6/orig/GP6E01/ a sibling of port/) is a FIXED relative offset
- * from the exe's own directory, so walking up from GetModuleFileNameA
+ * from the exe's own directory, so walking up from GetModuleFileNameW
  * (never cwd) and back down that fixed offset is robust to both. Returns
  * 0 only with the fst.bin probe passing, so the caller keeps its
  * build-time -D fallback otherwise. */
 int mp6_host_disc_root(char *buf, size_t n)
 {
-    char exeDir[MAX_PATH];
-    char candidateRoot[1024];
-    char candidateFst[1024];
+    wchar_t exeWide[MP6_WINDOWS_PATH_WCHARS];
+    char exeDir[1200];
+    char candidateRoot[1200];
+    char candidateFst[1200];
     DWORD len;
     char *lastSlash;
     char *p;
     FILE *probe;
-    size_t rootLen;
 
-    len = GetModuleFileNameA(NULL, exeDir, (DWORD)sizeof(exeDir));
-    if (len == 0 || len >= sizeof(exeDir)) {
-        return -1; /* GetModuleFileNameA failed/truncated -- caller keeps its fallback */
+    len = GetModuleFileNameW(NULL, exeWide,
+                             (DWORD)(sizeof(exeWide) / sizeof(exeWide[0])));
+    if (len == 0 || len >= sizeof(exeWide) / sizeof(exeWide[0]) ||
+        mp6_wide_to_utf8_path(exeWide, exeDir, sizeof(exeDir)) != 0) {
+        return -1; /* failed, non-UTF8, or beyond the explicit path cap */
     }
     /* exeDir is ".../port/mp6-native/build/mp6native.exe" -- strip the
      * filename to get the exe's own directory. Handle both separators:
-     * GetModuleFileNameA always returns '\\', but staying defensive here
+     * GetModuleFileNameW normally returns '\\', but staying defensive here
      * costs nothing. */
     lastSlash = strrchr(exeDir, '\\');
     p = strrchr(exeDir, '/');
@@ -301,20 +313,20 @@ int mp6_host_disc_root(char *buf, size_t n)
      * external_refs/repos/marioparty6/orig/GP6E01 -- this workspace's
      * fixed layout, not a guess. Forward slashes work fine mixed with the
      * backslash-separated exeDir prefix on Windows. */
-    snprintf(candidateRoot, sizeof(candidateRoot),
-             "%s/../../../external_refs/repos/marioparty6/orig/GP6E01", exeDir);
-    snprintf(candidateFst, sizeof(candidateFst), "%s/sys/fst.bin", candidateRoot);
+    if (mp6_path_join_checked(candidateRoot, sizeof(candidateRoot), exeDir,
+                              "../../../external_refs/repos/marioparty6/orig/GP6E01") != 0 ||
+        mp6_path_join_checked(candidateFst, sizeof(candidateFst), candidateRoot,
+                              "sys/fst.bin") != 0) {
+        return -1;
+    }
 
-    probe = fopen(candidateFst, "rb");
+    probe = mp6_fopen_utf8(candidateFst, "rb");
     if (!probe) {
         return -1; /* not this repo's layout -- caller keeps its fallback */
     }
     fclose(probe);
 
-    rootLen = strlen(candidateRoot);
-    if (rootLen + 1 > n) return -1;
-    memcpy(buf, candidateRoot, rootLen + 1);
-    return 0;
+    return mp6_path_copy_checked(buf, n, candidateRoot);
 }
 
 int mp6_host_save_dir(char *buf, size_t n)
@@ -337,10 +349,67 @@ int mp6_host_pref_dir(char *buf, size_t n)
 
 int mp6_host_mkdir(const char *path)
 {
-    /* "Already exists" is success per the header contract (callers
-     * ignore the result and rely on exactly that). */
-    if (CreateDirectoryA(path, NULL)) return 0;
-    return (GetLastError() == ERROR_ALREADY_EXISTS) ? 0 : -1;
+    wchar_t widePath[MP6_WINDOWS_PATH_WCHARS];
+    DWORD attrs;
+    if (path == NULL || path[0] == '\0' ||
+        mp6_utf8_to_wide_full_path(path, widePath, MP6_WINDOWS_PATH_WCHARS) != 0) return -1;
+    if (!CreateDirectoryW(widePath, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return -1;
+    attrs = GetFileAttributesW(widePath);
+    if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY) ||
+        (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        return -1;
+    }
+    return 0;
+}
+
+uint64_t mp6_host_process_id(void)
+{
+    return (uint64_t)GetCurrentProcessId();
+}
+
+int mp6_host_sync_file_path(const char *path)
+{
+    wchar_t widePath[MP6_WINDOWS_PATH_WCHARS];
+    HANDLE h;
+    int ok;
+    if (path == NULL ||
+        mp6_utf8_to_wide_full_path(path, widePath, MP6_WINDOWS_PATH_WCHARS) != 0) return -1;
+    h = CreateFileW(widePath, GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    ok = FlushFileBuffers(h) ? 0 : -1;
+    if (!CloseHandle(h)) ok = -1;
+    return ok;
+}
+
+int mp6_host_atomic_replace_file(const char *replacement, const char *destination)
+{
+    wchar_t wideReplacement[MP6_WINDOWS_PATH_WCHARS];
+    wchar_t wideDestination[MP6_WINDOWS_PATH_WCHARS];
+    DWORD attrs;
+    if (replacement == NULL || destination == NULL ||
+        mp6_utf8_to_wide_full_path(replacement, wideReplacement, MP6_WINDOWS_PATH_WCHARS) != 0 ||
+        mp6_utf8_to_wide_full_path(destination, wideDestination, MP6_WINDOWS_PATH_WCHARS) != 0) return -1;
+    attrs = GetFileAttributesW(wideDestination);
+    if (attrs != INVALID_FILE_ATTRIBUTES) {
+        /* ReplaceFile is the Windows transaction intended for this exact
+         * operation: the old destination remains the destination unless the
+         * replacement succeeds. It also preserves the destination's ACLs. */
+        if (ReplaceFileW(wideDestination, wideReplacement, NULL, REPLACEFILE_WRITE_THROUGH,
+                         NULL, NULL)) {
+            return 0;
+        }
+        return -1;
+    }
+    if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) {
+        return -1;
+    }
+    /* First save into an empty slot. MOVEFILE_REPLACE_EXISTING closes the
+     * existence race between the probe above and this call. */
+    return MoveFileExW(wideReplacement, wideDestination,
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : -1;
 }
 
 /* =======================================================================
@@ -609,7 +678,8 @@ static LONG WINAPI mp6_crash_filter(EXCEPTION_POINTERS *ep)
         return EXCEPTION_EXECUTE_HANDLER;
     }
     {
-        char exePath[MAX_PATH];
+        wchar_t exePath[MP6_WINDOWS_PATH_WCHARS];
+        char exePathUtf8[1024] = "<unprintable>";
         HMODULE hMod = GetModuleHandle(NULL);
         DWORD64 imgBase = (DWORD64)(uintptr_t)hMod;
         MODULEINFO modInfo;
@@ -624,18 +694,26 @@ static LONG WINAPI mp6_crash_filter(EXCEPTION_POINTERS *ep)
                 (unsigned long long)imgBase, (unsigned long)modSize);
         fflush(stderr);
 
-        if (GetModuleFileNameA(NULL, exePath, sizeof(exePath)) > 0) {
+        {
+            DWORD exeLen = GetModuleFileNameW(NULL, exePath,
+                                              MP6_WINDOWS_PATH_WCHARS);
+            if (exeLen > 0 && exeLen < MP6_WINDOWS_PATH_WCHARS) {
             DWORD64 loaded;
+            (void)mp6_wide_to_utf8_path(exePath, exePathUtf8,
+                                         sizeof(exePathUtf8));
             /* A real, already-open file handle (vs NULL) lets dbghelp
              * read the PE debug directory directly instead of re-deriving
              * it -- required together with SYMOPT_LOAD_ANYTHING above. */
-            hExeFile = CreateFileA(exePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            loaded = SymLoadModuleEx(proc, hExeFile != INVALID_HANDLE_VALUE ? hExeFile : NULL,
+            hExeFile = CreateFileW(exePath, GENERIC_READ, FILE_SHARE_READ,
+                                   NULL, OPEN_EXISTING, 0, NULL);
+            loaded = SymLoadModuleExW(proc,
+                                      hExeFile != INVALID_HANDLE_VALUE ? hExeFile : NULL,
                                       exePath, NULL, imgBase, modSize, NULL, 0);
             if (loaded == 0) {
                 fprintf(stderr, "[MP6-CRASH] SymLoadModuleEx(%s, base=0x%llX) failed (err=%lu)\n",
-                        exePath, (unsigned long long)imgBase, GetLastError());
+                        exePathUtf8, (unsigned long long)imgBase, GetLastError());
                 fflush(stderr);
+            }
             }
         }
     }
@@ -714,7 +792,7 @@ static bool mp6_sym_ensure_ready(void)
         return false;
     }
     {
-        char exePath[MAX_PATH];
+        wchar_t exePath[MP6_WINDOWS_PATH_WCHARS];
         HMODULE hMod = GetModuleHandle(NULL);
         DWORD64 imgBase = (DWORD64)(uintptr_t)hMod;
         MODULEINFO modInfo;
@@ -724,16 +802,22 @@ static bool mp6_sym_ensure_ready(void)
         if (GetModuleInformation(proc, hMod, &modInfo, sizeof(modInfo))) {
             modSize = modInfo.SizeOfImage;
         }
-        if (GetModuleFileNameA(NULL, exePath, sizeof(exePath)) > 0) {
+        {
+            DWORD exeLen = GetModuleFileNameW(NULL, exePath,
+                                              MP6_WINDOWS_PATH_WCHARS);
+            if (exeLen > 0 && exeLen < MP6_WINDOWS_PATH_WCHARS) {
             /* A real, already-open file handle (vs NULL) -- see the
              * matching comment in mp6_crash_filter above. Deliberately
              * left open (never CloseHandle'd): this whole function body
              * runs at most once per process (guarded above), so it's a
              * single one-time handle for the process's whole life, not a
              * per-call leak. */
-            HANDLE hExeFile = CreateFileA(exePath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            SymLoadModuleEx(proc, hExeFile != INVALID_HANDLE_VALUE ? hExeFile : NULL,
+            HANDLE hExeFile = CreateFileW(exePath, GENERIC_READ, FILE_SHARE_READ,
+                                          NULL, OPEN_EXISTING, 0, NULL);
+            SymLoadModuleExW(proc,
+                             hExeFile != INVALID_HANDLE_VALUE ? hExeFile : NULL,
                              exePath, NULL, imgBase, modSize, NULL, 0);
+            }
         }
     }
     s_mp6SymReady = true;

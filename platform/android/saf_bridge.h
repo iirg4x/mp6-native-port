@@ -25,6 +25,16 @@
 
 #include "../content/content_import.h" /* Mp6ImportStatus */
 
+#define MP6_SAF_URI_CAP 4096
+#define MP6_SAF_PATH_CAP 1200
+
+enum {
+    MP6_SAF_PICK_ERROR = -2,
+    MP6_SAF_PICK_CANCELLED = -1,
+    MP6_SAF_PICK_PENDING = 0,
+    MP6_SAF_PICK_READY = 1,
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -33,10 +43,9 @@ extern "C" {
  * Returns 0 on dispatch, -1 if the JNI bridge is unavailable. */
 int mp6_saf_open_tree_picker(void);
 
-/* Polls the picker result. Returns 1 with the tree URI copied into
- * uriOut when the user picked a folder, 0 while pending, -1 when the
- * picker was dismissed/cancelled. One-shot: a returned result is
- * consumed. */
+/* Polls the picker result. Returns READY with the complete tree URI copied
+ * into uriOut, PENDING, CANCELLED, or ERROR for bridge/capacity failures.
+ * One-shot: a returned Java result is consumed. */
 int mp6_saf_poll_tree_pick(char *uriOut, size_t n);
 
 /* Starts the Java-side tree import (validate GP6E01, copy the wanted

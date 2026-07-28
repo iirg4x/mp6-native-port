@@ -1,0 +1,152 @@
+MP6 Unlocked FPS: make replay begin decline on a full render-worker queue.
+
+Patch 0022 made frame-slot and mapped-staging admission nonblocking, but the
+last step of begin_frame still used BoundedQueue::push, which waits when the
+render-worker queue is full.  Add a try-push surface and roll back the otherwise
+unobserved frame packet when that final admission step fails.  The normal game
+frame path retains its blocking queue behavior.
+
+diff --git a/lib/gfx/render_worker.hpp b/lib/gfx/render_worker.hpp
+--- a/lib/gfx/render_worker.hpp
++++ b/lib/gfx/render_worker.hpp
+@@ -43,6 +43,7 @@ public:
+   explicit BoundedQueue(size_t capacity);
+ 
+   bool push(QueueItem item);
++  bool try_push(QueueItem item);
+   std::optional<QueueItem> pop_for(std::chrono::milliseconds timeout, bool& closed);
+   void close();
+   void reset();
+@@ -77,6 +78,7 @@ void initialize();
+ void shutdown();
+ 
+ void enqueue_begin_frame(uint64_t frameId, WorkCallback work);
++bool try_enqueue_begin_frame(uint64_t frameId, WorkCallback work);
+ void enqueue_encode_pass(uint64_t frameId, uint32_t passIndex, WorkCallback work);
+ void enqueue_end_frame(uint64_t frameId, WorkCallback work);
+ void enqueue_work(WorkCallback work);
+diff --git a/lib/gfx/render_worker.cpp b/lib/gfx/render_worker.cpp
+--- a/lib/gfx/render_worker.cpp
++++ b/lib/gfx/render_worker.cpp
+@@ -82,6 +82,24 @@ void enqueue(QueueItem item) {
+     g_pendingItems.fetch_sub(1, std::memory_order_acq_rel);
+   }
+ }
++
++bool try_enqueue(QueueItem item) {
++  ZoneScoped;
++  if (is_worker_thread() || !g_running.load(std::memory_order_acquire)) {
++    if (item.work) {
++      item.work();
++    }
++    complete_sync(item.sync);
++    return true;
++  }
++
++  g_pendingItems.fetch_add(1, std::memory_order_acq_rel);
++  if (!g_queue.try_push(std::move(item))) {
++    g_pendingItems.fetch_sub(1, std::memory_order_acq_rel);
++    return false;
++  }
++  return true;
++}
+ } // namespace
+ 
+ BoundedQueue::BoundedQueue(size_t capacity) : m_capacity(capacity) {}
+@@ -99,6 +117,18 @@ bool BoundedQueue::push(QueueItem item) {
+   return true;
+ }
+ 
++bool BoundedQueue::try_push(QueueItem item) {
++  ZoneScoped;
++  std::unique_lock lock{m_mutex};
++  if (m_closed || m_items.size() >= m_capacity) {
++    return false;
++  }
++  m_items.emplace_back(std::move(item));
++  lock.unlock();
++  m_notEmpty.notify_one();
++  return true;
++}
++
+ std::optional<QueueItem> BoundedQueue::pop_for(std::chrono::milliseconds timeout, bool& closed) {
+   std::unique_lock lock{m_mutex};
+   m_notEmpty.wait_for(lock, timeout, [&] { return m_closed || !m_items.empty(); });
+@@ -224,6 +254,14 @@ void enqueue_begin_frame(uint64_t frameId, WorkCallback work) {
+   });
+ }
+ 
++bool try_enqueue_begin_frame(uint64_t frameId, WorkCallback work) {
++  return try_enqueue({
++      .type = ItemType::BeginFrame,
++      .frameId = frameId,
++      .work = std::move(work),
++  });
++}
++
+ void enqueue_encode_pass(uint64_t frameId, uint32_t passIndex, WorkCallback work) {
+   enqueue({
+       .type = ItemType::EncodePass,
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -328,5 +328,6 @@ static render_worker::FrameSlotPool g_stagingSlots{StagingBufferCount};
+ static std::optional<size_t> g_reservedFrameSlot;
+ static std::optional<size_t> g_reservedStagingSlot;
++static bool g_reservedTryQueue;
+ static u32 g_currentRenderPass = UINT32_MAX;
+ static bool g_inOffscreen = false;
+ static std::optional<RenderPass> g_suspendedEfbPass;
+@@ -1691,11 +1692,14 @@ bool begin_frame() {
+   // pace_frame_start();
+   size_t frameSlot;
+   std::optional<size_t> stagingSlot;
++  bool tryQueue = false;
+   if (g_reservedFrameSlot && g_reservedStagingSlot) {
+     frameSlot = *g_reservedFrameSlot;
+     stagingSlot = *g_reservedStagingSlot;
++    tryQueue = g_reservedTryQueue;
+     g_reservedFrameSlot.reset();
+     g_reservedStagingSlot.reset();
++    g_reservedTryQueue = false;
+   } else {
+     frameSlot = acquire_frame_slot();
+     stagingSlot = acquire_mapped_staging_buffer();
+@@ -1749,10 +1753,27 @@ bool begin_frame() {
+   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
+   begin_pipeline_frame();
+-  render_worker::enqueue_begin_frame(frame.frameId, [frameSlot] {
++  auto beginWork = [frameSlot] {
+     static constexpr wgpu::CommandEncoderDescriptor EncoderDescriptor{.label = "Redraw encoder"};
+     g_framePackets[frameSlot].encoder = g_device.CreateCommandEncoder(&EncoderDescriptor);
+     webgpu::gpu_prof::frame_begin(g_framePackets[frameSlot].encoder);
+-  });
++  };
++  if (tryQueue) {
++    if (!render_worker::try_enqueue_begin_frame(frame.frameId, std::move(beginWork))) {
++      /* Nonblocking replay admission is all-or-nothing. Nothing observed this
++       * packet, so return both permits and restore the between-frame state. */
++      frame = {};
++      g_recordingFrame = nullptr;
++      g_currentRenderPass = UINT32_MAX;
++      g_suspendedEfbPass.reset();
++      g_cpuFrameStart = {};
++      --g_nextFrameId;
++      g_stagingSlots.release(*stagingSlot);
++      g_frameSlots.release(frameSlot);
++      return false;
++    }
++  } else {
++    render_worker::enqueue_begin_frame(frame.frameId, std::move(beginWork));
++  }
+   g_cpuFrameStart = PresentClock::now();
+   return true;
+ }
+@@ -1778,6 +1801,7 @@ bool try_begin_frame() {
+   }
+   g_reservedFrameSlot = *frameSlot;
+   g_reservedStagingSlot = *stagingSlot;
++  g_reservedTryQueue = true;
+   return begin_frame();
+ }
+ 

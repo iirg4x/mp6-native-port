@@ -7,3 +7,24 @@
 @@ -239 +242 @@
 -            if (*p != SLCheckSumGet(0, 0x2040)) {
 +            if ((u16)((((u8 *)p)[0] << 8) | ((u8 *)p)[1]) != SLCheckSumGet(0, 0x2040)) {
+@@ -827 +830 @@
+-            *p == sum;
++            (void)(*p == sum); /* Retail-compatible no-op; explicit on native compilers. */
+@@ -893 +896 @@
+-    memset(buf, size, 0);
++    memset(buf, 0, size);
+@@ -1323,0 +1327 @@
++    s16 choiceCount;
+@@ -1331,0 +1336 @@
++        choiceCount = 3;
+@@ -1336,0 +1342 @@
++        choiceCount = 3;
+@@ -1340,0 +1347 @@
++        choiceCount = 2;
+@@ -1343,0 +1351,3 @@
++    } else {
++        /* Invalid internal mode: deterministic cancel, never stale stack IDs. */
++        return -0x4d2;
+@@ -1364 +1374 @@
+-    if (choice == -1) {
++    if (choice < 0 || choice >= choiceCount) {

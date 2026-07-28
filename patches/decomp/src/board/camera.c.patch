@@ -1,0 +1,198 @@
+--- a/src/board/camera.c
++++ b/src/board/camera.c
+@@ -3,10 +3,7 @@
+ double sin(double);
+ double cos(double);
+ #pragma cplusplus on
+-extern inline double fabs(double x)
+-{
+-    return __fabs(x);
+-}
++double fabs(double x); /* Host CRT owner; avoid a second external C99 body. */
+ #pragma cplusplus reset
+ 
+ #include "game/board/main.h"
+@@ -20,6 +20,8 @@ extern inline double fabs(double x)
+ #include "game/process.h"
+
+ #include "humath.h"
++#include "mp6_board_runtime.h"
++#include "mp6_widescreen.h" /* WS: the shared live aspect / render-width source */
+
+ #define FLAG_BOARD_CAMERAMOT FLAGNUM(FLAG_GROUP_COMMON, 26)
+ 
+@@ -97,6 +98,7 @@ void mbCameraInit(void)
+     HuVecF pos;
+     HuVecF dir;
+     int i;
++    mp6_board_runtime_reset(BoardNoGet());
+     memset(&cameraStack[0], 0, sizeof(cameraStack));
+     memset(&cameraCur, 0, sizeof(cameraCur));
+     cameraP->attr = 0;
+@@ -135,1 +138,10 @@ void mbCameraInit(void)
+-    Hu3DCameraScissorSet(cameraP->bit, cameraP->viewportX, cameraP->viewportY, cameraP->viewportW, cameraP->viewportH);
++    /* WS -- the board camera's ONE scissor write (mp6WsBoardCameraApply
++     * below carries the full mechanism note). The native literal here is
++     * the camera's own viewportW, i.e. 640; at a wide window the render
++     * target is mp6_widescreen_render_width() px across, and a 640-wide
++     * scissor clips every 3D board draw to the LEFT 640 px of it -- the
++     * exact stale-scissor boxing already root-caused for the other scenes.
++     * Widened at the source so the board's very first drawn frame is
++     * already correct, before CameraOMExec's per-frame re-derivation ever
++     * runs. Exactly 640 -- unchanged -- when widescreen is disabled. */
++    Hu3DCameraScissorSet(cameraP->bit, cameraP->viewportX, cameraP->viewportY,
++        (unsigned int)mp6_widescreen_render_width(), cameraP->viewportH);
+@@ -161,6 +163,7 @@ void mbCameraInit(void)
+ 
+ static void Camera0LayerHook(s16 layerNo)
+ {
++    mp6_board_runtime_draw();
+     HU3D_LIGHT *light = &Hu3DGlobalLight[0];
+     if(lightTypeBackup[0] != -1) {
+         light->type = lightTypeBackup[0];
+@@ -193,0 +196,105 @@ static void CameraOMExec(OMOBJ *obj)
++/* WS -- the board's 3D camera aspect/viewport/scissor, re-derived LIVE.
++ *
++ * Every OTHER 3D scene in this project (Party's fn_1_33A0, mode-select's
++ * fn_1_1734, boot's ObjectSetup/BootTitleExec, file-select's ObjectSetup)
++ * issues Hu3DCameraPerspectiveSet/ViewportSet exactly ONCE, at scene setup
++ * -- which is why those call sites were converted to
++ * mp6_widescreen_camera_widen(): a registry whose per-tick
++ * mp6_widescreen_reapply() walker re-issues all three setters with the live
++ * scale_factor()/render_width().
++ *
++ * The board is the one scene that does NOT need that registry: its own
++ * CameraOMExec already re-issues perspective+viewport EVERY FRAME out of
++ * MBCAMERA's fields, so applying the same live widen right here tracks an
++ * interactive resize with no extra machinery -- and registering the board's
++ * cameraP->bit (HU3D_CAM0|HU3D_CAM1, a two-bit MASK; every existing
++ * camera_widen() call site passes a single bit, and the registry's own
++ * liveness probe shifts the bit to an index) would fight these per-frame
++ * writes for no gain. The one thing CameraOMExec never re-issued is the
++ * SCISSOR -- board camera.c sets it once, in mbCameraInit -- so it is
++ * re-issued here too, from the same source, closing the same stale-scissor
++ * gap already closed for the other scenes.
++ *
++ * Hor+ BY CONSTRUCTION: only the aspect handed to Hu3DCameraPerspectiveSet
++ * widens. MBCAMERA's own `aspect` FIELD stays native (1.2f) on purpose --
++ * it is ALSO the horizontal-fit divisor in CameraCanterCalc's auto-framing
++ * zoom (`if(j != 0) len /= cameraP->aspect;`), so widening the field would
++ * pull the camera IN to satisfy an easier horizontal fit and crop the
++ * vertical framing the 4:3 game authored. Leaving it native keeps vertical
++ * framing identical to native at every aspect and spends the extra width
++ * purely on revealing more world horizontally.
++ *
++ * Two consumers come along for free, both confirmed by direct read: board/
++ * math.c's ObjectCullUpdate and board/wipe.c's WipeMasuMatHook read the
++ * HU3D camera's aspect (`Hu3DCamera[Hu3DCameraNo].aspect`), NOT MBCAMERA's
++ * -- so the cull frustum widens with the projection (nothing at the newly
++ * revealed left/right edges is culled away) and the masu-wipe screen-space
++ * texgen stays aligned, with no separate fix for either.
++ *
++ * viewportX/viewportW are provably always (0, 640): they are written only
++ * by mbCameraInit, and the board camera API exposes Fov/NearFar/Scissor/Bit
++ * setters but no viewport setter at all (game/board/camera.h), with no
++ * other writer anywhere in the game or its RELs. So substituting the full
++ * render_width() for the width here is exact rather than an assumption --
++ * the same reasoning mp6_ws_apply_camera uses to hardcode its own viewport
++ * origin. An exact no-op when widescreen is disabled: scale_factor() is
++ * 1.0f and render_width() is 640, i.e. the literals mbCameraInit already
++ * installed for both the viewport and the scissor. */
++static void mp6WsBoardCameraApply(MBCAMERA *cameraP)
++{
++    float vpW = (float)mp6_widescreen_render_width();
++    Hu3DCameraPerspectiveSet(cameraP->bit, cameraP->fov, cameraP->near, cameraP->far,
++        cameraP->aspect * mp6_widescreen_scale_factor());
++    Hu3DCameraViewportSet(cameraP->bit, cameraP->viewportX, cameraP->viewportY, vpW,
++        cameraP->viewportH, cameraP->viewportNear, cameraP->viewportFar);
++    if(!mp6_widescreen_enabled()) {
++        return;
++    }
++    /* Everything past this point is an ADDITION to what CameraOMExec used
++     * to do per frame, so it is gated on the feature flag: with widescreen
++     * off the two calls above are byte-identical to the pair they replace
++     * (scale_factor() 1.0f, render_width() 640 == the camera's own
++     * viewportW) and NOTHING else about the camera's per-frame behaviour
++     * changes -- in particular mbCameraScissorSet() stays durable exactly
++     * as it is today (nothing in the game or its RELs calls it -- verified
++     * -- but the default-off path should not quietly acquire a new
++     * per-frame overwrite of a public setter's effect on the strength of
++     * that). */
++    Hu3DCameraScissorSet(cameraP->bit, (unsigned int)cameraP->viewportX,
++        (unsigned int)cameraP->viewportY, (unsigned int)vpW,
++        (unsigned int)cameraP->viewportH);
++    /* HU3D_CAM2 -- the board's THIRD camera. mbCameraInit creates it
++     * (Hu3DCameraCreate(cameraP->bit | HU3D_CAM2)) but deliberately leaves
++     * it out of cameraP->bit, so CameraOMExec re-issues nothing for it: it
++     * takes its whole state from Hu3DCameraCreate's defCamera template
++     * exactly once, at board load. defCamera is already widescreen-aware
++     * (game/hsfman.c's patch widens its aspect; its viewportW/scissorW come
++     * from the live RenderMode->fbWidth), so CAM2 is CORRECT for whatever
++     * the window was when the board loaded -- and frozen from then on, i.e.
++     * boxed the moment the window is resized mid-board. Only the two
++     * aspect-dependent quantities are re-derived, from the same live
++     * accessors, so heights stay exactly whatever Hu3DCameraCreate
++     * installed from RenderMode (efbHeight, which GXAdjustForOverscan may
++     * or may not have trimmed -- not this patch's business to re-decide).
++     *
++     * Written as DIRECT struct assignments rather than through
++     * Hu3DCameraViewportSet on purpose: that setter halves the vpH it is
++     * handed whenever RenderMode->xfbHeight == 240, which is safe for a
++     * value sourced from a constant (MBCAMERA's own 480, above) but would
++     * COMPOUND on a per-frame read-modify-write of the camera's own stored
++     * height. Direct field writes are the same thing mbCameraInit already
++     * does to this very camera (cam->pos/cam->target). Absolute writes from
++     * live inputs -- idempotent, never compounding.
++     *
++     * cameraP->aspect is MBCAMERA's untouched native 1.2f, which IS
++     * HU_DISP_ASPECT (576/480, game/disp.h) -- the exact constant defCamera
++     * carries -- so this reproduces defCamera's own widened aspect without
++     * introducing a second source of truth or a new header dependency. */
++    {
++        HU3D_CAMERA *cam2 = &Hu3DCamera[2];
++        cam2->aspect = cameraP->aspect * mp6_widescreen_scale_factor();
++        cam2->viewportW = vpW;
++        cam2->scissorW = (unsigned int)vpW;
++    }
++}
++
+@@ -195,6 +198,7 @@ static void CameraOMExec(OMOBJ *obj)
+ {
+     MBCAMERA *cameraP = mbCameraGet();
+     HuVecF dir;
++    mp6_board_runtime_tick();
+     if(mbExitCheck()) {
+         omDelObjEx(HuPrcCurrentGet(), obj);
+         return;
+@@ -203,1 +260,10 @@ static void CameraOMExec(OMOBJ *obj)
+-        return;
++        /* WS: a window resize while the pause menu is up must still
++         * converge -- this early return is the ONE per-frame path that
++         * would otherwise skip the camera re-derivation below. Gated on the
++         * feature flag so a disabled build's paused frames stay
++         * byte-identical (they write nothing to the camera at all, exactly
++         * as before). */
++        if(mp6_widescreen_enabled()) {
++            mp6WsBoardCameraApply(cameraP);
++        }
++        return;
+@@ -205,2 +271,1 @@ static void CameraOMExec(OMOBJ *obj)
+-    Hu3DCameraPerspectiveSet(cameraP->bit, cameraP->fov, cameraP->near, cameraP->far, cameraP->aspect);
+-    Hu3DCameraViewportSet(cameraP->bit, cameraP->viewportX, cameraP->viewportY, cameraP->viewportW, cameraP->viewportH, cameraP->viewportNear, cameraP->viewportFar);
++    mp6WsBoardCameraApply(cameraP);
+@@ -692,1 +757,15 @@ BOOL mbCameraCullCheck(HuVecF *pos, float radius)
+-    boundX = 1.2f*(tanHalfFov*-viewPos.z);
++    /* WS -- the board's own coarse visibility test, and the ONE place in
++     * the board that hardcodes the 4:3 aspect as a literal instead of
++     * reading a camera field. Its callers SKIP DRAWING entirely on a FALSE:
++     * board/object.c's ObjManOMExec (every board object with a
++     * cullRadius >= 0), and board/masu.c's two space-marker draw loops
++     * (the coloured space tiles and the capsule-space overlay). With the
++     * projection now widened to 1.2f*scale_factor(), a literal 1.2f here
++     * declares "not visible" for everything in the band between the native
++     * and the widened frustum -- i.e. board spaces and props would blink
++     * out along the left/right edges at exactly the aspects this lane
++     * unlocks. Widened by the SAME factor the projection is, so the test
++     * matches the frustum it is meant to approximate. Byte-identical (a
++     * literal 1.2f) when widescreen is disabled. */
++    boundX = (1.2f*mp6_widescreen_scale_factor())*(tanHalfFov*-viewPos.z);

@@ -13,10 +13,10 @@ OWN `_resolve_aurora_link_items()` -- the single source of truth for which
 archives the link step needs -- rather than re-deriving/duplicating that
 ~90-item list here (which would drift the moment build.py's list changes).
 Existence is necessary but NOT sufficient: the archives must also be
-CURRENT, so is_ready() validates a build fingerprint (the pinned commit +
-every patch file's content, stamped into the checkout after a build) and,
-for a hand-built tree that carries no stamp, falls back to comparing
-archive mtimes against the patch series. A stale tree is reported as such
+CURRENT, so is_ready() validates a build fingerprint (the verified checkout
+commit + every patch file's content, stamped into the checkout after a build)
+and content-checks the patched source/carve-out contract before adopting a
+hand-built stamp-less tree. A stale tree is reported as such
 instead of being handed to a link that would then fail.
 
 If Aurora truly isn't built yet, the default behavior is to print the exact
@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 from . import common
@@ -59,6 +60,23 @@ BUILD_TARGETS = ["aurora_pad", "aurora_si", "aurora_card", "aurora_mtx",
 # existence would happily hand a stale archive to the link step, which then
 # fails (or worse, links code that no longer matches the patches in tree).
 STAMP_NAME = ".mp6-aurora-build.json"
+BUILD_CONTRACT_VERSION = 4
+ARTIFACT_STAMP_VERSION = 4
+
+
+def _host_section_header():
+    return os.path.join(common.NATIVE_ROOT, "shim", "include", "mp6_host_section.h")
+
+
+def _carveout_cmake_args():
+    """Flags required by tools/build.py's verify_aurora_carveout()."""
+    header = _host_section_header().replace("\\", "/")
+    forced = f"-include {header}"
+    return [
+        f"-DCMAKE_C_FLAGS={forced}",
+        f"-DCMAKE_CXX_FLAGS={forced}",
+        "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON",
+    ]
 
 
 def _load_build_module():
@@ -94,13 +112,63 @@ def _patch_files():
     return [os.path.join(d, n) for n in sorted(os.listdir(d)) if n.endswith(".patch")]
 
 
-def build_fingerprint(pin=None):
+def verified_checkout_commit(pin=None):
+    """Return Aurora's full HEAD commit after proving it resolves to *pin*."""
+    pin = pin or read_aurora_pin()
+
+    def resolve(ref):
+        try:
+            proc = subprocess.run(
+                ["git", "-C", common.AURORA_DIR, "rev-parse", "--verify", ref],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+        except OSError as exc:
+            raise RuntimeError(f"cannot run Git to verify Aurora checkout: {exc}") from exc
+        commit = proc.stdout.strip().lower()
+        if proc.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            detail = proc.stderr.strip()
+            raise RuntimeError(
+                f"cannot resolve Aurora Git ref {ref!r} in {common.AURORA_DIR}"
+                + (f": {detail}" if detail else "")
+            )
+        return commit
+
+    head = resolve("HEAD")
+    expected = resolve(pin)
+    if head != expected:
+        raise RuntimeError(
+            f"Aurora checkout is at {head}, but the pinned commit {pin!r} resolves to {expected}"
+        )
+    return head
+
+
+def build_fingerprint(pin=None, zig_tree=None):
     """A hash of exactly what a built Aurora tree is supposed to CONTAIN: the
     pinned upstream commit plus every patch file's name and content. Any pin
     bump or patch edit changes it, which is precisely when the built archives
     stop matching the sources and have to be rebuilt."""
     h = hashlib.sha256()
-    h.update((pin or read_aurora_pin()).encode("utf-8"))
+    h.update(f"contract:{BUILD_CONTRACT_VERSION}\n".encode("ascii"))
+    pin = pin or read_aurora_pin()
+    h.update(pin.encode("utf-8"))
+    h.update(b"\ncheckout-commit:")
+    h.update(verified_checkout_commit(pin).encode("ascii"))
+    for arg in _carveout_cmake_args():
+        h.update(arg.encode("utf-8"))
+    header = _host_section_header()
+    if os.path.isfile(header):
+        with open(header, "rb") as f:
+            h.update(hashlib.sha256(f.read()).digest())
+    # Aurora compiler output depends on Zig's bundled headers/libraries as
+    # well as zig.exe. Bind the full verified install tree, not a shallow
+    # executable hash.
+    from . import step_toolchain
+    zig = step_toolchain.zig_exe_path()
+    if not os.path.isfile(zig):
+        raise RuntimeError(f"pinned Zig executable is missing: {zig}")
+    if zig_tree is None:
+        zig_tree = step_toolchain.verified_required_zig_tree()
+    h.update(json.dumps(zig_tree, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     for p in _patch_files():
         h.update(os.path.basename(p).encode("utf-8"))
         with open(p, "rb") as f:
@@ -120,15 +188,127 @@ def read_stamp():
         return None
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_manifest(paths):
+    records = []
+    seen = set()
+    for raw_path in paths:
+        path = os.path.realpath(os.fspath(raw_path))
+        key = os.path.normcase(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not os.path.isfile(path):
+            raise RuntimeError(f"required Aurora link/runtime/config input is missing: {path}")
+        records.append({
+            "path": path,
+            "bytes": os.path.getsize(path),
+            "sha256": _sha256_file(path),
+        })
+    records.sort(key=lambda item: os.path.normcase(item["path"]))
+    return records
+
+
+def _profile_paths(build, profile, items=None):
+    if profile == "windows":
+        items = build._resolve_aurora_link_items() if items is None else items
+        paths = [item for item in items if not item.startswith("-")]
+        paths += list(build.AURORA_RUNTIME_DLLS)
+        paths += [build.NOD_WIN_LIB]
+        build_dir = build.AURORA_BUILD_RMLUI
+    elif profile == "android":
+        items = build._resolve_android_aurora_link_items() if items is None else items
+        paths = [item for item in items if not item.startswith("-")]
+        paths += [build.NOD_ANDROID_LIB]
+        build_dir = build.AURORA_BUILD_ANDROID_RMLUI
+    else:
+        raise RuntimeError(f"unknown Aurora artifact profile: {profile}")
+    paths += [os.path.join(build_dir, "CMakeCache.txt"), os.path.join(build_dir, "build.ninja")]
+    return paths
+
+
+def _artifact_profile_problem(paths, recorded):
+    try:
+        actual = _artifact_manifest(paths)
+    except RuntimeError as exc:
+        return str(exc)
+    if not isinstance(recorded, list):
+        return "Aurora stamp has no artifact manifest for this link profile"
+    if actual != recorded:
+        by_path = {os.path.normcase(item.get("path", "")): item for item in recorded
+                   if isinstance(item, dict)}
+        for item in actual:
+            prior = by_path.get(os.path.normcase(item["path"]))
+            if prior != item:
+                return (f"Aurora artifact identity mismatch for {item['path']}: "
+                        f"stamp={prior!r}, actual={item!r}")
+        return "Aurora artifact manifest contains stale or extra inputs"
+    return None
+
+
+def verify_link_inputs(profile, build_module=None, items=None, check_fingerprint=True):
+    build = build_module or _load_build_module()
+    stamp = read_stamp()
+    if not isinstance(stamp, dict) or stamp.get("artifact_stamp_version") != ARTIFACT_STAMP_VERSION:
+        return [f"Aurora artifact stamp is absent/obsolete: {_stamp_path()}"]
+    if check_fingerprint:
+        try:
+            current_fingerprint = build_fingerprint(
+                zig_tree=getattr(build, "_VERIFIED_ZIG_TREE_IDENTITY", None)
+            )
+        except Exception as exc:  # noqa: BLE001
+            return [f"couldn't verify Aurora source/Zig build fingerprint: {exc}"]
+        if stamp.get("fingerprint") != current_fingerprint:
+            return [
+                f"Aurora source/Zig fingerprint mismatch: stamp={stamp.get('fingerprint')!r}, "
+                f"actual={current_fingerprint!r}"
+            ]
+    try:
+        paths = _profile_paths(build, profile, items=items)
+    except Exception as exc:  # noqa: BLE001
+        return [f"couldn't resolve Aurora {profile} profile: {exc}"]
+    problem = _artifact_profile_problem(paths, (stamp.get("profiles") or {}).get(profile))
+    return [problem] if problem else []
+
+
 def write_stamp(pin, trees):
+    build = _load_build_module()
+    checkout_commit = verified_checkout_commit(pin)
+    profiles = {}
+    for profile in ("windows", "android"):
+        try:
+            profiles[profile] = _artifact_manifest(_profile_paths(build, profile))
+        except Exception:
+            if profile == "windows":
+                raise
     data = {
+        "artifact_stamp_version": ARTIFACT_STAMP_VERSION,
         "fingerprint": build_fingerprint(pin),
         "pin": pin,
+        "checkout_commit": checkout_commit,
         "patches": [os.path.basename(p) for p in _patch_files()],
+        "profiles": profiles,
         "trees": list(trees),
     }
-    with open(_stamp_path(), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, sort_keys=True)
+    path = _stamp_path()
+    tmp = f"{path}.part-{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
     return data
 
 
@@ -147,12 +327,121 @@ def _stale_by_mtime(archives):
             if os.path.exists(a) and os.path.getmtime(a) < newest_src]
 
 
+def _patch_source_roots():
+    roots = [common.AURORA_DIR]
+    # Prefer the RmlUi tree because it is what the windowed executable links.
+    for tree_name in ("build-rmlui", "build"):
+        deps = os.path.join(common.AURORA_DIR, tree_name, "_deps")
+        if os.path.isdir(deps):
+            roots.extend(os.path.join(deps, d) for d in sorted(os.listdir(deps))
+                         if d.endswith("-src") and os.path.isdir(os.path.join(deps, d)))
+    return roots
+
+
+def _section_is_applied(apply_patches_mod, text, body):
+    lines = text.splitlines(keepends=True)
+    for hunk in apply_patches_mod._parse_hunks(body):
+        new_lines = hunk["new_lines"]
+        if not new_lines:
+            continue
+        begin = hunk["new_start"] - 1
+        if begin < 0 or lines[begin:begin + len(new_lines)] != new_lines:
+            return False
+    return True
+
+
+def _verify_patch_sources():
+    """Content-verifies a stamp-less hand-built checkout.
+
+    Comparing every dependency archive mtime to the newest patch rejected
+    correct trees forever (prebuilt/unaffected libraries naturally keep older
+    mtimes). Instead verify the post-patch text itself in the shared Aurora or
+    fetched dependency source trees.
+    """
+    sys.path.insert(0, os.path.join(common.NATIVE_ROOT, "tools"))
+    import apply_patches as apply_patches_mod
+
+    roots = _patch_source_roots()
+    problems = []
+    expected = {}
+    actual_paths = {}
+    dependency_sections = []
+    pin = read_aurora_pin()
+    for patch in _patch_files():
+        with open(patch, "r", encoding="utf-8", errors="surrogateescape") as f:
+            sections = split_patch_sections(f.read())
+        for section in sections:
+            rel = section["new"] or section["old"]
+            if rel not in expected:
+                proc = subprocess.run(
+                    ["git", "-C", common.AURORA_DIR, "show", f"{pin}:{rel}"],
+                    capture_output=True,
+                )
+                if proc.returncode == 0:
+                    expected[rel] = proc.stdout.decode("utf-8", "surrogateescape")
+                    actual_paths[rel] = os.path.join(common.AURORA_DIR, *rel.split("/"))
+                elif section["old"] is None:
+                    expected[rel] = ""
+                    actual_paths[rel] = os.path.join(common.AURORA_DIR, *rel.split("/"))
+                else:
+                    dependency_sections.append((patch, section, rel))
+                    continue
+            try:
+                expected[rel] = apply_patches_mod.apply_unified_diff(
+                    expected[rel], section["body"], label=f"verify:{os.path.basename(patch)}:{rel}")
+            except ValueError as exc:
+                problems.append(str(exc))
+
+    # Aurora-owned files can be verified exactly by replaying the whole patch
+    # queue from the pinned Git object. This remains correct when later patches
+    # intentionally edit lines introduced by earlier ones.
+    for rel, want in expected.items():
+        target = actual_paths[rel]
+        try:
+            with open(target, "r", encoding="utf-8", errors="surrogateescape") as f:
+                got = f.read()
+        except OSError:
+            problems.append(f"patched Aurora target is absent: {rel}")
+            continue
+        if got != want:
+            problems.append(f"patched Aurora target differs from replayed queue: {rel}")
+
+    # FetchContent dependencies are outside Aurora's Git object database.
+    # No later port patch edits the same dependency targets, so verify their
+    # final added/context blocks directly in the linked RmlUi dependency tree.
+    for patch, section, rel in dependency_sections:
+        candidates = [os.path.join(root, *rel.split("/")) for root in roots]
+        candidates = [p for p in candidates if os.path.isfile(p)]
+        if not candidates:
+            problems.append(f"{os.path.basename(patch)}: dependency target is absent: {rel}")
+            continue
+        applied = False
+        for target in candidates:
+            with open(target, "r", encoding="utf-8", errors="surrogateescape") as f:
+                if _section_is_applied(apply_patches_mod, f.read(), section["body"]):
+                    applied = True
+                    break
+        if not applied:
+            problems.append(f"{os.path.basename(patch)}: post-patch content not found in {rel}")
+    return problems
+
+
+def _verify_carveout(build):
+    checks = [
+        (os.path.join(build.AURORA_BUILD_RMLUI, "libaurora_gx.a"), ".mp6hbss"),
+        (os.path.join(build.AURORA_BUILD_RMLUI, "librmlui.a"), ".mp6hbss"),
+        (os.path.join(build.AURORA_BUILD_RMLUI, "extern", "libsqlite3.a"), ".mp6hdat"),
+    ]
+    return [f"{path}: missing required savestate carve-out section {section}"
+            for path, section in checks
+            if not os.path.isfile(path) or not build._ar_has_section(path, section)]
+
+
 def is_ready():
     """(bool ready, list problems) -- reuses tools/build.py's own archive
     resolution so this can never silently drift from what the link step
-    actually needs, then checks those archives are CURRENT (fingerprint stamp,
-    or an mtime-vs-patches fallback for a hand-built tree) rather than merely
-    present."""
+    actually needs, then checks those archives are CURRENT (fingerprint stamp
+    or verified stamp-less source content) rather than merely present."""
     try:
         build = _load_build_module()
         items = build._resolve_aurora_link_items()
@@ -165,7 +454,10 @@ def is_ready():
 
     stamp = read_stamp()
     if stamp is not None:
-        want = build_fingerprint()
+        try:
+            want = build_fingerprint()
+        except Exception as exc:  # noqa: BLE001
+            return False, [f"couldn't fingerprint full Zig/Aurora build contract: {exc}"]
         if stamp.get("fingerprint") != want:
             return False, [
                 f"aurora build fingerprint mismatch: {_stamp_path()} records "
@@ -174,15 +466,21 @@ def is_ready():
                 f"platform/gx/aurora-patches/ hash to {want[:12]}... -- the archives are "
                 f"stale and must be rebuilt"
             ]
-        return True, []
+        structural = (verify_link_inputs("windows", build_module=build, items=items,
+                                         check_fingerprint=False)
+                      + _verify_patch_sources() + _verify_carveout(build))
+        if "android" in (stamp.get("profiles") or {}):
+            structural = (verify_link_inputs(
+                "android", build_module=build, check_fingerprint=False
+            ) + structural)
+        return (not structural), structural
 
-    stale = _stale_by_mtime(archives)
-    if stale:
-        return False, stale + [
-            f"(no {STAMP_NAME} stamp in {common.AURORA_DIR}: fell back to comparing archive "
-            f"mtimes against platform/gx/aurora-patches/)"
-        ]
-    return True, []
+    # Stamp-less/manual build recovery: verify actual patched source content
+    # and the archive section invariant, then ensure_aurora() can adopt it by
+    # writing the current fingerprint. This is deterministic and does not use
+    # unrelated third-party archive mtimes as a proxy for patch application.
+    structural = _verify_patch_sources() + _verify_carveout(build)
+    return (not structural), structural
 
 
 def _print_manual_recipe(missing):
@@ -220,6 +518,9 @@ def _print_manual_recipe(missing):
          -DCMAKE_CXX_COMPILER={wrappers}\\zigcxx.bat ^
          -DCMAKE_RC_COMPILER={wrappers}\\zigrc.bat ^
          -DCMAKE_EXE_LINKER_FLAGS=-L{wrappers}\\stub-libs ^
+         -DCMAKE_C_FLAGS="-include {_host_section_header()}" ^
+         -DCMAKE_CXX_FLAGS="-include {_host_section_header()}" ^
+         -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON ^
          -DAURORA_DAWN_PROVIDER=package -DAURORA_SDL3_PROVIDER=package ^
          -DAURORA_ENABLE_RMLUI=OFF
        cmake --build {common.AURORA_DIR}\\build --target {' '.join(BUILD_TARGETS)}
@@ -316,17 +617,18 @@ def _write_wrapper_scripts(zig_exe):
                     f"set ZIG_LOCAL_CACHE_DIR={cache}\r\n"
                     f'"{zig_exe}" {verb} -target x86_64-windows-gnu %*\r\n')
     zigrc_impl = os.path.join(wrappers, "zigrc_impl.ps1")
-    if not os.path.exists(zigrc_impl):
-        with open(zigrc_impl, "w", newline="\r\n") as f:
-            f.write(_ZIGRC_IMPL_PS1.format(zig_exe=zig_exe))
-        common.ok(f"generated {zigrc_impl}")
+    # These files embed absolute workspace/toolchain paths. Refresh them on
+    # every provisioning attempt so moving the checkout or changing Zig never
+    # leaves the RC compiler pointing at the previous location.
+    with open(zigrc_impl, "w", newline="\r\n") as f:
+        f.write(_ZIGRC_IMPL_PS1.format(zig_exe=zig_exe))
+    common.ok(f"generated {zigrc_impl}")
     zigrc = os.path.join(wrappers, "zigrc.bat")
-    if not os.path.exists(zigrc):
-        with open(zigrc, "w", newline="\r\n") as f:
-            f.write("@echo off\r\n"
-                    f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{zigrc_impl}" %*\r\n'
-                    "exit /b %ERRORLEVEL%\r\n")
-        common.ok(f"generated {zigrc}")
+    with open(zigrc, "w", newline="\r\n") as f:
+        f.write("@echo off\r\n"
+                f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{zigrc_impl}" %*\r\n'
+                "exit /b %ERRORLEVEL%\r\n")
+    common.ok(f"generated {zigrc}")
     return wrappers
 
 
@@ -480,7 +782,7 @@ def _configure_and_build_tree(cmake, build_dir, wrappers, rmlui, apply_patches_m
         f"-DCMAKE_EXE_LINKER_FLAGS=-L{os.path.join(wrappers, 'stub-libs')}",
         "-DAURORA_DAWN_PROVIDER=package", "-DAURORA_SDL3_PROVIDER=package",
         f"-DAURORA_ENABLE_RMLUI={'ON' if rmlui else 'OFF'}",
-    ]
+    ] + _carveout_cmake_args()
     env = {"MSYS2_ARG_CONV_EXCL": "*"}
     common.run(args, env=env)
 
@@ -550,6 +852,15 @@ def ensure_aurora(auto_build=False, url=None, assume_yes=False):
     url = url or os.environ.get("MP6_AURORA_URL") or DEFAULT_AURORA_URL
     ready, missing = is_ready()
     if ready:
+        stamp = read_stamp()
+        needs_adoption = stamp is None
+        if (not needs_adoption
+                and "android" not in (stamp.get("profiles") or {})):
+            build = _load_build_module()
+            needs_adoption = os.path.isdir(build.AURORA_BUILD_ANDROID_RMLUI)
+        if needs_adoption:
+            write_stamp(read_aurora_pin(), ["build", "build-rmlui"])
+            common.ok(f"verified and adopted Aurora artifact profiles: {_stamp_path()}")
         common.ok(f"Aurora already built and ready: {common.AURORA_DIR}")
         return True
 
@@ -561,10 +872,9 @@ def ensure_aurora(auto_build=False, url=None, assume_yes=False):
         _print_manual_recipe(missing)
         raise common.SetupError(
             f"{common.AURORA_DIR} exists but its build is not current (see the problems above)",
-            hint="re-apply the changed patch(es) to that tree and re-run the two `cmake --build` "
-                 "invocations from the recipe, then delete "
-                 f"{_stamp_path()} (or rerun --build-aurora on a removed checkout for a clean "
-                 "from-scratch rebuild)")
+            hint="re-apply the changed patch(es), reconfigure with every flag in the printed recipe, "
+                 "re-run both builds, then delete the old stamp and re-run setup; the stamp-less "
+                 "verifier will content-check and adopt the rebuilt tree")
 
     if not auto_build:
         _print_manual_recipe(missing)

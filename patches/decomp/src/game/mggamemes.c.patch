@@ -1,0 +1,5 @@
+--- a/src/game/mggamemes.c
++++ b/src/game/mggamemes.c
+@@ -2269 +2269 @@
+-    if(type < 0 && type >= 6) {
++    if(type < 0 || type >= 6) {

@@ -50,6 +50,7 @@ static SDL_AudioStream *g_stream;
 static int g_typicalAdditionalBytes;
 static uint32_t g_starvationCount;
 static uint32_t g_callbackCount;
+static int g_putFailureReported;
 
 /* Launcher-owned master gain, applied via
  * SDL's own per-stream gain (SDL_SetAudioStreamGain -- multiplies during
@@ -92,7 +93,8 @@ static void SDLCALL mp6_audio_callback(void *userdata, SDL_AudioStream *stream, 
 
     if (g_typicalAdditionalBytes == 0) {
         g_typicalAdditionalBytes = additional_amount;
-    } else if (additional_amount > g_typicalAdditionalBytes * 2) {
+    } else if (g_typicalAdditionalBytes <= INT32_MAX / 2 &&
+               additional_amount > g_typicalAdditionalBytes * 2) {
         g_starvationCount++;
         printf("[AUDIO] SDL requested %d bytes this callback (typical ~%d) -- possible underrun #%u\n",
                additional_amount, g_typicalAdditionalBytes, (unsigned)g_starvationCount);
@@ -108,7 +110,17 @@ static void SDLCALL mp6_audio_callback(void *userdata, SDL_AudioStream *stream, 
         uint32_t maxChunk = (uint32_t)(sizeof(scratch) / sizeof(scratch[0])) / MP6_MSM_OUT_CHANNELS;
         if (chunk > maxChunk) chunk = maxChunk;
         mp6_msm_render(scratch, chunk);
-        SDL_PutAudioStreamData(stream, scratch, (int)(chunk * MP6_MSM_OUT_CHANNELS * sizeof(int16_t)));
+        if (!SDL_PutAudioStreamData(stream, scratch,
+                                    (int)(chunk * MP6_MSM_OUT_CHANNELS * sizeof(int16_t)))) {
+            /* Do not spin through the rest of a request after the stream
+             * has rejected the first chunk. The next callback may recover;
+             * this one cannot publish useful audio anymore. */
+            if (!g_putFailureReported) {
+                g_putFailureReported = 1;
+                fprintf(stderr, "[AUDIO] SDL_PutAudioStreamData failed: %s\n", SDL_GetError());
+            }
+            return;
+        }
         remaining -= chunk;
     }
 }
@@ -116,6 +128,8 @@ static void SDLCALL mp6_audio_callback(void *userdata, SDL_AudioStream *stream, 
 void mp6_audio_out_init(void)
 {
     SDL_AudioSpec spec;
+
+    g_putFailureReported = 0;
 
     if (!SDL_WasInit(SDL_INIT_AUDIO)) {
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
@@ -141,7 +155,11 @@ void mp6_audio_out_init(void)
         SDL_SetAudioStreamGain(g_stream, g_mp6MasterGain);
     }
     if (!SDL_ResumeAudioStreamDevice(g_stream)) {
-        printf("[AUDIO] SDL_ResumeAudioStreamDevice failed: %s\n", SDL_GetError());
+        printf("[AUDIO] SDL_ResumeAudioStreamDevice failed: %s -- no music will play\n",
+               SDL_GetError());
+        SDL_DestroyAudioStream(g_stream);
+        g_stream = NULL;
+        return;
     }
     printf("[AUDIO] SDL3 audio device open: %d Hz, %d ch, S16 -- real-time playback ACTIVE\n",
            spec.freq, spec.channels);

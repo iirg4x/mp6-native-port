@@ -17,7 +17,9 @@
 #include "dolphin.h"
 #include "mp6_shim_log.h"
 #include "host.h" /* mp6_host_arena_reserve */
+#include "mp6_alloc_size.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -50,14 +52,14 @@ u32 mp6_arena_size(void) { return MP6_ARENA_SIZE; }
 void mp6_arena_init(void)
 {
     /* The candidate-base loop (0x80000000 first -- game/memory.c's
-     * BLOCK_CHECK_BROKEN high-bit check) plus the OS-picked fallback and
-     * its [WARN] live in mp6_host_arena_reserve (the host backends). This
-     * TU keeps the FATAL policy: NULL means even the anywhere-fallback
-     * failed. */
+     * BLOCK_CHECK_BROKEN high-bit check) plus the verified OS-picked
+     * fallback live in mp6_host_arena_reserve (the host backends). This TU
+     * keeps the FATAL policy and independently verifies the ABI invariant. */
     void *got = mp6_host_arena_reserve(MP6_ARENA_SIZE);
 
-    if (!got) {
-        fprintf(stderr, "[FATAL] mp6_arena_init: VirtualAlloc failed for %u bytes at any base\n",
+    if (!got || !mp6_host_range_below_4gb(got, MP6_ARENA_SIZE)) {
+        fprintf(stderr, "[FATAL] mp6_arena_init: could not reserve an entirely low-4GB "
+                        "game arena of %u bytes\n",
                 (unsigned)MP6_ARENA_SIZE);
         exit(1);
     }
@@ -69,7 +71,7 @@ void mp6_arena_init(void)
 
     printf("[BOOT] arena: base=%p size=%uMB (%s 4GB)\n",
            (void *)g_arenaBase, MP6_ARENA_SIZE / (1024 * 1024),
-           (((uintptr_t)g_arenaBase + MP6_ARENA_SIZE) <= 0xFFFFFFFFu) ? "below" : "ABOVE");
+           mp6_host_range_below_4gb(g_arenaBase, MP6_ARENA_SIZE) ? "below" : "ABOVE");
     fflush(stdout);
 }
 
@@ -165,10 +167,25 @@ void *OSAllocFromHeap(OSHeapHandle heap, u32 size)
         return NULL;
     }
     {
-        u32 rounded = (size + 31u) & ~31u;
+        u32 rounded;
         BumpHeap *h = &g_heaps[heap];
         u8 *curBefore = h->cur;
-        if (h->cur + rounded > h->end) {
+        size_t remaining;
+        if (!mp6_os_heap_checked_request(size, &rounded)) {
+            printf("[HEAPTRACE] OSAllocFromHeap(heap=%d, size=%u) -> NULL "
+                   "(zero/rounding overflow)\n", heap, size);
+            fflush(stdout);
+            return NULL;
+        }
+        if (h->cur == NULL || h->end == NULL || h->cur > h->end) {
+            printf("[HEAPTRACE] OSAllocFromHeap(heap=%d, size=%u/rounded=%u) -> NULL "
+                   "(invalid heap bounds: cur=%p end=%p)\n",
+                   heap, size, rounded, (void *)h->cur, (void *)h->end);
+            fflush(stdout);
+            return NULL;
+        }
+        remaining = (size_t)(h->end - h->cur);
+        if ((size_t)rounded > remaining) {
             printf("[HEAPTRACE] OSAllocFromHeap(heap=%d, size=%u/rounded=%u) -> NULL (exhausted: cur=%p end=%p)\n",
                    heap, size, rounded, (void *)h->cur, (void *)h->end);
             fflush(stdout);

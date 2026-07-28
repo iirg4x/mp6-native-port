@@ -766,11 +766,6 @@ __attribute__((weak)) s32 msmSeUpdataListener(Vec *pos, Vec *heading)
     return (s32)0;
 }
 
-__attribute__((weak)) void msmSysCheckInit(void)
-{
-    MP6_LOG_ONCE("MSM", "msmSysCheckInit");
-}
-
 __attribute__((weak)) s32 msmSysSetAux(s32 auxA, s32 auxB)
 {
     MP6_LOG_ONCE("MSM", "msmSysSetAux");

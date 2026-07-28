@@ -1,0 +1,138 @@
+diff --git a/include/dolphin/gx/GXAurora.h b/include/dolphin/gx/GXAurora.h
+--- a/include/dolphin/gx/GXAurora.h
++++ b/include/dolphin/gx/GXAurora.h
+@@ -88,6 +88,12 @@
+  */
+ #define GX_AURORA_SET_COPY_MIP_GEN 0x003B
+ 
++/**
++ * Drops cached offscreen color/depth targets once queued users have taken
++ * their own references. Followed by nothing.
++ */
++#define GX_AURORA_DESTROY_FRAMEBUFFER_CACHE 0x003C
++
+ /**
+  * Draw primitives with the vertex count derived from a byte length, as written by
+  * GXBegin(prim, fmt, GX_AUTO). Must be followed by a u8 draw opcode (vtxfmt|prim),
+@@ -184,6 +190,12 @@ void GXRestoreFrameBuffer(void);
+  */
+ void GXSetTexCopyMipGen(u32 enable);
+ 
++/**
++ * FIFO-orders retirement of cached offscreen color/depth targets. Render
++ * packets already queued keep their references alive until submission.
++ */
++void GXDestroyFrameBufferCache(void);
++
+ #if __cplusplus
+ }
+ #endif
+diff --git a/lib/dolphin/gx/GXAurora.cpp b/lib/dolphin/gx/GXAurora.cpp
+--- a/lib/dolphin/gx/GXAurora.cpp
++++ b/lib/dolphin/gx/GXAurora.cpp
+@@ -98,2 +98,6 @@ void GXSetTexCopyMipGen(u32 enable) {
+   GX_WRITE_U8(enable != 0);
+ }
++
++void GXDestroyFrameBufferCache() {
++  GX_WRITE_AURORA(GX_AURORA_DESTROY_FRAMEBUFFER_CACHE);
++}
+diff --git a/lib/dolphin/gx/GXFrameBuffer.cpp b/lib/dolphin/gx/GXFrameBuffer.cpp
+--- a/lib/dolphin/gx/GXFrameBuffer.cpp
++++ b/lib/dolphin/gx/GXFrameBuffer.cpp
+@@ -50,8 +50,23 @@ void copy_tex(const void* dest, GXBool clear) noexcept {
+       .format = texCopyFmt,
+       .mips = mips,
+   };
+   auto it = g_gxState.copyTextureCache.find(key);
+   if (it == g_gxState.copyTextureCache.end()) {
++    // A CPU copy destination has one current geometry. Keeping older
++    // width/height/mip variants alive serves no sampled texture --
++    // copyTextures[dest] can name only the latest one -- and quality changes
++    // otherwise strand every previous shadow-map allocation. Use the normal
++    // eviction path so dependent palette conversions are retired too.
++    bool hasOldGeometry = false;
++    for (const auto& [oldKey, _] : g_gxState.copyTextureCache) {
++      if (oldKey.dest == dest) {
++        hasOldGeometry = true;
++        break;
++      }
++    }
++    if (hasOldGeometry) {
++      evict_copy_texture(dest);
++    }
+     gfx::TextureHandle handle;
+     if (gfx::tex_copy_conv::needs_conversion(texCopyFmt)) {
+       handle = gfx::new_conv_texture(dstWidth, dstHeight, texCopyFmt, "Copy Conv Texture", mips);
+diff --git a/lib/gfx/common.hpp b/lib/gfx/common.hpp
+--- a/lib/gfx/common.hpp
++++ b/lib/gfx/common.hpp
+@@ -259,6 +259,7 @@ void queue_texture_copy(wgpu::TexelCopyTextureInfo src, wgpu::TexelCopyTextureInfo dst, wgpu::Extent3D size);
+ 
+ void begin_offscreen(uint32_t width, uint32_t height);
+ void end_offscreen();
++void clear_offscreen_cache();
+ bool is_offscreen() noexcept;
+ uint32_t get_sample_count() noexcept;
+ void clear_caches() noexcept;
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -500,16 +500,16 @@ struct OffscreenCacheEntry {
+ static absl::flat_hash_map<OffscreenCacheKey, OffscreenCacheEntry> g_offscreenCache;
+ // [MP6] Bound g_offscreenCache. It is keyed by (width,height) and was only
+ // ever cleared on surface resize (clear_caches) or shutdown, so any workload
+ // that renders offscreen passes at several distinct sizes over a run --
+ // notably cycling the Mods-page Shadow Quality, whose offscreen shadow pass
+ // resolves at (size*scale*2)^2 -- accreted a full-resolution color + depth
+ // target pair per distinct size for the entire process lifetime (hundreds of
+-// MiB of GPU memory, a device-loss risk). Retain only the most-recently-used
+-// MP6_OFFSCREEN_CACHE_MAX sizes; the least-recently-used entry is evicted (its
+-// wgpu textures freed as their refcounts drop) before a new size is inserted.
+-// No-op until more than that many DISTINCT sizes have actually been requested:
+-// a steady quality setting uses exactly one size, and native/2x uses none.
+-static constexpr size_t MP6_OFFSCREEN_CACHE_MAX = 4;
++// MiB of GPU memory, a device-loss risk). Retain only the latest size; queued
++// render packets hold their own texture references, so eviction safely retires
++// the previous quality allocation once GPU work using it completes. Shadow
++// teardown also calls clear_offscreen_cache(), which matters when dropping
++// from an offscreen quality to native/2x (no replacement target is requested).
++static constexpr size_t MP6_OFFSCREEN_CACHE_MAX = 1;
+ static uint64_t g_offscreenClock = 0;
+ 
+ // Pooled destinations for the public resolve_pass API. Entries are recycled
+@@ -977,8 +977,10 @@ uint32_t get_sample_count() noexcept {
+   return current_render_passes()[g_currentRenderPass].msaaSamples;
+ }
+ 
++void clear_offscreen_cache() { g_offscreenCache.clear(); }
++
+ void clear_caches() noexcept {
+-  g_offscreenCache.clear();
++  clear_offscreen_cache();
+   std::lock_guard lock{g_bindGroupCacheMutex};
+   g_cachedBindGroups.clear();
+ }
+diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -1883,6 +1883,8 @@ static void handle_aurora_command(const uint8_t* data, size_t size, size_t& pos, bool bigEndian) {
+     CHECK(pos + 1 <= size, "GX_AURORA_SET_COPY_MIP_GEN read overrun");
+     g_gxState.texCopyMipGen = data[pos] != 0;
+     pos += 1;
++  } else if (subCmd == GX_AURORA_DESTROY_FRAMEBUFFER_CACHE) {
++    gfx::clear_offscreen_cache();
+   } else if (subCmd == GX_AURORA_DESTROY_TEXOBJ) {
+     CHECK(pos + 4 <= size, "GX_AURORA_DESTROY_TEXOBJ read overrun");
+     evict_texture_object(read_u32(data + pos, bigEndian));
+diff --git a/tests/gx_test_stubs.cpp b/tests/gx_test_stubs.cpp
+--- a/tests/gx_test_stubs.cpp
++++ b/tests/gx_test_stubs.cpp
+@@ -184,6 +184,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
+                        Vec4<float> clearColorValue, float clearDepthValue, GXTexFmt resolveFormat) {}
+ void queue_palette_conv(tex_palette_conv::ConvRequest req) {}
+ void begin_offscreen(uint32_t width, uint32_t height) {}
+ void end_offscreen() {}
++void clear_offscreen_cache() {}
+ bool is_offscreen() noexcept { return false; }
+ } // namespace aurora::gfx

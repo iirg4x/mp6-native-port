@@ -83,8 +83,9 @@ def parse_args(argv):
     p.add_argument("--build-aurora", action="store_true",
                    help="if Aurora isn't already built, attempt a from-scratch build (best-effort, "
                         "20-60+ minutes; default: print the manual recipe and stop)")
-    p.add_argument("--headless-only", action="store_true", help="only build mp6native_headless.exe")
-    p.add_argument("--windowed-only", action="store_true", help="only build mp6native.exe (windowed)")
+    modes = p.add_mutually_exclusive_group()
+    modes.add_argument("--headless-only", action="store_true", help="only build mp6native_headless.exe")
+    modes.add_argument("--windowed-only", action="store_true", help="only build mp6native.exe (windowed)")
     p.add_argument("--coro-fibers", action="store_true", help="passthrough to tools/build.py's A/B lever")
     p.add_argument("--dist-dir", metavar="PATH", help="where to assemble the runnable build "
                    "(default: <this checkout>/dist)")
@@ -115,7 +116,11 @@ def main(argv=None):
             return 1
 
         common.step(2, total_steps, "Toolchain (zig compiler + nod disc-image library)")
-        step_toolchain.ensure_zig(assume_yes=args.yes)
+        # The executable build is currently Windows-hosted. Unix/macOS runs
+        # still perform the portable source/disc preparation, using the Nod
+        # binary for the actual host instead of downloading zig.exe.
+        if common.IS_WINDOWS:
+            step_toolchain.ensure_zig(assume_yes=args.yes)
         step_toolchain.ensure_nod(assume_yes=args.yes)
 
         common.step(3, total_steps, "Decomp source (game code, fetched as source, read-only)")
@@ -129,6 +134,17 @@ def main(argv=None):
             force=args.force_disc, assume_yes=args.yes,
         )
         step_disc.run_decomp_split(decomp_dir)
+
+        if not common.IS_WINDOWS:
+            if args.android:
+                raise common.SetupError(
+                    "--android currently requires a Windows host",
+                    hint="portable decomp/disc preparation completed; run the executable build stages on Windows",
+                )
+            common.banner("Portable preparation complete")
+            print(f"  Decomp source and extracted GP6E01 content are ready at: {decomp_dir}")
+            print("  The executable build is currently Windows-hosted; reuse this workspace on Windows to continue.")
+            return 0
 
         common.step(5, total_steps, "Aurora graphics backend (detect existing build, or build it)")
         step_aurora.ensure_aurora(auto_build=args.build_aurora, url=args.aurora_url, assume_yes=args.yes)

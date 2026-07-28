@@ -1,5 +1,8 @@
 --- a/src/game/hsfanim.c
 +++ b/src/game/hsfanim.c
+@@ -10,0 +11,2 @@
++#include "mp6_anim_native.h"
++
 @@ -89 +89,29 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* This function already treats "not a live anim slot"
@@ -36,6 +39,38 @@
 +        return;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
+@@ -186,3 +214,29 @@
+-    if(--texAnimP->anim->useNum <= 0) {
+-        HuMemDirectFree(texAnimP->anim);
+-    }
++    /* texAnimP->anim is an ANIMDATA graph that this file obtained from
++     * HuSprAnimRead (Hu3DAnimCreate, above) -- and under this port that
++     * function is mp6_anim_read(), which REGISTERS the graph with the
++     * native ANM ownership table (platform/sprite/anim_native.c). The
++     * original code frees it with a raw HuMemDirectFree, which orphans
++     * the table record and, when the packed backing bytes are a distinct
++     * allocation from the parsed graph, leaks that backing outright. The
++     * ownership guard mp6_anim_before_direct_free() catches exactly this
++     * and aborts the process:
++     *   [FATAL] ANM native loader: direct free bypassed ANM ownership
++     *           teardown
++     * Caught directly, not guessed: this fired every time the boot flow
++     * left the attract loop for the first real overlay handoff
++     * (objman>Call New Ovl 3(1)), from Hu3DAnimKill+0x90d at this exact
++     * line, and it is what kept the port from ever reaching a board.
++     * sprman.c's HuSprAnimKill -- the OTHER place a refcounted ANIMDATA
++     * reaches zero -- was already converted to the ownership-aware
++     * teardown; this is the same site in this file, and it was missed.
++     * Fixed identically: unregister first (which hands back the distinct
++     * owned packed backing, or NULL when the graph and its bytes are one
++     * allocation), free that backing, then free the graph itself. */
++    if(--texAnimP->anim->useNum <= 0) {
++        void *packedBacking = mp6_anim_unregister_for_free(texAnimP->anim);
++        if(packedBacking) {
++            HuMemDirectFree(packedBacking);
++        }
++        HuMemDirectFree(texAnimP->anim);
++    }
 @@ -216 +263,18 @@
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* Same bug shape and fix as Hu3DAnimAnimSet/Hu3DAnimKill above -- see

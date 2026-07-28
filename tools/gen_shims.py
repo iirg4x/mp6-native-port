@@ -144,6 +144,10 @@ MACRO_RESOLUTION = {
     # renamed call sites actually link against.
     "GXBegin": "mp6_GXBegin",
     "GXEnd": "mp6_GXEnd",
+    # Retained-frame matrix identity bridge (dolphin_compat.h): windowed
+    # records Hu3D draw context then forwards to Aurora; headless receives the
+    # ordinary generated no-op under the same resolved link name.
+    "GXLoadPosMtxImm": "mp6_GXLoadPosMtxImm",
     # shim/include/dolphin_compat.h's own `#define GXCallDisplayList
     # mp6_GXCallDisplayList` -- same PURE-rename shape as GXBegin/GXEnd
     # above, so the draw-call bisect harness (MP6_SKIP_DRAWS) can
@@ -193,6 +197,11 @@ MANUAL_SYMBOLS = {
     "VIWaitForRetrace", "VIGetRetraceCount", "VIGetNextField", "VIInit",
     # GX bring-up needs a plausible non-null fifo pointer
     "GXInit",
+    # dolphin_compat.h renames every decomp GXLoadPosMtxImm call to this
+    # retained-frame bridge name. Aurora supplies the real forwarding bridge;
+    # shims_manual.c supplies a headless-only strong no-op so a clean public
+    # tree does not depend on synchronized generated output.
+    "mp6_GXLoadPosMtxImm",
     # REL loader bridge (fakes bootDll/selmenuDll/fileseldll as already-linked)
     "OSLink", "OSUnlink",
     # DVD: special-cased for the 3 synthetic REL paths, else "file not found"
@@ -246,8 +255,11 @@ MANUAL_SYMBOLS = {
     # HuAudSndGrpSetSet(MSM_GRP_MENU), objmain.c's HuAudDllSndGrpSet(overlay)
     # on every scene switch) and every SE id in those groups fails silently
     # with msm error -122.
-    # msmSysSetOutputMode/msmSysSetAux/msmSysCheckInit remain generated
-    # no-ops (aux effect buses / output modes stay out of scope).
+    # msmSysSetOutputMode/msmSysSetAux remain generated no-ops (aux effect
+    # buses / output modes stay out of scope). msmSysCheckInit is real: reset
+    # code consumes its installed-state return, so a void/no-op stub leaves an
+    # indeterminate return register and makes reset audio shutdown nondeterministic.
+    "msmSysCheckInit",
     "msmSysLoadGroup", "msmSysLoadGroupBase", "msmSysDelGroupAll",
     "msmSysDelGroupBase", "msmSysGetSampSize", "msmSysSetGroupLoadMode",
     # The save-data/CARD gate. A generated stub (a bare `return 0` with
@@ -324,7 +336,7 @@ AURORA_HAND_BRIDGED = {
     # GXBegin/GXEnd balance-diagnostic wrappers (see dolphin_compat.h and
     # aurora_bridge.c) -- aurora_bridge.c unconditionally defines both for
     # the aurora build, same reasoning as every other entry in this set.
-    "mp6_GXBegin", "mp6_GXEnd",
+    "mp6_GXBegin", "mp6_GXEnd", "mp6_GXLoadPosMtxImm",
     # The draw-call bisect harness's display-list-execute hook, same
     # reasoning as mp6_GXBegin/mp6_GXEnd immediately above.
     "mp6_GXCallDisplayList",

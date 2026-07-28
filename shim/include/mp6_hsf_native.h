@@ -41,12 +41,16 @@ extern "C" {
  * "the file buffer becomes part of the live model forever" contract, since
  * this deserializer's string fields point directly into it (see the .c
  * file's own header comment on why that's safe with no conversion step).
+ * `stringTableOut`, when non-NULL, is cleared before validation and receives
+ * the checked in-file string-table pointer only after a complete successful
+ * load. This preserves LoadHSF's legacy global side effect without publishing
+ * a pointer derived from an untrusted header first.
+ *
  * Returns a freshly HuMemDirectMalloc'd (HEAP_MODEL) HSF_DATA graph, ready
  * for game/hsfman.c's MakeDisplayList()/Hu3DModelCreate() to consume. Never
- * returns NULL for a non-NULL `data` (a defensively-inert, zeroed HSF_DATA
- * is returned instead of crashing if the header looks implausible -- see
- * the .c file's own sanity-check comment). */
-HSF_DATA *MP6_LoadHSFNative(void *data);
+ * returns NULL: malformed/unknown-length input returns a safe inert root;
+ * allocation failure is fatal rather than continuing with a partial graph. */
+HSF_DATA *MP6_LoadHSFNative(void *data, char **stringTableOut);
 
 #ifdef __cplusplus
 }

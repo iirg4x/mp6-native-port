@@ -1,0 +1,260 @@
+--- a/src/board/status.c
++++ b/src/board/status.c
+@@ -13,0 +14,4 @@
++
++#include "mp6_widescreen.h" /* widescreen support -- true-edge status anchoring */
++#include <stdio.h>  /* MP6_STATUS_DIAG panel-identity trace (StatusDiagOn) */
++#include <stdlib.h>
+@@ -190,0 +195,113 @@
++
++/* ---------------------------------------------------------------------
++ * Widescreen: anchor the board status layer to the TRUE screen edges.
++ *
++ * game/sprput.c's HuSprDispInit recenters the ONE shared 2D ortho to
++ * [-d, HU_DISP_WIDTH+d] where d = mp6_widescreen_half_width_delta()
++ * for the whole 2D layer at once -- so the native 0..576 logical canvas
++ * lands in the MIDDLE of a wide frame and every 2D element keeps its
++ * native relative layout with no per-element shim at all. That is exactly
++ * right for content composed as one centered picture, and exactly wrong
++ * for a HUD element whose whole design intent is "sit N units in from the
++ * screen's OWN corner": statusPosOn/statusPosOff (and their team
++ * variants) are authored at 114 / HU_DISP_WIDTH-114 precisely because
++ * those are corner insets, so under the recentered ortho all four panels
++ * float d logical units INSIDE the true left/right edges instead of
++ * hugging them -- growing with the aspect, ~104 units at 16:9 and ~223 at
++ * 21:9.
++ *
++ * These two helpers move exactly those elements back out to the real
++ * edges. The status layer stays entirely in NATIVE (576-space)
++ * coordinates end to end -- the tables, posBegin/posEnd, and every public
++ * getter (mbStatusPosOnGet/mbStatusPosOffGet still hand out native
++ * values, so board/capevent.c's own duel framing is unaffected) -- and
++ * the anchor is applied at the ONE place a position is actually handed to
++ * a sprite group, and inverted at the one place a position is read back
++ * out of one. Nothing can be shifted zero, one or two times depending on
++ * which call path it took: the same single-point discipline already
++ * established for the ortho itself, applied one layer down.
++ *
++ * HU_DISP_WIDTH is NOT redefined and the retail 10/9 X mapping is
++ * untouched: the ortho's logical span (576*k) and the render width
++ * (640*k) grow by the same factor, so a 114-unit inset stays the same
++ * physical proportion of the frame at every aspect.
++ *
++ * The side test is unambiguous in BOTH spaces -- every left-side status X
++ * this file can produce is <= 140 and every right-side one is >= 436,
++ * native or anchored (d >= 0 only pushes them further apart) -- so
++ * StatusUnanchorX is an exact inverse of StatusAnchorX. Both are exact
++ * no-ops when widescreen is disabled (d is 0.0f), so a default-OFF build
++ * makes byte-identical calls with byte-identical arguments.
++ * --------------------------------------------------------------------- */
++static float StatusAnchorX(float x)
++{
++    float d = mp6_widescreen_half_width_delta();
++    return (x < HU_DISP_CENTERX) ? (x - d) : (x + d);
++}
++
++static float StatusUnanchorX(float x)
++{
++    float d = mp6_widescreen_half_width_delta();
++    return (x < HU_DISP_CENTERX) ? (x + d) : (x - d);
++}
++
++/* Panel-identity diagnostics (port-only, MP6_STATUS_DIAG=1). The four
++ * panels' faces are baked at StatusSprCreate time from
++ * GwPlayerConf[slot].charNo, while everything else on the panel (rank,
++ * coins, the CPU badge) is read live from GwPlayer[slot] every frame -- so
++ * a face that disagrees with the rest of its own panel is the signature of
++ * a rebuild that did not take. Zero cost and zero output when the variable
++ * is unset, matching MP6_WS_HSF_DIAG's own always-compiled-in precedent. */
++static int StatusDiagOn(void)
++{
++    static int on = -1;
++    if(on < 0) {
++        const char *e = getenv("MP6_STATUS_DIAG");
++        on = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
++    }
++    return on;
++}
++
++static unsigned long StatusDiagHash(const void *p, int len)
++{
++    const unsigned char *b = (const unsigned char *)p;
++    unsigned long h = 2166136261UL;
++    int i;
++    if(b == NULL || len <= 0) {
++        return 0;
++    }
++    for(i=0; i<len; i++) {
++        h ^= (unsigned long)b[i];
++        h = (h * 16777619UL) & 0xFFFFFFFFUL;
++    }
++    return h;
++}
++
++/* The EXACT window aurora's own GXInitTexObj content fingerprint uses
++ * (lib/dolphin/gx/GXTexture.cpp, mp6-port patch 0006): first 64 bytes +
++ * last 64 bytes + the byte count. Printed alongside a full-buffer hash so
++ * a "different content, identical fingerprint" collision -- which would
++ * make the renderer's static-texture cache serve a stale image for a
++ * freshly-loaded texture at a recycled address -- is visible directly in
++ * the log instead of being inferred. */
++static unsigned long StatusDiagHeadTailHash(const void *p, int len)
++{
++    const unsigned char *b = (const unsigned char *)p;
++    unsigned char scratch[136];
++    int n = 0;
++    int headLen;
++    if(b == NULL || len <= 0) {
++        return 0;
++    }
++    headLen = (len < 64) ? len : 64;
++    memcpy(scratch, b, headLen);
++    n = headLen;
++    if(len > headLen) {
++        int tailLen = ((len - headLen) < 64) ? (len - headLen) : 64;
++        memcpy(scratch + n, b + (len - tailLen), tailLen);
++        n += tailLen;
++    }
++    memcpy(scratch + n, &len, sizeof(len));
++    n += (int)sizeof(len);
++    return StatusDiagHash(scratch, n);
++}
+@@ -255 +372 @@
+-        HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
++        HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);
+@@ -281,0 +399,10 @@
++    if(StatusDiagOn()) {
++        int i;
++        printf("[STATUS-DIAG] mbStatusReset enter: proc=%p", (void *)statusProc);
++        for(i=0; i<GW_PLAYER_MAX; i++) {
++            printf(" [%d]gid=%d offF=%d conf=%d", i, (int)statusWork[i].gid,
++                (int)statusWork[i].offF, (int)GwPlayerConf[i].charNo);
++        }
++        printf("\n");
++        fflush(stdout);
++    }
+@@ -284,0 +412,9 @@
++    if(StatusDiagOn()) {
++        int i;
++        printf("[STATUS-DIAG] mbStatusReset leave:");
++        for(i=0; i<GW_PLAYER_MAX; i++) {
++            printf(" [%d]gid=%d", i, (int)statusWork[i].gid);
++        }
++        printf("\n");
++        fflush(stdout);
++    }
+@@ -361 +497 @@
+-            HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
++            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);
+@@ -404 +540 @@
+-            HuSprGrpPosSet(statusMasuWork.gid, 700.0f, 72.0f);
++            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(700.0f), 72.0f);
+@@ -451,0 +588,30 @@
++        if(mp6_widescreen_enabled()) {
++            /* A resting panel is never re-positioned by the retail code
++             * (this early return is the whole at-rest path), so a LIVE
++             * window resize would leave it frozen at the corner inset
++             * computed for the OLD aspect while every other 2D layer
++             * re-derives itself every frame (the same "frozen at scene
++             * load" class mp6_widescreen_reapply() exists to close for
++             * 3D). Re-deriving the panel's own (native) rest position
++             * through the live anchor makes it track a drag-resize
++             * continuously. Guarded by an equality test so this is a
++             * genuine no-op whenever the aspect has NOT moved -- and the
++             * whole branch is skipped when widescreen is off, so a
++             * default-OFF build makes no extra call at all.
++             *
++             * status->posEnd IS the rest position on every path in this
++             * file (the interpolation below ends at it;
++             * mbStatusDispForceSet/mbStatusDispRestoreForce write it
++             * directly), and these sprite groups are owned solely by this
++             * file -- grep-confirmed: status->gid is never handed out --
++             * so nothing else can have moved the group meanwhile. The
++             * pause hook's own off-screen park is safe from this too:
++             * board/pause.c pauses every board process (HuPrcAllPause),
++             * so StatusMain -- this function's only caller -- does not
++             * run at all while the pause menu is up. */
++            float wantX = StatusAnchorX(status->posEnd.x);
++            HUSPR_GROUP *gp = &HuSprGrpData[status->gid];
++            if(gp->pos.x != wantX) {
++                HuSprGrpPosSet(status->gid, wantX, status->posEnd.y);
++            }
++        }
+@@ -470 +636,8 @@
+-    HuSprGrpPosSet(status->gid, pos.x, pos.y);
++    /* The ONE place a moving panel's position reaches its sprite group.
++     * posBegin/posEnd are both native and both on the SAME side of centre
++     * for every transition this file can set up (a slot's own on/off pair
++     * are same-side by construction, and the off-screen parking X is the
++     * further-out one), so anchoring the interpolated value is a plain
++     * translation of the whole slide -- it never crosses the side test
++     * mid-move. */
++    HuSprGrpPosSet(status->gid, StatusAnchorX(pos.x), pos.y);
+@@ -634 +807 @@
+-        HuSprGrpPosSet(status->gid, status->posEnd.x, status->posEnd.y);
++        HuSprGrpPosSet(status->gid, StatusAnchorX(status->posEnd.x), status->posEnd.y);
+@@ -680 +853 @@
+-    HuSprGrpPosSet(status->gid, status->posEnd.x, status->posEnd.y);
++    HuSprGrpPosSet(status->gid, StatusAnchorX(status->posEnd.x), status->posEnd.y);
+@@ -710 +883 @@
+-            HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
++            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);
+@@ -712 +885 @@
+-            HuSprGrpPosSet(statusMasuWork.gid, 700.0f, 72.0f);
++            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(700.0f), 72.0f);
+@@ -752 +925,9 @@
+-    pos->x = gp->pos.x;
++    /* The group's own stored X is ANCHORED (that is the only form this
++     * file ever writes); the status API is native end to end, so undo the
++     * anchor on the way out. Without this, mbStatusMoveSet/
++     * mbStatusNoMoveSet's posBegin==NULL branch -- which seeds a move
++     * from the panel's CURRENT position -- would feed an already-anchored
++     * value back into a path that anchors again, the exact double-shift
++     * the 2D ortho change above removes. Exact inverse, exact no-op
++     * when disabled. */
++    pos->x = StatusUnanchorX(gp->pos.x);
+@@ -761 +942 @@
+-    pos->x = gp->pos.x;
++    pos->x = StatusUnanchorX(gp->pos.x);
+@@ -834 +1015,28 @@
+-    mbSprCreate(mbBoardDataNumGet(statusKaoFileTbl[charNo]), 1500, NULL, &sprId);
++    {
++        ANIMDATA *kaoAnim = NULL;
++        mbSprCreate(mbBoardDataNumGet(statusKaoFileTbl[charNo]), 1500, &kaoAnim, &sprId);
++        if(StatusDiagOn()) {
++            ANIMBMP *b0 = (kaoAnim != NULL && kaoAnim->bmp != NULL) ? &kaoAnim->bmp[0] : NULL;
++            int palBytes = (b0 != NULL) ? (int)b0->palNum * 2 : 0;
++            printf("[STATUS-DIAG] SprCreate slot=%d confChar=%d gwChar=%d comF=%d "
++                   "kaoData=%d gid=%d kaoSpr=%d anim=%p"
++                   " fmt=%d %dx%d dataSize=%d palNum=%d data=%p pal=%p"
++                   " dataFull=%08lx dataHT=%08lx palFull=%08lx palHT=%08lx\n",
++                statusNo, charNo, (int)GwPlayer[statusNo].charNo,
++                (int)GwPlayer[statusNo].comF,
++                (int)statusKaoFileTbl[charNo], (int)status->gid, (int)sprId,
++                (void *)kaoAnim,
++                (b0 != NULL) ? (int)b0->dataFmt : -1,
++                (b0 != NULL) ? (int)b0->sizeX : -1,
++                (b0 != NULL) ? (int)b0->sizeY : -1,
++                (b0 != NULL) ? (int)b0->dataSize : -1,
++                (b0 != NULL) ? (int)b0->palNum : -1,
++                (b0 != NULL) ? b0->data : NULL,
++                (b0 != NULL) ? b0->palData : NULL,
++                (b0 != NULL) ? StatusDiagHash(b0->data, (int)b0->dataSize) : 0UL,
++                (b0 != NULL) ? StatusDiagHeadTailHash(b0->data, (int)b0->dataSize) : 0UL,
++                (b0 != NULL) ? StatusDiagHash(b0->palData, palBytes) : 0UL,
++                (b0 != NULL) ? StatusDiagHeadTailHash(b0->palData, palBytes) : 0UL);
++            fflush(stdout);
++        }
++    }
+@@ -1021 +1229 @@
+-                HuSprGrpPosSet(status->gid, status->posBegin.x, status->posBegin.y);
++                HuSprGrpPosSet(status->gid, StatusAnchorX(status->posBegin.x), status->posBegin.y);
+@@ -1026 +1234 @@
+-            HuSprGrpPosSet(statusMasuWork.gid, 700.0f, 72.0f);
++            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(700.0f), 72.0f);
+@@ -1032 +1240 @@
+-                HuSprGrpPosSet(status->gid, status->posEnd.x, status->posEnd.y);
++                HuSprGrpPosSet(status->gid, StatusAnchorX(status->posEnd.x), status->posEnd.y);
+@@ -1039 +1247 @@
+-            HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
++            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);

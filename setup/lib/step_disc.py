@@ -22,6 +22,7 @@ decomp's tooling fetches itself from its GitHub release the first time it's
 needed, the same way it always has for every decomp contributor.
 """
 import os
+import shutil
 
 from . import common, nod_ffi
 
@@ -30,14 +31,94 @@ REL_DIR = "dll"  # config/GP6E01/config.yml's modules all live under files/dll/*
 
 def _looks_extracted(decomp_dir):
     orig = os.path.join(decomp_dir, "orig", "GP6E01")
-    fst = os.path.join(orig, "sys", "fst.bin")
-    dol = os.path.join(orig, "sys", "main.dol")
-    rel_dir = os.path.join(orig, "files", REL_DIR)
-    if not (os.path.isfile(fst) and os.path.isfile(dol)):
+    try:
+        nod_ffi.validate_extracted_root(orig, require_build_files=True)
+        return True
+    except common.SetupError:
         return False
-    if not os.path.isdir(rel_dir):
+
+
+def _tree_paths(root):
+    return root + ".incoming", root + ".previous"
+
+
+def _safe_rmtree(path):
+    # Every caller supplies one of the two literal sibling suffixes above;
+    # never accept a broad/computed root as a recursive-delete target.
+    if not (path.endswith(".incoming") or path.endswith(".previous")):
+        raise common.SetupError(f"refusing unsafe transactional cleanup target: {path}")
+    shutil.rmtree(path, ignore_errors=False)
+
+
+def _valid_tree(path):
+    try:
+        nod_ffi.validate_extracted_root(path, require_build_files=True)
+        return True
+    except common.SetupError:
         return False
-    return any(f.lower().endswith(".rel") for f in os.listdir(rel_dir))
+
+
+def _recover_tree(root):
+    incoming, previous = _tree_paths(root)
+    if os.path.isdir(root):
+        if _valid_tree(root):
+            for stale in (incoming, previous):
+                if os.path.isdir(stale):
+                    _safe_rmtree(stale)
+            return
+        if os.path.isdir(previous) and _valid_tree(previous):
+            # Keep every destructive target on the suffix-checked transaction
+            # paths: move the invalid live tree aside, restore the known-good
+            # backup atomically, then remove the quarantined tree. A broad
+            # rmtree(root) here made a path-computation mistake unrecoverable.
+            if os.path.isdir(incoming):
+                _safe_rmtree(incoming)
+            os.replace(root, incoming)
+            try:
+                os.replace(previous, root)
+            except BaseException:
+                os.replace(incoming, root)
+                raise
+            _safe_rmtree(incoming)
+            common.warn("recovered the previous GP6E01 tree after an interrupted publish")
+            return
+    elif os.path.isdir(previous) and _valid_tree(previous):
+        os.replace(previous, root)
+        if os.path.isdir(incoming):
+            _safe_rmtree(incoming)
+        common.warn("recovered the previous GP6E01 tree after an interrupted publish")
+        return
+    marker = os.path.join(incoming, "sys", ".mp6-content-complete")
+    if not os.path.exists(root) and os.path.isfile(marker) and _valid_tree(incoming):
+        os.replace(incoming, root)
+        os.remove(os.path.join(root, "sys", ".mp6-content-complete"))
+        common.warn("completed a validated GP6E01 publish interrupted before its final rename")
+    elif os.path.isdir(incoming):
+        _safe_rmtree(incoming)
+
+
+def _publish_tree(incoming, root):
+    nod_ffi.validate_extracted_root(incoming, require_build_files=True)
+    marker = os.path.join(incoming, "sys", ".mp6-content-complete")
+    with open(marker, "wb") as f:
+        f.write(b"MP6-CONTENT-1\n")
+        f.flush()
+        os.fsync(f.fileno())
+    _, previous = _tree_paths(root)
+    if os.path.isdir(previous):
+        _safe_rmtree(previous)
+    had_root = os.path.isdir(root)
+    if had_root:
+        os.replace(root, previous)
+    try:
+        os.replace(incoming, root)
+    except BaseException:
+        if had_root and os.path.isdir(previous) and not os.path.exists(root):
+            os.replace(previous, root)
+        raise
+    os.remove(os.path.join(root, "sys", ".mp6-content-complete"))
+    if os.path.isdir(previous):
+        _safe_rmtree(previous)
 
 
 def _progress_cb():
@@ -49,10 +130,20 @@ def _progress_cb():
     return cb
 
 
+def _directory_has_entries(path):
+    if not os.path.isdir(path):
+        return False
+    with os.scandir(path) as entries:
+        return next(entries, None) is not None
+
+
 def ensure_disc(decomp_dir, disc_arg=None, include_movies=False, force=False, assume_yes=False):
     orig_root = os.path.join(decomp_dir, "orig", "GP6E01")
+    incoming, _previous = _tree_paths(orig_root)
+    _recover_tree(orig_root)
 
-    if not force and _looks_extracted(decomp_dir):
+    movies_ready = _directory_has_entries(os.path.join(orig_root, "files", "movie"))
+    if not force and _looks_extracted(decomp_dir) and (not include_movies or movies_ready):
         rel_count = len([f for f in os.listdir(os.path.join(orig_root, "files", REL_DIR))
                           if f.lower().endswith(".rel")])
         common.ok(f"disc already extracted at {orig_root} ({rel_count} .rel modules, sys/main.dol present) "
@@ -80,30 +171,37 @@ def ensure_disc(decomp_dir, disc_arg=None, include_movies=False, force=False, as
     if not os.path.exists(disc_arg):
         raise common.SetupError(f"disc path does not exist: {disc_arg}")
 
-    common.ensure_dir(orig_root)
-    common.ensure_dir(os.path.join(orig_root, "sys"))
-    common.ensure_dir(os.path.join(orig_root, "files"))
+    if os.path.isdir(incoming):
+        _safe_rmtree(incoming)
+    common.ensure_dir(os.path.join(incoming, "sys"))
+    common.ensure_dir(os.path.join(incoming, "files"))
 
-    if os.path.isdir(disc_arg):
-        common.info(f"treating {disc_arg} as an already-extracted disc folder")
-        summary = nod_ffi.extract_disc_folder(
-            disc_arg, orig_root, include_movies=include_movies, progress=_progress_cb()
-        )
-    else:
-        nod_dll = nod_ffi.find_nod_dll(os.path.join(common.TOOLCHAIN_DIR, "nod"))
-        if not os.path.exists(nod_dll):
-            raise common.SetupError(
-                f"nod.dll not found at {nod_dll}",
-                hint="run this tool's toolchain step first (it fetches nod via tools/fetch_nod.py)",
+    try:
+        if os.path.isdir(disc_arg):
+            common.info(f"treating {disc_arg} as an already-extracted disc folder")
+            summary = nod_ffi.extract_disc_folder(
+                disc_arg, incoming, include_movies=include_movies, progress=_progress_cb()
             )
-        common.info(f"opening disc image via nod: {disc_arg}")
-        free = common.free_space_bytes(orig_root)
-        if free < 900 * 1024 * 1024:
-            common.warn(f"only {common.human_size(free)} free near {orig_root}; a full extraction "
-                        "needs roughly 750MB-1.1GB")
-        summary = nod_ffi.extract_disc_image(
-            disc_arg, orig_root, nod_dll, include_movies=include_movies, progress=_progress_cb()
-        )
+        else:
+            nod_dll = nod_ffi.find_nod_dll(os.path.join(common.TOOLCHAIN_DIR, "nod"))
+            if not os.path.exists(nod_dll):
+                raise common.SetupError(
+                    f"nod.dll not found at {nod_dll}",
+                    hint="run this tool's toolchain step first (it fetches nod via tools/fetch_nod.py)",
+                )
+            common.info(f"opening disc image via nod: {disc_arg}")
+            free = common.free_space_bytes(orig_root)
+            if free < 900 * 1024 * 1024:
+                common.warn(f"only {common.human_size(free)} free near {orig_root}; a full extraction "
+                            "needs roughly 750MB-1.1GB")
+            summary = nod_ffi.extract_disc_image(
+                disc_arg, incoming, nod_dll, include_movies=include_movies, progress=_progress_cb()
+            )
+        _publish_tree(incoming, orig_root)
+    except BaseException:
+        if os.path.isdir(incoming):
+            _safe_rmtree(incoming)
+        raise
 
     common.ok(f"extracted {summary['files']} files ({common.human_size(summary['bytes'])}), "
               f"game ID {summary['game_id']}")

@@ -111,10 +111,18 @@ void mp6_shadow_offscreen_scissor(int x, int y, int w, int h);
  * Hu3DShadowExec / hsfdraw bind sites call mp6_shadow_latched_size() instead
  * of mp6_shadow_effective_size(), so a mid-run Shadow Quality change neither
  * resizes a live shadow (matching the "next scene" UI contract) nor resolves
- * more copy-dst texels than that buffer holds. An unlatched buffer falls back
- * to the live effective size. */
+ * more copy-dst texels than that buffer holds. The latch table is ordinary
+ * game state, captured and restored alongside HEAP_MODEL; it also fingerprints
+ * direct-malloc capacity so pointer reuse/LRU misses fall back to the current
+ * allocation rather than stale state or live config.
+ *
+ * Call mp6_shadow_release_buffer() immediately before freeing a shadow buffer.
+ * It forgets the host latch and, in Aurora builds, FIFO-retires both the copy-
+ * texture entries for this destination and cached quality-sized offscreen
+ * color/depth targets. Headless only forgets the latch. */
 void mp6_shadow_latch_size(const void *buf, int effSize);
 int mp6_shadow_latched_size(const void *buf, int nativeSize);
+void mp6_shadow_release_buffer(const void *buf);
 
 #ifdef __cplusplus
 }

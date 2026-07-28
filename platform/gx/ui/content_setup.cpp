@@ -6,6 +6,7 @@
 #include "content_setup.hpp"
 
 #include "launcher_state.hpp"
+#include "mp6_path.h"
 
 #include "lib/window.hpp" /* aurora internal (get_sdl_window), via -I AURORA_ROOT */
 #include <SDL3/SDL.h>
@@ -298,7 +299,12 @@ void ContentSetup::finish_success()
 {
 #ifndef __ANDROID__
     if (cfg().contentRoot[0] == '\0') {
-        snprintf(cfg().contentRoot, sizeof(cfg().contentRoot), "%s", dest_disc_root().c_str());
+        if (mp6_path_copy_checked(cfg().contentRoot, sizeof(cfg().contentRoot),
+                                  dest_disc_root().c_str()) != 0) {
+            show_error("Content was imported, but its destination path is too long to save. "
+                       "Move the GP6E01 folder to a shorter path and select it in Settings.");
+            return;
+        }
         cfg_save();
     }
 #endif
@@ -387,9 +393,9 @@ void ContentSetup::update()
         }
         case Stage::PickingFolder: {
 #ifdef __ANDROID__
-            char uri[1024];
+            char uri[MP6_SAF_URI_CAP];
             int r = mp6_saf_poll_tree_pick(uri, sizeof(uri));
-            if (r == 1) {
+            if (r == MP6_SAF_PICK_READY) {
                 mCancelRequested = false;
                 mUsingSafTree = true;
                 if (mp6_saf_tree_import_start(uri, dest_disc_root().c_str()) != 0) {
@@ -397,8 +403,10 @@ void ContentSetup::update()
                 } else {
                     set_stage(Stage::Importing);
                 }
-            } else if (r < 0) {
+            } else if (r == MP6_SAF_PICK_CANCELLED) {
                 set_stage(Stage::Choose);
+            } else if (r == MP6_SAF_PICK_ERROR) {
+                show_error("The selected folder URI is too long or the Android folder picker failed.");
             }
 #else
             std::string path;

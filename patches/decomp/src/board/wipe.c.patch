@@ -2,7 +2,7 @@
 +++ b/src/board/wipe.c
 @@ -17,0 +18 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -555 +556,13 @@
+@@ -844 +845,13 @@
 -    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f,
 +    /* This function's own ortho/viewport/scissor are a SEPARATE,
 +     * independent setup from WipeImageDraw's (this file's other hunks
@@ -16,24 +16,24 @@
 +     * not assumed fine. 640/480 (byte-identical) when widescreen is
 +     * disabled. */
 +    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f,
-@@ -558,2 +571,2 @@
+@@ -847,2 +860,2 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
 -    GXSetScissor(0, 0, 640, 480);
 +    GXSetViewport(0.0f, 0.0f, mp6_widescreen_render_width(), 480.0f, 0.0f, 1.0f);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -638 +651,7 @@
+@@ -927 +940,7 @@
 -    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f,
 +    /* Same widen as WipeGridDraw above -- see that comment. Tile/vertex-
 +     * flutter geometry beyond this ortho/viewport/scissor triplet
 +     * (work->vtx positions etc.) was left untouched -- not confirmed
 +     * exercised by testing. Flagged, not assumed fine. */
 +    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f,
-@@ -641,2 +660,2 @@
+@@ -930,2 +949,2 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
 -    GXSetScissor(0, 0, 640, 480);
 +    GXSetViewport(0.0f, 0.0f, mp6_widescreen_render_width(), 480.0f, 0.0f, 1.0f);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -757,2 +776,12 @@
+@@ -1046,2 +1065,12 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
 -    GXSetScissor(0, 0, 640, 480);
 +    /* This viewport/scissor is this function's OWN, independent of
@@ -47,14 +47,14 @@
 +     * is. 640 (byte-identical) when disabled. */
 +    GXSetViewport(0.0f, 0.0f, mp6_widescreen_render_width(), 480.0f, 0.0f, 1.0f);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -778 +807,6 @@
+@@ -1067 +1096,6 @@
 -    C_MTXOrtho(imageProjection, 0.0f, 480.0f, 0.0f, 576.0f, 0.0f,
 +    /* Recenter this ortho the same way HuSprDispInit's shared 2D canvas is
 +     * recentered -- left=-d, right=576+d instead of the old left-anchored
 +     * 0,576*scale (the reference widescreen hack never widened this at
 +     * all). No-op when disabled. */
 +    C_MTXOrtho(imageProjection, 0.0f, 480.0f, -mp6_widescreen_half_width_delta(), 576.0f + mp6_widescreen_half_width_delta(), 0.0f,
-@@ -790,0 +825,12 @@
+@@ -1079,0 +1114,12 @@
 +    /* work->x is hardcoded to 288.0f (WipeImageUpdate) -- exactly
 +     * HU_DISP_WIDTH/2, the exact center of BOTH the native canvas AND the
 +     * recentered wide one (the recenter is symmetric around that same
@@ -65,7 +65,7 @@
 +     * be a pure double-shift, pushing the right edge further right than
 +     * the left edge is pushed left. Reverted to the plain native
 +     * computation. */
-@@ -805,0 +852,12 @@
+@@ -1094,0 +1141,12 @@
 +    /* These 4 mask quads fill the area between the growing/shrinking
 +     * reveal hole and the canvas edges -- their 0.0f/576.0f literals ARE
 +     * the canvas-edge constants. Widened here to the recentered bounds
@@ -75,7 +75,7 @@
 +     * transition at a wide aspect. left/right/top/bottom themselves are
 +     * NOT touched (see the `right` comment above -- already correct,
 +     * symmetric around work->x=288). No-op when disabled. */
-@@ -808,4 +866,4 @@
+@@ -1097,4 +1155,4 @@
 -        GXPosition2f32(0.0f, 0.0f);
 -        GXPosition2f32(576.0f, 0.0f);
 -        GXPosition2f32(576.0f, top);
@@ -84,7 +84,7 @@
 +        GXPosition2f32(576.0f + mp6_widescreen_half_width_delta(), 0.0f);
 +        GXPosition2f32(576.0f + mp6_widescreen_half_width_delta(), top);
 +        GXPosition2f32(-mp6_widescreen_half_width_delta(), top);
-@@ -815,6 +873,6 @@
+@@ -1104,6 +1162,6 @@
 -        GXPosition2f32(0.0f, bottom);
 -        GXPosition2f32(576.0f, bottom);
 -        GXPosition2f32(576.0f, 480.0f);
@@ -97,17 +97,17 @@
 +        GXPosition2f32(-mp6_widescreen_half_width_delta(), 480.0f);
 +    }
 +    if (left > -mp6_widescreen_half_width_delta()) {
-@@ -822 +880 @@
+@@ -1111 +1169 @@
 -        GXPosition2f32(0.0f, top);
 +        GXPosition2f32(-mp6_widescreen_half_width_delta(), top);
-@@ -825,3 +883,3 @@
+@@ -1114,3 +1172,3 @@
 -        GXPosition2f32(0.0f, bottom);
 -    }
 -    if (left < 576.0f) {
 +        GXPosition2f32(-mp6_widescreen_half_width_delta(), bottom);
 +    }
 +    if (left < 576.0f + mp6_widescreen_half_width_delta()) {
-@@ -830,2 +888,2 @@
+@@ -1119,2 +1177,2 @@
 -        GXPosition2f32(576.0f, top);
 -        GXPosition2f32(576.0f, bottom);
 +        GXPosition2f32(576.0f + mp6_widescreen_half_width_delta(), top);

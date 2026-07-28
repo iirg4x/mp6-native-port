@@ -1,5 +1,7 @@
 --- a/src/REL/mdseldll/mdsel.c
 +++ b/src/REL/mdseldll/mdsel.c
+@@ -1378 +1378,0 @@
+-            i == 0;
 @@ -16,0 +17 @@
 +#include "mp6_widescreen.h" /* widescreen support */
 @@ -521,2 +522,16 @@

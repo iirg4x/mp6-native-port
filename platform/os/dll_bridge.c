@@ -1,4 +1,4 @@
-/* MP6 native port -- REL "loader" bridge for bootDll/selmenuDll/fileseldll,
+/* MP6 native port -- REL "loader" bridge for the recovered menu/board DLLs,
  * PLUS the DVD entry points every OTHER path (real game data: fonts,
  * message tables, HSF models, sprites, ...) goes through.
  *
@@ -46,6 +46,7 @@
 #include "mp6_shim_log.h"
 #include "mp6_dvd_files.h"
 #include "mp6_boot.h"
+#include "mp6_events.h" /* dll.bound game event, see mp6_dll_bridge_report_bound */
 
 #include <string.h>
 #include <stdio.h>
@@ -98,6 +99,16 @@ extern void mdpartyDll_epilog(void);
 const VoidFunc mdpartyDll_ctors[] = { 0 };
 const VoidFunc mdpartyDll_dtors[] = { 0 };
 
+/* w01Dll -- Towering Treetop. The recovered world01.c is linked into the
+ * native image and retains the real REL lifecycle: its prolog walks this
+ * module-local ctor table and calls its renamed ObjectSetup, which registers
+ * MB1_Create/MB1_Kill with the shared board runtime. */
+extern int w01Dll_prolog(void);
+extern void w01Dll_epilog(void);
+extern void w01Dll_ObjectSetup(void);
+const VoidFunc w01Dll_ctors[] = { 0 };
+const VoidFunc w01Dll_dtors[] = { 0 };
+
 enum {
     MP6_DLL_NONE = 0,
     MP6_DLL_BOOT,
@@ -105,6 +116,7 @@ enum {
     MP6_DLL_FILESEL,
     MP6_DLL_MDSEL,
     MP6_DLL_MDPARTY,
+    MP6_DLL_W01,
     MP6_DLL_MINIGAME_STUB,
 };
 
@@ -195,12 +207,22 @@ static void mp6_minigame_stub_idle_child(void)
 
 static BOOL mp6_minigame_stub_prolog(void)
 {
+    HUPROCESS *idle;
     printf("[STUB] minigame '%s' not yet decompiled -- rendering a black screen placeholder "
            "instead of crashing or running garbage code.\n",
            g_minigameStubName);
     fflush(stdout);
     mp6_dll_stub_black_screen_active = 1;
-    HuPrcChildCreate(mp6_minigame_stub_idle_child, 0x100, 0x1000, 0, HuPrcCurrentGet());
+    idle = HuPrcChildCreate(mp6_minigame_stub_idle_child, 0x100, 0x1000, 0,
+                            HuPrcCurrentGet());
+    if (idle == NULL) {
+        /* Without this child omWatchOverlayProc's ChildWatch loop never
+         * yields and pins the game thread at 100% CPU.  Report prolog
+         * failure instead of claiming a usable placeholder. */
+        mp6_dll_stub_black_screen_active = 0;
+        fprintf(stderr, "[STUB] could not allocate the minigame placeholder process\n");
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -236,6 +258,8 @@ static int synth_dll_for_path(const char *path)
     /* Same DLL(name) macro expansion, ovl_table.h line 92 =
      * DLL(mdpartydll) = index 91 -- all lowercase again. */
     if (strcmp(path, "dll/mdpartydll.rel") == 0) return MP6_DLL_MDPARTY;
+    /* ovl_table.h's DLL(w01dll) expansion is exactly this lowercase path. */
+    if (strcmp(path, "dll/w01dll.rel") == 0) return MP6_DLL_W01;
     if (is_minigame_stub_path(path, g_minigameStubName, sizeof(g_minigameStubName))) {
         return MP6_DLL_MINIGAME_STUB;
     }
@@ -422,6 +446,19 @@ s32 DVDConvertPathToEntrynum(char *pathPtr)
     return mp6_dvd_path_to_entrynum(pathPtr);
 }
 
+/* One place that both prints the existing "[BOOT] OSLink: bound X prolog/
+ * epilog" line (unchanged wording -- docs/W01_INTEGRATION.md's pass oracle
+ * greps for it verbatim) and publishes it as a `dll.bound` game event
+ * (shim/include/mp6_events.h). Posting from here rather than relying on
+ * shims_manual.c's OSReport tap because these lines are printf, not
+ * OSReport -- a direct post at the seam that already knows the fact is
+ * both cheaper and impossible to desynchronise from the printed text. */
+static void mp6_dll_bridge_report_bound(const char *moduleName)
+{
+    printf("[BOOT] OSLink: bound %s prolog/epilog\n", moduleName);
+    mp6_event_post("dll.bound", 0, moduleName);
+}
+
 BOOL OSLink(OSModuleInfo *newModule, void *bss)
 {
     MP6_LOG_ONCE("OS", "OSLink");
@@ -433,17 +470,17 @@ BOOL OSLink(OSModuleInfo *newModule, void *bss)
             case MP6_DLL_BOOT:
                 hdr->prolog = (u32)(uintptr_t)&bootDll_prolog;
                 hdr->epilog = (u32)(uintptr_t)&bootDll_epilog;
-                printf("[BOOT] OSLink: bound bootDll prolog/epilog\n");
+                mp6_dll_bridge_report_bound("bootDll");
                 return TRUE;
             case MP6_DLL_SELMENU:
                 hdr->prolog = (u32)(uintptr_t)&selmenuDll_prolog;
                 hdr->epilog = (u32)(uintptr_t)&selmenuDll_epilog;
-                printf("[BOOT] OSLink: bound selmenuDll prolog/epilog\n");
+                mp6_dll_bridge_report_bound("selmenuDll");
                 return TRUE;
             case MP6_DLL_FILESEL:
                 hdr->prolog = (u32)(uintptr_t)&fileselDll_prolog;
                 hdr->epilog = (u32)(uintptr_t)&fileselDll_epilog;
-                printf("[BOOT] OSLink: bound fileselDll prolog/epilog\n");
+                mp6_dll_bridge_report_bound("fileselDll");
                 return TRUE;
             case MP6_DLL_MDSEL:
                 /* Real mode select. The default: catch-all below still
@@ -451,7 +488,7 @@ BOOL OSLink(OSModuleInfo *newModule, void *bss)
                  * overlays this menu itself calls next, in particular). */
                 hdr->prolog = (u32)(uintptr_t)&mdselDll_prolog;
                 hdr->epilog = (u32)(uintptr_t)&mdselDll_epilog;
-                printf("[BOOT] OSLink: bound mdselDll prolog/epilog\n");
+                mp6_dll_bridge_report_bound("mdselDll");
                 return TRUE;
             case MP6_DLL_MDPARTY:
                 /* Real party-mode setup. The default: catch-all below
@@ -459,12 +496,18 @@ BOOL OSLink(OSModuleInfo *newModule, void *bss)
                  * this setup flow itself calls next, in particular). */
                 hdr->prolog = (u32)(uintptr_t)&mdpartyDll_prolog;
                 hdr->epilog = (u32)(uintptr_t)&mdpartyDll_epilog;
-                printf("[BOOT] OSLink: bound mdpartyDll prolog/epilog\n");
+                mp6_dll_bridge_report_bound("mdpartyDll");
+                return TRUE;
+            case MP6_DLL_W01:
+                hdr->prolog = (u32)(uintptr_t)&w01Dll_prolog;
+                hdr->epilog = (u32)(uintptr_t)&w01Dll_epilog;
+                mp6_dll_bridge_report_bound("w01Dll");
                 return TRUE;
             case MP6_DLL_MINIGAME_STUB:
                 hdr->prolog = (u32)(uintptr_t)&mp6_minigame_stub_prolog;
                 hdr->epilog = (u32)(uintptr_t)&mp6_minigame_stub_epilog;
                 printf("[BOOT] OSLink: bound minigame-stub prolog/epilog for '%s'\n", g_minigameStubName);
+                mp6_event_post("dll.bound", 0, "minigame-stub");
                 return TRUE;
             default:
                 /* Catch-all for ANY module id this switch doesn't

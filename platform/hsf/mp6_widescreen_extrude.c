@@ -929,6 +929,9 @@ void mp6_widescreen_extrude_model_repeat(HU3D_MODELID modelId)
     HuVecF rootScale, rootTrans;
     float k;
 
+    stcenter.x = 0.0f;
+    stcenter.y = 0.0f;
+
     if (!mp6_widescreen_enabled() || modelId < 0) {
         return;
     }
@@ -4661,7 +4664,8 @@ size_t mp6_widescreen_savestate_blob_size(void)
     int r, i;
     for (r = 0; r < 4; r++) {
         for (i = 0; i < mp6_ws_registry_num(r); i++) {
-            if (mp6_ws_entry_native(r, i) != NULL) {
+            if (mp6_ws_entry_native(r, i) != NULL &&
+                mp6_ws_entry_float_count(r, i) != 0) {
                 total += 3 * sizeof(uint32_t) + (size_t)mp6_ws_entry_float_count(r, i) * sizeof(float);
             }
         }
@@ -4681,7 +4685,7 @@ void mp6_widescreen_savestate_blob_write(void *buf)
             float *nat = mp6_ws_entry_native(r, i);
             uint32_t fc = mp6_ws_entry_float_count(r, i);
             uint32_t hdr3[3];
-            if (nat == NULL) {
+            if (nat == NULL || fc == 0) {
                 continue;
             }
             hdr3[0] = (uint32_t)r;
@@ -4713,10 +4717,41 @@ void mp6_widescreen_savestate_prerestore(void)
     }
 }
 
+int mp6_widescreen_savestate_validate_natives(const void *blob, size_t blobSize)
+{
+    static const uint32_t maxSlots[4] = {
+        MP6_WS_REPEAT_MAX, MP6_WS_SELECTIVE_MAX, MP6_WS_BORDER_MAX, MP6_WS_SPLIT_MAX
+    };
+    unsigned char seen[4][MP6_WS_REPEAT_MAX] = {{0}};
+    const unsigned char *bytes = (const unsigned char *)blob;
+    size_t off = 0;
+    uint32_t n, k;
+
+    if (blob == NULL || blobSize < sizeof(uint32_t)) return 0;
+    memcpy(&n, bytes, sizeof(n));
+    off = sizeof(n);
+    if (n > MP6_WS_REPEAT_MAX + MP6_WS_SELECTIVE_MAX +
+            MP6_WS_BORDER_MAX + MP6_WS_SPLIT_MAX) return 0;
+    for (k = 0; k < n; k++) {
+        uint32_t hdr3[3];
+        size_t floatBytes;
+        if (off > blobSize || sizeof(hdr3) > blobSize - off) return 0;
+        memcpy(hdr3, bytes + off, sizeof(hdr3));
+        off += sizeof(hdr3);
+        if (hdr3[0] >= 4 || hdr3[1] >= maxSlots[hdr3[0]] || hdr3[2] == 0 ||
+            seen[hdr3[0]][hdr3[1]]) return 0;
+        seen[hdr3[0]][hdr3[1]] = 1;
+        if ((size_t)hdr3[2] > (blobSize - off) / sizeof(float)) return 0;
+        floatBytes = (size_t)hdr3[2] * sizeof(float);
+        off += floatBytes;
+    }
+    return off == blobSize;
+}
+
 void mp6_widescreen_savestate_apply_natives(const void *blob, size_t blobSize)
 {
-    const unsigned char *p = (const unsigned char *)blob;
-    const unsigned char *end = p + blobSize;
+    const unsigned char *p;
+    const unsigned char *end;
     uint32_t n, k;
 
     /* The image restore just installed the CAPTURING process's native
@@ -4736,6 +4771,12 @@ void mp6_widescreen_savestate_apply_natives(const void *blob, size_t blobSize)
     if (blob == NULL || blobSize < sizeof(uint32_t)) {
         return;
     }
+    if (!mp6_widescreen_savestate_validate_natives(blob, blobSize)) {
+        fprintf(stderr, "[SAVESTATE] malformed widescreen snapshot blob -- all entries left disabled\n");
+        return;
+    }
+    p = (const unsigned char *)blob;
+    end = p + blobSize;
     memcpy(&n, p, sizeof(n));
     p += sizeof(n);
     for (k = 0; k < n; k++) {

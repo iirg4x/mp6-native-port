@@ -1,0 +1,101 @@
+MP6 Unlocked FPS: add a genuinely non-blocking frame-begin path.
+
+Replay admission runs inside the fixed 60 Hz tick's idle window.  The normal
+begin path waits indefinitely for a render-worker frame slot and mapped staging
+buffer, so checking a wall-clock estimate before calling it cannot protect the
+next simulation deadline.  The replay-only entry point acquires both pools with
+try_acquire and declines unless the staging buffer is already mapped.  A failed
+attempt changes no frame state and waits for neither GPU nor compositor.
+
+diff --git a/include/aurora/aurora.h b/include/aurora/aurora.h
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -148,0 +149,1 @@
++bool aurora_try_begin_frame();
+diff --git a/lib/gfx/common.hpp b/lib/gfx/common.hpp
+--- a/lib/gfx/common.hpp
++++ b/lib/gfx/common.hpp
+@@ -224,0 +225,1 @@
++bool try_begin_frame();
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -327,0 +328,2 @@
++static std::optional<size_t> g_reservedFrameSlot;
++static std::optional<size_t> g_reservedStagingSlot;
+@@ -1690,2 +1692,11 @@
+-  const size_t frameSlot = acquire_frame_slot();
+-  const auto stagingSlot = acquire_mapped_staging_buffer();
++  size_t frameSlot;
++  std::optional<size_t> stagingSlot;
++  if (g_reservedFrameSlot && g_reservedStagingSlot) {
++    frameSlot = *g_reservedFrameSlot;
++    stagingSlot = *g_reservedStagingSlot;
++    g_reservedFrameSlot.reset();
++    g_reservedStagingSlot.reset();
++  } else {
++    frameSlot = acquire_frame_slot();
++    stagingSlot = acquire_mapped_staging_buffer();
++  }
+@@ -1749,1 +1760,27 @@
++bool try_begin_frame() {
++  ZoneScopedN("Try begin replay frame");
++  if (g_recordingFrame != nullptr || g_reservedFrameSlot || g_reservedStagingSlot) {
++    return false;
++  }
++  const auto frameSlot = g_frameSlots.try_acquire();
++  if (!frameSlot) {
++    return false;
++  }
++  const auto stagingSlot = g_stagingSlots.try_acquire();
++  if (!stagingSlot) {
++    g_frameSlots.release(*frameSlot);
++    return false;
++  }
++  if (s_mappingStates[*stagingSlot].load(std::memory_order_acquire) != BufferMapState::Mapped) {
++    g_stagingSlots.release(*stagingSlot);
++    g_frameSlots.release(*frameSlot);
++    return false;
++  }
++  g_reservedFrameSlot = *frameSlot;
++  g_reservedStagingSlot = *stagingSlot;
++  return begin_frame();
++}
++
+ void finish() {
+diff --git a/lib/aurora.cpp b/lib/aurora.cpp
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -256,1 +256,37 @@
++/* Replay-only admission: unlike begin_frame(), gfx::try_begin_frame never
++ * waits for frame/staging slots.  Keep ImGui untouched when admission fails. */
++bool try_begin_frame() noexcept {
++  ZoneScoped;
++#ifdef AURORA_ENABLE_GX
++  {
++    if (!window::is_presentable()) {
++      webgpu::release_surface();
++      return false;
++    }
++    if (window::is_paused()) {
++      return false;
++    }
++    if (!g_surface) {
++      webgpu::refresh_surface(true);
++      if (!g_surface) {
++        return false;
++      }
++    }
++  }
++  window::refresh_frame_buffer_fit();
++  if (!gfx::try_begin_frame()) {
++    return false;
++  }
++  imgui::new_frame(window::get_window_size());
++#endif
++  return true;
++}
++
+ void end_frame() noexcept {
+@@ -438,0 +475,1 @@
++bool aurora_try_begin_frame() { return aurora::try_begin_frame(); }

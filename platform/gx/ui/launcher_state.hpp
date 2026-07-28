@@ -85,16 +85,15 @@ struct Mp6LauncherConfig {
     int shadowQuality;      /* video.shadow_quality */
     /* Unlocked FPS (Mods tab; shim/include/mp6_unlocked_fps.h has the full
      * contract): tick-decoupled presentation -- game logic stays 60Hz,
-     * extra display-rate frames are interpolated at the Hu3D MODEL level
-     * (platform/hsf/mp6_fi_model.c) during the tick throttle's idle window.
+     * extra display-rate frames replay the retained real-tick GX stream with
+     * identity-paired matrices rewritten during the tick throttle's idle window.
      * Binary; default OFF (exact no-op: zero extra begin/end-frame pairs,
      * present-count == tick-count). Applies live -- frame_interp.c reads
      * the accessor every tick, no restart. MP6_UNLOCKED_FPS env wins over
      * this when set (automation never reads the config).
      *
      * There is no mechanism sub-setting: the retired "FPS Smoothing Mode"
-     * row / video.fi_mode key selected between this and a stream-level
-     * replay that has since been deleted. An old config carrying
+     * row / video.fi_mode key selected an unsafe Hu3DExec re-run mode. An old config carrying
      * video.fi_mode is ignored by the tolerant parser (launcher_core.cpp),
      * exactly like the retired video.aspect_locked. */
     int unlockedFps;        /* video.unlocked_fps */

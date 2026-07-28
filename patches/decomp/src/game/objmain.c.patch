@@ -1,22 +1,9 @@
 --- a/src/game/objmain.c
 +++ b/src/game/objmain.c
-@@ -16,0 +17,18 @@
+@@ -16,0 +17,3 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
-+
-+/* game/sprman.c's mp6_animCache is a persistent side table keyed by raw
-+ * pointer value, with entries removed only via HuSprAnimKill (i.e. only
-+ * for objects torn down one at a time, tracked by refcount). It has no
-+ * way to notice a BULK, non-destructor reclaim of the memory it describes
-+ * -- exactly what the two calls below are: real hardware's own "does this
-+ * look like a real pointer or a small file offset" content check (the
-+ * mechanism this cache replaced) was immune to this by construction
-+ * (computed fresh from whatever bytes are AT an address, every call), but
-+ * a persistent side-table keyed by address is not. Declared here (not in
-+ * a shared header) to keep this a narrowly scoped, single-purpose hook. */
-+extern void mp6_animCacheClear(void);
-+
 @@ -18,0 +37,92 @@
 +/* The om-object execution census. An earlier census proved that at least
 + * one om object (bootDll's OutViewObj) is CREATED but never EXECUTED on
@@ -109,25 +96,6 @@
 +    }
 +}
 +
-@@ -157,0 +268,22 @@ void omOvlKill(s16 unlinkF)
-+    /* This bulk free just reclaimed every HEAP_MODEL block this overlay
-+     * tagged HU_MEMNUM_OVL -- including every game/sprman.c HuSprAnimRead
-+     * raw-file buffer and any ANIMDATA skeleton that never went through a
-+     * per-object HuSprAnimKill. Any mp6_animCache entry keyed by an
-+     * address in that reclaimed range is now stale: the next overlay's own
-+     * loads are free to reuse those exact addresses, and a stale hit there
-+     * returns someone else's parsed ANIMDATA (wrong format/dims/palette)
-+     * instead of parsing the fresh, correct bytes now sitting there.
-+     * Root-caused exactly this way for the Party Mode confirm screen's
-+     * Bonus Star icon: decompression and the ANIM parse formulas were both
-+     * proven correct, yet the bound texture's fmt/dims/palette were wrong
-+     * -- only explainable by a stale cache hit. Clearing here, at the one
-+     * choke point that performs this exact class of bulk reclaim, restores
-+     * the memoryless, self-correcting property real hardware's own
-+     * pointer-vs-offset check had (see sprman.c's own comment on
-+     * mp6_animCache for that mechanism) without needing every caller of
-+     * this function to remember to do it themselves. */
-+    mp6_animCacheClear();
 @@ -202,0 +335,6 @@ OMOBJMAN *omInitObjMan(s16 objMax, s32 objManPrio)
 +    if (mp6OmCensusOn()) { /* om census -- new obj manager, reset the verdict cache */
 +        memset(mp6OmcVerdict, 0, sizeof(mp6OmcVerdict));

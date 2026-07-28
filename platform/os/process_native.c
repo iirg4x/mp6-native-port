@@ -51,6 +51,7 @@
 #include "dolphin.h"
 #include "game/process.h"
 #include "game/memory.h"
+#include "mp6_boot.h"
 #include "host.h" /* mp6_coro_* context backend + mp6_host_sleep_ns; this
                    * file owns the ENTIRE scheduler (dispatch loop, yield
                    * status, slot-reuse table, HUPROCESS observables) --
@@ -283,14 +284,37 @@ static void UnlinkProcess(HUPROCESS **root, HUPROCESS *process)
 HUPROCESS *HuPrcCreate(void (*func)(void), u16 prio, u32 stackSize, s32 heapSize)
 {
     HUPROCESS *process;
+    void *stack;
     s32 allocSize;
+    s32 processAllocSize;
+    s32 stackAllocSize;
+    s32 heapAllocSize;
     void *heap;
     if (stackSize == 0) {
         stackSize = DEFAULT_STACK_SIZE;
     }
-    allocSize = HuMemMemoryAllocSizeGet(sizeof(HUPROCESS))
-                    + HuMemMemoryAllocSizeGet(stackSize)
-                    + HuMemMemoryAllocSizeGet(heapSize);
+    /* HuMemMemoryAllocSizeGet takes s32 and performs legacy signed
+     * round-up arithmetic.  Reject hostile/corrupt sizes before either
+     * the u32 stack request is narrowed or the three rounded sizes are
+     * added; wrapping this total can otherwise create a tiny outer heap
+     * followed by writes beyond it during the inner allocations below. */
+    if (stackSize < 8u || stackSize > (u32)INT32_MAX - 71u ||
+        heapSize < 0 || heapSize > INT32_MAX - 71) {
+        OSReport("process> invalid sizes stack %u heap %d\n",
+                 (unsigned)stackSize, (int)heapSize);
+        return NULL;
+    }
+    processAllocSize = HuMemMemoryAllocSizeGet((s32)sizeof(HUPROCESS));
+    stackAllocSize = HuMemMemoryAllocSizeGet((s32)stackSize);
+    heapAllocSize = HuMemMemoryAllocSizeGet(heapSize);
+    if (processAllocSize <= 0 || stackAllocSize <= 0 || heapAllocSize <= 0 ||
+        processAllocSize > INT32_MAX - stackAllocSize ||
+        processAllocSize + stackAllocSize > INT32_MAX - heapAllocSize) {
+        OSReport("process> allocation size overflow stack %u heap %d\n",
+                 (unsigned)stackSize, (int)heapSize);
+        return NULL;
+    }
+    allocSize = processAllocSize + stackAllocSize + heapAllocSize;
     if (!(heap = HuMemDirectMalloc(HEAP_HEAP, allocSize))) {
         OSReport("process> malloc error size %d\n", allocSize);
         return NULL;
@@ -301,12 +325,18 @@ HUPROCESS *HuPrcCreate(void (*func)(void), u16 prio, u32 stackSize, s32 heapSize
     fflush(stdout);
     HuMemHeapInit(heap, allocSize);
     process = HuMemMemoryAlloc(heap, sizeof(HUPROCESS), FAKE_RETADDR);
+    stack = HuMemMemoryAlloc(heap, (s32)stackSize, FAKE_RETADDR);
+    if (process == NULL || stack == NULL) {
+        OSReport("process> inner heap allocation failed size %d\n", allocSize);
+        HuMemDirectFree(heap);
+        return NULL;
+    }
     process->heap = heap;
     process->exec = HUPRC_EXEC_NORMAL;
     process->stat = 0;
     process->prio = prio;
     process->sleep = 0;
-    process->spBase = ((u32)(uintptr_t)HuMemMemoryAlloc(heap, stackSize, FAKE_RETADDR)) + stackSize - 8;
+    process->spBase = (u32)(uintptr_t)stack + stackSize - 8;
     /* The native coroutine bootstrap (ProcessTrampoline) reads ONLY .lr,
      * on this process's first dispatch; .sp is unused (each coroutine has
      * its own stack). No throwaway gcsetjmp needed: we just set .lr. */
@@ -353,6 +383,9 @@ void HuPrcChildUnlink(HUPROCESS *process)
 HUPROCESS *HuPrcChildCreate(void (*func)(void), u16 prio, u32 stackSize, s32 heapSize, HUPROCESS *parent)
 {
     HUPROCESS *child = HuPrcCreate(func, prio, stackSize, heapSize);
+    if (child == NULL) {
+        return NULL;
+    }
     HuPrcChildLink(parent, child);
     printf("[PRC] HuPrcChildCreate: parent=%p -> child=%p\n", (void *)parent, (void *)child);
     fflush(stdout);
@@ -510,6 +543,16 @@ void HuPrcCall(s32 tick)
     HUPROCESS *process;
     s32 ret;
     processcur = processtop;
+    /* The forced DLL self-test both allocates from HuMem and runs the stub
+     * prolog, which creates a child of HuPrcCurrentGet(). A VI-tick hook was
+     * too early during HuSysInit on one path and has no current process after
+     * dispatch on another. Here both prerequisites are true by construction:
+     * HuPrcCall is reached only after HuMemInitAll, and processcur is the live
+     * parent the prolog expects. The helper is a one-shot/no-op without the
+     * explicit MP6_TEST_LOAD_DLL environment lever. */
+    if (processcur != NULL) {
+        mp6_dll_bridge_selftest_check_env();
+    }
     ret = 0; /* was `gcsetjmp(&processjmpbuf)` -- always 0 on the one, direct
               * call HuPrcCall itself ever makes; every LATER update to
               * `ret` below is a plain assignment or DispatchProcessAndWait's
@@ -517,8 +560,26 @@ void HuPrcCall(s32 tick)
     while (1) {
         switch (ret) {
             case 2:
-                HuMemDirectFree(processcur->heap);
-                /* fallthrough */
+            {
+                /* gcTerminateProcess/ForceTerminateKilledProcess have
+                 * already unlinked this node, but deliberately leave its
+                 * next link intact for the dispatcher.  Capture every
+                 * field needed below while the nested process heap is
+                 * still live.  The old inherited ordering freed that heap
+                 * first and then read processcur->heap/processcur->next --
+                 * a real use-after-free on every process termination. */
+                HUPROCESS *next = processcur->next;
+                void *deadHeap = processcur->heap;
+                if (((u8 *)deadHeap)[4] != 165) {
+                    fprintf(stderr, "[FATAL] stack overlap error.(process pointer %p)\n",
+                            (void *)processcur);
+                    fflush(stderr);
+                    exit(1);
+                }
+                HuMemDirectFree(deadHeap);
+                processcur = next;
+                break;
+            }
             case 1:
                 if (((u8 *)(processcur->heap))[4] != 165) {
                     fprintf(stderr, "stack overlap error.(process pointer %p)\n", (void *)processcur);

@@ -1,0 +1,14 @@
+--- a/src/game/gamemes.c
++++ b/src/game/gamemes.c
+@@ -5,2 +5,3 @@
+ double sin(double);
+ double cos(double);
++double __fabs(double);
+@@ -25,0 +27 @@
++#include "string.h"
+@@ -213 +215 @@
+-GAMEMESID GameMesCreate(s16 mesNo, ...)
++GAMEMESID GameMesCreate(s32 mesNo, ...)
+@@ -349 +351 @@
+-    if(maxTime <= 0 && maxTime > 99) {
++    if(maxTime <= 0 || maxTime > 99) {

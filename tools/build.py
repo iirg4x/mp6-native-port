@@ -14,21 +14,31 @@ Usage:
     python tools/build.py            # build
     python tools/build.py --clean    # remove build/ first
     python tools/build.py --link-only
+    python tools/build.py --target aarch64-android --windowed --configuration release
 """
 import argparse
 import concurrent.futures
+import glob
 import hashlib
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import apply_patches  # noqa: E402 -- surgical patch queue, see its own docstring
+import fetch_nod  # noqa: E402 -- pinned nod artifact verification
 
 NATIVE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # .../mp6-native
 PORT_ROOT = os.path.dirname(NATIVE_ROOT)                                    # .../port
-DECOMP = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6"))
+if NATIVE_ROOT not in sys.path:
+    sys.path.insert(0, NATIVE_ROOT)
+from setup.lib import common as setup_common  # noqa: E402 -- shared path contract
+
+DECOMP = setup_common.DECOMP_DIR
 ZIG = os.path.join(PORT_ROOT, "toolchain", "zig-x86_64-windows-0.16.0", "zig.exe")
 BUILD_DIR = os.path.join(NATIVE_ROOT, "build")
 OBJ_DIR = os.path.join(BUILD_DIR, "obj")
@@ -53,11 +63,15 @@ IMAGE_BASE = "0x10000000"  # see platform/os/arena.c: keeps code/static-data poi
 # platform/android/mp6launcher.c). Headless-only by design: aurora/SDL for
 # Android is the android row.
 ANDROID_API_LEVEL = 28  # matches the probe row used during Android bring-up
+ANDROID_NDK_VERSION = fetch_nod.ANDROID_NDK_VERSION
 ANDROID_TRIPLE = f"aarch64-linux-android{ANDROID_API_LEVEL}"
 ANDROID_BUILD_DIR = os.path.join(BUILD_DIR, "android")
 ANDROID_OBJ_DIR = os.path.join(ANDROID_BUILD_DIR, "obj")
 ANDROID_MSL_OVERRIDE = os.path.join(ANDROID_BUILD_DIR, "msl_override")
 ANDROID_PATCHED_INCLUDE = os.path.join(ANDROID_BUILD_DIR, "patched_include")
+ANDROID_NATIVE_MANIFEST_VERSION = 2
+ANDROID_OPTIMIZATION = {"debug": "-O0", "release": "-O2"}
+ANDROID_RELEASE_SAFETY_FLAGS = ("-fno-strict-aliasing",)
 # The on-device smoke layout (everything
 # under /data/local/tmp/mp6. These bake the DEVICE-side fallback paths into
 # the .so the same way MP6_DVD_FILES_ROOT below bakes this repo's absolute
@@ -71,19 +85,25 @@ ANDROID_DVD_FST_PATH = ANDROID_DEVICE_BASE + "/GP6E01/sys/fst.bin"
 
 
 def _find_ndk_root():
-    """ANDROID_NDK_ROOT env override, else the newest ndk under
-    port/android-sdk/ndk/ (the probe kit's own autodetection rule,
-    port/android-probe/build.bat)."""
+    """Select only the audited r27d NDK; never let "newest" change the ABI."""
     env = os.environ.get("ANDROID_NDK_ROOT")
-    if env and os.path.isdir(env):
-        return env
-    ndk_base = os.path.join(PORT_ROOT, "android-sdk", "ndk")
-    if os.path.isdir(ndk_base):
-        vers = sorted(d for d in os.listdir(ndk_base)
-                      if os.path.isdir(os.path.join(ndk_base, d)))
-        if vers:
-            return os.path.join(ndk_base, vers[-1])
-    return None
+    candidate = env if env else os.path.join(
+        PORT_ROOT, "android-sdk", "ndk", ANDROID_NDK_VERSION
+    )
+    candidate = os.path.realpath(candidate)
+    if (not os.path.isdir(candidate)
+            or os.path.basename(candidate) != ANDROID_NDK_VERSION):
+        return None
+    properties = os.path.join(candidate, "source.properties")
+    try:
+        with open(properties, "r", encoding="utf-8") as f:
+            revisions = [
+                line.split("=", 1)[1].strip() for line in f
+                if "=" in line and line.split("=", 1)[0].strip() == "Pkg.Revision"
+            ]
+    except OSError:
+        return None
+    return candidate if revisions == [ANDROID_NDK_VERSION] else None
 
 
 def _ndk_clang(ndk_root):
@@ -616,6 +636,17 @@ def _resolve_android_aurora_link_items():
             out.append(os.path.normpath(os.path.join(AURORA_BUILD_ANDROID_RMLUI, item)).replace("\\", "/"))
     return out
 
+
+def _require_aurora_artifact_stamp(profile, items):
+    if NATIVE_ROOT not in sys.path:
+        sys.path.insert(0, NATIVE_ROOT)
+    from setup.lib import step_aurora
+    problems = step_aurora.verify_link_inputs(
+        profile, build_module=sys.modules[__name__], items=items
+    )
+    if problems:
+        raise RuntimeError("; ".join(problems))
+
 # Pre-generated .inc data blobs (font bitmaps, decode tables, splash-screen
 # packed sprites, ...) #include-d directly by several game/*.c and
 # REL/bootDll/data.c files. These are the decomp's OWN build-tool output
@@ -857,6 +888,44 @@ HEADER_CONTENT_PATCHES = [
         "void GXSetArray(GXAttr attr, void* data, u8 stride);",
         "GXSetArray: unconditional real-hardware 3-arg shape (matching decomp's actual call "
         "sites) regardless of TARGET_PC -- see platform/gx/aurora_bridge.c for the 5-arg adapter",
+    ),
+    (
+        "game/sprite.h",
+        re.compile(
+            r"//void HuSprTexLoad\(ANIMDATA \*anim, s16 bmpNo, s16 texMapId, "
+            r"GXTexWrapMode wrapS, GXTexWrapMode wrapT, GXTexFilter filter\);"
+        ),
+        "#ifndef MP6_FILESEL_LOCAL_HUSPRTEXLOAD_PROTO\n"
+        "void HuSprTexLoad(ANIMDATA *anim, s16 bmpNo, s16 texMapId, "
+        "GXTexWrapMode wrapS, GXTexWrapMode wrapT, GXTexFilter filter);\n"
+        "#endif",
+        "HuSprTexLoad: restore the exact prototype so native calls cannot use implicit-int ABI rules",
+    ),
+    (
+        "game/hu3d.h",
+        re.compile(
+            r"(HU3D_ANIMID Hu3DAnimCreate\(void \*dataP, HU3D_MODELID modelId, char \*bmpName\);\n)"
+        ),
+        r"\1s32 Hu3DAnimSet(HU3D_MODEL *modelP, HSF_ATTRIBUTE *attrP, s16 texSlotNo);\n",
+        "Hu3DAnimSet: expose the cross-TU texture-animation helper with its exact host ABI",
+    ),
+    (
+        "game/object.h",
+        re.compile(r"(BOOL omCameraViewCheck\(u32 cameraBit\);\n)"),
+        r"\1s16 omPadErrChk(s16 padNo);\n",
+        "omPadErrChk: expose the cross-TU controller-status helper with its exact host ABI",
+    ),
+    (
+        "msm/msmsys.h",
+        re.compile(r"void msmSysCheckInit\(void\);"),
+        "s32 msmSysCheckInit(void);",
+        "msmSysCheckInit: return the installed-state value that live reset callers consume",
+    ),
+    (
+        "game/gamemes.h",
+        re.compile(r"GAMEMESID GameMesCreate\(s16 mesNo, \.\.\.\);"),
+        "GAMEMESID GameMesCreate(s32 mesNo, ...);",
+        "GameMesCreate: use a non-promotable final named parameter so va_start is defined on hosts",
     ),
 ]
 
@@ -1202,9 +1271,58 @@ def resolve_source(rel):
     if os.path.exists(override):
         return override
     patched = os.path.join(PATCHED_SRC_DIR, rel.replace("/", os.sep))
-    if os.path.exists(patched):
+    base_patch = os.path.join(
+        NATIVE_ROOT, "patches", "decomp", rel.replace("/", os.sep) + ".patch"
+    )
+    fragment_glob = os.path.join(
+        NATIVE_ROOT, "patches", "decomp-fragments",
+        rel.replace("/", os.sep) + ".patch.*",
+    )
+    # build/patched-src is an output cache and may retain a file after its
+    # owning patch is removed. Never let such stale output shadow the pinned
+    # checkout: a generated copy is eligible only while an active base patch
+    # or ordered patch fragment still owns that logical source.
+    if os.path.exists(patched) and (os.path.exists(base_patch) or glob.glob(fragment_glob)):
         return patched
     return os.path.join(DECOMP, rel.replace("/", os.sep))
+
+
+GAME_NATIVE_ABI_FLAGS = {
+    # Native clang cannot safely inherit C89 implicit declarations.  These
+    # are the authoritative headers each decomp TU omitted; force-including
+    # them preserves the untouched dependency while making host calls use the
+    # real return/argument ABI.  Standard headers are deliberately per-file:
+    # game/mic.c carries surviving fixed-u32 MSL declarations that would
+    # conflict with a blanket host <string.h> include.
+    "src/game/audio.c": ["-include", "msm/msmsys.h", "-include", "mp6_msm_sys_compat.h"],
+    "src/game/card.c": ["-include", "game/process.h"],
+    "src/game/charman.c": ["-include", "stdio.h", "-include", "string.h",
+                            "-include", "game/frand.h", "-include", "game/hsfex.h"],
+    "src/game/colman.c": ["-include", "string.h"],
+    "src/game/data.c": ["-include", "stdio.h", "-include", "stdint.h"],
+    "src/game/flag.c": ["-include", "string.h"],
+    "src/game/gamework.c": ["-include", "string.h", "-include", "game/object.h"],
+    "src/game/hsfanim.c": ["-include", "game/frand.h"],
+    "src/game/hsfex.c": ["-include", "game/process.h"],
+    "src/game/hsfmotion.c": ["-include", "string.h"],
+    "src/game/init.c": ["-include", "game/sreset.h", "-include", "game/memory.h",
+                         "-include", "dolphin/demo/DEMOStats.h"],
+    "src/game/main.c": ["-include", "game/pad.h", "-include", "game/dvd.h",
+                         "-include", "game/msm.h"],
+    "src/game/memory.c": ["-include", "stdio.h", "-include", "string.h"],
+    "src/game/mggamemes.c": ["-include", "game/frand.h"],
+    "src/game/mic.c": ["-include", "dolphin/m2s.h", "-include", "dolphin/mic.h",
+                        "-include", "mp6_gsapi_compat.h"],
+    "src/game/objdll.c": ["-include", "string.h"],
+    "src/game/objmain.c": ["-include", "game/gamemes.h", "-include", "game/mg/actman.h",
+                            "-include", "game/charman.h"],
+    "src/game/objsub.c": ["-include", "game/window.h", "-include", "game/wipe.h"],
+    "src/game/objsysobj.c": ["-include", "game/gamemes.h", "-include", "game/wipe.h"],
+    "src/game/pad.c": ["-include", "game/msm.h"],
+    "src/game/sreset.c": ["-include", "msm/msmsys.h"],
+    "src/game/THPSimple.c": ["-include", "string.h", "-include", "mp6_thp_compat.h",
+                              "-include", "game/process.h"],
+}
 
 
 def game_sources():
@@ -1220,8 +1338,45 @@ def game_sources():
         rel = f"src/game/{f}"
         if rel in GAME_SKIP_LIST:
             continue
-        out.append((rel, []))
+        out.append((rel, list(GAME_NATIVE_ABI_FLAGS.get(rel, ()))))
     return out
+
+
+# The shared board runtime is one native subsystem, not an overlay. Board
+# startup/teardown and turn dispatch cross nearly every file in src/board, so
+# link the complete recovered 40-TU closure instead of letting a partial list
+# appear viable only because a particular menu path has not called it yet.
+BOARD_NATIVE_ABI_FLAGS = {
+    "src/board/audio.c": ["-include", "msm.h"],
+    "src/board/capsule.c": ["-include", "msm.h"],
+    "src/board/roulette.c": ["-include", "msm.h"],
+    "src/board/telop.c": ["-include", "msm.h"],
+    # mbCosDeg/mbSinDeg convert (angle * scale) to s32 and then MASK the
+    # result into the 2048-entry table (MB_TRIG_BYTE_MASK), so a NaN/huge
+    # angle is in-range by construction -- exactly what the console does.
+    # zig cc's default float-cast-overflow trap aborts the process on that
+    # same conversion instead; W01's own path-marker object (world01.c
+    # fn_1_13CC) feeds it a NaN during the board opening, when
+    # GwSystem.turnPlayerNo is still -1. Scoped to this TU.
+    "src/board/math.c": ["-fno-sanitize=float-cast-overflow"],
+    "src/board/camera.c": ["-include", "string.h"],
+    "src/board/config.c": ["-include", "string.h"],
+    "src/board/gate.c": ["-include", "string.h"],
+    "src/board/opening.c": ["-include", "string.h"],
+    "src/board/star.c": ["-include", "string.h"],
+}
+
+
+def board_sources():
+    board_dir = os.path.join(DECOMP, "src", "board")
+    return [
+        (f"src/board/{filename}",
+         ["-DMP6_NATIVE_PORT=1", "-include", "mp6_board_compat.h"]
+         + list(BOARD_NATIVE_ABI_FLAGS.get(f"src/board/{filename}", ())))
+        for filename in sorted(os.listdir(board_dir))
+        if filename.endswith(".c")
+    ]
+
 
 # Each REL module is its own MWCC-era link unit on real hardware, so
 # bootDll/selmenuDll/fileseldll each freely reuse the SAME per-module
@@ -1234,7 +1389,9 @@ def game_sources():
 REL_SOURCES = [
     ("src/REL/bootDll/boot.c", ["-D_prolog=bootDll_prolog", "-D_epilog=bootDll_epilog",
                                  "-D_ctors=bootDll_ctors", "-D_dtors=bootDll_dtors",
-                                 "-DObjectSetup=bootDll_ObjectSetup"]),
+                                 "-DObjectSetup=bootDll_ObjectSetup",
+                                 "-include", "msm/msmsys.h",
+                                 "-include", "mp6_msm_sys_compat.h"]),
     ("src/REL/bootDll/data.c", []),
     ("src/REL/bootDll/opening.c", []),
     ("src/REL/selmenuDll/selmenu.c", ["-D_prolog=selmenuDll_prolog", "-D_epilog=selmenuDll_epilog",
@@ -1242,12 +1399,20 @@ REL_SOURCES = [
                                        "-DObjectSetup=selmenuDll_ObjectSetup",
                                        # see shim/include/selmenu_compat.h for why this is
                                        # per-file rather than in the global dolphin_compat.h
-                                       "-include", "selmenu_compat.h"]),
+                                       "-include", "selmenu_compat.h",
+                                       "-include", "game/charman.h"]),
     ("src/REL/fileseldll/filename.c", []),
     ("src/REL/fileseldll/filesel.c", ["-D_prolog=fileselDll_prolog", "-D_epilog=fileselDll_epilog",
                                         "-D_ctors=fileselDll_ctors", "-D_dtors=fileselDll_dtors",
-                                        "-DObjectSetup=fileselDll_ObjectSetup"]),
-    ("src/REL/fileseldll/saveload.c", []),
+                                        "-DObjectSetup=fileselDll_ObjectSetup",
+                                        # This TU carries an older s32-parameter declaration.
+                                        # Integer/enum arguments share the ABI; suppress the
+                                        # exact shadow-header prototype here to avoid a C type
+                                        # conflict while every other TU receives the safe one.
+                                        "-DMP6_FILESEL_LOCAL_HUSPRTEXLOAD_PROTO",
+                                        "-include", "game/hsfex.h",
+                                        "-include", "stdint.h"]),
+    ("src/REL/fileseldll/saveload.c", ["-include", "stdio.h", "-include", "string.h"]),
     # mdseldll (mode select -- the overlay file-select's own no-card flow
     # proceeds to unconditionally, ovl_table.h index 93). The decomp's
     # configure.py marks mdsel.c Matching and the built REL is
@@ -1275,7 +1440,10 @@ REL_SOURCES = [
                                     "-Dfn_1_6E54=mdsel_fn_1_6E54",
                                     "-Dfn_1_C8C=mdsel_fn_1_C8C",
                                     "-Dlbl_1_data_0=mdsel_lbl_1_data_0",
-                                    "-Dlbl_1_data_154=mdsel_lbl_1_data_154"]),
+                                    "-Dlbl_1_data_154=mdsel_lbl_1_data_154",
+                                    "-include", "game/hsfex.h",
+                                    "-include", "mp6_mdsel_audio_compat.h",
+                                    "-include", "string.h"]),
     # mdpartydll (party-mode setup --
     # mode select's own "Party Mode" confirm proceeds to this overlay,
     # ovl_table.h line 92 = index 91). The decomp's configure.py marks all
@@ -1298,8 +1466,44 @@ REL_SOURCES = [
                                         "-Dlbl_1_data_4=mdparty_lbl_1_data_4",
                                         "-Dfn_1_36C4=mdparty_fn_1_36C4",
                                         "-Dlbl_1_data_1C=mdparty_lbl_1_data_1C",
-                                        "-Dlbl_1_data_0=mdparty_lbl_1_data_0"]),
+                                        "-Dlbl_1_data_0=mdparty_lbl_1_data_0",
+                                        "-include", "game/hsfex.h",
+                                        "-include", "game/audio.h",
+                                        "-include", "game/saveload.h"]),
     ("src/REL/mdpartydll/stage.c", []),
+    # w01Dll (Towering Treetop, board 1). world01.c is recovered/matching at
+    # the pinned decomp revision. Its runtime.c is the same one-line include
+    # of Runtime.PPCEABI.H/runtime.c as the menu REL wrappers above; the
+    # native compiler runtime supplies those integer helpers, so compiling
+    # that PPC runtime wrapper into the monolithic host image would be both
+    # redundant and ABI-wrong. Lifecycle/ObjectSetup names are REL-local on
+    # hardware and therefore receive the same namespace treatment here.
+    ("src/REL/w01Dll/world01.c", ["-D_prolog=w01Dll_prolog", "-D_epilog=w01Dll_epilog",
+                                    "-D_ctors=w01Dll_ctors", "-D_dtors=w01Dll_dtors",
+                                    "-DObjectSetup=w01Dll_ObjectSetup",
+                                    # REL-local data labels may repeat across
+                                    # independently linked overlays. These are
+                                    # the only two measured W01 intersections
+                                    # in the monolithic native COFF link.
+                                    "-Dlbl_1_data_48C=w01_lbl_1_data_48C",
+                                    "-Dlbl_1_data_0=w01_lbl_1_data_0",
+                                    # fn_1_13CC (world01.c:1592) reads
+                                    # GwPlayer[GwSystem.turnPlayerNo] on a path
+                                    # the function's own `playerNo >= 0` guard
+                                    # does NOT cover, and mbMain sets
+                                    # turnPlayerNo = -1 for the whole board
+                                    # opening -- so GwPlayer[-1] is genuinely
+                                    # executed. On GameCube that is a plain
+                                    # in-range load of the 4 bytes preceding
+                                    # GwPlayer (the value lands in
+                                    # work->lastMasuId and is overwritten by the
+                                    # first real tile compare below it); under
+                                    # zig cc's default UBSan array-bounds trap it
+                                    # aborts the process instead, which is the
+                                    # only thing standing between MB1_Create and
+                                    # a live board frame. Scoped to this one TU
+                                    # so every other file keeps the trap.
+                                    "-fno-sanitize=array-bounds"]),
 ]
 
 MAIN_C_FLAGS = ["-Dmain=GameMain"]
@@ -1325,7 +1529,16 @@ HOST_STATE_SECTION_SOURCES = {
     "platform/audio/msm_bridge.c",
     "platform/audio/audio_out_sdl.c",
     "platform/gx/aurora_bridge.c",
+    # SDL mouse/touch accumulators and finger/down-edge latches describe the
+    # running process's event stream, never deterministic game state. They are
+    # also explicitly cleared after restore so pre-load input cannot leak into
+    # the restored timeline.
+    "platform/gx/freecam_input.c",
+    "platform/android/touch_pad.cpp",
     "platform/content/content_import.cpp",
+    # Android SAF bridge owns JNI global refs and pending picker state. Those
+    # handles belong to the running VM/process and must never be restored.
+    "platform/android/saf_bridge.c",
     # The DVD layer's whole statics set is host-owned
     # -- the FST blob and its string pool are CRT-heap pointers, g_entryPaths
     # is a heap array of heap strings, and g_resolvedFilesRoot/_FstPath are
@@ -1380,8 +1593,8 @@ HOST_STATE_SECTION_SOURCES = {
     # to the RUNNING process's UI session -- a restored state must neither
     # re-enable freecam nor teleport the camera the user is flying.
     "platform/hsf/mp6_freecam.c",
-    # Unlocked FPS MODEL interpolation (shim/include/mp6_fi_model.h): the
-    # per-tick transform/camera snapshot buffers are host-owned RENDER state
+    # Unlocked FPS identity/camera metadata (shim/include/mp6_fi_model.h): the
+    # model-generation/context and camera snapshot buffers are host-owned render state
     # of the RUNNING process, not captured game state -- a restore must not
     # reinstate a pre-restore snapshot (it would interpolate across the state
     # discontinuity). Same carve-out shape as frame_interp.c right below.
@@ -1393,14 +1606,19 @@ HOST_STATE_SECTION_SOURCES = {
     # counter that describe the RUNNING process's debug session, not game
     # state.
     "platform/gx/shadow_dump.c",
+    # MP6_FRAME_DUMP (shim/include/mp6_frame_dump.h): same category again --
+    # an env latch, the armed/written burst position, and (worse) the
+    # realloc'd readback scratch buffer's heap POINTER. Restoring a capturing
+    # process's buffer pointer into the loading one is the exact heap-
+    # corruption class this carve-out exists to prevent.
+    "platform/gx/frame_dump.c",
     # Unlocked FPS presentation layer (shim/include/mp6_unlocked_fps.h): the
     # idle-window pacing statics are monotonic timestamps taken from the RUNNING
     # process's timer plus diagnostic counters -- host state, not captured game
     # state. Restoring a capturing process's timestamps into the loading one
     # would hand the first post-restore window a nonsense alpha and spacing.
-    # (Historically this carve-out also protected the retained-stream path's
-    # realloc'd buffers, whose restored pointer VALUES corrupted the heap; that
-    # path is deleted, the carve-out stays for the reason above.) Aurora-only
+    # It also protects the retained stream's realloc'd buffers, whose restored
+    # pointer VALUES would corrupt the heap. Aurora-only
     # TU (PLATFORM_AURORA_ONLY); the headless build never compiles it, so this
     # entry is asserted only against the windowed build.
     "platform/gx/frame_interp.c",
@@ -1477,6 +1695,8 @@ def verify_host_section_sources():
 
 PLATFORM_SOURCES_COMMON = [
     "platform/os/arena.c",
+    "platform/os/sdk_native.c",  # portable PS-matrix/quaternion SDK names;
+                                  # headless-only C_QUAT/GX attribute sinks
     "platform/os/process_native.c",  # replaces jmp_native.c + hostjmp.c +
                                        # prc_trace.c (game/jmp.c AND game/process.c
                                        # skipped together, see GAME_SKIP_LIST) --
@@ -1490,10 +1710,20 @@ PLATFORM_SOURCES_COMMON = [
                                   # capture/restore regression gate runs, since
                                   # it is the mode with a byte-identical log.
     "platform/os/dll_bridge.c",
-    "platform/os/board_stub.c",  # Honest no-op placeholder for src/board/board.c's
-                                   # mbSaveInit/mbSavePartyInit -- board.c itself is a separate,
-                                   # not-yet-integrated recovery lane; see the file's own header.
+    "platform/os/board_runtime.c",  # board lifecycle marker/state bridge used by W01
+    "platform/os/board_placeholders.c",  # logged native seams for board symbols absent on decomp main
+    "platform/os/board_telop.c",  # mbTelopCreate: board name/logo telop, upgraded
+                                    # out of board_placeholders.c's no-op list (see
+                                    # that file's own header for provenance)
     "platform/os/log.c",
+    "platform/os/mp6_events.c",  # the game-event bus (shim/include/mp6_events.h):
+                                   # typed [EVENT] lines for overlay/DLL/screen state
+                                   # changes, so automation can bind input to observed
+                                   # state instead of guessed tick offsets. Needs the
+                                   # decomp's include/ovl_table.h (COMMON_FLAGS' decomp
+                                   # -I's) to name overlays; BOTH modes, since the
+                                   # OSReport tap that feeds it (platform/null/
+                                   # shims_manual.c) is in both.
     "platform/os/card_native.c",  # memory-card slot A: CARDInit(void)->aurora
                                     # CARDInit(game,maker) interposer + saves/
                                     # base path; honest no-op under
@@ -1517,18 +1747,17 @@ PLATFORM_SOURCES_COMMON = [
                                     # (see shim/include/mp6_save_endian.h)
     "platform/dvd/dvd_files.c",  # real FST + host-file serving, see dll_bridge.c's own header
     "platform/hsf/hsf_load_native.c",  # real HSF (3D scene) deserializer
+    "platform/sprite/anim_native.c",  # bounded 32-bit-BE ANM -> native graph + ownership cache
     "platform/hsf/mp6_freecam.c",  # freecam camera override (shim/include/mp6_freecam.h):
                                      # needs game/hu3d.h (COMMON_FLAGS' decomp -I's) like its
                                      # neighbors; BOTH modes because its one caller is the
                                      # shared Hu3DExec patch hook -- a permanently-false
                                      # branch in headless (nothing there can enable it).
-    "platform/hsf/mp6_fi_model.c",  # Unlocked FPS MODEL-level interpolation (shim/include/
-                                      # mp6_fi_model.h): snapshot Hu3DData[]/Hu3DCamera[] per tick,
-                                      # re-run Hu3DExec on the interpolated pose in the idle window.
+    "platform/hsf/mp6_fi_model.c",  # Unlocked FPS identity/camera metadata (shim/include/
+                                      # mp6_fi_model.h): stable model generations + camera-cut history.
                                       # Needs game/hu3d.h (COMMON_FLAGS' decomp -I's) like mp6_freecam.c;
-                                      # BOTH modes so the replay-pass flag it defines resolves for the
-                                      # shared hsfman.c guard patch -- the replay caller (frame_interp.c)
-                                      # is aurora-only, so the re-run path is dead code in headless.
+                                      # BOTH modes because shared hsfman.c records the same real-draw
+                                      # identity context even when headless never captures a GX stream.
     "platform/hsf/mp6_widescreen_extrude.c",  # The shared backdrop-extrude helpers:
                                                  # shared backdrop-extrude helper, hoisted out of
                                                  # mdpartydll/mdparty.c's own file-local static so every
@@ -1556,6 +1785,14 @@ PLATFORM_SOURCES_COMMON = [
                                      # its platform/gx/framescope.c and platform/hsf/ neighbors;
                                      # links into BOTH modes, internally #ifdef MP6_HEADLESS_BUILD
                                      # (headless has no renderer/GPU -- standing no-op there).
+    "platform/gx/frame_dump.c",  # MP6_FRAME_DUMP debug lever (shim/include/
+                                    # mp6_frame_dump.h): per-present GPU->CPU capture of
+                                    # aurora's present source (aurora-patches/0025). In COMMON
+                                    # for the same reason shadow_dump.c is -- its trigger entry
+                                    # point is called from platform/os/mp6_events.c, which links
+                                    # into BOTH modes -- and split internally by #ifdef
+                                    # MP6_HEADLESS_BUILD/__ANDROID__ (no renderer there, and the
+                                    # Android aurora archive has no 0025 symbol to link against).
     # platform/null/shims_generated{,_aurora}.c is NOT in this list -- see
     # collect_units() below, it's the one PLATFORM_SOURCES_COMMON entry
     # whose SOURCE FILE (not just its compile flags) differs per mode. See
@@ -1591,8 +1828,7 @@ PLATFORM_AURORA_ONLY = [
     "platform/gx/aurora_bridge.c", "platform/gx/framescope.c",
     "platform/gx/frame_interp.c",  # Unlocked FPS presentation layer
                                      # (shim/include/mp6_unlocked_fps.h): the frame-boundary
-                                     # hooks + the idle-window pacing that drives the
-                                     # model-level replay (platform/hsf/mp6_fi_model.c).
+                                     # hooks + retained-FIFO rewrite/submission and pacing.
                                      # Aurora headers only (AURORA_FLAGS), same split as
                                      # aurora_bridge.c -- headless untouched by construction.
     "platform/gx/freecam_input.c",  # freecam host-input collector (SDL keyboard/
@@ -1752,6 +1988,10 @@ def collect_units(headless, coro_fibers=False, android=False):
             f = f + MAIN_C_FLAGS
         obj_name = "game_" + os.path.basename(abs_path).replace(".c", ".o")
         units.append((abs_path, f, obj_name, "common"))
+    for rel, flags in board_sources():
+        abs_path = resolve_source(rel)
+        obj_name = "board_" + os.path.basename(abs_path).replace(".c", ".o")
+        units.append((abs_path, flags, obj_name, "common"))
     for rel, flags in REL_SOURCES:
         abs_path = resolve_source(rel)
         obj_name = "rel_" + os.path.basename(abs_path).replace(".c", ".o")
@@ -1826,30 +2066,289 @@ def collect_units(headless, coro_fibers=False, android=False):
     return units
 
 
-def _newest_mtime_under(dirpath):
-    newest = 0.0
-    for root, _dirs, files in os.walk(dirpath):
-        for f in files:
-            try:
-                newest = max(newest, os.path.getmtime(os.path.join(root, f)))
-            except OSError:
-                pass
-    return newest
+_COMPILE_CONTRACT_VERSION = 5
+_COMPILER_ID_CACHE = {}
+_COMPILER_ID_LOCK = threading.Lock()
+_CONTENT_HASH_CACHE = {}
+_CONTENT_HASH_LOCK = threading.Lock()
+_VERIFIED_ZIG_TREE_IDENTITY = None
 
 
-def needs_rebuild(src, obj):
-    if not os.path.exists(obj):
+def _reset_fingerprint_caches():
+    """Start a new build-invocation content snapshot.
+
+    Windows exposes creation time as st_ctime, so an in-place same-size edit
+    can restore every reusable stat field. Clearing once before each compile
+    scan keeps cross-TU deduplication while ensuring no previous invocation's
+    metadata cache can hide changed bytes.
+    """
+    with _COMPILER_ID_LOCK:
+        _COMPILER_ID_CACHE.clear()
+    with _CONTENT_HASH_LOCK:
+        _CONTENT_HASH_CACHE.clear()
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _zig_tree_identity(path):
+    if os.path.basename(path).lower() != "zig.exe":
+        return None
+    if (os.path.normcase(os.path.realpath(path)) == os.path.normcase(os.path.realpath(ZIG))
+            and _VERIFIED_ZIG_TREE_IDENTITY is not None):
+        return _VERIFIED_ZIG_TREE_IDENTITY
+    if NATIVE_ROOT not in sys.path:
+        sys.path.insert(0, NATIVE_ROOT)
+    from setup.lib import step_toolchain
+    return step_toolchain.zig_tree_fingerprint(os.path.dirname(path))
+
+
+def _compiler_identity(path):
+    """Return an identity that changes when the compiler binary changes.
+
+    Exact command lines catch flag/tool selection changes; hashing the actual
+    executable also catches in-place Zig/NDK upgrades whose path stayed put.
+    The cache is process-local because every TU in a row uses the same driver.
+    """
+    real = os.path.realpath(path)
+    st = os.stat(real)
+    key = (real, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    with _COMPILER_ID_LOCK:
+        cached = _COMPILER_ID_CACHE.get(key)
+        if cached is not None:
+            return cached
+        identity = {
+            "path": real,
+            "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
+            "sha256": _sha256_file(real),
+        }
+        tree = _zig_tree_identity(real)
+        if tree is not None:
+            identity["toolchain_tree"] = tree
+        _COMPILER_ID_CACHE.clear()
+        _COMPILER_ID_CACHE[key] = identity
+        return identity
+
+
+def _content_hash(path):
+    """Hash a dependency once per observed filesystem identity this run."""
+    real = os.path.realpath(path)
+    st = os.stat(real)
+    # ctime changes even when a test/editor deliberately restores an older
+    # mtime, so the cache cannot hide the very replacement case this content
+    # fingerprint exists to catch. The persisted decision is the SHA itself.
+    key = (real, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    with _CONTENT_HASH_LOCK:
+        cached = _CONTENT_HASH_CACHE.get(key)
+    if cached is not None:
+        return cached
+    digest = _sha256_file(real)
+    with _CONTENT_HASH_LOCK:
+        _CONTENT_HASH_CACHE[key] = digest
+    return digest
+
+
+def _command_record(cmd):
+    payload = {
+        "contract": _COMPILE_CONTRACT_VERSION,
+        "command": cmd,
+        "compiler": _compiler_identity(cmd[0]),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload["fingerprint"] = hashlib.sha256(encoded).hexdigest()
+    return payload
+
+
+def _dependency_record(depfile):
+    unique = {}
+    for dep in _parse_depfile(depfile):
+        path = dep if os.path.isabs(dep) else os.path.join(NATIVE_ROOT, dep)
+        real = os.path.realpath(path)
+        unique[os.path.normcase(real)] = real
+    return [{"path": path, "sha256": _content_hash(path)}
+            for path in sorted(unique.values(), key=os.path.normcase)]
+
+
+def _parse_depfile(path):
+    """Parse the single-target Make depfiles emitted by Zig/clang.
+
+    Drive-letter colons are not target separators, and backslashes only act
+    as Make escapes for whitespace and other escapable characters. This lets
+    the same parser handle clang's forward-slash paths and escaped spaces on
+    Windows without corrupting literal path separators.
+    """
+    with open(path, "r", encoding="utf-8", errors="surrogateescape") as f:
+        body = f.read()
+    body = re.sub(r"\\\r?\n", "", body)
+    separator = re.search(r":\s", body)
+    if separator is None:
+        raise ValueError(f"malformed depfile (missing target separator): {path}")
+    text = body[separator.end():]
+    deps = []
+    token = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch.isspace():
+            if token:
+                deps.append("".join(token))
+                token = []
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(text) and text[i + 1] in " \\#:$\t":
+            token.append(text[i + 1])
+            i += 2
+            continue
+        token.append(ch)
+        i += 1
+    if token:
+        deps.append("".join(token))
+    if not deps:
+        raise ValueError(f"malformed depfile (no prerequisites): {path}")
+    return deps
+
+
+def needs_rebuild(src, obj, cmd):
+    depfile = obj + ".d"
+    stamp = obj + ".cmd.json"
+    if not os.path.exists(obj) or not os.path.exists(depfile) or not os.path.exists(stamp):
         return True
-    obj_mtime = os.path.getmtime(obj)
-    self_mtime = os.path.getmtime(os.path.abspath(__file__))
-    # No real dependency graph -- approximate "did any shared
-    # compat header change" by checking the whole shim/include/ + patched
-    # header tree's newest mtime too, not just this one source file's.
-    newest_shared = max(_newest_mtime_under(SHIM_INCLUDE), _newest_mtime_under(PATCHED_INCLUDE),
-                         _newest_mtime_under(MSL_OVERRIDE))
-    return (os.path.getmtime(src) > obj_mtime
-            or self_mtime > obj_mtime
-            or newest_shared > obj_mtime)
+    try:
+        with open(stamp, "r", encoding="utf-8") as f:
+            old_record = json.load(f)
+        command_record = _command_record(cmd)
+        if any(old_record.get(key) != value for key, value in command_record.items()):
+            return True
+        dependencies = old_record.get("dependencies")
+        if not isinstance(dependencies, list) or dependencies != _dependency_record(depfile):
+            return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return True
+    return False
+
+
+def _write_command_record(path, record):
+    content = json.dumps(record, indent=2, sort_keys=True) + "\n"
+    tmp = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+
+
+_OPTIMIZATION_FLAG_RE = re.compile(r"-O(?:0|1|2|3|g|s|z|fast)")
+
+
+def _verified_android_compile_profile(units, expected_flag, required_flags=()):
+    """Prove every Android game/platform TU was compiled at one exact mode."""
+    aggregate = hashlib.sha256()
+    count = 0
+    for _src, _flags, obj_name, _flavor in sorted(units, key=lambda unit: unit[2]):
+        obj = os.path.join(OBJ_DIR, obj_name)
+        record_path = obj + ".cmd.json"
+        if not os.path.isfile(obj):
+            raise RuntimeError(f"Android object is missing: {obj}")
+        try:
+            with open(record_path, "rb") as f:
+                raw = f.read()
+            record = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise RuntimeError(f"cannot verify Android compile record {record_path}: {exc}") from exc
+        command = record.get("command")
+        if record.get("contract") != _COMPILE_CONTRACT_VERSION or not isinstance(command, list):
+            raise RuntimeError(f"obsolete/malformed Android compile record: {record_path}")
+        optimization = [arg for arg in command
+                        if isinstance(arg, str) and _OPTIMIZATION_FLAG_RE.fullmatch(arg)]
+        if optimization != [expected_flag]:
+            raise RuntimeError(
+                f"Android compile profile mismatch for {obj_name}: expected exactly "
+                f"{expected_flag}, found {optimization}"
+            )
+        for required in required_flags:
+            if command.count(required) != 1:
+                raise RuntimeError(
+                    f"Android compile profile mismatch for {obj_name}: expected exactly one "
+                    f"{required}, found {command.count(required)}"
+                )
+        name = obj_name.replace("\\", "/").encode("utf-8")
+        aggregate.update(len(name).to_bytes(4, "big"))
+        aggregate.update(name)
+        aggregate.update(hashlib.sha256(raw).digest())
+        count += 1
+    if count != len(units):
+        raise RuntimeError(f"Android compile-profile count mismatch: {count} != {len(units)}")
+    return {"units": count, "required_flags": [expected_flag, *required_flags],
+            "command_records_sha256": aggregate.hexdigest()}
+
+
+def _verified_android_helper_profile(label, command, expected_flag, required_flags=()):
+    """Record and validate the compile/link command for a standalone helper.
+
+    libmain.so and mp6launcher do not pass through compile_one(), so their
+    optimization mode cannot be proven from the per-object command records.
+    Keep the complete command in the ephemeral build manifest and validate it
+    here; the APK gate independently rechecks the command and its digest.
+    """
+    optimization = [arg for arg in command
+                    if isinstance(arg, str) and _OPTIMIZATION_FLAG_RE.fullmatch(arg)]
+    if optimization != [expected_flag]:
+        raise RuntimeError(
+            f"Android helper profile mismatch for {label}: expected exactly "
+            f"{expected_flag}, found {optimization}"
+        )
+    for required in required_flags:
+        if command.count(required) != 1:
+            raise RuntimeError(
+                f"Android helper profile mismatch for {label}: expected exactly one "
+                f"{required}, found {command.count(required)}"
+            )
+    encoded = json.dumps(command, separators=(",", ":")).encode("utf-8")
+    return {
+        "required_flags": [expected_flag, *required_flags],
+        "command": list(command),
+        "command_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _artifact_identity(path):
+    return {"bytes": os.path.getsize(path), "sha256": _sha256_file(path)}
+
+
+def _write_android_native_manifest(configuration, optimization, compile_flags, windowed,
+                                   compile_profile, link_cmd, helper_profiles, artifacts,
+                                   staged=None):
+    out_dir = ANDROID_AURORA_OUT_DIR if windowed else ANDROID_BUILD_DIR
+    path = os.path.join(out_dir, "native-build-manifest.json")
+    data = {
+        "manifest_version": ANDROID_NATIVE_MANIFEST_VERSION,
+        "target": ANDROID_TRIPLE,
+        "ndk_version": ANDROID_NDK_VERSION,
+        "configuration": configuration,
+        "game_optimization": optimization,
+        "game_compile_flags": list(compile_flags),
+        "windowed": bool(windowed),
+        "compile_profile": compile_profile,
+        "helper_profiles": helper_profiles,
+        "link_command_sha256": hashlib.sha256(
+            json.dumps(link_cmd, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+        "artifacts": {name: _artifact_identity(value) for name, value in sorted(artifacts.items())},
+        "staged": ({name: _artifact_identity(value) for name, value in sorted(staged.items())}
+                   if staged is not None else {}),
+    }
+    _write_command_record(path, data)
+    return path, data
 
 
 def _write_if_changed(path, content):
@@ -1873,8 +2372,6 @@ _ANDROID_CC = None
 def compile_one(unit):
     src, flags, obj_name, flavor = unit
     obj = os.path.join(OBJ_DIR, obj_name)
-    if not needs_rebuild(src, obj):
-        return (src, obj, True, "", True)  # skipped=True
     if _ANDROID_CC is not None:
         # android row. Headless: every unit is "common" flavor by
         # construction. The android --windowed row adds the aurora-flavor TUs
@@ -1949,8 +2446,23 @@ def compile_one(unit):
                                        "-I", AURORA_ROOT]
             zig_lang = "c++"
         cmd = [ZIG, zig_lang] + base_flags + flags + ["-c", src, "-o", obj]
+    depfile = obj + ".d"
+    # Keep the compile tail intact while asking the compiler for the exact
+    # transitive header graph, including toolchain/system headers.
+    cmd = cmd[:-4] + ["-MD", "-MF", depfile, "-MT", obj] + cmd[-4:]
+    if not needs_rebuild(src, obj, cmd):
+        return (src, obj, True, "", True)  # skipped=True
     proc = subprocess.run(cmd, capture_output=True, text=True)
     ok = proc.returncode == 0 and os.path.exists(obj)
+    if ok:
+        try:
+            if not os.path.exists(depfile):
+                raise OSError(f"compiler did not produce dependency file {depfile}")
+            record = _command_record(cmd)
+            record["dependencies"] = _dependency_record(depfile)
+            _write_command_record(obj + ".cmd.json", record)
+        except OSError as exc:
+            return (src, obj, False, proc.stdout + proc.stderr + f"\n{exc}\n", False)
     return (src, obj, ok, proc.stdout + proc.stderr, False)  # actually invoked the compiler
 
 
@@ -1981,16 +2493,76 @@ def copy_aurora_runtime_dlls(dst_dir):
     the `simple` target either -- there being no CMake step to invoke here,
     this driver copies the same runtime DLLs itself, next to
     build/mp6native.exe."""
-    import shutil
     for src in AURORA_RUNTIME_DLLS:
-        if not os.path.exists(src):
-            print(f"[WARN] copy_aurora_runtime_dlls: missing {src} -- aurora/build may not be built")
-            continue
         dst = os.path.join(dst_dir, os.path.basename(src))
-        if os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(src):
-            continue
-        shutil.copy2(src, dst)
-        print(f"  copied {os.path.basename(src)}")
+        if _copy_required_file(src, dst, "Aurora runtime DLL"):
+            print(f"  copied {os.path.basename(src)}")
+
+
+def _copy_required_file(src, dst, label):
+    """Install one runtime artifact by content, never by timestamps."""
+    if not os.path.isfile(src):
+        raise RuntimeError(f"required {label} is missing: {src}")
+    source_hash = _sha256_file(src)
+    if os.path.isfile(dst) and _sha256_file(dst) == source_hash:
+        return False
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = f"{dst}.staging-{os.getpid()}-{threading.get_ident()}"
+    try:
+        shutil.copy2(src, tmp)
+        if _sha256_file(tmp) != source_hash:
+            raise RuntimeError(f"copied {label} failed verification: {src} -> {dst}")
+        os.replace(tmp, dst)
+        if _sha256_file(dst) != source_hash:
+            raise RuntimeError(f"installed {label} is stale or corrupt: {dst}")
+    finally:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+    return True
+
+
+def _remove_private_tree(path, destination):
+    """Remove only a staging/backup sibling created for *destination*."""
+    path_abs = os.path.abspath(path)
+    destination_abs = os.path.abspath(destination)
+    if not (path_abs.startswith(destination_abs + ".staging-")
+            or path_abs.startswith(destination_abs + ".previous-")):
+        raise RuntimeError(f"refusing to remove non-staging directory: {path}")
+    shutil.rmtree(path_abs, ignore_errors=True)
+
+
+def _install_staged_tree(stage, destination):
+    """Replace a directory atomically enough to preserve the old tree on failure."""
+    previous = f"{destination}.previous-{os.getpid()}"
+    _remove_private_tree(previous, destination)
+    moved_old = False
+    try:
+        if os.path.exists(destination):
+            os.replace(destination, previous)
+            moved_old = True
+        os.replace(stage, destination)
+    except Exception:
+        if moved_old and not os.path.exists(destination) and os.path.exists(previous):
+            os.replace(previous, destination)
+        raise
+    if moved_old:
+        _remove_private_tree(previous, destination)
+
+
+def _sync_tree_exact(source, destination):
+    """Mirror *source* exactly, removing files deleted from the source tree."""
+    if not os.path.isdir(source):
+        raise RuntimeError(f"required resource tree is missing: {source}")
+    stage = f"{destination}.staging-{os.getpid()}"
+    _remove_private_tree(stage, destination)
+    try:
+        shutil.copytree(source, stage)
+        _install_staged_tree(stage, destination)
+    finally:
+        if os.path.exists(stage):
+            _remove_private_tree(stage, destination)
 
 
 def build_android(args):
@@ -2003,7 +2575,8 @@ def build_android(args):
     (apply_patches) IS shared deliberately: its content is
     target-independent decomp source and its writer is
     _write_if_changed-idempotent, so sharing costs no mtime churn."""
-    global OBJ_DIR, MSL_OVERRIDE, PATCHED_INCLUDE, _ANDROID_CC
+    global OBJ_DIR, MSL_OVERRIDE, PATCHED_INCLUDE, _ANDROID_CC, _VERIFIED_ZIG_TREE_IDENTITY
+    _reset_fingerprint_caches()
 
     ndk_root = _find_ndk_root()
     clang = _ndk_clang(ndk_root) if ndk_root else None
@@ -2012,7 +2585,17 @@ def build_android(args):
               f"({clang or 'no NDK under port/android-sdk/ndk/'}) -- set ANDROID_NDK_ROOT "
               "or install the NDK per port/android-probe/README.md")
         return 1
+    configuration = getattr(args, "configuration", "debug")
+    optimization = ANDROID_OPTIMIZATION.get(configuration)
+    if optimization is None:
+        print(f"[FATAL] unsupported Android configuration: {configuration!r}")
+        return 1
+    configuration_flags = [optimization]
+    if configuration == "release":
+        configuration_flags += list(ANDROID_RELEASE_SAFETY_FLAGS)
     print(f"Mode: --target aarch64-android (headless .so + launcher; NDK {os.path.basename(ndk_root)})")
+    print(f"Android configuration: {configuration} (all game/platform TUs: "
+          f"{' '.join(configuration_flags)})")
 
     if args.coro_fibers:
         # The fiber backend is win32-only (host_win32.c); android always
@@ -2024,8 +2607,8 @@ def build_android(args):
     OBJ_DIR = ANDROID_OBJ_DIR
     MSL_OVERRIDE = ANDROID_MSL_OVERRIDE
     PATCHED_INCLUDE = ANDROID_PATCHED_INCLUDE
-    _ANDROID_CC = {"clang": clang, "flags": android_common_flags(),
-                   "aurora_flags": android_aurora_flags()}
+    _ANDROID_CC = {"clang": clang, "flags": android_common_flags() + configuration_flags,
+                   "aurora_flags": android_aurora_flags() + configuration_flags}
 
     # --windowed = the aurora/SDL3/Dawn
     # graphics build as libmp6game.so for the APK shell. Default (no flag)
@@ -2036,17 +2619,28 @@ def build_android(args):
               "AURORA_BUILD_ANDROID_RMLUI comment block in tools/build.py (or "
               "for the cmake recipe")
         return 1
-    if windowed and not os.path.exists(NOD_ANDROID_LIB):
-        print(f"[FATAL] --windowed: {NOD_ANDROID_LIB} missing (the disc-import backend) -- "
-              f"{NOD_RECIPE_HINT}")
-        return 1
-    if windowed and not os.path.isdir(NOD_INCLUDE):
-        print(f"[FATAL] --windowed: {NOD_INCLUDE} missing -- {NOD_RECIPE_HINT}")
-        return 1
+    if windowed:
+        if NATIVE_ROOT not in sys.path:
+            sys.path.insert(0, NATIVE_ROOT)
+        from setup.lib import step_toolchain
+        try:
+            _VERIFIED_ZIG_TREE_IDENTITY = step_toolchain.verified_required_zig_tree()
+        except step_toolchain.common.SetupError as exc:
+            print(f"[FATAL] --windowed: Zig toolchain integrity check failed: {exc.message}")
+            return 1
+        nod_ok, nod_problem = fetch_nod.check_android_install()
+        if not nod_ok:
+            print(f"[FATAL] --windowed: Android nod toolchain is missing/stale: {nod_problem} -- "
+                  "run `python tools/fetch_nod.py --android`")
+            return 1
+        try:
+            _require_aurora_artifact_stamp("android", _resolve_android_aurora_link_items())
+        except RuntimeError as exc:
+            print(f"[FATAL] --windowed: Aurora Android artifact provenance failed: {exc}")
+            return 1
 
     os.makedirs(OBJ_DIR, exist_ok=True)
     if args.clean:
-        import shutil
         shutil.rmtree(ANDROID_BUILD_DIR, ignore_errors=True)
         os.makedirs(OBJ_DIR, exist_ok=True)
 
@@ -2056,7 +2650,7 @@ def build_android(args):
     patch_abi_struct_headers(dst_root=ANDROID_PATCHED_INCLUDE,
                              extra_patches=ANDROID_HEADER_CONTENT_PATCHES)
     apply_decomp_override_headers(dst_root=ANDROID_PATCHED_INCLUDE)  # shield (see docstring)
-    apply_patches.apply_all()  # shared patched-src, see docstring
+    apply_patches.apply_all(decomp_root=DECOMP)  # shared patched-src, see docstring
 
     units = collect_units(headless=not windowed, coro_fibers=False, android=True)
     if windowed:
@@ -2107,6 +2701,16 @@ def build_android(args):
             print(log.strip())
         print(f"\n{len(failures)} file(s) failed to compile. Not linking.")
         return 1
+
+    try:
+        compile_profile = _verified_android_compile_profile(
+            units, optimization, configuration_flags[1:]
+        )
+    except RuntimeError as exc:
+        print(f"[FATAL] Android {configuration} compile-profile verification failed: {exc}")
+        return 1
+    print(f"Verified Android compile profile: {compile_profile['units']} TUs, "
+          f"exactly one {optimization} each")
 
     # ---- savestate link stamp (android) ------------------------------------
     # Same contract as the desktop stamp above (see that block's comment):
@@ -2220,12 +2824,26 @@ def build_android(args):
         # image. No SDL on this link line by design.
         shell_src = os.path.join(NATIVE_ROOT, "platform", "android", "mp6shell.c")
         shell_path = os.path.join(ANDROID_AURORA_OUT_DIR, "libmain.so")
-        shell_cmd = [clang, "-target", ANDROID_TRIPLE, "-O2", "-g", "-Wall", "-Wextra",
+        shell_cmd = [clang, "-target", ANDROID_TRIPLE] + configuration_flags + [
+                     "-g", "-Wall", "-Wextra",
+                     # The two standalone android helpers are plain C with no
+                     # game/Aurora headers, but they do share the port's own
+                     # header-only seam helpers (shim/include/mp6_path.h's
+                     # checked path construction). SHIM_INCLUDE is the only
+                     # -I either of them needs.
+                     "-I", SHIM_INCLUDE,
                      "-shared", "-fPIC", shell_src, "-o", shell_path,
                      "-Wl,-soname,libmain.so",
                      "-Wl,-z,max-page-size=16384",
                      "-Wl,--no-undefined",
                      "-llog", "-ldl"]
+        try:
+            shell_profile = _verified_android_helper_profile(
+                "libmain.so", shell_cmd, optimization, configuration_flags[1:]
+            )
+        except RuntimeError as exc:
+            print(f"[FATAL] {exc}")
+            return 1
         print("Building libmain.so (APK bootstrap shell)...")
         proc = subprocess.run(shell_cmd, capture_output=True, text=True)
         print(proc.stdout)
@@ -2249,41 +2867,71 @@ def build_android(args):
         # stay in build/android/aurora/ as the debugging artifact; a
         # dynsym sanity probe below fails the build if the stripped image
         # ever stops carrying the symbols dladdr needs.
-        import shutil
         llvm_strip = os.path.join(os.path.dirname(clang), "llvm-strip.exe")
         llvm_nm = os.path.join(os.path.dirname(clang), "llvm-nm.exe")
         jni_dir = os.path.join(NATIVE_ROOT, "platforms", "android", "app", "src",
                                "main", "jniLibs", "arm64-v8a")
-        os.makedirs(jni_dir, exist_ok=True)
+        jni_stage = f"{jni_dir}.staging-{os.getpid()}"
+        _remove_private_tree(jni_stage, jni_dir)
+        if not os.path.isfile(llvm_strip) or not os.path.isfile(llvm_nm):
+            print(f"[FATAL] the selected NDK is missing llvm-strip/llvm-nm beside {clang}; "
+                  "cannot validate APK native libraries")
+            return 1
+        os.makedirs(jni_stage, exist_ok=False)
         for src in (so_path, shell_path):
-            dst = os.path.join(jni_dir, os.path.basename(src))
-            if not os.path.exists(dst) or os.path.getmtime(dst) < os.path.getmtime(src):
-                if os.path.exists(llvm_strip):
-                    proc = subprocess.run([llvm_strip, "--strip-unneeded", "-o", dst, src],
-                                          capture_output=True, text=True)
-                    if proc.returncode != 0:
-                        print(f"[FATAL] llvm-strip failed on {src}:\n{proc.stderr}")
-                        return 1
-                    shutil.copystat(src, dst)
-                    print(f"  staged {os.path.basename(src)} -> {os.path.relpath(dst, NATIVE_ROOT)} "
-                          f"(stripped {os.path.getsize(src) / 1e6:.1f}MB -> {os.path.getsize(dst) / 1e6:.1f}MB; "
-                          f"unstripped kept at {os.path.relpath(src, NATIVE_ROOT)})")
-                else:
-                    shutil.copy2(src, dst)
-                    print(f"[WARN] llvm-strip not found at {llvm_strip} -- staged UNSTRIPPED "
-                          f"{os.path.basename(src)}")
+            if not os.path.isfile(src):
+                print(f"[FATAL] native library was not produced by this build: {src}")
+                _remove_private_tree(jni_stage, jni_dir)
+                return 1
+            dst = os.path.join(jni_stage, os.path.basename(src))
+            proc = subprocess.run([llvm_strip, "--strip-unneeded", "-o", dst, src],
+                                  capture_output=True, text=True)
+            if proc.returncode != 0 or not os.path.isfile(dst):
+                print(f"[FATAL] llvm-strip failed on {src}:\n{proc.stderr}")
+                _remove_private_tree(jni_stage, jni_dir)
+                return 1
+            shutil.copystat(src, dst)
+            print(f"  prepared {os.path.basename(src)} for APK staging "
+                  f"(stripped {os.path.getsize(src) / 1e6:.1f}MB -> {os.path.getsize(dst) / 1e6:.1f}MB; "
+                  f"unstripped kept at {os.path.relpath(src, NATIVE_ROOT)})")
+        staged_names = {name for name in os.listdir(jni_stage)
+                        if os.path.isfile(os.path.join(jni_stage, name))}
+        expected_names = {"libmp6game.so", "libmain.so"}
+        if staged_names != expected_names:
+            print(f"[FATAL] native staging manifest mismatch: expected {sorted(expected_names)}, "
+                  f"found {sorted(staged_names)}")
+            _remove_private_tree(jni_stage, jni_dir)
+            return 1
         # dladdr-symbolization sanity: the stripped game image must still
         # export its dynamic symbols (dladdr reads .dynsym, not .symtab).
-        if os.path.exists(llvm_nm):
-            probe = subprocess.run([llvm_nm, "-D", os.path.join(jni_dir, "libmp6game.so")],
-                                   capture_output=True, text=True)
-            wanted = ("mp6_android_main", "GameMain")
-            missing = [w for w in wanted if w not in probe.stdout]
-            if missing:
-                print(f"[FATAL] stripped libmp6game.so lost dynamic symbols {missing} -- dladdr "
-                      "symbolization (crash handler) would break; check the strip flags")
-                return 1
-            print(f"  dynsym probe: {', '.join(wanted)} present post-strip (dladdr symbolization intact)")
+        probe = subprocess.run([llvm_nm, "-D", os.path.join(jni_stage, "libmp6game.so")],
+                               capture_output=True, text=True)
+        wanted = ("mp6_android_main", "GameMain")
+        missing = [w for w in wanted if w not in probe.stdout]
+        if probe.returncode != 0 or missing:
+            print(f"[FATAL] stripped libmp6game.so lost dynamic symbols {missing} -- dladdr "
+                  "symbolization (crash handler) would break; check the strip flags\n"
+                  f"{probe.stderr}")
+            _remove_private_tree(jni_stage, jni_dir)
+            return 1
+        print(f"  dynsym probe: {', '.join(wanted)} present post-strip (dladdr symbolization intact)")
+        try:
+            _install_staged_tree(jni_stage, jni_dir)
+        except OSError as exc:
+            print(f"[FATAL] failed to install APK native libraries transactionally: {exc}")
+            if os.path.exists(jni_stage):
+                _remove_private_tree(jni_stage, jni_dir)
+            return 1
+        print(f"  staged exact native manifest -> {os.path.relpath(jni_dir, NATIVE_ROOT)}")
+
+        staged = {name: os.path.join(jni_dir, name) for name in sorted(expected_names)}
+        manifest_path, _manifest = _write_android_native_manifest(
+            configuration, optimization, configuration_flags, True, compile_profile, link_cmd,
+            {"libmain.so": shell_profile},
+            {"libmp6game.so": so_path, "libmain.so": shell_path}, staged,
+        )
+        print(f"  recorded authenticated {configuration}/{optimization} native build -> "
+              f"{os.path.relpath(manifest_path, NATIVE_ROOT)}")
 
         print(f"\nBuilt {so_path}")
         print(f"Built {shell_path}")
@@ -2294,9 +2942,18 @@ def build_android(args):
     # ---- build mp6launcher (single-TU exe, plain C, no game headers) -------
     launcher_src = os.path.join(NATIVE_ROOT, "platform", "android", "mp6launcher.c")
     launcher_path = os.path.join(ANDROID_BUILD_DIR, "mp6launcher")
-    launcher_cmd = [clang, "-target", ANDROID_TRIPLE, "-O2", "-g", "-Wall", "-Wextra",
+    launcher_cmd = [clang, "-target", ANDROID_TRIPLE] + configuration_flags + [
+                    "-g", "-Wall", "-Wextra",
+                    "-I", SHIM_INCLUDE,  # shim/include/mp6_path.h -- see libmain.so above
                     "-fPIE", "-pie", launcher_src, "-o", launcher_path,
                     "-ldl", "-Wl,-z,max-page-size=16384"]
+    try:
+        launcher_profile = _verified_android_helper_profile(
+            "mp6launcher", launcher_cmd, optimization, configuration_flags[1:]
+        )
+    except RuntimeError as exc:
+        print(f"[FATAL] {exc}")
+        return 1
     print("Building mp6launcher...")
     proc = subprocess.run(launcher_cmd, capture_output=True, text=True)
     print(proc.stdout)
@@ -2304,6 +2961,14 @@ def build_android(args):
     if proc.returncode != 0:
         print("LAUNCHER BUILD FAILED")
         return 1
+
+    manifest_path, _manifest = _write_android_native_manifest(
+        configuration, optimization, configuration_flags, False, compile_profile, link_cmd,
+        {"mp6launcher": launcher_profile},
+        {"libmp6game.so": so_path, "mp6launcher": launcher_path},
+    )
+    print(f"Recorded authenticated {configuration}/{optimization} native build -> "
+          f"{os.path.relpath(manifest_path, NATIVE_ROOT)}")
 
     print(f"\nBuilt {so_path}")
     print(f"Built {launcher_path}")
@@ -2317,9 +2982,21 @@ def build_android(args):
 
 
 def main():
+    global _VERIFIED_ZIG_TREE_IDENTITY
     ap = argparse.ArgumentParser()
     ap.add_argument("--clean", action="store_true")
     ap.add_argument("--link-only", action="store_true")
+    ap.add_argument(
+        "--configuration", choices=sorted(ANDROID_OPTIMIZATION), default="debug",
+        help="Android native compile mode: debug=-O0 (default), "
+             "release=-O2/-fno-strict-aliasing. "
+             "Recorded and verified for every game/platform TU; Android only.",
+    )
+    ap.add_argument(
+        "--allow-dirty-decomp", action="store_true",
+        help="Explicit development-only override for a decomp checkout that differs from the "
+             "documented pin. Default builds fail closed for reproducibility.",
+    )
     ap.add_argument("-j", type=int, default=os.cpu_count() or 4)
     # the design's own target-row table.
     # Default = today's Windows behavior, byte-for-byte (the whole Windows
@@ -2351,7 +3028,7 @@ def main():
                           "graphics libmp6game.so + the libmain.so APK bootstrap shell into "
                           "build/android/aurora/, and stage jniLibs for platforms/android. "
                           "Requires external_refs/repos/aurora/build-android (see "
-                          "). Ignored on the Windows rows.")
+                          "docs/BUILDING.md). Ignored on the Windows rows.")
     ap.add_argument("--coro-fibers", action="store_true",
                      help="A/B lever: build the Win32 FIBER "
                           "coroutine backend (platform/host/host_win32.c) instead of the DEFAULT "
@@ -2361,8 +3038,34 @@ def main():
                           "'_corofib'-suffixed exe/objects so both backends can be A/B'd side by side.")
     args = ap.parse_args()
 
+    if args.target != "aarch64-android" and args.configuration != "debug":
+        ap.error("--configuration release is supported only with --target aarch64-android")
+
+    if NATIVE_ROOT not in sys.path:
+        sys.path.insert(0, NATIVE_ROOT)
+    from setup.lib import step_decomp, step_toolchain
+    try:
+        step_decomp.validate_decomp_checkout(
+            DECOMP,
+            step_decomp.read_pinned_commit(),
+            allow_dirty=(args.allow_dirty_decomp
+                         or os.environ.get("MP6_ALLOW_DIRTY_DECOMP") == "1"),
+        )
+    except step_decomp.common.SetupError as exc:
+        print(f"[FATAL] unsupported decomp build inputs: {exc.message}")
+        if exc.hint:
+            print(f"        {exc.hint}")
+        return 1
+
     if args.target == "aarch64-android":
         return build_android(args)  # self-contained; never touches the flow below
+
+    try:
+        _VERIFIED_ZIG_TREE_IDENTITY = step_toolchain.verified_required_zig_tree()
+    except step_toolchain.common.SetupError as exc:
+        print(f"[FATAL] Zig toolchain integrity check failed: {exc.message}")
+        print("        run `python setup/setup.py` to restore the pinned complete toolchain")
+        return 1
 
     # Canonical single-workspace checkout: plain exe names.
     coro_exe_suffix = "_corofib" if args.coro_fibers else ""
@@ -2374,7 +3077,6 @@ def main():
     os.makedirs(OBJ_DIR, exist_ok=True)
 
     if args.clean:
-        import shutil
         shutil.rmtree(BUILD_DIR, ignore_errors=True)
         os.makedirs(OBJ_DIR, exist_ok=True)
 
@@ -2382,17 +3084,25 @@ def main():
     patch_msl_override()
     patch_abi_struct_headers()
     apply_decomp_override_headers()  # shield against foreign decomp WIP (see its docstring)
-    apply_patches.apply_all()  # build/patched-src/* for the be16/be32 endianness fixes
+    apply_patches.apply_all(decomp_root=DECOMP)  # build/patched-src/* for the be16/be32 fixes
 
     # the windowed build now links nod (the
     # launcher's disc-image import backend). Fail fast with the recipe
     # rather than dying later on a missing include/import-lib.
-    if not args.headless and (not os.path.isdir(NOD_INCLUDE) or not os.path.exists(NOD_WIN_LIB)):
-        print(f"[FATAL] nod toolchain missing under {NOD_DIR} (the launcher's disc-image import "
-              f"backend) -- {NOD_RECIPE_HINT}")
-        return 1
+    if not args.headless:
+        nod_ok, nod_problem = fetch_nod.check_host_install("Windows", "x86_64")
+        if not nod_ok:
+            print(f"[FATAL] pinned nod toolchain is missing/stale ({nod_problem}) -- "
+                  "run `python tools/fetch_nod.py --host`")
+            return 1
+        try:
+            _require_aurora_artifact_stamp("windows", _resolve_aurora_link_items())
+        except RuntimeError as exc:
+            print(f"[FATAL] Aurora artifact provenance failed: {exc}")
+            return 1
 
     units = collect_units(args.headless, args.coro_fibers)
+    _reset_fingerprint_caches()
     print(f"Mode: {'--headless (null platform only)' if args.headless else 'aurora (default)'}"
           f"{' [coro=fibers]' if args.coro_fibers else ' [coro=arena/minicoro]'}")
     print(f"Total translation units: {len(units)}")
@@ -2516,7 +3226,11 @@ def main():
 
     if not args.headless:
         print("\nCopying Aurora runtime DLLs next to the exe...")
-        copy_aurora_runtime_dlls(os.path.dirname(out_exe))
+        try:
+            copy_aurora_runtime_dlls(os.path.dirname(out_exe))
+        except (OSError, RuntimeError) as exc:
+            print(f"[FATAL] runtime deployment failed: {exc}")
+            return 1
         # Stage the ripped launcher resources
         # (res/rml stylesheets + res/fonts) next to the exe. The launcher
         # resolves res/ under the CWD first (the documented run-from-repo-
@@ -2524,37 +3238,26 @@ def main():
         # second (double-click runs) -- see launcher_core.cpp's
         # mp6_resource_base(). Launcher mode only ever READS these;
         # automation runs never touch them.
-        import shutil
         res_src = os.path.join(NATIVE_ROOT, "res")
         res_dst = os.path.join(os.path.dirname(out_exe), "res")
-        if os.path.isdir(res_src):
-            copied = 0
-            for root, _dirs, files in os.walk(res_src):
-                rel = os.path.relpath(root, res_src)
-                dst_root = os.path.join(res_dst, rel) if rel != "." else res_dst
-                os.makedirs(dst_root, exist_ok=True)
-                for fn in files:
-                    s = os.path.join(root, fn)
-                    d = os.path.join(dst_root, fn)
-                    if not os.path.exists(d) or os.path.getmtime(d) < os.path.getmtime(s):
-                        shutil.copy2(s, d)
-                        copied += 1
-            if copied:
-                print(f"  staged {copied} launcher resource file(s) -> build/res")
+        try:
+            _sync_tree_exact(res_src, res_dst)
+        except (OSError, RuntimeError) as exc:
+            print(f"[FATAL] launcher resource deployment failed: {exc}")
+            return 1
+        print("  staged exact launcher resource tree -> build/res")
     else:
         # --headless links real zlib too (MP6_ZLIB_LIB_ITEM above) -- needs
         # its DLL alongside the exe same as any other dynamically-linked
         # import library, headless or not.
         dst_dir = os.path.dirname(out_exe)
-        if os.path.exists(MP6_ZLIB_DLL):
-            dst = os.path.join(dst_dir, os.path.basename(MP6_ZLIB_DLL))
-            if not os.path.exists(dst) or os.path.getmtime(dst) < os.path.getmtime(MP6_ZLIB_DLL):
-                import shutil
-                shutil.copy2(MP6_ZLIB_DLL, dst)
+        dst = os.path.join(dst_dir, os.path.basename(MP6_ZLIB_DLL))
+        try:
+            if _copy_required_file(MP6_ZLIB_DLL, dst, "headless zlib runtime DLL"):
                 print(f"  copied {os.path.basename(MP6_ZLIB_DLL)}")
-        else:
-            print(f"[WARN] {MP6_ZLIB_DLL} missing -- build external_refs/repos/aurora first "
-                  f"or mp6native_headless.exe won't start")
+        except (OSError, RuntimeError) as exc:
+            print(f"[FATAL] runtime deployment failed: {exc}")
+            return 1
 
     print(f"\nBuilt {out_exe}")
     return 0

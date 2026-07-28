@@ -118,11 +118,10 @@ static void mp6_coro_pool_init(void)
         fflush(stderr);
         exit(1);
     }
-    /* The whole point of this backend: prove the stacks are <4GB. If even
-     * the OS-picked fallback inside mp6_host_arena_reserve landed the pool
-     * >=4GB, fail loudly at boot rather than let a truncated stack-local
-     * pointer corrupt state silently later. */
-    if (((uintptr_t)g_pool + MP6_CORO_POOL_SIZE) > 0xFFFFFFFFu) {
+    /* Defense in depth: the host seam already rejects this, but coroutine
+     * stacks must never be published unless every byte is representable by
+     * the original u32 ABI. */
+    if (!mp6_host_range_below_4gb(g_pool, MP6_CORO_POOL_SIZE)) {
         fprintf(stderr,
                 "[FATAL] coro_arena: coroutine stack pool at %p (+%zu bytes) is NOT entirely below 4GB "
                 "-- HuPrc process stacks must be <4GB (process-stack locals escape into u32 fields). "

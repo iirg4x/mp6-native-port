@@ -1,5 +1,31 @@
 --- a/src/game/frand.c
 +++ b/src/game/frand.c
+@@ -33 +33,24 @@
+-u32 frandmod(u32 arg0) {
++/* PORT FIX -- signedness. The decomp's include/game/frand.h declares this
++ * `u32 frandmod(u32)`, but the shipped GameCube binary provably uses the
++ * SIGNED signature, and the decomp's own config already records that:
++ * config/GP6E01/tu_declarations.json gives
++ *     "frandmod": { "declaration": "s32 frandmod(s32 modulus);",
++ *                   "authority":   "dol" }
++ * The declaration side of this correction lives in
++ * patches/decomp-overrides/include/game/frand.h -- see that file for the
++ * main.dol disassembly proving the signed conversion, the measured crash it
++ * causes on the recovered w01Dll board (alphaBase = 4294967296.0f instead of
++ * -8.0f, narrowed into an s16 => hard panic), and the list of ~20 further
++ * sites that silently corrupt floats under the unsigned signature.
++ *
++ * This hunk only makes the DEFINITION agree with that corrected declaration;
++ * without it frand.c fails to compile, which is the intended safety net.
++ * Behaviour is bit-identical for every modulus the game passes: the body
++ * yields (frand_seed & 0x7FFFFFFF) % arg0, always in [0, arg0) and always
++ * < 2^31, hence representable in both s32 and u32. `% arg0` still evaluates
++ * in unsigned arithmetic (the u32 left operand wins the usual arithmetic
++ * conversions), so even the instruction selection is unchanged; the only
++ * thing that changes is how CALLERS convert the result -- which is the
++ * entire point of the fix. `ret` stays u32 for the same reason: the return
++ * conversion is provably in-range. */
++s32 frandmod(s32 arg0) {
 @@ -35,0 +36,22 @@
 +    /* Real PowerPC divwu/divw does NOT trap on a zero divisor
 +     * (Gekko/Broadway silently produces an implementation-defined-but-

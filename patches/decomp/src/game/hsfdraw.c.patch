@@ -1,7 +1,9 @@
 --- a/src/game/hsfdraw.c
 +++ b/src/game/hsfdraw.c
-@@ -14,0 +15 @@
+@@ -14,0 +15,3 @@
 +#include "mp6_shadow_quality.h" /* shadow quality: effective map size */
++#include "mp6_fi_model.h" /* deferred-draw matrix identity (Unlocked FPS) */
++#include <stdint.h>
 @@ -25,0 +27,54 @@
 +
 +/* Object-level draw census, the per-OBJECT companion to hsfman.c's
@@ -56,13 +58,52 @@
 +    const char *want = mp6DlDumpEnv();
 +    return want && objName && strcmp(want, objName) == 0;
 +}
+@@ -52,2 +109,2 @@
+-static s32 MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
+-static s32 MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
++static void MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
++static void MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
+@@ -138 +140,6 @@
+-    DrawObjIdx = 0;
++    DrawObjIdx = 0;
++    /* Unlocked FPS (shim/include/mp6_fi_model.h): a new deferred batch starts
++     * here, so drop the previous one's reserved identities. Diagnostic-free
++     * bookkeeping; nothing about the draw itself changes. */
++    mp6_fi_capture_defer_reset();
 @@ -149,0 +205,6 @@
 +    if (mp6ObjCensusActive()) { /* object census -- see mp6ObjCensusActive above */
-+        printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=%p root=%p rootType=%d objectNum=%d motId=%d\n",
-+               (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)hsf, (void *)hsf->root,
-+               hsf->root ? hsf->root->type : -1, hsf->objectNum, modelP->motId);
++        /* modelP->hsf and modelP->hookFunc are the SAME union member
++         * (include/game/hu3d.h): for a hook-func model -- every particle
++         * system (mbParticleCreate) and every raw Hu3DHookFuncCreate --
++         * that word holds a FUNCTION pointer and there is no HSF_DATA at
++         * all. Reading hsf->root before the HU3D_ATTR_HOOKFUNC branch below
++         * therefore chased a code address as if it were a scene graph, and
++         * killed the census on the first hook-func model of any board tick
++         * (access violation reading 0xFFFFFFFFFFFFFFFF: hsf->root came back
++         * all-ones out of the code page, and ->type sits at offset 0). The
++         * census could consequently never complete a single board frame,
++         * which is exactly the frame content a flicker investigation needs
++         * enumerated. Print the HSF fields only when there IS an HSF. */
++        if (modelP->attr & HU3D_ATTR_HOOKFUNC) {
++            printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x HOOKFUNC hook=%p motId=%d (no HSF: union holds the hook)\n",
++                   (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)modelP->hookFunc, modelP->motId);
++        } else if (hsf == NULL) {
++            printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=NULL motId=%d\n",
++                   (int)(modelP - Hu3DData), (unsigned)modelP->attr, modelP->motId);
++        } else {
++            printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=%p root=%p rootType=%d objectNum=%d motId=%d\n",
++                   (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)hsf, (void *)hsf->root,
++                   hsf->root ? hsf->root->type : -1, hsf->objectNum, modelP->motId);
++        }
 +        fflush(stdout);
 +    }
+@@ -159 +221,6 @@
+-        DrawObjIdx++;
++        /* Unlocked FPS: this hook-func (particle) model is being DEFERRED to
++         * Hu3DDrawPost, which emits its matrices after the model bracket has
++         * closed. Reserve its identity here, while the bracket is still open. */
++        mp6_fi_capture_defer_push(DrawObjIdx);
++        DrawObjIdx++;
 @@ -189,0 +251,7 @@
 +    if (mp6ObjCensusActive()) { /* object census (rot/pos: the sky-wheel angle) */
 +        printf("[CENSUS-OBJ]  objCall type=%d name=%s childNum=%d baseRot=(%.1f,%.1f,%.1f) basePos=(%.1f,%.1f,%.1f) curRot=(%.1f,%.1f,%.1f)\n",
@@ -95,6 +136,51 @@
 +                       objPtr->name ? objPtr->name : "(null)", mp6Br, (unsigned)constData->attr,
 +                       (unsigned)objPtr->flags, transformP->scale.x, transformP->scale.y, transformP->scale.z);
 +                fflush(stdout);
+@@ -354 +445,3 @@
+-                    DrawObjIdx++;
++                    /* Unlocked FPS: deferred translucent/NEAR object -- reserve
++                     * its identity before Hu3DDrawPost emits it out of order. */
++                    mp6_fi_capture_defer_push(DrawObjIdx);
++                    DrawObjIdx++;
+@@ -361 +453,3 @@
+-                    DrawObjIdx++;
++                    /* Unlocked FPS: deferred z-compare-off object, same. */
++                    mp6_fi_capture_defer_push(DrawObjIdx);
++                    DrawObjIdx++;
+@@ -684,2 +742,26 @@
+-                    texAnimP = &Hu3DTexAnimData[animWorkP->animId];
+-                    if((animWorkP->attr & HU3D_ATTRANIM_ATTR_ANIM2D) && !(texAnimP->attr & HU3D_ANIM_ATTR_NOUSE)) {
++                    /* native port: the original computed
++                     * `texAnimP = &Hu3DTexAnimData[animWorkP->animId];`
++                     * BEFORE testing the ANIM2D flag. animId is only ever
++                     * ASSIGNED by Hu3DAnimCreate/Hu3DAnimLink (hsfanim.c),
++                     * which also set ANIM2D; a work created by
++                     * SetObjAttrMotion (attribute POS/ROT/SCALE/BITMAP
++                     * motion tracks, hsfmotion.c:1178) initializes attr and
++                     * the 3D transform fields but LEAVES animId
++                     * UNINITIALIZED -- so for every such work the retail
++                     * code computed a wild address it then never
++                     * dereferenced (ANIM2D clear, branch not taken; benign
++                     * on console). The bounds-checked native build panics
++                     * on the address computation itself. Measured,
++                     * deterministic across two runs on the retail W01
++                     * Party route ~38s after w01.render (first board scene
++                     * with attribute-track motions): "index 22086 out of
++                     * bounds for type 'HU3D_TEXANIM[256]'" here, with the
++                     * work's attr a legitimate ANIM3D and animId = heap
++                     * garbage 0x5646 ('F','V' of a recycled "HSFV037"
++                     * image block; build/w01party/verify1+verify2).
++                     * Reorder so the index is computed only under the flag
++                     * that guarantees a live animId -- observably
++                     * identical to retail. */
++                    if((animWorkP->attr & HU3D_ATTRANIM_ATTR_ANIM2D)
++                     && !((texAnimP = &Hu3DTexAnimData[animWorkP->animId])->attr & HU3D_ANIM_ATTR_NOUSE)) {
+@@ -1161 +1251 @@
+-            GXSetTevOrder(tevStage, GX_TEXMAP_NULL, GX_TEXCOORD_NULL, GX_COLOR0A0);
++            GXSetTevOrder(tevStage, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+@@ -1432 +1522 @@
+-            GXSetTevOrder(tevStage, GX_TEXMAP_NULL, GX_TEXCOORD_NULL, GX_COLOR0A0);
++            GXSetTevOrder(tevStage, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
 @@ -1836 +1926,6 @@
 -    GXInitTexObj(&texObj, Hu3DShadow->buf, Hu3DShadow->size, Hu3DShadow->size, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
 +    /* The texObj's claimed dims track the scaled copy DESTINATION
@@ -123,6 +209,23 @@
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
+@@ -2386 +2498,6 @@
+-            drawObj = &DrawObjData[DrawObjNum[drawObjNo]];
++            drawObj = &DrawObjData[DrawObjNum[drawObjNo]];
++            /* Unlocked FPS: re-install the identity reserved for this draw
++             * object at PUSH time. DrawObjNum[] is the depth-sorted emission
++             * order; DrawObjNum[drawObjNo] is the stable push slot, which is
++             * what the reservation was keyed by. */
++            mp6_fi_capture_defer_begin(DrawObjNum[drawObjNo]);
+@@ -2387,0 +2500,8 @@
++                if (mp6ObjCensusActive()) { /* object census: the hook-func (particle) draws -- the one class the object walk above can never enter, because a hook-func model has no scene graph to walk */
++                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d HOOKFUNC hook=%p z=%.1f mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
++                           drawObjNo, (int)(drawObj->model - Hu3DData), (void *)drawObj->model->hookFunc, drawObj->z,
++                           drawObj->matrix[0][0], drawObj->matrix[0][1], drawObj->matrix[0][2], drawObj->matrix[0][3],
++                           drawObj->matrix[1][0], drawObj->matrix[1][1], drawObj->matrix[1][2], drawObj->matrix[1][3],
++                           drawObj->matrix[2][0], drawObj->matrix[2][1], drawObj->matrix[2][2], drawObj->matrix[2][3]);
++                    fflush(stdout);
++                }
 @@ -2399,0 +2512,6 @@
 +                if (mp6ObjCensusActive()) { /* object census: deferred z-sorted draws */
 +                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d obj=%s z=%.1f\n",
@@ -130,6 +233,11 @@
 +                           drawObj->object->name ? drawObj->object->name : "(null)", drawObj->z);
 +                    fflush(stdout);
 +                }
+@@ -2488 +2606,3 @@
+-            }
++            }
++            /* Unlocked FPS: close this deferred draw object's bracket. */
++            mp6_fi_capture_model_end();
 @@ -2507,0 +2626,10 @@
 +    if (mp6ObjCensusActive()) { /* object census (matrix row: the applied wheel rotation) */
 +        printf("[CENSUS-OBJ]   ObjDraw model=%d obj=%s faceCount=%d mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
@@ -261,6 +369,17 @@
 +            printf("[DL-DUMP] wrote %s (faces=%d dlSize=%d)\n", path, faceBuf->count, (int)totalSize);
 +            fflush(stdout);
 +        }
+@@ -2730 +2976,8 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
+-        DrawData[drawCnt].dlOfs = (u32) DLBufP - (u32) DLBufStartP;
++        {
++            uintptr_t current = (uintptr_t)DLBufP;
++            uintptr_t start = (uintptr_t)DLBufStartP;
++            if(current < start || current - start > INT32_MAX) {
++                OSReport("[FATAL] HSF display-list offset outside s32 range\n");
++                _Exit(EXIT_FAILURE);
++            }
++            DrawData[drawCnt].dlOfs = (s32)(current - start);
++        }
 @@ -2834,0 +3082,39 @@
 +                /* Real, unpatched original decomp gap, same class as
 +                 * game/hsfman.c's Hu3DZClear and game/sprput.c's
@@ -311,6 +430,82 @@
 +                 * strip loop always emit exactly faceNumBuf[drawCnt]
 +                 * vertices in total too. */
 +                GXEnd();
+@@ -2993 +3292 @@
+-static s32 MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
++static void MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
+@@ -3028 +3327 @@
+-static s32 MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
++static void MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
+@@ -3059 +3358 @@ static void MDFaceCnt(HSF_OBJECT *objPtr, HSF_FACE *face) {
+-    if(matP != materialBak || (polyTypeBak != face->type & 7) || (face->type & 7) == 4) {
++    if(matP != materialBak || polyTypeBak != (face->type & 7) || (face->type & 7) == 4) {
+@@ -3438,0 +3738,24 @@
++static HSF_OBJECT *mp6_hsf_duplicate_remap(const HSF_DATA *hsf,
++                                            HSF_OBJECT *objectCopy,
++                                            const HSF_OBJECT *source)
++{
++    uintptr_t base;
++    uintptr_t address;
++    uintptr_t delta;
++    size_t bytes;
++    if(source == NULL) return NULL;
++    if(hsf == NULL || objectCopy == NULL || hsf->object == NULL
++            || hsf->objectNum <= 0
++            || (size_t)hsf->objectNum > SIZE_MAX / sizeof(HSF_OBJECT)) {
++        OSReport("[FATAL] invalid HSF duplicate object array\n");
++        _Exit(EXIT_FAILURE);
++    }
++    base = (uintptr_t)hsf->object;
++    address = (uintptr_t)source;
++    bytes = (size_t)hsf->objectNum * sizeof(HSF_OBJECT);
++    if(address < base || (delta = address - base) >= bytes
++            || delta % sizeof(HSF_OBJECT) != 0) {
++        OSReport("[FATAL] HSF duplicate pointer outside source object array\n");
++        _Exit(EXIT_FAILURE);
++    }
++    return (HSF_OBJECT *)((u8 *)objectCopy + delta);
++}
++
+@@ -3447,2 +3771,10 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-    objPtr = HuMemDirectMallocNum(HEAP_MODEL, hsf->objectNum * sizeof(HSF_OBJECT), mallocNo);
++    if(hsf == NULL || hsf->object == NULL || hsf->objectNum <= 0
++            || (size_t)hsf->objectNum > (size_t)INT32_MAX / sizeof(HSF_OBJECT)) {
++        OSReport("[FATAL] invalid HSF object duplicate request\n");
++        _Exit(EXIT_FAILURE);
++    }
++    objPtr = HuMemDirectMallocNum(HEAP_MODEL,
++        hsf->objectNum * sizeof(HSF_OBJECT), mallocNo);
++    if(objPtr == NULL) {
++        OSReport("[FATAL] HSF object duplicate allocation failed\n");
++        _Exit(EXIT_FAILURE);
++    }
+     objBuf = objPtr;
+@@ -3455 +3787 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-                objReplicaP->mesh.replica = (HSF_OBJECT*) ((u8 *) objBuf + ((u32)objReplicaP->mesh.replica - (u32)hsf->object));
++                objReplicaP->mesh.replica = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.replica);
+@@ -3458 +3790 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-                objPtr->mesh.parent = (HSF_OBJECT*) ((u8 *)objBuf + ((u32)srcObj->mesh.parent - (u32)hsf->object));
++                objPtr->mesh.parent = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.parent);
+@@ -3460 +3792,9 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-            objPtr->mesh.child = HuMemDirectMallocNum(HEAP_MODEL, srcObj->mesh.childNum*sizeof(HSF_OBJECT *), mallocNo);
++            if(srcObj->mesh.childNum != 0) {
++                objPtr->mesh.child = HuMemDirectMallocNum(HEAP_MODEL,
++                    srcObj->mesh.childNum*sizeof(HSF_OBJECT *), mallocNo);
++                if(objPtr->mesh.child == NULL) {
++                    OSReport("[FATAL] HSF duplicate child allocation failed\n");
++                    _Exit(EXIT_FAILURE);
++                }
++            } else {
++                objPtr->mesh.child = NULL;
++            }
+@@ -3462,0 +3803,4 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
++                if(objPtr->constData == NULL) {
++                    OSReport("[FATAL] HSF duplicate const-data allocation failed\n");
++                    _Exit(EXIT_FAILURE);
++                }
+@@ -3466 +3810 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-                objPtr->mesh.child[j] = (HSF_OBJECT*) ((u8 *)objBuf + ((u32)srcObj->mesh.child[j] - (u32)hsf->object));
++                objPtr->mesh.child[j] = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.child[j]);
 @@ -3495 +3793,23 @@
 -            objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
 +            /* 64-bit/checked-build portability fix, NULL-in-pointer-rebase

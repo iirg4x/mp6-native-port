@@ -32,6 +32,7 @@ void mp6_CARDInit(void)
 #else /* aurora build: wire the real backend */
 
 #include "host.h" /* mp6_host_save_dir / mp6_host_mkdir */
+#include "mp6_path.h"
 #include <stdio.h>
 
 /* aurora lib/dolphin/card.cpp exports (extern "C" there). NOT taken from
@@ -48,22 +49,23 @@ extern void CARDInit(const char *game, const char *maker);
 void mp6_CARDInit(void)
 {
     static int done = 0;
-    char saveDir[256];
-    char sub[320];
+    char saveDir[1200];
+    char regionDir[1200];
+    char cardDir[1200];
     if (done) return; /* aurora's CARDInit self-guards too; keep the log clean */
-    done = 1;
 
     /* Base path from the host seam -- mp6_host_save_dir returns the
      * cwd-relative "saves" on win32 (see host.h for why that resolution
-     * must not change). The defensive fallback below cannot fire on win32
-     * (the backend only fails on a too-small buffer). */
+     * must not change). Failure is terminal for this attempt: falling back to
+     * a different relative path on Android would initialize the wrong target. */
     if (mp6_host_save_dir(saveDir, sizeof(saveDir)) != 0) {
-        snprintf(saveDir, sizeof(saveDir), "saves");
+        fprintf(stderr, "[CARD] save directory path is unavailable or too long -- CARD backend not initialized\n");
+        return;
     }
 
     /* GCI-folder layout: saves/USA/Card A (slot B unused but harmless).
-     * Directory-creation results deliberately ignored (existing dirs are
-     * the common case). Separator is a macro: on win32 it must stay "\\"
+     * Every component is checked before the backend sees the base path.
+     * Separator is a macro: on win32 it must stay "\\"
      * (existing save trees were created with it); on posix '\\' is an
      * ordinary filename character, so android needs the real '/'. */
 #ifdef _WIN32
@@ -71,15 +73,21 @@ void mp6_CARDInit(void)
 #else
 #define MP6_CARD_SEP "/"
 #endif
-    mp6_host_mkdir(saveDir);
-    snprintf(sub, sizeof(sub), "%s" MP6_CARD_SEP "USA", saveDir);
-    mp6_host_mkdir(sub);
-    snprintf(sub, sizeof(sub), "%s" MP6_CARD_SEP "USA" MP6_CARD_SEP "Card A", saveDir);
-    mp6_host_mkdir(sub);
+    if (mp6_path_join_checked(regionDir, sizeof(regionDir), saveDir,
+                              MP6_CARD_SEP "USA") != 0 ||
+        mp6_path_join_checked(cardDir, sizeof(cardDir), regionDir,
+                              MP6_CARD_SEP "Card A") != 0 ||
+        mp6_host_mkdir(saveDir) != 0 || mp6_host_mkdir(regionDir) != 0 ||
+        mp6_host_mkdir(cardDir) != 0) {
+        fprintf(stderr, "[CARD] could not create a safe save directory tree at \"%s\" -- CARD backend not initialized\n",
+                saveDir);
+        return;
+    }
 
     CARDSetBasePath(saveDir, -1);
     CARDInit("GP6E", "01");
-    printf("[CARD] slot A wired to aurora GCI-folder backend at saves/USA/Card A\n");
+    done = 1;
+    printf("[CARD] slot A wired to aurora GCI-folder backend at %s\n", cardDir);
     {
         /* self-check: print exactly what the game's HuCardSlotCheck will see */
         extern int CARDProbeEx(int chan, int *memSize, int *sectorSize);

@@ -45,6 +45,8 @@ def required_artifacts(native_root, headless=True, windowed=True, coro_fibers=Fa
     (name-in-build/, kind) pairs. Derived from tools/build.py's own constants
     (AURORA_RUNTIME_DLLS / MP6_ZLIB_DLL), not a second hand-maintained copy, so
     it cannot drift from what the link step actually needs at runtime."""
+    if not headless and not windowed:
+        raise common.SetupError("no build target selected (choose headless, windowed, or both)")
     tools_dir = os.path.join(native_root, "tools")
     if tools_dir not in sys.path:
         sys.path.insert(0, tools_dir)
@@ -72,6 +74,8 @@ def build(native_root, headless=True, windowed=True, jobs=None, coro_fibers=Fals
     """Runs the requested build(s) and returns the wall-clock instant sampled
     just before the first one -- assemble_dist() uses it to prove the exes it
     ships were produced by THIS run rather than left over from an older one."""
+    if not headless and not windowed:
+        raise common.SetupError("no build target selected (choose headless, windowed, or both)")
     started = time.time() - 1.0  # -1s: filesystem mtime granularity
     if windowed:
         common.info("building the windowed exe (links Aurora) -- build/mp6native.exe")
@@ -139,11 +143,21 @@ def assemble_dist(native_root, dist_dir=None, headless=True, windowed=True, coro
             else:
                 shutil.copy2(src, dst)
                 copied.append(name)
-        # Debug symbols aren't required, but ship them when the build made them.
-        for name in os.listdir(build_dir):
-            if name.lower().endswith(".pdb") and os.path.isfile(os.path.join(build_dir, name)):
-                shutil.copy2(os.path.join(build_dir, name), os.path.join(staging, name))
-                copied.append(name)
+        # Debug symbols are optional, but only the PDB paired with a selected
+        # executable belongs in this exact staging manifest. Copying every
+        # *.pdb from build/ leaked stale symbols from unselected build modes.
+        selected_pdbs = {
+            os.path.splitext(name)[0] + ".pdb"
+            for name, kind in required if kind == "exe"
+        }
+        for name in sorted(selected_pdbs):
+            src = os.path.join(build_dir, name)
+            if not os.path.isfile(src):
+                continue
+            if built_after is not None and os.path.getmtime(src) < built_after:
+                continue
+            shutil.copy2(src, os.path.join(staging, name))
+            copied.append(name)
 
         if os.path.isdir(dist_dir):
             os.replace(dist_dir, previous)

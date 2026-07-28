@@ -31,6 +31,7 @@ layouts are intentionally never modeled here.
 """
 import ctypes
 import os
+import platform
 
 from . import common
 
@@ -212,6 +213,8 @@ class Nod:
                 raise NodError(f"nod_read error: {self.last_error()}")
             if got == 0:
                 raise NodError("nod_read: unexpected end-of-stream before declared size")
+            if got > want:
+                raise NodError(f"nod_read returned {got} bytes for a {want}-byte request")
             write_fn(bytes(buf[:got]))
             left -= got
 
@@ -234,6 +237,11 @@ def blob_bytes(blob):
 # ---------------------------------------------------------------------------
 
 EXPECTED_GAME_ID = b"GP6E01"
+MAX_FST_BYTES = 8 * 1024 * 1024
+MAX_FST_ENTRIES = 65_536
+MAX_WANTED_BYTES = 1536 * 1024 * 1024  # 1.5 GiB; real GP6E01 stays below this.
+BOOT_BIN_BYTES = 0x440
+DISC_MAX_BYTES = 1_459_978_240
 
 
 def validate_game_id(game_id6):
@@ -244,6 +252,17 @@ def validate_game_id(game_id6):
     if game_id6[:3] == b"GP6":
         return False, f"wrong region: this disc is {shown} -- the port needs the USA release (GP6E01)"
     return False, f"not Mario Party 6: game ID {shown} (need GP6E01, Mario Party 6 USA)"
+
+
+def validate_boot_bytes(data):
+    if not isinstance(data, (bytes, bytearray)) or len(data) != BOOT_BIN_BYTES:
+        raise common.SetupError(
+            f"boot.bin must be exactly {BOOT_BIN_BYTES} bytes (the GameCube boot header)"
+        )
+    ok, msg = validate_game_id(bytes(data[:6]))
+    if not ok:
+        raise common.SetupError(msg)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -269,13 +288,153 @@ def is_safe_rel(rel):
     """
     if not rel or rel[0] == "/":
         return False
+    reserved = {"CON", "PRN", "AUX", "NUL", "CLOCK$"}
     for comp in rel.split("/"):
         if comp in ("", ".", ".."):
             return False
-        if "\\" in comp or ":" in comp:
+        if comp[-1] in (".", " "):
             return False
-        if any(ord(ch) < 0x20 for ch in comp):
+        if "\\" in comp or ":" in comp or any(ch in '<>"|?*' for ch in comp):
             return False
+        if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in comp):
+            return False
+        base = comp.split(".", 1)[0].upper()
+        if base in reserved or (len(base) == 4 and base[:3] in ("COM", "LPT")
+                                and base[3] in "123456789"):
+            return False
+    return True
+
+
+def validate_fst_bytes(data):
+    """Reject an FST before nod/setup/runtime can traverse unchecked offsets."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) < 12:
+        raise common.SetupError("sys/fst.bin is too small")
+    if len(data) > MAX_FST_BYTES:
+        raise common.SetupError("sys/fst.bin exceeds the 8 MiB safety limit")
+
+    def be32(off):
+        return int.from_bytes(data[off:off + 4], "big")
+
+    root_word = be32(0)
+    if (root_word >> 24) != 1 or (root_word & 0x00FFFFFF) != 0:
+        raise common.SetupError("sys/fst.bin root entry is not the canonical directory entry")
+    if be32(4) != 0:
+        raise common.SetupError("sys/fst.bin root directory has a nonzero parent index")
+    count = be32(8)
+    if count <= 0 or count > MAX_FST_ENTRIES or count * 12 > len(data):
+        raise common.SetupError(
+            f"sys/fst.bin entry count {count} does not fit in the {len(data)}-byte file"
+        )
+    strings_at = count * 12
+    stack = [(0, count, "")]  # index, subtree end, full path
+    files = []
+    seen_host_paths = set()
+    for index in range(1, count):
+        while stack and index >= stack[-1][1]:
+            stack.pop()
+        if not stack:
+            raise common.SetupError(f"sys/fst.bin entry {index} lies outside the root subtree")
+        off = index * 12
+        word0 = be32(off)
+        entry_type = word0 >> 24
+        if entry_type not in (0, 1):
+            raise common.SetupError(f"sys/fst.bin entry {index} has invalid type {entry_type}")
+        name_off = word0 & 0x00FFFFFF
+        name_at = strings_at + name_off
+        if name_at < strings_at or name_at >= len(data):
+            raise common.SetupError(f"sys/fst.bin entry {index} has an out-of-range name offset")
+        nul = data.find(b"\0", name_at)
+        if nul < 0 or nul == name_at:
+            raise common.SetupError(f"sys/fst.bin entry {index} has an empty/unterminated name")
+        name = bytes(data[name_at:nul]).decode("latin-1")
+        if "/" in name or not is_safe_rel(name):
+            raise common.SetupError(f"sys/fst.bin entry {index} has an unsafe host filename: {name!r}")
+        full = f"{stack[-1][2]}/{name}" if stack[-1][2] else name
+        if not is_safe_rel(full):
+            raise common.SetupError(f"sys/fst.bin entry {index} has an unsafe host path: {full!r}")
+        if len(full) >= 1024:
+            raise common.SetupError(f"sys/fst.bin entry {index} path exceeds 1023 bytes")
+        folded = full.upper()
+        if folded in seen_host_paths:
+            raise common.SetupError(
+                f"sys/fst.bin entry {index} collides with another host path: {full!r}"
+            )
+        seen_host_paths.add(folded)
+        if entry_type == 1:
+            parent, end = be32(off + 4), be32(off + 8)
+            if parent != stack[-1][0] or end <= index or end > stack[-1][1]:
+                raise common.SetupError(f"sys/fst.bin directory {index} has an invalid parent/end")
+            if len(stack) >= 256:
+                raise common.SetupError("sys/fst.bin directory nesting exceeds 256 levels")
+            stack.append((index, end, full))
+        else:
+            position, size = be32(off + 4), be32(off + 8)
+            if position + size > DISC_MAX_BYTES:
+                raise common.SetupError(
+                    f"sys/fst.bin file entry {index} exceeds the GameCube disc range"
+                )
+            files.append((full, size))
+    return files
+
+
+def _runtime_wanted(rel):
+    return (rel in ("opening.bnr", "sound/MP6_SND.msm", "sound/MP6_Str.pdt")
+            or rel == "data" or rel.startswith("data/")
+            or rel == "mess" or rel.startswith("mess/")
+            or rel == "mic" or rel.startswith("mic/"))
+
+
+def validate_extracted_root(root, require_build_files=False):
+    boot = os.path.join(root, "sys", "boot.bin")
+    fst = os.path.join(root, "sys", "fst.bin")
+    try:
+        with open(boot, "rb") as f:
+            boot_bytes = f.read(BOOT_BIN_BYTES + 1)
+    except OSError as exc:
+        raise common.SetupError(f"missing or unreadable {boot}: {exc}") from exc
+    validate_boot_bytes(boot_bytes)
+    try:
+        with open(fst, "rb") as f:
+            manifest = validate_fst_bytes(f.read(MAX_FST_BYTES + 1))
+    except OSError as exc:
+        raise common.SetupError(f"missing or unreadable {fst}: {exc}") from exc
+    found = set()
+    wanted_bytes = 0
+    for rel, expected_size in manifest:
+        if not _runtime_wanted(rel):
+            continue
+        wanted_bytes += expected_size
+        if wanted_bytes > MAX_WANTED_BYTES:
+            raise common.SetupError("GP6E01 runtime file set exceeds the 1.5 GiB safety limit")
+        path = os.path.join(root, "files", *rel.split("/"))
+        if not os.path.isfile(path) or os.path.getsize(path) != expected_size:
+            raise common.SetupError(
+                f"missing/truncated runtime file from fst.bin: {path} "
+                f"(expected {expected_size} bytes)"
+            )
+        if expected_size > 0 and rel in ("opening.bnr", "sound/MP6_SND.msm", "sound/MP6_Str.pdt"):
+            found.add(rel)
+        for prefix in ("data/", "mess/", "mic/"):
+            if expected_size > 0 and rel.startswith(prefix):
+                found.add(prefix[:-1])
+    required = {"opening.bnr", "sound/MP6_SND.msm", "sound/MP6_Str.pdt", "data", "mess", "mic"}
+    if not required.issubset(found):
+        missing = ", ".join(sorted(required - found))
+        raise common.SetupError(f"incomplete GP6E01 fst.bin/runtime tree; missing: {missing}")
+    if require_build_files:
+        dol = os.path.join(root, "sys", "main.dol")
+        dll_entries = [(rel, size) for rel, size in manifest
+                       if rel.startswith("dll/") and rel.lower().endswith(".rel")]
+        if not os.path.isfile(dol) or os.path.getsize(dol) <= 0 or not dll_entries:
+            raise common.SetupError(
+                f"incomplete build extraction under {root}: need sys/main.dol and files/dll/*.rel"
+            )
+        for rel, expected_size in dll_entries:
+            path = os.path.join(root, "files", *rel.split("/"))
+            if not os.path.isfile(path) or os.path.getsize(path) != expected_size:
+                raise common.SetupError(
+                    f"missing/truncated build REL from fst.bin: {path} (expected {expected_size} bytes)"
+                )
     return True
 
 
@@ -286,7 +445,22 @@ def _skip_subtree(rel, include_movies):
 
 
 def find_nod_dll(nod_dir):
-    return os.path.join(nod_dir, "windows-x86_64", "bin", "nod.dll")
+    system = platform.system()
+    machine = platform.machine().lower()
+    if machine in ("amd64", "x86_64"):
+        machine = "x86_64"
+    elif machine in ("arm64", "aarch64"):
+        machine = "aarch64"
+    if (system, machine) == ("Windows", "x86_64"):
+        return os.path.join(nod_dir, "windows-x86_64", "bin", "nod.dll")
+    if (system, machine) == ("Linux", "x86_64"):
+        return os.path.join(nod_dir, "linux-x86_64", "lib", "libnod.so")
+    if (system, machine) == ("Darwin", "aarch64"):
+        return os.path.join(nod_dir, "macos-aarch64", "lib", "libnod.dylib")
+    raise common.SetupError(
+        f"nod has no pinned setup-tool binary for {system}/{machine}; "
+        "supported hosts are Windows/x86_64, Linux/x86_64, and macOS/aarch64"
+    )
 
 
 def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False, progress=None):
@@ -309,6 +483,16 @@ def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False
         part = nod.open_data_partition(disc)
         try:
             meta = nod.partition_meta(part)
+            if meta.raw_boot.size != BOOT_BIN_BYTES:
+                raise common.SetupError(
+                    f"boot.bin must be exactly {BOOT_BIN_BYTES} bytes (the GameCube boot header)"
+                )
+            if meta.raw_fst.size > MAX_FST_BYTES:
+                raise common.SetupError("sys/fst.bin exceeds the 8 MiB safety limit")
+            boot_bytes = blob_bytes(meta.raw_boot)
+            validate_boot_bytes(boot_bytes)
+            fst_bytes = blob_bytes(meta.raw_fst)
+            validate_fst_bytes(fst_bytes)
             sys_dir = os.path.join(dest_root, "sys")
             common.ensure_dir(sys_dir)
             sys_files = [
@@ -328,7 +512,16 @@ def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False
                 total_sys_bytes += len(data)
 
             # --- Walk the FST, collecting wanted files -------------------
-            walk_dirs = []  # stack of (end_index, prefix)
+            # NOD CONTRACT: nod_partition_iterate_fst() never delivers the
+            # root node -- its loop starts at node index 1 (nod-ffi/src/
+            # lib.rs:680, "let mut idx: usize = 1; // skip root node").  The
+            # root frame is therefore seeded here from the same raw fst.bin
+            # nod parses: the root node's length field (big-endian at byte
+            # offset 8) is the node count, i.e. the root's child-end index,
+            # and validate_fst_bytes() above has already range-checked it.
+            # content_import.cpp's fst_callback() seeds the identical frame.
+            root_end = int.from_bytes(fst_bytes[8:12], "big")
+            walk_dirs = [(root_end, "")]  # stack of (end_index, prefix)
             wanted_files = []  # (index, size, rel)
             skipped_dirs = []
             unsafe_skipped = []  # SECURITY: FST names that would escape dest_root
@@ -337,9 +530,6 @@ def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False
                 while walk_dirs and index >= walk_dirs[-1][0]:
                     walk_dirs.pop()
                 prefix = walk_dirs[-1][1] if walk_dirs else ""
-                if index == 0 and kind == NOD_NODE_KIND_DIRECTORY:
-                    walk_dirs.append((size, ""))
-                    return index + 1
                 name_s = name.decode("utf-8", "replace") if name else ""
                 rel = f"{prefix}/{name_s}" if prefix else name_s
                 if kind == NOD_NODE_KIND_DIRECTORY:
@@ -371,7 +561,9 @@ def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False
                     "real Mario Party 6 data partition"
                 )
 
-            total_bytes = sum(sz for _, sz, _ in wanted_files) + total_sys_bytes
+            total_bytes = sum(sz for _, sz, _ in wanted_files) + total_sys_bytes + len(fst_bytes)
+            if total_bytes > MAX_WANTED_BYTES:
+                raise common.SetupError("selected disc content exceeds the 1.5 GiB safety limit")
             done_bytes = total_sys_bytes
             for n, (index, size, rel) in enumerate(wanted_files):
                 dest_path = os.path.join(dest_root, "files", *rel.split("/"))
@@ -387,7 +579,6 @@ def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False
                     progress(done_bytes, total_bytes, rel)
 
             # fst.bin last (torn-import safety).
-            fst_bytes = blob_bytes(meta.raw_fst)
             with open(os.path.join(sys_dir, "fst.bin"), "wb") as f:
                 f.write(fst_bytes)
             done_bytes += len(fst_bytes)
@@ -431,41 +622,32 @@ def extract_disc_folder(folder_path, dest_root, include_movies=False, progress=N
             "(need sys/fst.bin + files/ inside it, or a GP6E01/DATA folder containing them)"
         )
 
-    boot_path = os.path.join(root, "sys", "boot.bin")
-    if os.path.isfile(boot_path):
-        with open(boot_path, "rb") as f:
-            game_id = f.read(6)
-        if len(game_id) == 6:
-            ok, msg = validate_game_id(game_id)
-            if not ok:
-                raise common.SetupError(msg, hint="point --disc at a real, legally-owned Mario Party 6 (USA) disc image")
+    validate_extracted_root(root)
+    with open(os.path.join(root, "sys", "boot.bin"), "rb") as f:
+        game_id = f.read(6)
 
     files_root = os.path.join(root, "files")
     to_copy = []
-    unsafe_skipped = []  # SECURITY: entries whose join would escape dest_root
-    for dirpath, dirnames, filenames in os.walk(files_root):
-        rel_dir = os.path.relpath(dirpath, files_root).replace("\\", "/")
-        rel_dir = "" if rel_dir == "." else rel_dir
-        if not include_movies:
-            dirnames[:] = [d for d in dirnames if not (f"{rel_dir}/{d}" if rel_dir else d) == "movie"
-                           and not (f"{rel_dir}/{d}" if rel_dir else d).startswith("movie/")]
-        for fn in filenames:
-            rel = f"{rel_dir}/{fn}" if rel_dir else fn
-            if not include_movies and (rel == "movie" or rel.startswith("movie/")):
-                continue
-            # SECURITY: mirror the disc-image gate. os.walk never yields '..',
-            # but validate defensively so the destination join stays rooted.
-            if not is_safe_rel(rel):
-                unsafe_skipped.append(rel)
-                continue
-            to_copy.append(rel)
-    if unsafe_skipped:
-        common.warn(f"ignored {len(unsafe_skipped)} folder entry name(s) that would escape the "
-                    f"extraction root (e.g. {unsafe_skipped[0]!r})")
+    with open(os.path.join(root, "sys", "fst.bin"), "rb") as f:
+        manifest = validate_fst_bytes(f.read(MAX_FST_BYTES + 1))
+    # The validated FST is authoritative. Never enumerate the host folder:
+    # an extra wanted-looking file not named by the disc manifest must not be
+    # smuggled into a prepared GP6E01 tree.
+    for rel, expected_size in manifest:
+        if _skip_subtree(rel, include_movies):
+            continue
+        src = os.path.join(files_root, *rel.split("/"))
+        if not os.path.isfile(src) or os.path.getsize(src) != expected_size:
+            raise common.SetupError(
+                f"missing/truncated file required by fst.bin: {src} (expected {expected_size} bytes)"
+            )
+        to_copy.append(rel)
 
     total = len(to_copy)
     done_bytes = 0
     total_bytes = sum(os.path.getsize(os.path.join(files_root, *r.split("/"))) for r in to_copy)
+    if total_bytes > MAX_WANTED_BYTES:
+        raise common.SetupError("selected folder content exceeds the 1.5 GiB safety limit")
     for i, rel in enumerate(to_copy):
         src = os.path.join(files_root, *rel.split("/"))
         dst = os.path.join(dest_root, "files", *rel.split("/"))
@@ -488,4 +670,5 @@ def extract_disc_folder(folder_path, dest_root, include_movies=False, progress=N
     if fst_last:
         shutil.copy2(*fst_last)  # fst.bin last -- torn-import safety
 
-    return {"files": total + len(os.listdir(sys_src)), "bytes": done_bytes, "game_id": "GP6E01"}
+    return {"files": total + len(os.listdir(sys_src)), "bytes": done_bytes,
+            "game_id": game_id.decode("ascii", "replace")}

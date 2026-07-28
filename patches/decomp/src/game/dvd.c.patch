@@ -25,6 +25,12 @@
 + * true root, for both this port and real hardware alike (a strict no-op
 + * there). */
 +static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async, void **outBufP)
+@@ -18 +40 @@
+-    void *buf;
++    void *buf = NULL;
+@@ -40 +62 @@
+-            break;
++            return NULL; /* OSPanic is not assumed noreturn by the native ABI. */
 @@ -47,0 +70 @@
 +    if (outBufP) *outBufP = buf;
 @@ -81 +104 @@

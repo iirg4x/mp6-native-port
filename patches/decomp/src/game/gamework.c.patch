@@ -1,0 +1,9 @@
+--- a/src/game/gamework.c
++++ b/src/game/gamework.c
+@@ -276,4 +276,5 @@
+ BOOL GWMgCustomGet(int mgNo)
+ {
+-    
++    (void)mgNo;
++    return FALSE;
+ }

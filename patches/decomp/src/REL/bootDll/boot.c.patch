@@ -28,6 +28,91 @@
 +     * ViewportSet, so this camera stayed frozen at scene-load size without
 +     * this. Same literals, same effect on this call. */
 +    mp6_widescreen_camera_widen(1, 45.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
+@@ -317,0 +355,71 @@
++    /* Native-port developer boot route (MP6_BOOT_TO).
++     *
++     * The shipped flow can only leave this overlay one way: through the
++     * opening/title attract loop into fileseldll.  That loop is a poor
++     * automation target because BootTitleExec's START window is a
++     * FRAME-counted slice (TITLE_INPUT_WAIT_FRAMES) inside a sequence
++     * whose other waits are WALL-CLOCK (OSTicksToMilliseconds), so the
++     * tick at which any given screen is live varies run to run on a
++     * free-running host and a tick-scheduled press can miss it entirely.
++     *
++     * The game's own developer overlay-select menu (src/REL/selmenuDll,
++     * compiled and OSLink-bound by this port exactly like every other
++     * overlay) has no reachable entry point at all in the shipped build:
++     * nothing in the decomp ever names DLL_selmenuDLL except selmenu.c
++     * itself.  It also has no timeout of its own -- SMMain simply waits
++     * for input forever -- so once it is up, a scripted drive is timing
++     * independent, which the attract loop can never be.
++     *
++     * This lever hands bootDll's ALREADY COMPLETED init (CharInit,
++     * HuWindowInit, GameMesInit, HuWinInit, the title data dir and the
++     * menu sound group -- everything above this point) to a chosen
++     * overlay through the SAME omOvlCallEx transition the retail title
++     * path uses.  It does not synthesize any board/party state: whichever
++     * overlay is named then runs its own real screens.  Unset (the
++     * default) is a pure no-op and the retail path below is untouched.
++     *
++     * The charNo seed matches selmenuDll's OWN ObjectSetup fixup (and
++     * mdpartydll's fn_1_E30 default): main.c leaves GwPlayerConf[].charNo
++     * at CHARNO_NONE (-1) and only fileseldll normally replaces it, but
++     * selmenu.c's fixup tests `charNo >= SM_CHAR_MAX`, which -1 never
++     * satisfies, so player 0 would keep -1 and index smCharNameTbl[-1].
++     */
++    {
++        const char *mp6BootTo = getenv("MP6_BOOT_TO");
++        OMOVL mp6BootOvl = DLL_NONE;
++        int mp6BootPlayer;
++
++        if (mp6BootTo != NULL && mp6BootTo[0] != '\0') {
++            if (strcmp(mp6BootTo, "selmenu") == 0) {
++                mp6BootOvl = DLL_selmenuDLL;
++            } else if (strcmp(mp6BootTo, "filesel") == 0) {
++                mp6BootOvl = DLL_fileseldll;
++            } else if (strcmp(mp6BootTo, "mdsel") == 0) {
++                mp6BootOvl = DLL_mdseldll;
++            } else if (strcmp(mp6BootTo, "mdparty") == 0) {
++                mp6BootOvl = DLL_mdpartydll;
++            } else {
++                OSReport("[MP6-BOOT-ROUTE] unknown MP6_BOOT_TO='%s' (expected selmenu|filesel|mdsel|mdparty) -- ignored\n",
++                         mp6BootTo);
++            }
++        }
++        if (mp6BootOvl != DLL_NONE) {
++            OSReport("[MP6-BOOT-ROUTE] MP6_BOOT_TO='%s' -> overlay %d; skipping the opening/title attract loop\n",
++                     mp6BootTo, (int)mp6BootOvl);
++            for (mp6BootPlayer = 0; mp6BootPlayer < GW_PLAYER_MAX; mp6BootPlayer++) {
++                if (GwPlayerConf[mp6BootPlayer].charNo < 0) {
++                    GwPlayerConf[mp6BootPlayer].charNo = (s16)mp6BootPlayer;
++                }
++            }
++            HuPrcSleep(60);
++            OpeningKill();
++            HuDataDirClose(DATA_title);
++            HuAudSStreamAllFadeOut(1000);
++            if (mp6BootOvl == DLL_fileseldll) {
++                asyncStat = HuDataDirReadAsync(DATA_filesel);
++            }
++            WipeCreate(WIPE_MODE_OUT, WIPE_TYPE_NORMAL, 60);
++            while (WipeCheck()) {
++                HuPrcVSleep();
++            }
++            HuPrcSleep(30);
++            if (mp6BootOvl == DLL_fileseldll) {
++                while (!HuDataGetAsyncStat(asyncStat)) {
++                    HuPrcVSleep();
++                }
++            }
++            omOvlCallEx(mp6BootOvl, TRUE, 0, 0);
++            HuPrcEnd();
++            while (TRUE) {
++                HuPrcVSleep();
++            }
++        }
++    }
++
 @@ -327,0 +355,70 @@
 +        /* This is the attract-loop replay path: the title screen's own
 +         * input-wait timed out with no START press, so the opening cutscene

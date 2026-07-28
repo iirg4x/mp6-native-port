@@ -24,9 +24,9 @@ def syncMp6Assets = tasks.register('syncMp6Assets', Sync) {
     into mp6GeneratedAssetsDir
 }
 
-// Version derives from git so every sideloaded build force-updates on device
-// (a fixed versionCode makes Android silently keep the previous install) and
-// the running build is identifiable at Settings -> Apps -> MP6 -> version.
+// versionCode must be monotonic across releases and independent of Git history
+// depth (shallow/source-archive builds cannot safely derive it from rev-list).
+// versionName still carries the commit hash so an installed build is traceable.
 def mp6GitOut = { List cmd ->
     try {
         def p = new ProcessBuilder(cmd).directory(mp6RepoDir).start()
@@ -36,18 +36,38 @@ def mp6GitOut = { List cmd ->
     } catch (ignored) { return '' }
 }
 def mp6GitHash = { def h = mp6GitOut(['git', 'rev-parse', '--short=7', 'HEAD']); h ? h : 'nogit' }()
-def mp6GitCount = { def c = mp6GitOut(['git', 'rev-list', '--count', 'HEAD']); c ==~ /\d+/ ? c.toInteger() : 1 }()
+def mp6VersionFile = new File(mp6RepoDir, 'VERSION')
+if (!mp6VersionFile.isFile()) {
+    throw new GradleException("Missing release version file: ${mp6VersionFile}")
+}
+def mp6BaseVersion = mp6VersionFile.getText('UTF-8').trim()
+if (!(mp6BaseVersion ==~ /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/)) {
+    throw new GradleException("Invalid semantic version in ${mp6VersionFile}: ${mp6BaseVersion}")
+}
+def mp6VersionCodeFile = new File(mp6RepoDir, 'VERSION_CODE')
+if (!mp6VersionCodeFile.isFile()) {
+    throw new GradleException("Missing monotonic Android version code file: ${mp6VersionCodeFile}")
+}
+def mp6VersionCodeText = mp6VersionCodeFile.getText('UTF-8').trim()
+if (!(mp6VersionCodeText ==~ /[1-9]\d{0,9}/)) {
+    throw new GradleException("Invalid positive Android version code in ${mp6VersionCodeFile}: ${mp6VersionCodeText}")
+}
+def mp6VersionCode = mp6VersionCodeText.toLong()
+if (mp6VersionCode > 2100000000L) {
+    throw new GradleException("Android version code exceeds Play/PackageManager limit: ${mp6VersionCode}")
+}
 
 android {
     namespace 'com.mp6.game'
     compileSdk 36
+    buildToolsVersion '35.0.0'
 
     defaultConfig {
         applicationId 'com.mp6.game'
         minSdk 28          // = ANDROID_PLATFORM=android-28, the U-A0 probe row
         targetSdk 36
-        versionCode mp6GitCount
-        versionName "0.1.0-${mp6GitHash}"
+        versionCode mp6VersionCode.intValue()
+        versionName "${mp6BaseVersion}-${mp6GitHash}"
     }
 
     buildTypes {
@@ -89,7 +109,11 @@ android {
     }
 
     lint {
-        abortOnError false
+        abortOnError true
+        checkReleaseBuilds true
+        // Reviewed snapshot of inherited SDL Android glue findings. New or
+        // moved issues remain fatal; regenerate only after code review.
+        baseline = file('lint-baseline.xml')
     }
 }
 

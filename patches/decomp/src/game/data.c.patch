@@ -1,5 +1,53 @@
 --- a/src/game/data.c
 +++ b/src/game/data.c
+@@ -116 +116 @@
+-    if(DataDirMax <= dirId) {
++    if(dirId < 0 || DataDirMax <= dirId) {
+@@ -123,5 +123,8 @@
+-        if(dirAMemP = HuARDirCheck(dataNum)) {
+-            HuAR_ARAMtoMRAM(dirAMemP);
++        if((dirAMemP = HuARDirCheck(dataNum)) != 0) {
++            if(HuAR_ARAMtoMRAM(dirAMemP) == NULL) {
++                return NULL;
++            }
+             while(HuARDMACheck());
+             statId = HuDataReadChk(dataNum);
++            if(statId < 0) {
++                return NULL;
++            }
+             readStat = &ReadDataStat[statId];
+@@ -153 +156 @@
+-    if(DataDirMax <= dirId) {
++    if(dirId < 0 || DataDirMax <= dirId) {
+@@ -266 +269 @@
+-    if(DataDirMax <= dirId) {
++    if(dirId < 0 || DataDirMax <= dirId) {
+@@ -272,4 +275,6 @@
+-        if(dirAMemP = HuARDirCheck(dataNum)) {
++        if((dirAMemP = HuARDirCheck(dataNum)) != 0) {
+             OSReport("ARAM data num %x\n", dataNum);
+-            HuAR_ARAMtoMRAM(dirAMemP);
++            if(HuAR_ARAMtoMRAM(dirAMemP) == NULL) {
++                return HU_DATA_STAT_NONE;
++            }
+             statId = STAT_ID_ARAM;
+@@ -299 +304 @@
+-    if(DataDirMax <= dirId) {
++    if(dirId < 0 || DataDirMax <= dirId) {
+@@ -471 +476 @@
+-        if(DataDirMax <= dirId) {
++        if(dirId < 0 || DataDirMax <= dirId) {
+@@ -625 +630 @@
+-	if(dir >= (s32)DataDirMax) {
++	if(dir < 0 || dir >= (s32)DataDirMax) {
+@@ -630,2 +635,2 @@
+-		char panic_str[48];
+-		sprintf(panic_str, "HuDataDVDdirDirectOpen: File Open Error(%08x)", dataNum);
++		char panic_str[64];
++		snprintf(panic_str, sizeof(panic_str), "HuDataDVDdirDirectOpen: File Open Error(%08x)", dataNum);
+@@ -659 +664 @@
+-	if((u32)buf & 0x3) {
++	if((uintptr_t)buf & 0x3u) {
 @@ -3,0 +4 @@
 +#include "be.h"
 @@ -330,0 +332,3 @@

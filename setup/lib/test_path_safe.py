@@ -32,6 +32,14 @@ CASES = [
     ("data/sub/../../../x", False),
     ("data/e\x00vil", False),    # control byte (NUL) inside a name
     ("data/e\nvil", False),      # control byte (LF)
+    ("data/caf\u00e9.bin", False),  # non-ASCII host normalization/case varies
+    ("data/NUL", False),         # Windows device, even without an extension
+    ("data/con.txt", False),     # devices remain reserved with extensions
+    ("data/COM1.bin", False),
+    ("data/Lpt9", False),
+    ("data/foo.", False),        # aliases "foo" on Windows
+    ("data/foo ", False),
+    ("data/a?b", False),
     ("", False),
     # --- the legitimate wanted-set paths: all must be ACCEPTED ---
     ("data/x.bin", True),

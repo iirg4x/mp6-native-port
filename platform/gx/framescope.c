@@ -26,6 +26,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "mp6_parse.h"
+#include "mp6_path.h"
+#include "mp6_utf8_file.h"
+
 /* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
  * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
@@ -49,7 +53,16 @@ static int   fs_armed = 0;
 static void fs_parse_env(void)
 {
     const char *e = getenv("MP6_FRAMESCOPE");
-    fs_target_frame = (e && atoi(e) > 0) ? atoi(e) : -1;
+    int parsed;
+    fs_target_frame = (e != NULL &&
+                       mp6_parse_i32_strict(e, 1, INT_MAX, &parsed)) ? parsed : -1;
+}
+
+static int fs_env_positive(const char *name)
+{
+    const char *value = getenv(name);
+    int parsed;
+    return value != NULL && mp6_parse_i32_strict(value, 1, INT_MAX, &parsed);
 }
 
 int mp6_fs_active(void)
@@ -72,9 +85,14 @@ void mp6_fs_frame_end(void)
     } else if (fs_armed) {
         /* frame just captured -- dump */
         const char *out = getenv("MP6_FRAMESCOPE_OUT");
-        char path[260];
-        snprintf(path, sizeof path, "%s", out ? out : "build/framescope.txt");
-        FILE *f = fopen(path, "w");
+        char path[1200];
+        FILE *f = NULL;
+        if (mp6_path_copy_checked(path, sizeof(path),
+                                  out ? out : "build/framescope.txt") == 0) {
+            f = mp6_fopen_utf8(path, "w");
+        } else {
+            fprintf(stderr, "[FRAMESCOPE] output path is too long -- capture not written\n");
+        }
         if (f) {
             int i;
             fprintf(f, "# framescope: frame %ld, tick %ld, %d calls captured\n",
@@ -171,8 +189,7 @@ static void fs_texdump(const void *data, int w, int h, int fmt)
     u32 sz;
     int i;
     if (fs_texdump_env == -1) {
-        const char *e = getenv("MP6_FRAMESCOPE_TEXDUMP");
-        fs_texdump_env = (e && atoi(e) > 0);
+        fs_texdump_env = fs_env_positive("MP6_FRAMESCOPE_TEXDUMP");
     }
     if (!fs_texdump_env || !data) return;
     for (i = 0; i < fs_dumped_n; i++) if (fs_dumped[i] == data) return;
@@ -180,7 +197,7 @@ static void fs_texdump(const void *data, int w, int h, int fmt)
     sz = fs_tex_size(w, h, fmt);
     if (!sz) return;
     snprintf(path, sizeof path, "build/fs_tex_%p_%dx%d_f%d.bin", data, w, h, fmt);
-    f = fopen(path, "wb");
+    f = mp6_fopen_utf8(path, "wb");
     if (f) { fwrite(data, 1, sz, f); fclose(f); }
 }
 
@@ -240,15 +257,14 @@ void mp6_fs_GXLoadTlut(const GXTlutObj *obj, u32 idx)
         if (fs_armed && fs_tluts[i].data && fs_tluts[i].entries > 0) {
             static int fs_tlutdump_env = -1;
             if (fs_tlutdump_env == -1) {
-                const char *e = getenv("MP6_FRAMESCOPE_TEXDUMP");
-                fs_tlutdump_env = (e && atoi(e) > 0);
+                fs_tlutdump_env = fs_env_positive("MP6_FRAMESCOPE_TEXDUMP");
             }
             if (fs_tlutdump_env) {
                 char path[260];
                 FILE *f;
                 snprintf(path, sizeof path, "build/fs_tlut_i%u_%p_n%d_tf%d.bin",
                          idx, fs_tluts[i].data, fs_tluts[i].entries, fs_tluts[i].fmt);
-                f = fopen(path, "wb");
+                f = mp6_fopen_utf8(path, "wb");
                 if (f) { fwrite(fs_tluts[i].data, 2, (size_t)fs_tluts[i].entries, f); fclose(f); }
             }
         }

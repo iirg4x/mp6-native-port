@@ -9,10 +9,13 @@
 #define MP6_DVD_FILES_H
 
 #include "dolphin.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+int mp6_dvd_open_handle_count(void);
 
 /* Real disc's FST-driven path resolution (external_refs/.../dvdfs.c is the
  * read-only reference this reimplements). Returns -1 (honest "not found")
@@ -39,6 +42,18 @@ BOOL mp6_dvd_read(DVDFileInfo *fileInfo, void *addr, s32 length, s32 offset);
  * (e.g. it's one of dll_bridge.c's synthetic REL handles instead) -- safe
  * to call unconditionally from DVDClose. */
 void mp6_dvd_close(DVDFileInfo *fileInfo);
+
+/* Validates a complete runtime disc root before it is selected or published:
+ * exact GP6E01 boot ID, structurally safe fst.bin, and the three mandatory
+ * top-level assets used by every supported menu flow. Returns 1 on success,
+ * 0 with a human-readable error otherwise. */
+int mp6_dvd_validate_disc_root(const char *discRoot, char *err, size_t errn);
+
+/* Launcher helpers (implemented by dvd_files.c). */
+int mp6_dvd_probe_root(char *filesRootOut, size_t n);
+/* Returns 0 only when both complete paths fit and were published together;
+ * otherwise leaves the previous/automatic resolution untouched. */
+int mp6_dvd_set_root_override(const char *filesRoot, const char *fstPath);
 
 #ifdef __cplusplus
 }

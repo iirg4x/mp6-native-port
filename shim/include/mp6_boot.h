@@ -162,10 +162,10 @@ extern volatile int mp6_dll_stub_black_screen_active;
  * for that exact name via dll_bridge.c's own real entry points -- proving
  * the stub path end to end for an ARBITRARY m6xx-shaped name without
  * needing real (not-yet-decompiled) board code to ever request one for
- * real. No-op if the env var isn't set. Called once, lazily, from
- * mp6_tick_advance() (platform/null/shims_manual.c) on the first tick --
- * late enough that the heap/arena (HuMemDirectMalloc) this whole dance
- * allocates through is already up in both build modes. */
+ * real. No-op if the env var isn't set. Called once, lazily, from the first
+ * HuPrcCall after `processcur` is assigned: this proves both prerequisites
+ * the prolog needs (all HuMem heaps initialized and a valid current parent)
+ * instead of assuming the first VI tick is late enough. */
 void mp6_dll_bridge_selftest_check_env(void);
 
 /* Resolves a code address to "func+0xNN (file:line)" (or the best partial
@@ -207,6 +207,19 @@ void mp6_alloc_census_tick_check(void);
  * this header stays includable from TUs without dolphin/types.h. */
 uint32_t mp6_heap_block_data_size(const void *ptr);
 
+/* Full ownership query for the same verified block-base seam. Returns 1
+ * only for a live direct-allocation base and publishes its heap id, usable
+ * byte extent, and allocator lifetime tag. Consumers that build a native
+ * graph around packed data use this to give the graph the same bulk-free
+ * lifetime as its backing bytes. All out-pointers are optional. */
+int mp6_heap_block_info(const void *ptr, int32_t *heapOut,
+                        uint32_t *sizeOut, uint32_t *tagOut);
+
+/* Convert a verified live low-arena allocation base into the legacy u32
+ * lifetime tag used by the model allocator. Fails closed if the low-4GB
+ * invariant is ever violated instead of silently truncating a host pointer. */
+uint32_t mp6_heap_pointer_tag(const void *ptr);
+
 /* The real GPU's maxTextureDimension2D,
  * as actually negotiated for THIS run -- captured by main_native.c's
  * mp6_aurora_log_callback, which scans Aurora's own startup "Using
@@ -220,7 +233,10 @@ uint32_t mp6_heap_block_data_size(const void *ptr);
  * build has no Aurora log stream at all (--headless, where
  * mp6_widescreen_render_width() is a fixed-640 stub that never consults
  * this at all) -- callers must treat 0 as "unknown, use a safe fallback",
- * never as a real zero-sized limit. */
+ * never as a real zero-sized limit.  The callback records it in
+ * aurora_bridge.c's host-state carve-out so loading a state made on another
+ * GPU cannot replace this run's negotiated limit. */
+void mp6_aurora_record_max_texture_dimension_2d(int dimension);
 int mp6_aurora_queried_max_texture_dimension_2d(void);
 
 #ifdef __cplusplus

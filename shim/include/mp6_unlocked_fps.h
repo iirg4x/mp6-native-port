@@ -1,74 +1,92 @@
-/* MP6 native port -- Mods-page "Unlocked FPS" (tick-decoupled presentation).
+/* MP6 native port -- Mods-page "Unlocked FPS" presentation replay.
  *
- * Game logic stays a fixed 60Hz tick (aurora_bridge.c section 8's throttle
- * -- untouched). Presentation is decoupled: during
- * mp6_tick_throttle_wait()'s idle window -- after tick N's own present,
- * before tick N+1's deadline -- extra frames are presented with the scene
- * advanced along the last two ticks' motion.
+ * Simulation remains a fixed 60 Hz.  Each real frame's complete Aurora GX
+ * FIFO stream is retained; idle-window presents submit a filtered copy of the
+ * bytes, rewriting only position matrices whose explicit Hu3D identity and
+ * camera history match the previous real frame.  Replays do not call
+ * Hu3DExec, layer hooks, model hooks, material hooks, animation code, or any
+ * other game callback.  Consequently callback-owned BSS/heap state advances
+ * exactly once per simulation tick.
  *
- * MECHANISM: MODEL-level interpolation, and only that
- * (shim/include/mp6_fi_model.h has the full contract; the mechanism lives
- * in platform/hsf/mp6_fi_model.c, the pacing in platform/gx/frame_interp.c).
- * Each real tick snapshots every LIVE Hu3D model's transform (pos/rot/scale,
- * keyed by its stable Hu3DData[] slot index) and every live camera. Each
- * in-between frame writes pose(N-1 -> N, t = 1 + alpha) into those slots --
- * a FORWARD extrapolation past the already-presented pose N, alpha =
- * (now - tickN_present)/tick_period bounded to [0,1] -- and RE-RUNS Hu3DExec
- * so the renderer re-derives matrices, normals, lighting and draw order from
- * the advanced pose. Afterwards every model's/camera's tick-N state is
- * restored exactly, so tick N+1's game logic proceeds byte-identically to
- * feature-off (GATE A; the hsfman.c patch's six `if (!mp6_fi_replay_pass)`
- * guards suppress the state-advancing side effects inside Hu3DExec, and
- * MP6_FI_MODEL_ASSERT=1 verifies the invariant in-process).
+ * Identity is (camera, model slot, creation generation, matrix ordinal), not
+ * command order.  Slot reuse and draw-order changes therefore snap instead of
+ * cross-pairing.  Motion in model->mtx is naturally retained because the
+ * actual emitted matrices are compared.  Camera cuts consider position,
+ * target, up, and FOV; Freecam works through the same real-tick camera stream.
  *
- * Because the interpolation is per-OBJECT, a spawn/teleport/fast-flip is
- * snapped per slot (>50u or >10deg in one tick) without touching its
- * neighbours -- the property a stream-level replay could never have. 2D
- * layers draw raw immediate-mode vertices (game/sprput.c) and the screen
- * wipe is drawn outside Hu3DExec, so UI, effects and transitions stay 60Hz
- * by construction -- the settings row says so honestly, and replays are
- * suppressed outright while a wipe is up (they cannot contain it).
+ * PAIRING RULE.  A matrix is named by
  *
- * HISTORY, so the shape of this file makes sense: a second, STREAM-level
- * mechanism used to exist behind a mode selector (retained GX command
- * streams + a command-stream walker + pos/nrm matrix surgery, fed by aurora
- * patch 0015's fifo drain-capture sink). It was evaluated on-device against
- * the model path and lost; it, its config/UI selector and patch 0015 have
- * all been deleted. There is no mode lever and no fallback.
+ *     (camera, model slot, creation generation, sub, ordinal)
  *
- * Pacing: none beyond alpha and a plain wall-clock fit check. aurora's
- * render worker (FrameSlotCount=2) backpressures begin/end pairs against
- * the vsync'd present queue, so the replay loop self-paces to the display;
- * a per-window replay cap plus an even spread across the window keep the
- * vsync-off diagnostic configuration bounded and non-bursty.
+ * and NEVER by its position in the retained stream.  `sub` names the EMISSION
+ * BRACKET: 0xFFFF for a matrix emitted inside the model bracket itself,
+ * otherwise the deferred draw object's PUSH-ORDER rank within that model.
+ * It is not optional.  Hu3DDraw does not emit every object where it decides to
+ * draw it -- translucent / NEAR / ALTBLEND / z-compare-off objects and every
+ * hook-func (particle) model are pushed onto the z-sorted DrawObjData list and
+ * emitted later by Hu3DDrawPost, after mp6_fi_capture_model_end() and in DEPTH
+ * order.  On the w01 board that is two thirds of a frame's position matrices.
+ * Reserving identity at push time, where the model bracket is still open, and
+ * ranking it by push order is what makes pairing immune to that depth sort,
+ * which re-permutes emission order on every camera move.
  *
- * Levers (same shape as MP6_SHADOW_QUALITY/MP6_WIDESCREEN):
- *   - Mods-page "Unlocked FPS" toggle -> video.unlocked_fps
- *     (launcher_core.cpp; launcher mode only -- automation never reads the
- *     config, docs/TESTING.md's sacred contract).
- *   - MP6_UNLOCKED_FPS env: set -> it WINS over the config ("0" forces
- *     off, anything else on); needed because automation mode never reads
- *     mp6_config.json, so no scripted gate could exercise the feature
- *     without it.
- *   - MP6_PRESENT_RATE_LOG=1 (aurora_bridge.c, beside MP6_TICK_RATE_LOG):
- *     ~5s windowed present-rate lines + a final begins/presents/ticks
- *     summary at clean shutdown -- the off-proof (present-count ==
- *     tick-count) and on-proof (present-rate >> tick-rate) instrument.
- *   - MP6_FI_DIAG=1: periodic replay/wipe diagnostics + per-replay body
- *     cost; =2 adds one QPC-stamped line per real tick present.
- *   - MP6_FI_MODEL_ASSERT=1 / MP6_FI_ANIMLOG=1 / MP6_FI_POSELOG=1 and the
- *     MP6_FI_MODEL_BACKLERP / MP6_FI_MODEL_NOWIPEGATE A/B levers: see
- *     shim/include/mp6_fi_model.h. All off by default, all no-ops unset.
+ * Layer hooks (Hu3DLayerHookSet) draw inside a camera but own no model slot;
+ * they take a pseudo-slot identity above HU3D_MODEL_MAX, generation-stamped
+ * from the installed function pointer.  The invariant to hold on to is that
+ * EVERY position matrix emitted inside a 3D camera bracket carries a key --
+ * MP6_FI_DIAG>=3's `incam` counter is zero exactly when that holds.  What is
+ * left keyless is screen-space (sprites, wipes, the shadow/reflect passes),
+ * which a camera move cannot tear.
  *
- * OFF (default) is an EXACT no-op: no snapshot is taken, VIWaitForRetrace
- * performs zero extra begin/end-frame pairs, and present-count ==
- * tick-count.
+ * WHY UNPAIRED MATRICES ARE A VISIBLE DEFECT AND NOT MERELY A LOST
+ * OPTIMISATION.  Every pos matrix is a MODELVIEW, so a camera pan moves all of
+ * them together.  If some advance by alpha and some are pinned to tick N, the
+ * two populations tear apart by alpha x the pan speed for exactly one presented
+ * frame and snap back on the next tick -- an A-B-A flicker that has no
+ * counterpart while the camera is still.  That is why the idle board and mode
+ * select were clean while the board's opening pan was not; see
+ * docs/history/F3_LEAF_STROBE.md section 7 for the measurement.
  *
- * Windowed (aurora) builds only: platform/gx/frame_interp.c is listed in
- * tools/build.py's PLATFORM_AURORA_ONLY (same split as aurora_bridge.c);
- * --headless never compiles any of this, so the headless gate is untouched
- * by construction. (mp6_fi_model.c itself compiles in both modes -- it
- * needs game/hu3d.h -- but nothing calls its replay path headless.) */
+ * DEGRADATION IS ONE-DIRECTIONAL.  Every rejection -- no identity, a group
+ * whose pos-load membership changed since the previous tick, an ambiguous
+ * duplicate key, an unstable camera, a pair failing the motion gate -- emits
+ * stream N's own bytes, i.e. that object presents UN-INTERPOLATED for that one
+ * window.  Nothing in the pairing path can remove a draw; the skip filter that
+ * can is decided from the command's opcode alone, before any pairing state is
+ * read.  MP6_FI_DIAG>=3 prints the per-tick split (paired / nokey / countdiff /
+ * dup / unmatched), which joins 1:1 with a MP6_FRAME_DUMP index.csv row.
+ *
+ * Replay frame admission uses Aurora's non-blocking try-begin API. Absolute
+ * deadline checks are repeated after spacing, stream rewrite, and OS-event
+ * pumping, and frame-slot, mapped-staging, and render-queue permits are all
+ * acquired with try operations. A replay therefore never enters a begin-frame
+ * resource wait inside the simulation deadline window.
+ *
+ * MP6_UNLOCKED_FPS is the environment override (0 disables, any other value
+ * enables); otherwise the live launcher setting is used.  MP6_FI_DIAG and
+ * MP6_FI_ANIMLOG retain the existing diagnostic surfaces.
+ *
+ * MATRIX REWRITE CONTRACT. A replayed pos matrix is built from the tick matrix
+ * B and its predecessor A as
+ *
+ *     O(alpha) = compose(advance(decompose(A), decompose(B), alpha))
+ *                + ( B - compose(decompose(B)) )
+ *
+ * The trailing term is the RESIDUAL CARRY and it is not optional. TRS
+ * decomposition is exact only for a similarity transform; a modelview carrying
+ * shear (non-uniform parent scale times a child rotation) loses that shear in
+ * the round trip, so without the carry O(0) != B and every interpolated present
+ * re-poses the object and snaps back on the next tick -- a flicker whose size
+ * is set by the decomposition error, not by motion, and which therefore no
+ * motion gate can catch. With the carry O(0) == B exactly: a replay frame can
+ * never disagree with the tick frame it was built from.
+ *
+ * Bisect levers, diagnosis only, never set in a real run:
+ *   MP6_FI_NO_INTERP=1     keep the replay cadence, submit the stream verbatim.
+ *   MP6_FI_NO_RESIDUAL=1   drop the residual carry (reinstates the defect).
+ * MP6_FI_DIAG>=3 reports, per replay, maxResid (the shear being carried) and
+ * maxA0Err (|O(0) - B|, which must stay at zero).
+ */
 #ifndef MP6_UNLOCKED_FPS_H
 #define MP6_UNLOCKED_FPS_H
 
@@ -78,40 +96,26 @@
 extern "C" {
 #endif
 
-/* Resolved enable state: MP6_UNLOCKED_FPS env when set (parsed once),
- * else the launcher config (live -- the Mods toggle applies immediately),
- * else 0. Automation mode without the env lever always resolves 0. */
 int mp6_unlocked_fps_enabled(void);
 
-/* Frame-boundary hooks, called by aurora_bridge.c's VIWaitForRetrace:
- * ..._frame_begin right after aurora_begin_frame() succeeds (currently a
- * reserved no-op -- the seam is kept because it is the one per-tick point
- * inside an open frame); ..._frame_end right after aurora_end_frame()
- * returns (takes tick N's model/camera snapshot, rotates the N-1/N
- * retention pair, and timestamps the present for alpha + spacing). Both are
- * cheap no-ops while the feature is off. */
+/* Real-frame hooks around the Aurora begin/end pair. */
 void mp6_fi_note_frame_begin(void);
 void mp6_fi_note_frame_end(void);
 
-/* One replay attempt inside the tick throttle's wait loop. remainNs is the
- * time left until the next tick deadline, periodNs the tick period.
- * Returns 1 if an interpolated frame was begun+presented (caller re-reads
- * the clock and loops), 0 if it declined (feature off, snapshots not ready,
- * wipe on screen, window too small, per-window cap reached) -- caller falls
- * through to its normal sleep/spin. */
-int mp6_fi_idle_present(int64_t remainNs, int64_t periodNs);
+/* Windowed GXLoadPosMtxImm bridge hook.  Records identity metadata only while
+ * a real-frame stream capture is armed; raw replay never calls it. */
+void mp6_fi_stream_note_pos_mtx(void);
 
-/* aurora_bridge.c's present accounting (MP6_PRESENT_RATE_LOG): the replay
- * path reports each extra begin/end pair through this, the bridge counts
- * its own real frames itself. */
+/* Attempt one idle-window replay before the caller's absolute monotonic-clock
+ * deadline. Returns one only after a frame was actually presented; zero means
+ * the caller should continue its normal wait. Passing the absolute deadline
+ * prevents time spent between the throttle's sample and admission from being
+ * accidentally added back onto the simulation window. */
+int mp6_fi_idle_present(int64_t deadline_ns, int64_t period_ns);
+
 void mp6_present_counters_add(long begins, long ends);
 
-/* SAVESTATE restore hook (platform/os/savestate.c). frame_interp.c's statics
- * are carved out of the savestate image (they are the RUNNING process's pacing
- * clock -- see the TU's header comment), so a load leaves them intact; this
- * re-anchors the window and drops the retained N-1/N model snapshots so the
- * first post-restore window does not interpolate across the state
- * discontinuity. No-op-safe: valid to call whether or not the feature is on. */
+/* Drop retained FIFO/camera/identity history across a savestate discontinuity. */
 void mp6_fi_savestate_reset(void);
 
 #ifdef __cplusplus

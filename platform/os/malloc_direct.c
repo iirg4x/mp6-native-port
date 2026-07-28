@@ -37,6 +37,9 @@
 #include "game/init.h"
 #include "dolphin/os.h"
 #include "mp6_boot.h" /* mp6_tick_count -- mp6_trace_heap_model's tick gate below */
+#include "mp6_savestate.h"
+#include "mp6_alloc_size.h"
+#include "mp6_anim_native.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -129,9 +132,11 @@ void HuMemDCFlush(HEAPID heap)
  * the margin the original 32-bit struct had for free. Costs at most one
  * extra 32-byte "slot" per zero-size request; irrelevant against a
  * multi-megabyte heap. */
-static s32 mp6_no_zero_alloc(s32 size)
+static int mp6_checked_direct_alloc_size(const char *api, s32 requested, s32 *roundedOut)
 {
-    return (size > 0) ? size : 1;
+    if (mp6_humem_checked_request(requested, roundedOut)) return 1;
+    fprintf(stderr, "[ALLOC] %s rejected invalid/overflowing size %d\n", api, (int)requested);
+    return 0;
 }
 
 /* Lightweight, permanent HEAP_HEAP trace (bounded call count so a long
@@ -216,6 +221,30 @@ static int g_allocCensusParsed = 0;
 static int g_allocCensusCallsLogged = 0;
 static const char *const g_heapNames[HEAP_MAX] = { "HEAP_HEAP", "HEAP_SOUND", "HEAP_MODEL", "HEAP_DVD", "HEAP_SPACE" };
 
+void mp6_malloc_savestate_capture_host_config(Mp6SsAllocDiagHostConfig *out)
+{
+    if (out == NULL) return;
+    out->censusStartTick = g_allocCensusStartTick;
+    out->censusParsed = g_allocCensusParsed;
+    out->censusCallsLogged = g_allocCensusCallsLogged;
+}
+
+void mp6_malloc_savestate_apply_host_config(const Mp6SsAllocDiagHostConfig *in)
+{
+    if (in == NULL) return;
+    if ((in->censusParsed != 0 && in->censusParsed != 1) ||
+        in->censusCallsLogged < 0 ||
+        in->censusCallsLogged > MP6_ALLOC_CENSUS_CALL_BUDGET) {
+        g_allocCensusStartTick = -1;
+        g_allocCensusParsed = 0;
+        g_allocCensusCallsLogged = 0;
+        return;
+    }
+    g_allocCensusStartTick = in->censusStartTick;
+    g_allocCensusParsed = in->censusParsed;
+    g_allocCensusCallsLogged = in->censusCallsLogged;
+}
+
 static void mp6_alloc_census_parse_env(void)
 {
     const char *env;
@@ -254,8 +283,18 @@ void mp6_alloc_census_tick_check(void)
 static int mp6_heap_id_for_ptr(const void *ptr)
 {
     int i;
+    uintptr_t p;
+    if (ptr == NULL) return -1;
+    p = (uintptr_t)ptr;
     for (i = 0; i < HEAP_MAX; i++) {
-        if (ptr >= HeapTbl[i] && (const char *)ptr < (const char *)HeapTbl[i] + HeapSizeTbl[i]) {
+        uintptr_t start = (uintptr_t)HeapTbl[i];
+        uintptr_t end;
+        if (start == 0 || HeapSizeTbl[i] == 0 ||
+            (uintptr_t)HeapSizeTbl[i] > UINTPTR_MAX - start) {
+            continue;
+        }
+        end = start + (uintptr_t)HeapSizeTbl[i];
+        if (p >= start && p < end) {
             return i;
         }
     }
@@ -305,8 +344,15 @@ static void mp6_alloc_census_trace_free(const char *who, void *ptr, u32 num, u32
     if (g_allocCensusCallsLogged >= MP6_ALLOC_CENSUS_CALL_BUDGET) return;
     g_allocCensusCallsLogged++;
     heap = mp6_heap_id_for_ptr(ptr);
-    blk = (MP6ShadowMemBlock *)((char *)ptr - sizeof(MP6ShadowMemBlock));
     mp6_symbolize_addr((void *)(uintptr_t)retaddr, sym, sizeof(sym));
+    if (heap < 0 || (uintptr_t)ptr < (uintptr_t)HeapTbl[heap] + sizeof(*blk)) {
+        printf("[ALLOC-CENSUS-CALL] #%d tick=%ld %s(heap=?(outside all heaps) ptr=%p "
+               "num=0x%08x) caller=%s  *** INVALID POINTER ***\n",
+               g_allocCensusCallsLogged, mp6_tick_count, who, ptr, num, sym);
+        fflush(stdout);
+        return;
+    }
+    blk = (MP6ShadowMemBlock *)((char *)ptr - sizeof(MP6ShadowMemBlock));
     printf("[ALLOC-CENSUS-CALL] #%d tick=%ld %s(heap=%s ptr=%p num=0x%08x magic=%u) caller=%s%s\n",
            g_allocCensusCallsLogged, mp6_tick_count, who,
            (heap >= 0) ? g_heapNames[heap] : "?(outside all heaps)", ptr, num, (unsigned)blk->magic, sym,
@@ -330,22 +376,59 @@ static void mp6_alloc_census_trace_free(const char *who, void *ptr, u32 num, u32
  * native header footprint -- which is a conservative (never over-reporting)
  * bound regardless of the 32-vs-native-header-size wrinkle documented in
  * the MP6_MEMBLOCK_HDR comment: worst case we under-report by 8 bytes. */
-uint32_t mp6_heap_block_data_size(const void *ptr)
+int mp6_heap_block_info(const void *ptr, int32_t *heapOut,
+                        uint32_t *sizeOut, uint32_t *tagOut)
 {
     const MP6ShadowMemBlock *blk;
+    uintptr_t start, end, p, blockAddr;
+    int heap;
+    if (heapOut != NULL) *heapOut = -1;
+    if (sizeOut != NULL) *sizeOut = 0;
+    if (tagOut != NULL) *tagOut = 0;
     if (ptr == NULL) return 0;
-    if (mp6_heap_id_for_ptr(ptr) < 0) return 0;
+    heap = mp6_heap_id_for_ptr(ptr);
+    if (heap < 0) return 0;
+    start = (uintptr_t)HeapTbl[heap];
+    end = start + (uintptr_t)HeapSizeTbl[heap];
+    p = (uintptr_t)ptr;
+    if (p < start + sizeof(MP6ShadowMemBlock)) return 0;
+    blockAddr = p - sizeof(MP6ShadowMemBlock);
     blk = (const MP6ShadowMemBlock *)((const char *)ptr - sizeof(MP6ShadowMemBlock));
-    if (blk->magic != 165) return 0;
+    if (blk->magic != 165 || blk->flag != 1) return 0;
     if (blk->size <= (int32_t)sizeof(MP6ShadowMemBlock)) return 0;
-    return (uint32_t)blk->size - (uint32_t)sizeof(MP6ShadowMemBlock);
+    if ((uint32_t)blk->size > end - blockAddr) return 0;
+    if (heapOut != NULL) *heapOut = heap;
+    if (sizeOut != NULL) {
+        *sizeOut = (uint32_t)blk->size - (uint32_t)sizeof(MP6ShadowMemBlock);
+    }
+    if (tagOut != NULL) *tagOut = blk->num;
+    return 1;
+}
+
+uint32_t mp6_heap_block_data_size(const void *ptr)
+{
+    uint32_t size = 0;
+    (void)mp6_heap_block_info(ptr, NULL, &size, NULL);
+    return size;
+}
+
+uint32_t mp6_heap_pointer_tag(const void *ptr)
+{
+    uintptr_t value = (uintptr_t)ptr;
+    if (!mp6_heap_block_info(ptr, NULL, NULL, NULL) || value > UINT32_MAX) {
+        fprintf(stderr, "[FATAL] allocation pointer cannot be represented as model tag: %p\n",
+                ptr);
+        fflush(stderr);
+        _Exit(EXIT_FAILURE);
+    }
+    return (uint32_t)value;
 }
 
 void *HuMemDirectMalloc(HEAPID heap, s32 size)
 {
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
     s32 rawSize = size;
-    size = OSRoundUp32B(mp6_no_zero_alloc(size));
+    if (!mp6_checked_direct_alloc_size("HuMemDirectMalloc", size, &size)) return NULL;
     {
         void *result = HuMemMemoryAlloc(HeapTbl[heap], size, retaddr);
         if (heap == HEAP_HEAP) mp6_trace_heap_heap("HuMemDirectMalloc", rawSize, retaddr, result);
@@ -359,7 +442,7 @@ void *HuMemDirectMallocNum(HEAPID heap, s32 size, u32 num)
 {
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
     s32 rawSize = size;
-    size = OSRoundUp32B(mp6_no_zero_alloc(size));
+    if (!mp6_checked_direct_alloc_size("HuMemDirectMallocNum", size, &size)) return NULL;
     {
         void *result = HuMemMemoryAllocNum(HeapTbl[heap], size, num, retaddr);
         if (heap == HEAP_HEAP) mp6_trace_heap_heap("HuMemDirectMallocNum", rawSize, retaddr, result);
@@ -372,27 +455,29 @@ void *HuMemDirectMallocNum(HEAPID heap, s32 size, u32 num)
 void *HuMemDirectTailMalloc(HEAPID heap, s32 size)
 {
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
-    size = OSRoundUp32B(mp6_no_zero_alloc(size));
+    if (!mp6_checked_direct_alloc_size("HuMemDirectTailMalloc", size, &size)) return NULL;
     return HuMemTailMemoryAlloc(HeapTbl[heap], size, retaddr);
 }
 
 void *HuMemDirectTailMallocNum(HEAPID heap, s32 size, u32 num)
 {
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
-    size = OSRoundUp32B(mp6_no_zero_alloc(size));
+    if (!mp6_checked_direct_alloc_size("HuMemDirectTailMallocNum", size, &size)) return NULL;
     return HuMemTailMemoryAllocNum(HeapTbl[heap], size, num, retaddr);
 }
 
 void *HuMemDirectRealloc(HEAPID heap, void *ptr, s32 size)
 {
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
-    return HuMemMemoryRealloc(HeapTbl[heap], ptr, mp6_no_zero_alloc(size), retaddr);
+    if (!mp6_checked_direct_alloc_size("HuMemDirectRealloc", size, &size)) return NULL;
+    return HuMemMemoryRealloc(HeapTbl[heap], ptr, size, retaddr);
 }
 
 void HuMemDirectFree(void *ptr)
 {
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
     mp6_alloc_census_trace_free("HuMemDirectFree", ptr, (u32)-256, retaddr);
+    mp6_anim_before_direct_free(ptr);
     HuMemMemoryFree(ptr, retaddr);
 }
 
@@ -446,6 +531,11 @@ void HuMemDirectFreeNum(HEAPID heap, u32 num)
     u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
     mp6_alloc_census_trace_call("HuMemDirectFreeNum(pre)", heap, 0, num, retaddr, NULL);
     mp6_heap_walk_tagged(heap, num, "BEFORE HuMemDirectFreeNum");
+    /* Packed ANM parsing builds a native pointer graph whose lifetime tag
+     * mirrors its raw backing allocation. Invalidate those side-table
+     * identities while the block metadata is still live, at the one seam
+     * shared by overlay and model-specific bulk reclamation. */
+    mp6_anim_before_bulk_free(heap, num);
     HuMemMemoryFreeNum(HeapTbl[heap], num, retaddr);
     mp6_heap_walk_tagged(heap, num, "AFTER  HuMemDirectFreeNum");
 }

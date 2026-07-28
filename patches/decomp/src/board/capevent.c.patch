@@ -1,0 +1,38 @@
+--- a/src/board/capevent.c
++++ b/src/board/capevent.c
+@@ -84,0 +85 @@
++#ifndef MP6_NATIVE_PORT
+@@ -88,0 +90 @@
++#endif
+@@ -149,0 +152 @@
++#ifndef MP6_NATIVE_PORT
+@@ -153,0 +157 @@
++#endif
+@@ -167,0 +172 @@
++#ifndef MP6_NATIVE_PORT
+@@ -171,0 +177 @@
++#endif
+@@ -342,0 +349 @@
++#ifndef MP6_NATIVE_PORT
+@@ -344,0 +352 @@
++#endif
+@@ -354,0 +363 @@
++#ifndef MP6_NATIVE_PORT
+@@ -356,0 +366 @@
++#endif
+@@ -476,0 +487 @@
++#ifndef MP6_NATIVE_PORT
+@@ -480,0 +492 @@
++#endif
+@@ -579,0 +592 @@
++#ifndef MP6_NATIVE_PORT
+@@ -585,0 +599 @@
++#endif
+@@ -595,0 +610 @@
++#ifndef MP6_NATIVE_PORT
+@@ -597,0 +613 @@
++#endif
+@@ -713,0 +730 @@
++#ifndef MP6_NATIVE_PORT
+@@ -727,0 +745 @@
++#endif

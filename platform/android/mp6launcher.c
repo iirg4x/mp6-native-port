@@ -48,6 +48,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "mp6_path.h"
+#include "mp6_parse.h"
+
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
@@ -94,9 +97,9 @@ static void *try_reserve_exact(uint64_t base, uint64_t size, const char **how)
 
 int main(int argc, char **argv)
 {
-    char exeDir[512];
-    char libPath[1024];
-    char baseDir[1024];
+    char exeDir[1200];
+    char libPath[1200];
+    char baseDir[1200];
     int ticks = 600;
     void *soRegion = MAP_FAILED;
     uint64_t soBase = 0;
@@ -111,7 +114,7 @@ int main(int argc, char **argv)
     {
         ssize_t n = readlink("/proc/self/exe", exeDir, sizeof(exeDir) - 1);
         char *slash;
-        if (n <= 0) {
+        if (n <= 0 || (size_t)n >= sizeof(exeDir) - 1) {
             fprintf(stderr, "[HOST] FATAL: readlink(/proc/self/exe): %s\n", strerror(errno));
             return 2;
         }
@@ -119,11 +122,22 @@ int main(int argc, char **argv)
         slash = strrchr(exeDir, '/');
         if (slash) *slash = 0;
     }
-    if (argc >= 2) ticks = atoi(argv[1]);
-    if (argc >= 3) snprintf(libPath, sizeof(libPath), "%s", argv[2]);
-    else           snprintf(libPath, sizeof(libPath), "%s/libmp6game.so", exeDir);
-    if (argc >= 4) snprintf(baseDir, sizeof(baseDir), "%s", argv[3]);
-    else           snprintf(baseDir, sizeof(baseDir), "%s", exeDir);
+    if (argc >= 2 && !mp6_parse_i32_strict(argv[1], 1, INT_MAX, &ticks)) {
+        fprintf(stderr, "[HOST] FATAL: invalid tick budget '%s' (expected 1..%d)\n",
+                argv[1], INT_MAX);
+        return 2;
+    }
+    if ((argc >= 3 ? mp6_path_copy_checked(libPath, sizeof(libPath), argv[2])
+                   : mp6_path_join_checked(libPath, sizeof(libPath), exeDir,
+                                           "libmp6game.so")) != 0) {
+        fprintf(stderr, "[HOST] FATAL: game image path is too long\n");
+        return 2;
+    }
+    if ((argc >= 4 ? mp6_path_copy_checked(baseDir, sizeof(baseDir), argv[3])
+                   : mp6_path_copy_checked(baseDir, sizeof(baseDir), exeDir)) != 0) {
+        fprintf(stderr, "[HOST] FATAL: base directory path is too long\n");
+        return 2;
+    }
 
     if (access(libPath, R_OK) != 0) {
         fprintf(stderr, "[HOST] FATAL: game image not readable: %s (%s)\n", libPath, strerror(errno));
@@ -132,7 +146,10 @@ int main(int argc, char **argv)
 
     /* host_android.c resolves disc/save/pref paths under this (does not
      * overwrite a caller-exported value). */
-    setenv("MP6_HOST_BASE", baseDir, 0);
+    if (setenv("MP6_HOST_BASE", baseDir, 0) != 0) {
+        fprintf(stderr, "[HOST] FATAL: could not publish MP6_HOST_BASE: %s\n", strerror(errno));
+        return 2;
+    }
 
     /* Diagnostic lever: MP6_LAUNCH_HIGH_TEST=1 loads the game image with a
      * PLAIN dlopen -- bionic places it at its default HIGH (>=4GB) address

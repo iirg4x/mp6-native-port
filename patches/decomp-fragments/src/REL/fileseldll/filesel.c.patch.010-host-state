@@ -1,0 +1,27 @@
+--- a/src/REL/fileseldll/filesel.c
++++ b/src/REL/fileseldll/filesel.c
+@@ -1372,8 +1372,13 @@
+     for (i = 0; i < 4; i++) {
+         p = &lbl_1_bss_D8[i];
+         if (p->unk_7C == proc) {
+             break;
+         }
+     }
++    if (i >= 4) {
++        HuPrcEnd();
++        return;
++    }
++    prevState = p->unk_12;
+     idx = i;
+@@ -1586 +1591 @@
+-    proc->property = (void *)arg1;
++    proc->property = (void *)(intptr_t)arg1;
+@@ -1598 +1603 @@
+-    bank = (s32)proc->property;
++    bank = (s32)(intptr_t)proc->property;
+@@ -2130 +2135 @@
+-                proc2->property = (void *)a;
++                proc2->property = (void *)(intptr_t)a;
+@@ -2194 +2199 @@
+-    idx = (s32)proc->property;
++    idx = (s32)(intptr_t)proc->property;

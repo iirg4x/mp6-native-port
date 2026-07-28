@@ -1,6 +1,10 @@
 --- a/src/REL/fileseldll/filename.c
 +++ b/src/REL/fileseldll/filename.c
-@@ -28 +28 @@
+@@ -20,0 +21 @@
++#include "game/frand.h"
+@@ -27,2 +27,3 @@
+ #pragma cplusplus on
++double __frsqrte(double);
 -extern inline float sqrtf(float x)
 +extern inline float mp6_fileseldll_sqrtf(float x)
 @@ -580 +580 @@

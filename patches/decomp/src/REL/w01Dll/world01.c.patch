@@ -1,0 +1,119 @@
+--- a/src/REL/w01Dll/world01.c
++++ b/src/REL/w01Dll/world01.c
+@@ -3,0 +4,58 @@
++
++/* PORT FIX -- float-argument ABI, implicit-declaration class (the class
++ * tools/abi_warning_audit.py exists for; this TU was simply not in its
++ * ABI_CRITICAL_SOURCES set, so it was never audited).
++ *
++ * world01.c calls three functions that NO header it includes declares:
++ *   mbMtxRotAxisRad(Mtx, char, float)   src/board/math.c:157, called at
++ *                                       fn_1_12D58 (the ambient falling-leaf
++ *                                       draw) with particle->angle
++ *   mbHermiteCalcV(HuVecF*, HuVecF*, HuVecF*, HuVecF*, HuVecF*, float)
++ *                                       src/board/math.c:514
++ *   __fabs(double) -> double            MSL, declared only in the
++ *                                       PowerPC_EABI_Support math.h this TU
++ *                                       does not reach
++ * Without a prototype, C's default argument promotions send every `float`
++ * argument as a DOUBLE, and an undeclared function is assumed to return
++ * `int`. On PowerPC EABI that is harmless -- every float argument travels in
++ * f1..f8 as a double anyway and the callee's own frsp narrows it, and
++ * __fabs's result comes back in f1 either way -- which is exactly why the
++ * shipped game never noticed. On x86_64 the caller writes a double into
++ * XMM0 and the callee reads a float32 out of the SAME register, i.e. the
++ * LOW 32 bits of the double's bit pattern.
++ *
++ * That is not "slightly wrong", it is catastrophic and it was visible on
++ * screen: a float widened to double has its low 29 mantissa bits zero, so
++ * the low 32 bits can only ever be one of eight values, and
++ * mbMtxRotAxisRad's angle therefore collapses to one of {0, +/-0.0,
++ * +/-1.084e-19, +/-2.0, +/-3.689e19} regardless of the real angle. Through
++ * board/math.c's cos/sin lookup table those eight collapse to exactly THREE
++ * rotations -- (cos,sin) = (1,0), (-0.416,+0.909), (-0.416,-0.909) -- and
++ * the board's ambient leaves consequently snapped between three fixed poses
++ * from frame to frame instead of fluttering. Measured directly: with
++ * MP6_W01_LEAF_TRACE the integrator's own angle moves at most 8.59 deg per
++ * tick (matching an exact float32 replay of fn_1_1330C), while the drawn
++ * matrix jumped between precisely those three states, and the captured
++ * frames showed the leaf holding one silhouette for 4-6 frames and flipping
++ * to a foreshortened sliver for exactly one -- the long-standing "board
++ * leaf strobe".
++ *
++ * Declaring the three functions here restores the intended (and
++ * PowerPC-observed) behavior; it changes nothing about the decomp's own
++ * code. Kept in this TU rather than in a decomp-overrides header because
++ * world01.c includes none of the headers that would naturally carry them
++ * (game/board/guide.h declares the *Deg* siblings, and this TU does not
++ * include it). */
++void mbMtxRotAxisRad(Mtx m, char axis, float rad);
++void mbHermiteCalcV(HuVecF *a, HuVecF *b, HuVecF *c, HuVecF *d, HuVecF *dst,
++                    float t);
++double __fabs(double x);
++
++/* W01 falling-leaf trace (MP6_W01_LEAF_TRACE=<tick>, 16-tick window).
++ * The board's ambient leaf fall is fn_1_12A4C (spawn, 64 particles) /
++ * fn_1_1330C (per-tick flutter integrator) / fn_1_12D58 (hook-func draw,
++ * one 50x50 XZ-plane quad per particle rotated about Z by particle->angle).
++ * Every flicker report against this board eventually lands on that leaf,
++ * and the ONLY way to tell "the authored angle really moves that far in one
++ * frame" from "the angle is smooth and the DRAW is wrong" is to read the
++ * integrator's own state per tick -- a screen-space silhouette measurement
++ * cannot separate them, because both look like a one-frame pose change.
++ * So: dump angle/angleSpeed/pos/vel for all 64 particles, per tick, for a
++ * short window. Diagnostic only: prints state, never changes behavior; one
++ * cached getenv and zero output when unset. */
++#include <stdio.h>
++#include <stdlib.h>
++extern long mp6_tick_count;
++static long mp6W01LeafTick = -2; /* -2 = env not parsed yet, -1 = disabled */
++static long mp6W01LeafSpan = 16; /* MP6_W01_LEAF_TRACE_TICKS, default 16 */
++static int mp6W01LeafTrace(void)
++{
++    if (mp6W01LeafTick == -2) {
++        const char *e = getenv("MP6_W01_LEAF_TRACE");
++        const char *n = getenv("MP6_W01_LEAF_TRACE_TICKS");
++        mp6W01LeafTick = (e && atol(e) > 0) ? atol(e) : -1;
++        if (n && atol(n) > 0) {
++            mp6W01LeafSpan = atol(n);
++        }
++    }
++    return mp6W01LeafTick > 0 && mp6_tick_count >= mp6W01LeafTick &&
++           mp6_tick_count < mp6W01LeafTick + mp6W01LeafSpan;
++}
++
+@@ -998,0 +999 @@
++    OSReport("[W01] prolog\n");
+@@ -1020,0 +1022 @@
++    OSReport("[W01] ObjectSetup board=%d\n", MBNO_WORLD_1);
+@@ -1092,0 +1095 @@
++    OSReport("[W01] MB1_Create complete\n");
+@@ -1521,2 +1523,2 @@
+-    s32 playerMasuId;
+-    s32 masuId;
++    s32 playerMasuId = -1; /* native fix -- see this hunk's note below */
++    s32 masuId = -1;
+@@ -1589 +1591,4 @@
+-        work->lastMasuId = GwPlayer[playerNo].masuId;
++        /* native fix: playerNo is GwSystem.turnPlayerNo, which is -1 for the
++         * whole board opening; GwPlayer[-1] is an out-of-bounds read. */
++        work->lastMasuId =
++            (playerNo >= 0) ? GwPlayer[playerNo].masuId : -1;
+@@ -6153,0 +6183,8 @@
++        if (mp6W01LeafTrace()) { /* leaf trace, DRAW side: the angle this frame's
++                                  * matrix was actually built from, plus the
++                                  * view-space transform the quad is drawn with. */
++            printf("[W01-LEAFDRAW] tick=%ld i=%2d angle=%9.4f scale=%.3f vpos=(%8.1f,%8.1f,%8.1f) r0=(%.3f,%.3f,%.3f) r1=(%.3f,%.3f,%.3f)\n",
++                   mp6_tick_count, (int)i, particle->angle, particle->scale,
++                   modelMtx[0][3], modelMtx[1][3], modelMtx[2][3],
++                   modelMtx[0][0], modelMtx[0][1], modelMtx[0][2],
++                   modelMtx[1][0], modelMtx[1][1], modelMtx[1][2]);
++        }
+@@ -6270,0 +6300,7 @@
++        if (mp6W01LeafTrace()) { /* leaf trace -- see mp6W01LeafTrace above */
++            printf("[W01-LEAF] tick=%ld i=%2d angle=%9.4f spd=%+9.5f pos=(%8.1f,%8.1f,%8.1f) vel=(%8.1f,%8.1f,%8.1f)\n",
++                   mp6_tick_count, (int)i, particle->angle, particle->angleSpeed,
++                   particle->pos.x, particle->pos.y, particle->pos.z,
++                   particle->vel.x, particle->vel.y, particle->vel.z);
++            fflush(stdout);
++        }

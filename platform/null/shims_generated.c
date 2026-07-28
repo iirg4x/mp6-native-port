@@ -338,11 +338,6 @@ __attribute__((weak)) void GXLoadNrmMtxImm(const void* mtx, u32 id)
     MP6_LOG_ONCE("GX", "GXLoadNrmMtxImm");
 }
 
-__attribute__((weak)) void GXLoadPosMtxImm(const void* mtx, u32 id)
-{
-    MP6_LOG_ONCE("GX", "GXLoadPosMtxImm");
-}
-
 __attribute__((weak)) void GXLoadTexMtxImm(const void* mtx, u32 id, GXTexMtxType type)
 {
     MP6_LOG_ONCE("GX", "GXLoadTexMtxImm");
@@ -1582,11 +1577,6 @@ __attribute__((weak)) s32 msmSeUpdataListener(Vec *pos, Vec *heading)
 {
     MP6_LOG_ONCE("MSM", "msmSeUpdataListener");
     return (s32)0;
-}
-
-__attribute__((weak)) void msmSysCheckInit(void)
-{
-    MP6_LOG_ONCE("MSM", "msmSysCheckInit");
 }
 
 __attribute__((weak)) s32 msmSysSetAux(s32 auxA, s32 auxB)

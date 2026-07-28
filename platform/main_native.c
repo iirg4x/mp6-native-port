@@ -39,7 +39,10 @@
  */
 #include "mp6_boot.h"
 #include "mp6_widescreen.h" /* mp6_widescreen_set_enabled */
+#include "mp6_aa_resolve.h"
 #include "host.h" /* mp6_host_crash_install, mp6_host_image_below_4gb */
+#include "mp6_path.h"
+#include "mp6_parse.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -123,9 +126,13 @@ int mp6_headless_main(int ticks)
 #ifndef __ANDROID__
 int main(int argc, char **argv)
 {
-    /* Same arg contract as always: argv[1], when a positive number, is the
-     * tick budget; anything else keeps the default (see mp6_headless_main). */
-    return mp6_headless_main(argc > 1 ? atoi(argv[1]) : 0);
+    int ticks = 0;
+    if (argc > 1 && !mp6_parse_i32_strict(argv[1], 1, INT_MAX, &ticks)) {
+        fprintf(stderr, "[BOOT] invalid headless tick budget '%s' (expected 1..%d)\n",
+                argv[1], INT_MAX);
+        return 2;
+    }
+    return mp6_headless_main(ticks);
 }
 #endif /* !__ANDROID__ -- the Android .so has no main; see mp6_headless_main */
 
@@ -171,12 +178,6 @@ extern int mp6_launcher_run_menu(void *sdlWindow);
 extern void mp6_launcher_apply_game_settings(void);
 extern int mp6_launcher_content_ready(void);
 
-/* Captured out of Aurora's own startup
- * log line (see mp6_boot.h's declaration comment for the full mechanism --
- * this is what mp6_aurora_queried_max_texture_dimension_2d() below reads
- * back). 0 = not seen yet. */
-static int g_mp6AuroraMaxTextureDimension2D = 0;
-
 /* Scans one already-received log message for Aurora's own
  * "maxTextureDimension2D: <N>" substring (lib/webgpu/gpu.cpp's
  * Log.info("Using limits: ...") -- {fmt}-style formatting, so N is always
@@ -197,13 +198,8 @@ static void mp6_aurora_scan_log_for_texture_limit(const char *message)
     hit += sizeof(needle) - 1;
     parsed = strtol(hit, &end, 10);
     if (end != hit && parsed > 0 && parsed <= 1000000L) {
-        g_mp6AuroraMaxTextureDimension2D = (int)parsed;
+        mp6_aurora_record_max_texture_dimension_2d((int)parsed);
     }
-}
-
-int mp6_aurora_queried_max_texture_dimension_2d(void)
-{
-    return g_mp6AuroraMaxTextureDimension2D;
 }
 
 static void mp6_aurora_log_callback(AuroraLogLevel level, const char *module, const char *message, unsigned int len)
@@ -268,8 +264,17 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
                 hasInputScript = 1;
                 i++; /* consume the spec argument too */
             } else {
-                int n = atoi(argv[i]);
-                if (n > 0) { mp6_max_ticks = n; hasNumericArg = 1; }
+                int n;
+                if (mp6_parse_i32_strict(argv[i], 1, INT_MAX, &n)) {
+                    mp6_max_ticks = n;
+                    hasNumericArg = 1;
+                } else if ((argv[i][0] >= '0' && argv[i][0] <= '9') ||
+                           ((argv[i][0] == '+' || argv[i][0] == '-') &&
+                            argv[i][1] >= '0' && argv[i][1] <= '9')) {
+                    fprintf(stderr, "[BOOT] invalid tick budget '%s' (expected 1..%d)\n",
+                            argv[i], INT_MAX);
+                    return 2;
+                }
             }
         }
         if (hasInputScript && !hasNumericArg) {
@@ -297,6 +302,7 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * would just be dead weight (or worse, a second, confusing address
      * range) if enabled here. */
     AuroraConfig config;
+    int bootFxaaOn = 0;
     memset(&config, 0, sizeof(config));
     /* Test-isolation protocol: the title includes this checkout's own
      * workspace directory name so a title-based window lookup from
@@ -318,8 +324,11 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     {
         const char *winSize = getenv("MP6_WINDOW_SIZE");
         if (winSize != NULL && winSize[0] != '\0') {
-            unsigned w = 0, h = 0;
-            if (sscanf(winSize, "%ux%u", &w, &h) == 2 && w > 0 && h > 0) {
+            const char *x = strchr(winSize, 'x');
+            uint32_t w = 0, h = 0;
+            if (x != NULL && x != winSize && x[1] != '\0' && strchr(x + 1, 'x') == NULL &&
+                mp6_parse_u32_span(winSize, (size_t)(x - winSize), 1, 16384, &w) &&
+                mp6_parse_u32_span(x + 1, strlen(x + 1), 1, 16384, &h)) {
                 config.windowWidth = w;
                 config.windowHeight = h;
                 printf("[BOOT] MP6_WINDOW_SIZE=%ux%u -- initial window size overridden\n", w, h);
@@ -348,40 +357,54 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
         const char *vs = getenv("MP6_VSYNC");
         config.vsync = (vs != NULL && vs[0] == '1') ? true : false;
     }
-    /* Anti-Aliasing (MSAA 4x / SSAA 1.5x-2x): aurora_initialize-time parameters
-     * like backend/vsync above -- aurora builds the multisampled targets/resolve/
-     * per-pipeline sampleCount and the scaled content framebuffer off these two
-     * values at that call, which is why the UI calls them restart-pending.
+    /* Resolve the unified Anti-Aliasing setting ONCE, before aurora starts.
+     * config.msaa, config.ssaa and the post-start FXAA switch are projections
+     * of this one decision -- never three independently-resolved settings.
      *
-     * ENV WINS, IN BOTH MODES. MP6_MSAA / MP6_SSAA are checked FIRST and beat the
-     * saved config, exactly like MP6_SHADOW_QUALITY, MP6_UNLOCKED_FPS and
-     * MP6_WIDESCREEN document themselves ("env lever set: it wins outright").
-     * They used to be read only OUTSIDE launcher mode, which made the launcher's
-     * Anti-Aliasing row grey itself out (settings.cpp isDisabled) for levers that
-     * were then ignored -- the control was locked for no reason. Tolerant parsing
-     * either way: only "4" turns MSAA on, only "1.5"/"2" set an SSAA factor;
-     * anything else (unset included) is off, matching the config parser's own
-     * tolerant clamp, so an unset lever leaves the byte-identical native path. */
+     * Any AA env lever being present overrides video.aa outright in both
+     * launcher and automation modes. If several levers request an enabled
+     * mode, precedence is explicit and stable:
+     *
+     *     MP6_MSAA=4  >  MP6_SSAA=1.5|2  >  MP6_FXAA=1
+     *
+     * Invalid/off values do not beat a lower-priority enabled request; if no
+     * env request is enabled, the effective mode is Off. This makes e.g.
+     * MP6_FXAA=0 a real unified-AA override instead of accidentally leaving a
+     * configured MSAA/SSAA mode active. SSAA remains desktop-only. */
     {
         const char *ms = getenv("MP6_MSAA");
-        if (ms != NULL) {
-            config.msaa = (strcmp(ms, "4") == 0) ? 4 : 1;
-        } else {
-            config.msaa = launcherMode ? (uint32_t)mp6_launcher_cfg_msaa() : 1;
-        }
-    }
-#ifndef __ANDROID__
-    /* SSAA is DESKTOP-ONLY: aurora ignores the field on __ANDROID__ too, but the
-     * port never even sends it there. */
-    {
         const char *ss = getenv("MP6_SSAA");
-        if (ss != NULL) {
-            config.ssaa = (strcmp(ss, "2") == 0) ? 2.0f : (strcmp(ss, "1.5") == 0) ? 1.5f : 1.0f;
-        } else {
-            config.ssaa = launcherMode ? mp6_launcher_cfg_ssaa() : 1.0f;
+        const char *fx = getenv("MP6_FXAA");
+        int cfgMsaa = 1;
+        float cfgSsaa = 1.0f;
+        int cfgFxaa = 0;
+        Mp6AaResolved aa;
+
+        if (launcherMode) {
+            cfgMsaa = mp6_launcher_cfg_msaa();
+#ifndef __ANDROID__
+            cfgSsaa = mp6_launcher_cfg_ssaa();
+#endif
+            cfgFxaa = mp6_launcher_cfg_post_aa();
+        }
+        aa = mp6_aa_resolve(ms, ss, fx, cfgMsaa, cfgSsaa, cfgFxaa,
+#ifndef __ANDROID__
+                            1
+#else
+                            0
+#endif
+                            );
+        config.msaa = aa.msaa;
+#ifndef __ANDROID__
+        config.ssaa = aa.ssaa;
+#endif
+        bootFxaaOn = aa.fxaa;
+        if (aa.env_override) {
+            printf("[BOOT] AA env override (MP6_MSAA > MP6_SSAA > MP6_FXAA): %s\n",
+                   aa.label);
+            fflush(stdout);
         }
     }
-#endif
 #ifdef __ANDROID__
     /* A4: launcher resources ("res/rml/...", "res/fonts/...") ship as APK
      * assets and load through aurora's SDL_IOFromFile-backed RmlUi file
@@ -408,52 +431,19 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     printf("[BOOT] calling aurora_initialize() before GameMain() reaches the game's GXInit\n");
     fflush(stdout);
     AuroraInfo info = aurora_initialize(argc, argv, &config);
-    /* Anti-Aliasing (FXAA): a live post-process, applied here right after aurora
-     * is up rather than through AuroraConfig (unlike msaa) -- so it is NOT
-     * restart-pending. MP6_FXAA is checked FIRST and wins in BOTH modes, same
-     * "env wins outright" contract as MP6_MSAA/MP6_SSAA above; tolerant, only
-     * "1" turns it on. Off is a no-op -- the shader's post_aa_mode stays 0, the
-     * present path byte-identical.
-     *
-     * The resolved trio is then reported to the launcher: it is the only place
-     * that knows what aurora ACTUALLY got (config after env override), and the
-     * settings row needs it to keep the modes mutually exclusive at runtime --
-     * see mp6_launcher_aa_apply_live() (launcher_core.cpp). */
+    /* Apply the single AA decision's live post-process projection after Aurora
+     * starts. The init-time projections above are guaranteed to be native when
+     * bootFxaaOn is true, so FXAA can never stack with MSAA or SSAA. Report the
+     * effective trio to the launcher for its live/restart-pending bookkeeping. */
     {
-        const char *fx = getenv("MP6_FXAA");
-        int fxaaOn;
-        if (fx != NULL) {
-            fxaaOn = (fx[0] == '1') ? 1 : 0;
-        } else {
-            fxaaOn = launcherMode ? mp6_launcher_cfg_post_aa() : 0;
-        }
-        /* Mutually exclusive at boot too: an init-time mechanism (MSAA/SSAA)
-         * already owns this session's image, so FXAA on top would double-AA. */
-        if (fxaaOn && (config.msaa > 1
-#ifndef __ANDROID__
-                       || config.ssaa > 1.0f
-#endif
-                       )) {
-            printf("[BOOT] AA: FXAA suppressed -- this session initialized with "
-                   "MSAA %ux / SSAA %.2fx (one AA mechanism at a time)\n",
-                   (unsigned)config.msaa,
-#ifndef __ANDROID__
-                   (double)config.ssaa
-#else
-                   1.0
-#endif
-            );
-            fflush(stdout);
-            fxaaOn = 0;
-        }
-        aurora_set_post_aa(fxaaOn ? AURORA_POST_AA_FXAA : AURORA_POST_AA_NONE);
+        aurora_set_post_aa(bootFxaaOn ? AURORA_POST_AA_FXAA : AURORA_POST_AA_NONE);
         mp6_launcher_note_session_aa((int)config.msaa,
 #ifndef __ANDROID__
                                      config.ssaa,
 #else
                                      1.0f,
 #endif
-                                     fxaaOn);
+                                     bootFxaaOn);
     }
     /* Normal-window placement + the WINDOW half of the fixed-aspect policy
      * (bordered windowed window, interactive resizes constrained to 4:3).
@@ -587,22 +577,22 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
 
 extern const char *SDL_GetAndroidExternalStoragePath(void);
 extern const char *SDL_GetAndroidInternalStoragePath(void);
+extern int mp6_import_recover_disc_root(const char *destDiscRoot);
+extern int mp6_dvd_validate_disc_root(const char *discRoot, char *err, size_t errn);
 
 static int mp6_android_has_fst(const char *base)
 {
-    char probe[1024];
-    FILE *f;
-    snprintf(probe, sizeof(probe), "%s/GP6E01/sys/fst.bin", base);
-    f = fopen(probe, "rb");
-    if (!f) return 0;
-    fclose(f);
-    return 1;
+    char root[1200];
+    char err[256];
+    if (mp6_path_join_checked(root, sizeof(root), base, "GP6E01") != 0) return 0;
+    mp6_import_recover_disc_root(root);
+    return mp6_dvd_validate_disc_root(root, err, sizeof(err));
 }
 
 int mp6_android_main(int argc, char **argv)
 {
     static char *fwdArgv[33];
-    static char baseDir[1024];
+    static char baseDir[1200];
     int fwdArgc = 0;
     int i;
 
@@ -638,19 +628,21 @@ int mp6_android_main(int argc, char **argv)
     {
         const char *ext = SDL_GetAndroidExternalStoragePath();
         const char *inl = SDL_GetAndroidInternalStoragePath();
-        char extBase[512] = {0};
-        char inlBase[512] = {0};
-        if (ext && ext[0]) snprintf(extBase, sizeof(extBase), "%s/mp6", ext);
-        if (inl && inl[0]) snprintf(inlBase, sizeof(inlBase), "%s/mp6", inl);
-        if (extBase[0] && mp6_android_has_fst(extBase)) {
-            snprintf(baseDir, sizeof(baseDir), "%s", extBase);
+        char extBase[1200] = {0};
+        char inlBase[1200] = {0};
+        int extOk = ext && ext[0] &&
+                    mp6_path_join_checked(extBase, sizeof(extBase), ext, "mp6") == 0;
+        int inlOk = inl && inl[0] &&
+                    mp6_path_join_checked(inlBase, sizeof(inlBase), inl, "mp6") == 0;
+        if (extOk && mp6_android_has_fst(extBase)) {
+            mp6_path_copy_checked(baseDir, sizeof(baseDir), extBase);
             printf("[BOOT] android base dir: %s (external, fst.bin present)\n", baseDir);
-        } else if (inlBase[0] && mp6_android_has_fst(inlBase)) {
-            snprintf(baseDir, sizeof(baseDir), "%s", inlBase);
+        } else if (inlOk && mp6_android_has_fst(inlBase)) {
+            mp6_path_copy_checked(baseDir, sizeof(baseDir), inlBase);
             printf("[BOOT] android base dir: %s (internal, fst.bin present)\n", baseDir);
         } else {
-            snprintf(baseDir, sizeof(baseDir), "%s",
-                     extBase[0] ? extBase : (inlBase[0] ? inlBase : "/sdcard/mp6"));
+            mp6_path_copy_checked(baseDir, sizeof(baseDir),
+                                  extOk ? extBase : (inlOk ? inlBase : "/sdcard/mp6"));
             printf("[BOOT] android base dir: %s (fst.bin NOT found -- push the disc tree "
                    "here; expect the [DVD] missing-FST degradation)\n", baseDir);
         }

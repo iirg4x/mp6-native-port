@@ -29,10 +29,11 @@
  * a plain filesystem "disc root" directory that will directly contain
  * sys/ and files/.
  *
- * Torn-import safety: sys/fst.bin -- the single load-bearing probe file
- * for every content check in the port (launcher validate_root,
- * mp6_dvd_probe_root, mp6_android_has_fst) -- is written LAST, so an
- * interrupted import never presents as bootable content.
+ * Torn-import safety: imports are written into a sibling `.incoming` tree,
+ * fully validated (boot ID, FST structure, mandatory files), marked complete,
+ * and directory-swapped into place while the prior root is held as
+ * `.previous`. Startup recovery repairs either rename interruption window;
+ * a partial tree is never selected as bootable content.
  */
 #ifndef MP6_CONTENT_IMPORT_H
 #define MP6_CONTENT_IMPORT_H
@@ -81,9 +82,13 @@ void mp6_import_poll(Mp6ImportStatus *out);
  * transitions to MP6_IMPORT_CANCELLED. */
 void mp6_import_cancel(void);
 
-/* Reaps the worker thread and resets state to MP6_IMPORT_IDLE. Only valid
- * once state is DONE/FAILED/CANCELLED. */
+/* Cancels if necessary, reaps the worker thread, and resets state to IDLE.
+ * Safe during UI/process teardown. */
 void mp6_import_reset(void);
+
+/* Repairs an interrupted transactional directory publish for this root.
+ * Returns nonzero when a usable destination root exists afterward. */
+int mp6_import_recover_disc_root(const char *destDiscRoot);
 
 #ifdef __cplusplus
 }

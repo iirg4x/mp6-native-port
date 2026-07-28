@@ -21,12 +21,13 @@
 +                            cluster = &hsf->cluster[track->cluster];
 +                            cluster->index = GetClusterCurve(track, t);
 +                        }
-@@ -170,2 +186,6 @@
+@@ -170,2 +186,7 @@
 -                        cluster = &hsf->cluster[weightTrack->cluster];
 -                        cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, t);
 +                        /* Same guard as HSF_TRACK_CLUSTER immediately
 +                         * above. */
-+                        if (weightTrack->cluster >= 0 && weightTrack->cluster < hsf->clusterNum) {
++                        if (weightTrack->cluster >= 0 && weightTrack->cluster < hsf->clusterNum
++                                && weightTrack->clusterWeight >= 0 && weightTrack->clusterWeight < 32) {
 +                            cluster = &hsf->cluster[weightTrack->cluster];
 +                            cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, t);
 +                        }

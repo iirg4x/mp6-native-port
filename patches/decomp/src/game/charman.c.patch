@@ -1,6 +1,6 @@
 --- a/src/game/charman.c
 +++ b/src/game/charman.c
-@@ -102 +102,24 @@
+@@ -102 +102,21 @@
 -static u16 dustFlags[CHAR_NPC_MAX];
 +/* Real, unpatched original decomp bug (not a decompilation error --
 + * charman.c is independently confirmed byte-identical against the real
@@ -23,3 +23,113 @@
 + * target), just gives this one loop the storage it was already assuming
 + * it had. */
 +static u16 dustFlags[CHAR_NPC_NO_BASE];
+@@ -543,2 +563,2 @@
+-static inline s16 EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param);
+-static s16 EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param);
++static inline void EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param);
++static void EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param);
+@@ -1127,0 +1148,14 @@
++/* Host-UB fix, and only that -- no behaviour change. This is declared s16
++ * (game/charman.h), but every path fell off the end of it without ever
++ * executing a return. On the real hardware's PowerPC ABI that "worked" by
++ * accident: the tail call it makes leaves its own result sitting in r3,
++ * which is exactly where this function's caller then reads the return
++ * value from, so the handle came back for free. Falling off the end of a
++ * value-returning function is undefined the moment any caller reads the
++ * result, though, and this port's host compilers are free to leave the
++ * return register holding something else entirely. Every path already
++ * computes the handle it was accidentally returning -- returning it
++ * explicitly, and -1 for the muted (voiceFlag & 0x1) early-out that plays
++ * no sound at all and had nothing to hand back, is observably identical
++ * while being defined. Every call site in the game discards the result,
++ * so no caller can tell the difference either way. */
+@@ -1134 +1168 @@
+-            CharFXPlayPos(charNo, seNo, &modelP->pos);
++            return CharFXPlayPos(charNo, seNo, &modelP->pos);
+@@ -1136,5 +1170,11 @@
+-            CharFXPlayVolPan(charNo, seNo, workP->vol, workP->pan);
+-        }
+-    }
+-}
+-
++            return CharFXPlayVolPan(charNo, seNo, workP->vol, workP->pan);
++        }
++    }
++    return -1;
++}
++
++/* Same shape one function down: the local it returned was declared and
++ * returned but never assigned, so this handed back an uninitialised
++ * value (on PowerPC, in practice, whatever the call on the line above had
++ * just left in r3 -- i.e. the handle it meant all along). It now returns
++ * that handle explicitly instead. All call sites discard it. */
+@@ -1145 +1184,0 @@
+-    s16 ret;
+@@ -1156,2 +1195 @@
+-    _CharFXPlay(charNo, seNo, voiceFlag);
+-    return ret;
++    return _CharFXPlay(charNo, seNo, voiceFlag);
+@@ -1326 +1364,14 @@
+-static inline s16 EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param)
++/* The two file-local, side-effect-only members of this file's Effect*Create
++ * family. Unlike EffectDustCreate / EffectHitCreate / EffectSmokeCreate
++ * above -- each of which forwards the single id EffectCreate produced --
++ * these two run a per-camera loop and have no single id to hand back: the
++ * decompiled source types them s16, yet every path (including the bare
++ * early return taken when EffectCreate reports -1) falls off the end
++ * without a value, which is undefined behaviour on the host the moment a
++ * caller reads it. Both are static to this file and all four call sites in
++ * it -- UpdateCharAnim's two warn cases and its bird case, plus
++ * CharEffectWarnCreate at the bottom of the file -- discard the result, so
++ * typing them as what they actually are removes the undefined behaviour
++ * without touching a single caller. The bare early return inside keeps its
++ * original meaning exactly: give up on the remaining cameras. */
++static inline void EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param)
+@@ -1363 +1414 @@
+-static s16 EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param)
++static void EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param)
+@@ -2531,0 +2583,12 @@
++/* Declared s32 in game/charman.h, but the child-process-creation failure
++ * path was a bare valueless return and the success path fell off the end
++ * of the function entirely -- so the forwarding wrapper right below it
++ * (CharNpcDustVoiceOffSet) was passing an undefined value straight out to
++ * its own caller. The value this was always meant to report is the child
++ * process it just created, 0 when it could not be created, so that is what
++ * it reports now; the success path's own work is untouched. The added
++ * allocation guard is not a behaviour change either: without it a failed
++ * HuMemDirectMallocNum walks directly into the next line's field store and
++ * dereferences NULL, so the guard can only fire where the original already
++ * crashed -- and it reaps the orphaned child process the original would
++ * have leaked on the way down. */
+@@ -2537 +2600 @@
+-        return;
++        return 0;
+@@ -2539,0 +2603,4 @@
++        if(!work) {
++            HuPrcKill(process);
++            return 0;
++        }
+@@ -2546,0 +2614 @@
++    return (s32)(uintptr_t)process;
+@@ -2551,3 +2619 @@
+-    s32 ret;
+-    CharNpcDustSet(modelId, motId, type, CHAR_NPC_NONE);
+-    return ret;
++    return CharNpcDustSet(modelId, motId, type, CHAR_NPC_NONE);
+@@ -2737,0 +2804,7 @@
++/* Third instance of the same shape in this file: the local it returns on
++ * one path is declared and returned but never assigned, and the muted
++ * early-out at the top was a bare valueless return. Both now hand back the
++ * value that path already had -- the helper call's own handle, and the -1
++ * that this function's other muted early-out (in the 0x8000 branch below)
++ * already returns for exactly the same condition. Every call site in the
++ * file discards the result. */
+@@ -2742 +2814,0 @@
+-    s16 ret;
+@@ -2744 +2816 @@
+-        return;
++        return -1;
+@@ -2759,2 +2831 @@
+-            _CharFXPlay(charNo, seId, voiceFlag);
+-            return ret;
++            return _CharFXPlay(charNo, seId, voiceFlag);

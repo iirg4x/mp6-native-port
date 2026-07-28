@@ -60,9 +60,10 @@
  * Those TUs put their statics in a dedicated section (MP6_HOST_STATE_
  * SECTION) via a force-included pragma header, so the carve-out is a
  * SECTION NAME rather than a hand-maintained list of variables that would
- * silently rot as the code changes. Audio is instead re-synced from
- * restored game state (stop everything, replay what the game says should
- * be playing), which costs a brief audible seam at the cue point.
+ * silently rot as the code changes. Audio is instead rebuilt from a bounded
+ * mixer shadow: callback output is gated silent while streams/groups/SFX are
+ * decoded, then every captured slot, handle, position, volume, and fade is
+ * published before the callback resumes.
  */
 #ifndef MP6_SAVESTATE_H
 #define MP6_SAVESTATE_H
@@ -85,7 +86,7 @@ extern "C" {
 
 /* Bump on ANY layout change to the on-disk format below. The loader
  * refuses a mismatch rather than guessing. */
-#define MP6_SAVESTATE_VERSION 3u
+#define MP6_SAVESTATE_VERSION 6u
 
 #define MP6_SAVESTATE_MAGIC   0x36505336u /* "6PS6" */
 
@@ -161,6 +162,44 @@ void mp6_dvd_savestate_rehydrate(void);
  * just installed the capturing process's pointer over it). */
 void mp6_aram_savestate_rehydrate(void *liveBuf);
 
+/* The emulated RTC is wall-clock-at-process-start plus a host monotonic
+ * delta. A captured base cannot be reused after a reboot because the host
+ * monotonic epoch resets. Store the logical tick value in the file and
+ * rebuild the base against THIS boot's monotonic counter after restore. */
+int64_t mp6_os_time_savestate_capture(void);
+/* Compute the restoring process's RTC base before the memory commit.  The
+ * checked subtraction can reject a corrupt logical tick value without ever
+ * invoking signed overflow.  Apply the already-proven base after commit so
+ * the live-memory phase has no fallible arithmetic left to perform. */
+int mp6_os_time_savestate_rebase(int64_t logicalTicks, int64_t *rtcBaseOut);
+void mp6_os_time_savestate_apply_rebase(int64_t rtcBaseTicks);
+
+/* Windowed host-input collectors live in the host-state carve-out, then
+ * explicitly discard any deltas/fingers sampled before a restore.  The touch
+ * hook exists only in the Android windowed build; savestate.c guards the call
+ * with the same platform condition. */
+void mp6_freecam_input_savestate_reset(void);
+void mp6_touch_pad_savestate_reset(void);
+void mp6_aurora_input_reset_transients(void);
+
+/* Current-invocation environment-derived state must survive the image memcpy:
+ * loading a capture from a process with different automation/diagnostic env
+ * settings must not import that process's parsed caches. */
+#define MP6_SS_AUTO_START_MAX 32
+typedef struct Mp6SsShimHostConfig {
+    int autoStartTicks[MP6_SS_AUTO_START_MAX];
+    int autoStartCount;
+} Mp6SsShimHostConfig;
+typedef struct Mp6SsAllocDiagHostConfig {
+    long censusStartTick;
+    int censusParsed;
+    int censusCallsLogged;
+} Mp6SsAllocDiagHostConfig;
+void mp6_shims_savestate_capture_host_config(Mp6SsShimHostConfig *out);
+void mp6_shims_savestate_apply_host_config(const Mp6SsShimHostConfig *in);
+void mp6_malloc_savestate_capture_host_config(Mp6SsAllocDiagHostConfig *out);
+void mp6_malloc_savestate_apply_host_config(const Mp6SsAllocDiagHostConfig *in);
+
 /* C4 (review): the widescreen registries' host-heap "native geometry"
  * snapshots are GAME state that must travel in the file -- the restored
  * arena holds already-EXTRUDED vertices, so a post-restore re-snapshot
@@ -175,6 +214,9 @@ void mp6_aram_savestate_rehydrate(void *liveBuf);
 size_t mp6_widescreen_savestate_blob_size(void);
 void mp6_widescreen_savestate_blob_write(void *buf);
 void mp6_widescreen_savestate_prerestore(void);
+/* Side-effect-free structural preflight: exact consumption, bounded registry
+ * IDs/slots/count, and no duplicate entries. */
+int mp6_widescreen_savestate_validate_natives(const void *blob, size_t blobSize);
 void mp6_widescreen_savestate_apply_natives(const void *blob, size_t blobSize);
 
 /* ------------------------------------------------------------------
@@ -201,6 +243,7 @@ void mp6_widescreen_savestate_apply_natives(const void *blob, size_t blobSize);
  * has no address of its own to restore to. */
 #define MP6_SS_AUDIO_MAX_CHAN   8
 #define MP6_SS_AUDIO_MAX_GROUPS 16
+#define MP6_SS_AUDIO_MAX_VOICES 16
 
 typedef struct {
     int32_t  active;
@@ -217,21 +260,51 @@ typedef struct {
 } Mp6SsAudioChan;
 
 typedef struct {
+    int32_t  active;
+    int32_t  paused;
+    int32_t  seId;      /* replay identity in the immutable MSM_SE table */
+    int32_t  groupIdx;  /* owning grpInfo index; must still be resident */
+    int32_t  seNo;      /* exact game-visible handle */
+    uint64_t posFrac;   /* Q16.16 position in the decoded mono sample */
+    int32_t  vol;
+    int32_t  pan;
+    float    fadeMul;
+    float    fadeStep;
+    int32_t  fadeAction;
+} Mp6SsAudioVoice;
+
+typedef struct {
     int32_t        chanCount;
     Mp6SsAudioChan chan[MP6_SS_AUDIO_MAX_CHAN];
     int32_t        groupCount;
-    int32_t        groupIdx[MP6_SS_AUDIO_MAX_GROUPS]; /* grpInfo indices of the loaded NON-base groups */
+    /* Loaded groups beyond the immutable init-time base set. Positive values
+     * are ordinary dynamic groups; negative values preserve dynamically-added
+     * base groups (msmSysLoadGroupBase) across restore. */
+    int32_t        groupIdx[MP6_SS_AUDIO_MAX_GROUPS];
     int32_t        seNoCounter;
     int32_t        masterVol;
     int32_t        seMasterVol;
+    /* Fixed runtime voice slots, including holes.  Slot identity determines
+     * mixer order and future first-free allocation, so compacting this list
+     * would not be an exact restore. */
+    Mp6SsAudioVoice voice[MP6_SS_AUDIO_MAX_VOICES];
 } Mp6SsAudioShadow;
 
-/* Snapshot the mixer into `out` (safe/zeroing if audio never initialized). */
-void mp6_msm_savestate_capture(Mp6SsAudioShadow *out);
+/* Snapshot the mixer into `out` (safe/zeroing if audio never initialized).
+ * Returns 0 on success. A negative result means the fixed shadow cannot
+ * represent the live mixer exactly, so the outer capture must fail closed
+ * instead of publishing a knowingly incomplete state. */
+int mp6_msm_savestate_capture(Mp6SsAudioShadow *out);
+
+/* Side-effect-free precommit validation against the live parsed .pdt/.msm
+ * directories.  Rejects corrupt IDs, group encodings, handle/counter state,
+ * volumes, and non-finite or incoherent fade envelopes before any restored
+ * bytes are written to live memory. */
+int mp6_msm_savestate_validate(const Mp6SsAudioShadow *in);
 
 /* Re-establish the captured mixer state: stop everything, reload the SE
- * groups, replay the streams at their captured positions, and bias the SE
- * handle counter past anything restored game state might still hold. */
+ * groups, replay streams and SFX at their captured positions/slots/handles,
+ * and restore the exact next SE handle counter. */
 void mp6_msm_savestate_apply(const Mp6SsAudioShadow *in);
 
 /* Per-tick hook, called from the frame boundary in BOTH build modes.
@@ -260,10 +333,14 @@ void mp6_savestate_request_load_path(const char *path);
  * slots live NEXT TO it): "mp6_savestate.mp6state" ->
  * "mp6_savestate_slot<N>.mp6state" (the ".mp6state" suffix is re-appended
  * if present, else "_slot<N>" is appended). Honors MP6_SAVESTATE_PATH. */
-void mp6_savestate_slot_file(int slot, char *buf, size_t n);
+/* Returns 0 only when the complete derived path fit; on failure writes an
+ * empty string when possible and never returns a truncated path. */
+int mp6_savestate_slot_file(int slot, char *buf, size_t n);
 
-/* Cheap header-only compatibility probe for a slot file (no decompress, no
- * layout walk): MP6_SAVESTATE_OK = readable and captured by THIS build;
+/* Cheap compatibility/integrity probe (no decompress, no live-layout walk):
+ * reads the header/table and CRC-protected widescreen tail.
+ * MP6_SAVESTATE_OK = readable, metadata/tail intact, and captured by THIS build;
+ * compressed region-payload integrity is checked only by an actual load.
  * ERR_IO = no/unreadable file; ERR_FORMAT = not a savestate / other
  * version; ERR_BINARY_MISMATCH = a different build's state (the UI shows
  * "incompatible (other build)" instead of a raw console error). */

@@ -1,0 +1,265 @@
+Cut the per-EFB-copy multisample cost on tile-based GPUs.
+
+WHAT COSTS WHAT. set_efb_targets() hangs a resolveTarget off every EFB render
+pass and every GXCopyTex splits the pass (resolve_pass_into), so under MSAA a
+copy carries two distinct costs. Measured, at file select, MSAA 4x, 1280x960:
+
+  A) the full-attachment multisample resolve -- writes ONE 1x-sized texture
+     (W*H*4 B) and, on a tiler, runs inside tile memory. 3.75 MiB/copy here.
+  B) the pass break itself -- colorStoreOp/depthStoreOp both default to Store,
+     so the MULTISAMPLED color AND depth attachments (W*H*samples*4 B each) are
+     flushed to main memory, and the continuation pass's loadOp: Load drags
+     them back in. 37.5 MiB stored + 37.5 MiB loaded per break at 4x.
+
+(B) is an order of magnitude larger than (A) and is the term MSAA multiplies by
+the sample count; (A) is sample-count-independent. (B) dominates, and on a
+tile-based mobile GPU it is the frame. Per-frame aurora counters at file select
+before this patch: passes=6 efbCopies=5 msaaResolves=6, msStore=225.00 MiB
+msLoad=168.75 MiB -- 393.75 MiB/frame of multisampled attachment traffic, vs
+112.50 MiB on a plain 2-pass screen.
+
+The canonical mobile fix -- storeOp: Discard on the multisampled attachment --
+is NOT generally legal here: rendering RESUMES into the same EFB after a copy,
+so the samples are usually still needed. Two narrower cases are legal:
+
+(1) BACK-TO-BACK COPIES. MP6's file select copies four 320x168 quadrants of one
+    finished EFB image with no draw between them (framescope: four CopyTex at
+    the same draw index). Each gets its own pass, and three of them are EMPTY --
+    no draws, no clears. An empty pass's resolve output is byte-identical to the
+    previous pass's, which already landed in the very same resolve target, so
+    its whole BeginRenderPass/End is dead work that only buys a store+reload of
+    both multisampled attachments. Skip it and encode the copy alone against the
+    still-current resolve target. Tracked by two new RenderPass flags:
+    msResolveCurrent (set ONLY on the continuation pass resolve_pass_into
+    creates, whose predecessor always carries a resolveTarget and therefore
+    always resolves) and skipRenderPass. Any other pass-creating path
+    (begin_frame, begin_color_pass, begin/end_offscreen, resume_efb_pass_loading)
+    leaves msResolveCurrent false, so the skip cannot escape a run of
+    consecutive GXCopyTex calls on an otherwise untouched EFB.
+
+(2) THE CONTINUATION CLEARS. GXCopyTex(dest, GX_TRUE) gives the next pass
+    loadOp: Clear, so the samples this pass would store are overwritten before
+    anything reads them -- Discard them. WebGPU writes resolveTarget
+    independently of storeOp, so the copy is unaffected. Excluded when the pass
+    also feeds captureDepthSnapshot / a resolve_pass depth snapshot.
+
+Both are gated on msaaSamples > 1: with MSAA off nothing in this file behaves
+differently (verified -- identical per-frame counters with the change compiled
+in and compiled out).
+
+Verified: same counters after -- passes=6 skipped=3 efbCopies=5 msaaResolves=3,
+msStore=93.75 MiB msLoad=56.25 MiB, i.e. 393.75 -> 150.00 MiB/frame (-61.9%) and
+6 -> 3 resolves, with the 5 EFB copies all still issued. Plain screens are
+untouched (2 passes, 0 skipped, identical bytes). Shadow-map dumps at file
+select under MSAA 4x are unchanged within run-to-run noise (mean silhouette
+coverage 12.84% before, 12.84% after, 12.85% for a same-setting control run;
+before-vs-after pixel delta ~55k px over 27 dumps vs ~54k px for the control).
+
+This is a BANDWIDTH win. It cannot be observed on a desktop discrete GPU, which
+is CPU-bound on this workload, and no desktop framerate improvement is claimed.
+
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -253,6 +253,16 @@
+   bool discardable = false;
+   bool captureDepthSnapshot = false;
+   bool sealed = false;
++  // [MP6] aurora-patches/0020. msResolveCurrent: at the START of this pass the
++  // MSAA resolve target already holds resolve(colorView) -- true only for the
++  // continuation pass resolve_pass_into() creates, because the pass it just
++  // sealed carries a resolveTarget and therefore always resolves.
++  // skipRenderPass: this pass mutates nothing, so its BeginRenderPass/End pair
++  // (and with it the store+reload of the sample-count-sized color+depth
++  // attachment, plus a redundant full-attachment resolve) is pure cost; only
++  // the trailing copy is encoded. See resolve_pass_into().
++  bool msResolveCurrent = false;
++  bool skipRenderPass = false;
+   std::vector<tex_palette_conv::ConvRequest> paletteConvs;
+ 
+   // Something copies this pass's output after it ends: a GX resolve or resolve_pass snapshots.
+@@ -854,10 +864,57 @@
+       static_cast<float>(rect.height) / srcH,
+   };
+   prevPass.resolveUniformRange = push_uniform(uvTransform);
+-  enqueue_pass(current_frame_packet(), g_recordingFrameSlot, g_currentRenderPass);
+ 
+   // Populate new render pass from previous
+   const auto msaaSamples = prevPass.msaaSamples;
++  const bool nextClearsColor = clearColor && clearAlpha;
++  const bool nextClearsDepth = clearDepth;
++
++  // [MP6] aurora-patches/0020 -- cut the per-copy multisample cost on tilers.
++  //
++  // Every GXCopyTex splits the EFB pass here, and the EFB attachments are
++  // sample-count-sized (color 4x + depth 4x at MSAA 4x). The split's real cost
++  // is NOT the resolve (that runs on-tile and writes one 1x-sized texture); it
++  // is that colorStoreOp/depthStoreOp default to Store, so the pass break
++  // flushes both multisampled attachments to main memory, and the continuation
++  // pass's loadOp: Load drags them straight back in. That is 8x the bytes of a
++  // non-MSAA break, per break, and on a tile-based mobile GPU it is the frame.
++  //
++  // Two cases can be paid less:
++  //
++  // (1) Back-to-back copies. A screen that copies several sub-rects of one
++  //     finished EFB image (MP6's file select copies four 320x168 quadrants
++  //     with no draw between them) gets one pass per copy, and all but the
++  //     first are EMPTY: no draws, no clears. An empty pass's resolve output is
++  //     byte-identical to the previous pass's, which already landed in the very
++  //     same resolve target (set_efb_targets hangs it off every EFB pass), so
++  //     the whole render pass is dead work. Skip it: the copy alone is encoded,
++  //     reading the still-current resolve target. 4 copies then cost 1 pass
++  //     break instead of 4.
++  //
++  // (2) The continuation clears. GXCopyTex(dest, GX_TRUE) makes the next pass
++  //     start with loadOp: Clear, so the samples this pass would store are
++  //     overwritten before anything reads them. StoreOp::Discard lets the
++  //     driver keep them in tile memory and never write them out; WebGPU still
++  //     writes resolveTarget (the resolve is specified independently of
++  //     storeOp), so the copy is unaffected.
++  //
++  // Both are gated on msaaSamples > 1: the non-multisampled path is untouched.
++  if (msaaSamples > 1) {
++    if (prevPass.msResolveCurrent && !prevPass.hasDraws && !prevPass.clearColor && !prevPass.clearDepth &&
++        !prevPass.captureDepthSnapshot && !prevPass.snapshotColorDst && !prevPass.snapshotDepthDst) {
++      prevPass.skipRenderPass = true;
++    } else {
++      if (nextClearsColor) {
++        prevPass.colorStoreOp = wgpu::StoreOp::Discard;
++      }
++      if (nextClearsDepth && !prevPass.captureDepthSnapshot && !prevPass.snapshotDepthDst) {
++        prevPass.depthStoreOp = wgpu::StoreOp::Discard;
++      }
++    }
++  }
++  enqueue_pass(current_frame_packet(), g_recordingFrameSlot, g_currentRenderPass);
++
+   RenderPass newPass{
+       .label = pass_label("EFB"),
+       .colorView = prevPass.colorView,
+@@ -870,11 +927,17 @@
+       .msaaSamples = msaaSamples,
+       .clearColorValue = clearColorValue,
+       .clearDepthValue = clearDepthValue,
+-      .clearColor = clearColor && clearAlpha,
+-      .clearDepth = clearDepth,
++      .clearColor = nextClearsColor,
++      .clearDepth = nextClearsDepth,
+       .hasDepth = prevPass.hasDepth,
+       .hasStencil = prevPass.hasStencil,
+   };
++  // [MP6] prevPass carries a resolveTarget, so by the time this pass begins the
++  // resolve target holds resolve(colorView) -- whether prevPass resolved for
++  // real or was itself skipped because the value was already there. This is the
++  // ONLY place the flag is set, which is what keeps the skip above confined to
++  // consecutive GXCopyTex calls on an otherwise untouched EFB.
++  newPass.msResolveCurrent = msaaSamples > 1;
+   newPass.commands.reserve(2048);
+   current_render_passes().emplace_back(std::move(newPass));
+   ++g_currentRenderPass;
+@@ -1882,53 +1945,60 @@
+     return;
+   }
+ 
+-  const std::array attachments{
+-      wgpu::RenderPassColorAttachment{
+-          .view = passInfo.colorView,
+-          .resolveTarget = passInfo.resolveView,
+-          .loadOp = passInfo.colorLoadOp != wgpu::LoadOp::Undefined
+-                        ? passInfo.colorLoadOp
+-                        : (passInfo.clearColor ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load),
+-          .storeOp = passInfo.colorStoreOp,
+-          .clearValue =
+-              {
+-                  .r = passInfo.clearColorValue.x(),
+-                  .g = passInfo.clearColorValue.y(),
+-                  .b = passInfo.clearColorValue.z(),
+-                  .a = passInfo.clearColorValue.w(),
+-              },
+-      },
+-  };
+-  wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{};
+-  const wgpu::RenderPassDepthStencilAttachment* depthStencilAttachmentPtr = nullptr;
+-  if (passInfo.depthStencilView) {
+-    depthStencilAttachment = {
+-        .view = passInfo.depthStencilView,
+-        .depthLoadOp = passInfo.hasDepth ? (passInfo.depthLoadOp != wgpu::LoadOp::Undefined
+-                                                ? passInfo.depthLoadOp
+-                                                : (passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load))
+-                                         : wgpu::LoadOp::Undefined,
+-        .depthStoreOp = passInfo.hasDepth ? passInfo.depthStoreOp : wgpu::StoreOp::Undefined,
+-        .depthClearValue = passInfo.clearDepthValue,
+-        .stencilLoadOp = passInfo.hasStencil ? passInfo.stencilLoadOp : wgpu::LoadOp::Undefined,
+-        .stencilStoreOp = passInfo.hasStencil ? passInfo.stencilStoreOp : wgpu::StoreOp::Undefined,
+-        .stencilClearValue = passInfo.stencilClearValue,
++  // [MP6] aurora-patches/0020: an empty back-to-back-copy segment contributes
++  // nothing to the EFB and its resolve target is already current, so encoding
++  // the render pass would only cost a store + reload of the multisampled
++  // color+depth attachment and a redundant resolve. Fall straight through to
++  // the copy. Never set when msaaSamples == 1.
++  if (!passInfo.skipRenderPass) {
++    const std::array attachments{
++        wgpu::RenderPassColorAttachment{
++            .view = passInfo.colorView,
++            .resolveTarget = passInfo.resolveView,
++            .loadOp = passInfo.colorLoadOp != wgpu::LoadOp::Undefined
++                          ? passInfo.colorLoadOp
++                          : (passInfo.clearColor ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load),
++            .storeOp = passInfo.colorStoreOp,
++            .clearValue =
++                {
++                    .r = passInfo.clearColorValue.x(),
++                    .g = passInfo.clearColorValue.y(),
++                    .b = passInfo.clearColorValue.z(),
++                    .a = passInfo.clearColorValue.w(),
++                },
++        },
++    };
++    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{};
++    const wgpu::RenderPassDepthStencilAttachment* depthStencilAttachmentPtr = nullptr;
++    if (passInfo.depthStencilView) {
++      depthStencilAttachment = {
++          .view = passInfo.depthStencilView,
++          .depthLoadOp = passInfo.hasDepth ? (passInfo.depthLoadOp != wgpu::LoadOp::Undefined
++                                                  ? passInfo.depthLoadOp
++                                                  : (passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load))
++                                           : wgpu::LoadOp::Undefined,
++          .depthStoreOp = passInfo.hasDepth ? passInfo.depthStoreOp : wgpu::StoreOp::Undefined,
++          .depthClearValue = passInfo.clearDepthValue,
++          .stencilLoadOp = passInfo.hasStencil ? passInfo.stencilLoadOp : wgpu::LoadOp::Undefined,
++          .stencilStoreOp = passInfo.hasStencil ? passInfo.stencilStoreOp : wgpu::StoreOp::Undefined,
++          .stencilClearValue = passInfo.stencilClearValue,
++      };
++      depthStencilAttachmentPtr = &depthStencilAttachment;
++    }
++    const auto label = passInfo.label.empty() ? fmt::format("Render pass {}", passIndex)
++                                              : fmt::format("{} {}", passInfo.label, passIndex);
++    const wgpu::RenderPassDescriptor renderPassDescriptor{
++        .label = label.c_str(),
++        .colorAttachmentCount = attachments.size(),
++        .colorAttachments = attachments.data(),
++        .depthStencilAttachment = depthStencilAttachmentPtr,
++        .timestampWrites = webgpu::gpu_prof::pass_writes(label),
+     };
+-    depthStencilAttachmentPtr = &depthStencilAttachment;
+-  }
+-  const auto label = passInfo.label.empty() ? fmt::format("Render pass {}", passIndex)
+-                                            : fmt::format("{} {}", passInfo.label, passIndex);
+-  const wgpu::RenderPassDescriptor renderPassDescriptor{
+-      .label = label.c_str(),
+-      .colorAttachmentCount = attachments.size(),
+-      .colorAttachments = attachments.data(),
+-      .depthStencilAttachment = depthStencilAttachmentPtr,
+-      .timestampWrites = webgpu::gpu_prof::pass_writes(label),
+-  };
+ 
+-  auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
+-  render_pass(pass, frame, passInfo);
+-  pass.End();
++    auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
++    render_pass(pass, frame, passInfo);
++    pass.End();
++  }
+ 
+   if (passInfo.captureDepthSnapshot) {
+     depth_peek::encode_frame_snapshot(cmd, passInfo.copySourceDepthView, passInfo.targetSize, passInfo.msaaSamples);

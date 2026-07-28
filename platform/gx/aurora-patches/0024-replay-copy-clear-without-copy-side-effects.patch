@@ -1,0 +1,139 @@
+MP6 Unlocked FPS: preserve copy-clear barriers without replaying copy effects.
+
+Retained replay intentionally suppresses GXCopyTex destinations: resolving
+again would revise renderer copy caches and depth/readback state outside the
+single real simulation tick.  A clear=true copy also starts a cleared EFB
+continuation, though; deleting the command entirely merges shadow/reflection
+draws into the visible pass.  Replace such triggers with a replay-only command
+that performs the attachment clear/pass split but creates no copy texture.
+
+diff --git a/include/dolphin/gx/GXAurora.h b/include/dolphin/gx/GXAurora.h
+--- a/include/dolphin/gx/GXAurora.h
++++ b/include/dolphin/gx/GXAurora.h
+@@ -95,5 +95,12 @@
+ #define GX_AURORA_DESTROY_FRAMEBUFFER_CACHE 0x003C
+ 
++/**
++ * Replay-only EFB copy barrier: preserves GXCopyTex(clear=true)'s attachment
++ * clear without resolving into or mutating a CPU-addressed copy texture.
++ * Followed by a u8 boolean.
++ */
++#define GX_AURORA_REPLAY_COPY_CLEAR 0x003D
++
+ /**
+  * Draw primitives with the vertex count derived from a byte length, as written by
+  * GXBegin(prim, fmt, GX_AUTO). Must be followed by a u8 draw opcode (vtxfmt|prim),
+diff --git a/lib/gfx/common.hpp b/lib/gfx/common.hpp
+--- a/lib/gfx/common.hpp
++++ b/lib/gfx/common.hpp
+@@ -261,6 +261,8 @@ void queue_texture_copy(wgpu::TexelCopyTextureInfo src, wgpu::TexelCopyTextureIn
+ void begin_offscreen(uint32_t width, uint32_t height);
+ void end_offscreen();
+ void clear_offscreen_cache();
++void replay_copy_clear(bool clearColor, bool clearAlpha, bool clearDepth, Vec4<float> clearColorValue,
++                       float clearDepthValue);
+ bool is_offscreen() noexcept;
+ uint32_t get_sample_count() noexcept;
+ void clear_caches() noexcept;
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -967,6 +967,70 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
+   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
+ }
+ 
++void replay_copy_clear(bool clearColor, bool clearAlpha, bool clearDepth, Vec4<float> clearColorValue,
++                       float clearDepthValue) {
++  if (!clearColor && !clearAlpha && !clearDepth) {
++    return;
++  }
++
++  /* Retained replay suppresses the copy destination, but GXCopyTex(clear=true)
++   * is also an EFB pass boundary. Preserve that visible clear without creating
++   * or revising a CPU-addressed texture cache entry. */
++  auto& prevPass = current_render_passes()[g_currentRenderPass];
++  const auto msaaSamples = prevPass.msaaSamples;
++  const bool nextClearsColor = clearColor && clearAlpha;
++  if (msaaSamples > 1) {
++    if (nextClearsColor) {
++      prevPass.colorStoreOp = wgpu::StoreOp::Discard;
++    }
++    if (clearDepth && !prevPass.captureDepthSnapshot && !prevPass.snapshotDepthDst) {
++      prevPass.depthStoreOp = wgpu::StoreOp::Discard;
++    }
++  }
++  enqueue_pass(current_frame_packet(), g_recordingFrameSlot, g_currentRenderPass);
++
++  RenderPass newPass{
++      .label = pass_label("EFB replay-copy clear"),
++      .colorView = prevPass.colorView,
++      .resolveView = prevPass.resolveView,
++      .depthStencilView = prevPass.depthStencilView,
++      .copySourceTexture = prevPass.copySourceTexture,
++      .copySourceView = prevPass.copySourceView,
++      .copySourceDepthView = prevPass.copySourceDepthView,
++      .targetSize = prevPass.targetSize,
++      .msaaSamples = msaaSamples,
++      .clearColorValue = clearColorValue,
++      .clearDepthValue = clearDepthValue,
++      .clearColor = nextClearsColor,
++      .clearDepth = clearDepth,
++      .hasDepth = prevPass.hasDepth,
++      .hasStencil = prevPass.hasStencil,
++  };
++  newPass.commands.reserve(2048);
++  current_render_passes().emplace_back(std::move(newPass));
++  ++g_currentRenderPass;
++
++  if (!nextClearsColor && (clearColor || clearAlpha)) {
++    push_draw_command(clear::DrawData{
++        .pipeline = pipeline_ref(clear::PipelineConfig{
++            .msaaSamples = msaaSamples,
++            .clearColor = clearColor,
++            .clearAlpha = clearAlpha,
++            .clearDepth = false,
++        }),
++        .color =
++            wgpu::Color{
++                .r = clearColorValue.x(),
++                .g = clearColorValue.y(),
++                .b = clearColorValue.z(),
++                .a = clearColorValue.w(),
++            },
++    });
++  }
++  push_command(CommandType::SetViewport, Command::Data{.setViewport = g_cachedViewport});
++  push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
++}
++
+ void queue_palette_conv(tex_palette_conv::ConvRequest req) {
+   auto& renderPass = current_render_passes()[g_currentRenderPass];
+   ASSERT(!renderPass.sealed, "Attempted to append palette conversion to sealed render pass {}", g_currentRenderPass);
+diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -1885,6 +1885,14 @@ static void handle_aurora_command(const uint8_t* data, size_t size, size_t& pos,
+     pos += 1;
+   } else if (subCmd == GX_AURORA_DESTROY_FRAMEBUFFER_CACHE) {
+     gfx::clear_offscreen_cache();
++  } else if (subCmd == GX_AURORA_REPLAY_COPY_CLEAR) {
++    CHECK(pos + 1 <= size, "GX_AURORA_REPLAY_COPY_CLEAR read overrun");
++    const bool clear = data[pos] != 0;
++    pos += 1;
++    if (clear) {
++      gfx::replay_copy_clear(g_gxState.colorUpdate, g_gxState.alphaUpdate, g_gxState.depthUpdate,
++                             g_gxState.clearColor, clear_depth_value());
++    }
+   } else if (subCmd == GX_AURORA_DESTROY_TEXOBJ) {
+     CHECK(pos + 4 <= size, "GX_AURORA_DESTROY_TEXOBJ read overrun");
+     evict_texture_object(read_u32(data + pos, bigEndian));
+diff --git a/tests/gx_test_stubs.cpp b/tests/gx_test_stubs.cpp
+--- a/tests/gx_test_stubs.cpp
++++ b/tests/gx_test_stubs.cpp
+@@ -186,5 +186,6 @@ void queue_palette_conv(tex_palette_conv::ConvRequest req) {}
+ void begin_offscreen(uint32_t width, uint32_t height) {}
+ void end_offscreen() {}
+ void clear_offscreen_cache() {}
++void replay_copy_clear(bool, bool, bool, Vec4<float>, float) {}
+ bool is_offscreen() noexcept { return false; }
+ } // namespace aurora::gfx

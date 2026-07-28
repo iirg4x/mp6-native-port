@@ -1,0 +1,28 @@
+--- a/src/game/colman.c
++++ b/src/game/colman.c
+@@ -997 +997 @@
+-        } else if(vtxDeltaZero) {
++        } else {
+@@ -1005 +1005 @@
+-            if(temp_f31 < -fabsf(temp_f31*0.0001f)) {
++            if(temp_f31 < -fabs(temp_f31*0.0001)) {
+@@ -1013 +1013 @@
+-        if(fabsf(mag2) < 0.0001f) {
++        if(fabs(mag2) < 0.0001) {
+@@ -1051 +1051 @@
+-            if(temp_f31 < -fabsf(temp_f31*0.0001f)) {
++            if(temp_f31 < -fabs(temp_f31*0.0001)) {
+@@ -1059 +1059 @@
+-        if(fabsf(mag2) < 0.0001f) {
++        if(fabs(mag2) < 0.0001) {
+@@ -1328 +1328 @@
+-                if(temp_f29 < -fabsf(temp_f29*0.0001f)) {
++                if(temp_f29 < -fabs(temp_f29*0.0001)) {
+@@ -1335 +1335 @@
+-            if(fabsf(temp_f26) < 0.0001f) {
++            if(fabs(temp_f26) < 0.0001) {
+@@ -3241,2 +3241,2 @@
+-    if(!ColMapInitCheck()) {
+-        return;
++    if(!ColMapInitCheck()) {
++        return 0;

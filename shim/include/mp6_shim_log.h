@@ -3,7 +3,7 @@
  * Every null-platform shim logs the SDK call it stands in for exactly once
  * (rate-limited per distinct call site, not per call). This header is
  * shared by the generated shims (platform/null/shims_generated.c) and the
- * hand-written ones (platform/null/shims_manual.c, platform/os/*.c).
+ * hand-written ones (platform/null/shims_manual.c and platform/os sources).
  */
 #ifndef MP6_SHIM_LOG_H
 #define MP6_SHIM_LOG_H

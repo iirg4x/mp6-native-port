@@ -5,7 +5,7 @@
  * matching e.g. Nintendo's own dsptool and every open-source reimplementation
  * of it):
  *
- *     sample = (signedNibble * scale) << 11
+ *     sample = signedNibble * scale * 2048
  *     sample += 1024                              (round-to-nearest before
  *                                                    the final >>11 -- 1024
  *                                                    == 1 << (11-1))
@@ -22,11 +22,20 @@
  */
 #include "dspadpcm.h"
 
-static int16_t mp6_clamp16(int32_t v)
+static int16_t mp6_clamp16(int64_t v)
 {
     if (v > 32767) return 32767;
     if (v < -32768) return -32768;
     return (int16_t)v;
+}
+
+/* C's right shift of a negative signed integer is implementation-defined.
+ * DSP fixed-point wants an arithmetic >> 11 (floor division), so spell that
+ * operation portably after doing every multiply in int64_t. */
+static int64_t mp6_arshift11(int64_t v)
+{
+    if (v >= 0) return v / 2048;
+    return -((-v + 2047) / 2048);
 }
 
 void mp6_dspadpcm_decode(const uint8_t *src, uint32_t numFrames,
@@ -54,12 +63,12 @@ void mp6_dspadpcm_decode(const uint8_t *src, uint32_t numFrames,
             uint8_t byte = frame[1 + i / 2];
             int nibble = (i & 1) ? (byte & 0xF) : (byte >> 4);
             int32_t signedNibble = (nibble > 7) ? (nibble - 16) : nibble;
-            int32_t sample = (signedNibble * scale) << 11;
+            int64_t sample = (int64_t)signedNibble * (int64_t)scale * 2048;
             int16_t s16;
 
             sample += 1024;
-            sample += c1 * hist1 + c2 * hist2;
-            sample >>= 11;
+            sample += (int64_t)c1 * hist1 + (int64_t)c2 * hist2;
+            sample = mp6_arshift11(sample);
 
             s16 = mp6_clamp16(sample);
             out[f * 14 + i] = s16;

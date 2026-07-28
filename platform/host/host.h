@@ -2,7 +2,7 @@
  *
  * Every OS-facing runtime mechanic the port needs, behind one small
  * interface, so a new platform is one new backend file instead of a sweep
- * over platform/**. Backends: host_win32.c (links into BOTH build modes,
+ * over platform files. Backends: host_win32.c (links into BOTH build modes,
  * headless and windowed) and host_android.c. The seam core is
  * deliberately SDL-free: the --headless build links no SDL at all
  * (tools/build.py's platform-unit split).
@@ -22,6 +22,17 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+/* Every game-visible pointer is narrowed through u32 somewhere in the
+ * original ABI.  Use an exclusive 4-GB end so a one-byte range beginning at
+ * 0xffffffff is valid while any byte at 0x100000000 is rejected. */
+static inline int mp6_host_range_below_4gb(const void *base, size_t size)
+{
+    uint64_t lo;
+    if (base == NULL) return 0;
+    lo = (uint64_t)(uintptr_t)base;
+    return lo < 0x100000000ull && (uint64_t)size <= 0x100000000ull - lo;
+}
 
 #ifdef __cplusplus
 extern "C" {
@@ -118,12 +129,13 @@ void mp6_host_wallclock(Mp6DateTime *out);
  * Memory (2)
  * --------------------------------------------------------------------- */
 
-/* Reserve+commit the game arena, preferring the fixed low candidate bases
+/* Reserve+commit a game-visible arena, preferring the fixed low candidate bases
  * (0x80000000 first -- game/memory.c's BLOCK_CHECK high-bit check; full
  * candidate list and rationale in the backends). Falls back to an
- * OS-chosen address (with a stderr [WARN] about >=4GB round-trip risk) if
- * every candidate is taken. Returns NULL only if even that failed -- the
- * caller (arena.c) keeps its own [FATAL]+exit policy. win32:
+ * OS-chosen address if every candidate is taken, but accepts it only when
+ * the ENTIRE reservation remains below 4 GB. Returns NULL when allocation
+ * fails or that invariant cannot be met; callers keep their own
+ * [FATAL]+exit policy. win32:
  * VirtualAlloc(MEM_RESERVE|MEM_COMMIT). android: mmap over the same
  * candidate list. */
 void *mp6_host_arena_reserve(size_t size);
@@ -209,11 +221,28 @@ int mp6_host_save_dir(char *buf, size_t n);
  * (interface-completeness for platforms that need a real writable dir). */
 int mp6_host_pref_dir(char *buf, size_t n);
 
-/* Create a directory (parents NOT created; mirrors CreateDirectoryA /
- * mkdir(2)). Returns 0 if created or it already existed, nonzero on any
- * other failure. Callers (card_native.c) don't check the result; the
- * return exists for future callers. */
+/* Create a directory (parents NOT created; mirrors CreateDirectoryW /
+ * mkdir(2)). Returns 0 only when the resulting target is a real directory;
+ * an existing file, symlink/reparse point, or any other failure is rejected. */
 int mp6_host_mkdir(const char *path);
+
+/* Stable for this process lifetime and distinct between concurrently-running
+ * game instances. Used only to isolate sibling temporary save files. */
+uint64_t mp6_host_process_id(void);
+
+/* Force a completely closed file's data/metadata through the host storage
+ * cache before it is atomically published. Returns 0 only after the host's
+ * durability primitive succeeds. */
+int mp6_host_sync_file_path(const char *path);
+
+/* Atomically publish a completely-written sibling temporary file over a
+ * destination. `replacement` and `destination` must be on the same volume.
+ * Success removes/replaces `replacement`; failure leaves the existing
+ * destination untouched whenever the host API can provide that guarantee.
+ * POSIX also fsyncs the parent directory after rename. If that post-rename
+ * durability sync fails, -1 is returned even though the new file is already
+ * atomically visible (rolling it back would be less safe). */
+int mp6_host_atomic_replace_file(const char *replacement, const char *destination);
 
 /* ---------------------------------------------------------------------
  * Coroutines (3) -- the HuPrc process scheduler's context backend

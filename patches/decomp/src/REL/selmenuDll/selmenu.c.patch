@@ -1,0 +1,29 @@
+--- a/src/REL/selmenuDll/selmenu.c
++++ b/src/REL/selmenuDll/selmenu.c
+@@ -590 +590,3 @@
+-        smCharOnF[smPlayerConf[i].charNo] = 1;
++        if ((u16)smPlayerConf[i].charNo < SM_CHAR_MAX) {
++            smCharOnF[smPlayerConf[i].charNo] = 1;
++        }
+@@ -592,2 +592,2 @@
+-    if (!num) {
+-        return;
++    if (!num) {
++        return smPlayerConf[playerNo].charNo;
+@@ -1007,2 +1007,2 @@
+-    MSMSE *se = msmSeGetIndexPtr(smEmiCompDataNo);
+-    smEmiCompVal = se->comp;
++    MSMSE *se = (MSMSE *)msmSeGetIndexPtr(smEmiCompDataNo);
++    smEmiCompVal = (se != NULL) ? se->comp : 0;
+@@ -1066,2 +1066,2 @@
+-                se = msmSeGetIndexPtr(smEmiCompDataNo);
+-                smEmiCompVal = se->comp;
++                se = (MSMSE *)msmSeGetIndexPtr(smEmiCompDataNo);
++                smEmiCompVal = (se != NULL) ? se->comp : 0;
+@@ -1078,2 +1078,4 @@
+-                se = msmSeGetIndexPtr(smEmiCompDataNo);
+-                se->comp = smEmiCompVal;
++                se = (MSMSE *)msmSeGetIndexPtr(smEmiCompDataNo);
++                if (se != NULL) {
++                    se->comp = smEmiCompVal;
++                }

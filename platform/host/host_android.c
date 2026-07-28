@@ -39,6 +39,7 @@
  * windows.h -- exactly the headless TU set.
  */
 #include "host.h"
+#include "mp6_path.h"
 
 #include "mp6_boot.h" /* mp6_symbolize_addr's declaration (extra exported
                        * backend symbol, same as host_win32.c) */
@@ -178,7 +179,11 @@ void *mp6_host_arena_reserve(size_t size)
 
     for (i = 0; i < sizeof(kCandidateBases) / sizeof(kCandidateBases[0]); i++) {
         got = mp6_try_fixed_low(kCandidateBases[i], size);
-        if (got) break;
+        if (got && mp6_host_range_below_4gb(got, size)) break;
+        if (got) {
+            munmap(got, size);
+            got = NULL;
+        }
     }
     if (!got) {
         got = mmap(NULL, size, PROT_READ | PROT_WRITE,
@@ -186,11 +191,14 @@ void *mp6_host_arena_reserve(size_t size)
         if (got == MAP_FAILED) {
             return NULL; /* caller (arena.c / coro_arena.c) keeps its own FATAL policy */
         }
-        /* Same fallback WARN as host_win32.c, byte-for-byte. */
-        fprintf(stderr,
-                "[WARN] mp6_host_arena_reserve: no candidate low(<4GB) base free; OS picked %p -- "
-                "u32 pointer round-trips may break if this is >=4GB\n",
-                got);
+        if (!mp6_host_range_below_4gb(got, size)) {
+            fprintf(stderr,
+                    "[ERROR] mp6_host_arena_reserve: OS-picked range %p (+%zu bytes) is not "
+                    "entirely below 4GB; refusing it\n",
+                    got, size);
+            munmap(got, size);
+            return NULL;
+        }
     }
     return got;
 }
@@ -274,14 +282,19 @@ int mp6_host_image_writable_sections(Mp6HostImageSection *out, int maxOut)
 
 static const char *mp6_android_base(void)
 {
-    static char base[512];
+    static char base[1200];
     static int init;
+    static int valid;
     if (!init) {
         const char *env = getenv("MP6_HOST_BASE");
-        snprintf(base, sizeof(base), "%s", (env && env[0]) ? env : "/data/local/tmp/mp6");
+        valid = mp6_path_copy_checked(base, sizeof(base),
+                                      (env && env[0]) ? env : "/data/local/tmp/mp6") == 0;
+        if (!valid) {
+            fprintf(stderr, "[HOST] MP6_HOST_BASE is too long -- Android host paths disabled\n");
+        }
         init = 1;
     }
-    return base;
+    return valid ? base : NULL;
 }
 
 int mp6_host_disc_root(char *buf, size_t n)
@@ -291,13 +304,17 @@ int mp6_host_disc_root(char *buf, size_t n)
      * (dvd_files.c) keeps its build-time -D fallback otherwise. Layout on
      * device: <base>/GP6E01/{sys/fst.bin,files/...}, mirroring the repo's
      * own orig/GP6E01 shape. */
-    char candidateRoot[1024];
-    char candidateFst[1024];
+    char candidateRoot[1200];
+    char candidateFst[1200];
+    const char *base = mp6_android_base();
     FILE *probe;
-    size_t rootLen;
 
-    snprintf(candidateRoot, sizeof(candidateRoot), "%s/GP6E01", mp6_android_base());
-    snprintf(candidateFst, sizeof(candidateFst), "%s/sys/fst.bin", candidateRoot);
+    if (base == NULL ||
+        mp6_path_join_checked(candidateRoot, sizeof(candidateRoot), base, "GP6E01") != 0 ||
+        mp6_path_join_checked(candidateFst, sizeof(candidateFst), candidateRoot,
+                              "sys/fst.bin") != 0) {
+        return -1;
+    }
 
     probe = fopen(candidateFst, "rb");
     if (!probe) {
@@ -305,28 +322,75 @@ int mp6_host_disc_root(char *buf, size_t n)
     }
     fclose(probe);
 
-    rootLen = strlen(candidateRoot);
-    if (rootLen + 1 > n) return -1;
-    memcpy(buf, candidateRoot, rootLen + 1);
-    return 0;
+    return mp6_path_copy_checked(buf, n, candidateRoot);
 }
 
 int mp6_host_save_dir(char *buf, size_t n)
 {
-    int len = snprintf(buf, n, "%s/saves", mp6_android_base());
-    return (len > 0 && (size_t)len < n) ? 0 : -1;
+    const char *base = mp6_android_base();
+    return base ? mp6_path_join_checked(buf, n, base, "saves") : -1;
 }
 
 int mp6_host_pref_dir(char *buf, size_t n)
 {
-    int len = snprintf(buf, n, "%s", mp6_android_base());
-    return (len > 0 && (size_t)len < n) ? 0 : -1;
+    const char *base = mp6_android_base();
+    return base ? mp6_path_copy_checked(buf, n, base) : -1;
 }
 
 int mp6_host_mkdir(const char *path)
 {
-    if (mkdir(path, 0755) == 0) return 0;
-    return (errno == EEXIST) ? 0 : -1;
+    struct stat st;
+    if (path == NULL || path[0] == '\0') return -1;
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) return -1;
+    if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode)) return -1;
+    return 0;
+}
+
+uint64_t mp6_host_process_id(void)
+{
+    return (uint64_t)(unsigned long)getpid();
+}
+
+int mp6_host_sync_file_path(const char *path)
+{
+    int fd, ok;
+    if (path == NULL) return -1;
+    fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) return -1;
+    ok = fsync(fd) == 0 ? 0 : -1;
+    if (close(fd) != 0) ok = -1;
+    return ok;
+}
+
+int mp6_host_atomic_replace_file(const char *replacement, const char *destination)
+{
+    char parent[1200];
+    char *slash;
+    int dirfd, ok = 0;
+    if (replacement == NULL || destination == NULL || destination[0] == '\0' ||
+        mp6_path_copy_checked(parent, sizeof(parent), destination) != 0) return -1;
+    slash = strrchr(parent, '/');
+    if (slash == NULL) {
+        if (mp6_path_copy_checked(parent, sizeof(parent), ".") != 0) return -1;
+    } else if (slash == parent) {
+        slash[1] = '\0';
+    } else {
+        *slash = '\0';
+    }
+    /* POSIX rename is atomic and replaces an existing non-directory target
+     * without exposing a delete-then-create window. Both savestate names are
+     * sibling paths, so EXDEV is not a supported/possible success case. */
+    if (rename(replacement, destination) != 0) return -1;
+
+    /* The file itself was fsync'd before rename. Persist the directory entry
+     * too, so a reported-success publish survives power loss. If this step
+     * fails the rename has already happened and cannot be rolled back safely;
+     * return failure honestly while leaving the atomically-published file. */
+    dirfd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd < 0) return -1;
+    if (fsync(dirfd) != 0) ok = -1;
+    if (close(dirfd) != 0) ok = -1;
+    return ok;
 }
 
 /* =======================================================================

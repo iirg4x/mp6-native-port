@@ -98,10 +98,12 @@
 #include "mp6_shim_log.h"
 #include "mp6_hsf_native.h"
 #include "mp6_gxarray_registry.h"
-#include "mp6_boot.h" /* mp6_heap_block_data_size -- LoadBitmaps' copy bound */
+#include "mp6_boot.h" /* mp6_heap_block_data_size -- exact preflight input extent */
+#include "hsf_validate_internal.h"
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ==========================================================================
  * Section header (HSF_HEADER, file-original layout: magic[8] + 21x
@@ -344,7 +346,7 @@ typedef struct { u8 magic[8]; FSection sec[FSEC_COUNT]; } FHeader;
 #define FSHP_SIZE    12
 
 /* HSF_MAPATTR (file) -- 24 bytes. NOT a rendering/material construct --
- * confirmed by direct grep across every game/*.c file: only game/mapspace.c
+ * confirmed by direct grep across every game C source: only game/mapspace.c
  * ever reads hsf->mapAttr (MapWall/MapWallCheck/MapPos, the game BOARD's
  * own wall/floor collision system: "does this X/Z position fall inside this
  * mapAttr's bounding box, and if so, walk its packed polygon list"),
@@ -489,6 +491,7 @@ static void ReadHeader(const u8 *base, FHeader *h)
  * ========================================================================== */
 typedef struct {
     const u8 *base;
+    size_t fileSize; /* exact validated logical length, excluding allocator padding */
     FHeader h;
 
     HSF_SCENE     *scene;      s32 sceneNum;
@@ -539,7 +542,73 @@ typedef struct {
      * this function's own two HSF_DATA allocations stay plain
      * HuMemDirectMalloc. */
     u32 mallocTag;
+
+    /* Total face corner indices clamped into buffer range by
+     * SanitizeMeshFaceCorners (see that function's own comment) -- logged
+     * once per model by MP6_LoadHSFNative when non-zero. */
+    u32 sanitizedFaceCorners;
 } LoadCtx;
+
+/* Keep the standalone preflight's conservative native-allocation strides
+ * mechanically tied to this ABI. */
+_Static_assert(sizeof(HSF_FACE) <= 64, "update HSF face preflight stride");
+_Static_assert(sizeof(HSF_TRACK) <= 32, "update HSF track preflight stride");
+_Static_assert(sizeof(HSF_CENV_DUAL) <= 32, "update HSF dual preflight stride");
+_Static_assert(sizeof(HSF_CENV_MULTI) <= 32, "update HSF multi preflight stride");
+_Static_assert(sizeof(HSF_CENV_MULTI_WEIGHT) <= 16,
+               "update HSF multi-weight preflight stride");
+
+/* HuMemDirectMallocNum can return NULL for a legitimate exhausted heap (and
+ * rejects an overflowing/negative s32 request).  Continuing into the dozens
+ * of immediate memset/memcpy calls below would turn that recoverable resource
+ * failure into a wild write.  Preflight proves every requested size fits s32;
+ * an actual OOM is process-fatal because a partially-built model cannot be
+ * rolled back safely through the game's tag allocator. */
+static void *HsfCheckedMallocNum(HEAPID heap, s32 size, u32 tag,
+                                 const char *where)
+{
+    void *p;
+    if (size <= 0) {
+        fprintf(stderr, "[FATAL] HSF allocation size invalid in %s: %d\n",
+                where, (int)size);
+        fflush(stderr);
+        _Exit(EXIT_FAILURE);
+    }
+    p = HuMemDirectMallocNum(heap, size, tag);
+    if (p == NULL) {
+        fprintf(stderr, "[FATAL] HSF allocation failed in %s: %d bytes\n",
+                where, (int)size);
+        fflush(stderr);
+        _Exit(EXIT_FAILURE);
+    }
+    return p;
+}
+
+/* Keep the check structurally inseparable from every allocation in this TU,
+ * including future loader additions.  The helper itself is defined before
+ * this macro, so its call still reaches the real allocator. */
+#define HuMemDirectMallocNum(heap, size, tag) \
+    HsfCheckedMallocNum((heap), (size), (tag), __func__)
+
+static HSF_DATA *MakeInertHSF(const u8 *base, size_t readable)
+{
+    HSF_DATA *hsf = (HSF_DATA *)HuMemDirectMallocNum(
+        HEAP_MODEL, (s32)sizeof(HSF_DATA), 0);
+    HSF_OBJECT *root;
+    memset(hsf, 0, sizeof(*hsf));
+    root = (HSF_OBJECT *)HuMemDirectMallocNum(
+        HEAP_MODEL, (s32)sizeof(HSF_OBJECT), mp6_heap_pointer_tag(hsf));
+    memset(root, 0, sizeof(*root));
+    root->type = HSF_OBJ_ROOT;
+    root->name = "";
+    hsf->root = root;
+    hsf->object = root;
+    hsf->objectNum = 0;
+    if (base != NULL && readable >= sizeof(hsf->magic)) {
+        memcpy(hsf->magic, base, sizeof(hsf->magic));
+    }
+    return hsf;
+}
 
 /* Strings need no conversion at all (plain NUL-terminated bytes, no
  * endianness, no pointer-width issue) -- point straight into the original
@@ -549,7 +618,12 @@ typedef struct {
  * the live model" contract (see mp6_hsf_native.h). */
 static char *GetStr(const LoadCtx *ctx, u32 strOfs)
 {
-    return (char *)(ctx->base + ctx->h.sec[FSEC_STRING].ofs + strOfs);
+    u32 strBytes = (u32)ctx->h.sec[FSEC_STRING].num;
+    const u8 *p;
+    if (strOfs >= strBytes) return NULL;
+    p = ctx->base + ctx->h.sec[FSEC_STRING].ofs + strOfs;
+    if (memchr(p, 0, (size_t)(strBytes - strOfs)) == NULL) return NULL;
+    return (char *)p;
 }
 
 /* Motion-track name lookups use a 16-BIT string-table offset (the raw
@@ -562,7 +636,7 @@ static char *GetStr(const LoadCtx *ctx, u32 strOfs)
  * real hardware too; not replicated here). */
 static char *GetMotionStr(const LoadCtx *ctx, u16 strOfs)
 {
-    return (char *)(ctx->base + ctx->h.sec[FSEC_STRING].ofs + strOfs);
+    return GetStr(ctx, (u32)strOfs);
 }
 
 /* Symbol pool: a flat array of raw u32 (BE) indices -- see this file's own
@@ -595,17 +669,48 @@ static void LoadPalettes(LoadCtx *ctx)
     out = (HSF_PALETTE *)HuMemDirectMallocNum(HEAP_MODEL, (s32)(sizeof(HSF_PALETTE) * (u32)num), ctx->mallocTag);
     memset(out, 0, sizeof(HSF_PALETTE) * (u32)num);
 
+    /* First publish each declared entry count.  The field is temporarily
+     * also used as the required copy count, then restored below. */
+    for (i = 0; i < num; i++) {
+        const u8 *rec = secBase + (u32)i * FPAL_SIZE;
+        u32 nameOfs = be32(rec + FPAL_NAME);
+        s32 palSize = (s32)be32(rec + FPAL_PALSIZE);
+        out[i].name = GetStr(ctx, nameOfs);
+        out[i].palSize = (u32)palSize;
+    }
+
+    /* CI_IA8 bitmaps contain a second TLUT bank at the next 16-entry
+     * boundary.  The legacy in-place loader exposed both because its
+     * pointer addressed the complete raw pool.  A native copy of only the
+     * palette record's declared first-bank count makes hsfdraw.c's TL32
+     * lookup read past the allocation.  Scan the already-preflighted bitmap
+     * records once and enlarge only the referenced palette copies. */
+    {
+        s32 bitmapNum = ctx->h.sec[FSEC_BITMAP].num;
+        const u8 *bitmapBase = ctx->base + ctx->h.sec[FSEC_BITMAP].ofs;
+        s32 bitmap;
+        for (bitmap = 0; bitmap < bitmapNum; ++bitmap) {
+            const u8 *rec = bitmapBase + (u32)bitmap * FBMP_SIZE;
+            if (rec[FBMP_DATAFMT] == HSF_BMPFMT_CI_IA8) {
+                s32 palId = (s32)be32(rec + FBMP_PALDATA);
+                u32 first = (u32)be16(rec + FBMP_PALSIZE);
+                u32 required = ((first + 15u) & ~15u) + first;
+                if (out[palId].palSize < required) {
+                    out[palId].palSize = required;
+                }
+            }
+        }
+    }
+
     for (i = 0; i < num; i++) {
         const u8 *rec = secBase + (u32)i * FPAL_SIZE;
         const u8 *poolBase = secBase + (u32)num * FPAL_SIZE;
-        u32 nameOfs = be32(rec + FPAL_NAME);
-        s32 palSize = (s32)be32(rec + FPAL_PALSIZE);
+        s32 declaredSize = (s32)be32(rec + FPAL_PALSIZE);
+        u32 copySize = out[i].palSize;
         u32 dataOfs = be32(rec + FPAL_DATA);
         u16 *data = NULL;
 
-        out[i].name = GetStr(ctx, nameOfs);
-        out[i].palSize = (u32)palSize;
-        if (palSize > 0) {
+        if (copySize > 0) {
             /* Palette entries are GPU-side TLUT data, NOT CPU-parsed fields
              * -- the ONLY consumer is game/hsfdraw.c's LoadTexture ->
              * GXInitTlutObj -> GXLoadTlut, and Aurora ingests that buffer
@@ -616,9 +721,10 @@ static void LoadPalettes(LoadCtx *ctx)
              * (the RGB5A3/RGB565 opacity bit lands in the wrong place), so
              * memcpy must preserve the file's big-endian entry stream
              * unchanged -- never be16()-swap this data. */
-            data = (u16 *)HuMemDirectMallocNum(HEAP_MODEL, (s32)(sizeof(u16) * (u32)palSize), ctx->mallocTag);
-            memcpy(data, poolBase + dataOfs, sizeof(u16) * (u32)palSize);
+            data = (u16 *)HuMemDirectMallocNum(HEAP_MODEL, (s32)(sizeof(u16) * copySize), ctx->mallocTag);
+            memcpy(data, poolBase + dataOfs, sizeof(u16) * copySize);
         }
+        out[i].palSize = (u32)declaredSize;
         out[i].data = data;
     }
     ctx->palette = out;
@@ -646,11 +752,11 @@ static HSF_PALETTE *FindPaletteById(const LoadCtx *ctx, s32 id)
  * allocation's end.
  *
  * Tile geometry per HSF dataFmt (game/hsfformat.h BMPFMT_* order; the CI_*
- * formats pick C4 vs C8 off `pixSize < 8`, mirroring game/hsfdraw.c's
+ * formats pick C4 vs C8 from validated `pixSize` 4 or 8, mirroring game/hsfdraw.c's
  * LoadTexture switch). Mirrors tools/mp6scene/mp6_hsf.py's _GX_TILE, which
- * validated these against the whole disc (12,844 bitmaps, 0 failures). An
- * unknown format falls back to the naive count -- old behavior, never
- * larger. */
+ * validated these against the whole disc (12,844 bitmaps, 0 failures).
+ * Preflight rejects every unknown format/depth pair, so the default is an
+ * unreachable fail-closed zero rather than an inferred allocation size. */
 static u32 BitmapTileBytes(u8 dataFmt, u8 pixSize, u16 w, u16 h)
 {
     u32 tw, th, tb;
@@ -666,11 +772,11 @@ static u32 BitmapTileBytes(u8 dataFmt, u8 pixSize, u16 w, u16 h)
     case 9:                                                  /* CI_RGB565 */
     case 10:                                                 /* CI_RGB5A3 */
     case 11:                                                 /* CI_IA8    */
-        if (pixSize < 8) { tw = 8; th = 8; tb = 32; }        /* -> C4 */
-        else             { tw = 8; th = 4; tb = 32; }        /* -> C8 */
+        if (pixSize == 4) { tw = 8; th = 8; tb = 32; }       /* -> C4 */
+        else              { tw = 8; th = 4; tb = 32; }       /* -> C8 */
         break;
     default:
-        return ((u32)w * (u32)h * (u32)pixSize) / 8;
+        return 0;
     }
     return ((u32)(w + tw - 1) / tw) * ((u32)(h + th - 1) / th) * tb;
 }
@@ -703,7 +809,6 @@ static void LoadBitmaps(LoadCtx *ctx)
         u32 dataOfs = be32(rec + FBMP_DATA);
         HSF_PALETTE *pal;
         u32 pixelBytes;
-        u32 naiveBytes;
 
         out[i].name = GetStr(ctx, nameOfs);
         out[i].maxLod = be32(rec + FBMP_MAXLOD);
@@ -735,26 +840,19 @@ static void LoadBitmaps(LoadCtx *ctx)
          * the naive size: actman "test09a" is short 1,800 bytes, ishi
          * "testPic" 222). Real hardware just DMA'd whatever followed in
          * RAM; this port bounds the copy by the buffer's own allocation
-         * extent (mp6_heap_block_data_size -- data.c allocates every file
-         * buffer via HuMemDirectMalloc) and ZERO-pads the missing tail, the
-         * same policy as tools/mp6scene/mp6_hsf.py's importer. If the bound
-         * is unavailable (pointer not a verifiable block base), copy only
-         * the naive byte count -- bytes guaranteed present in every real
-         * file -- and zero the rest. */
-        naiveBytes = ((u32)(u16)sizeX * (u32)(u16)sizeY * (u32)pixSize) / 8;
+         * exact logical extent established by mp6_hsf_preflight (which first
+         * verifies mp6_heap_block_data_size and then narrows allocator padding
+         * to the checked string-table end) and ZERO-pads the missing tail, the
+         * same policy as tools/mp6scene/mp6_hsf.py's importer. */
         pixelBytes = BitmapTileBytes(out[i].dataFmt, pixSize, (u16)sizeX, (u16)sizeY);
         if (pixelBytes > 0) {
             u8 *pixels = (u8 *)HuMemDirectMallocNum(HEAP_MODEL, (s32)pixelBytes, ctx->mallocTag);
-            u32 avail = mp6_heap_block_data_size(ctx->base);
+            size_t avail = ctx->fileSize;
             u32 srcOfs = (u32)(poolBase - ctx->base) + dataOfs;
             u32 copyN;
-            if (avail > 0) {
-                copyN = (srcOfs >= avail) ? 0
-                      : (pixelBytes <= avail - srcOfs) ? pixelBytes
-                                                       : (avail - srcOfs);
-            } else {
-                copyN = (naiveBytes < pixelBytes) ? naiveBytes : pixelBytes;
-            }
+            copyN = ((size_t)srcOfs >= avail) ? 0
+                  : ((size_t)pixelBytes <= avail - (size_t)srcOfs) ? pixelBytes
+                                                                  : (u32)(avail - (size_t)srcOfs);
             if (copyN < pixelBytes) {
                 memset(pixels + copyN, 0, pixelBytes - copyN);
             }
@@ -1221,6 +1319,82 @@ static void LoadFaceGroups(LoadCtx *ctx)
 }
 
 /* ==========================================================================
+ * Face-corner sanitization. The preflight proves every face/strip RECORD
+ * lies inside the file, but an in-range record may still carry an
+ * out-of-range corner VALUE -- an authoring defect the retail loader never
+ * checks (its GX draw simply overreads the array that follows). Exactly one
+ * shipped mesh does this: the Boo shopkeeper's 2-vertex "itemhook_R" marker
+ * triangle names vertex 2, in all three copies of the model
+ * (capsuleshop[8] size 91475, m433[32] size 91476, m661[33] size 100755 --
+ * attributed by running the preflight over all 9649 retail HSFs).
+ * Rejecting the whole model for that one corner erased a real, visible
+ * retail character from the scene ("[HSF] rejected malformed decoded
+ * model: mesh lacks valid draw buffers (6, 0)" during board load), so the
+ * preflight now only COUNTS such corners (MP6HsfValidated.oobFaceCorners)
+ * and this pass clamps them into range: the affected primitive becomes
+ * degenerate (zero area -- for itemhook_R, corners (1,2,0) become (1,1,0))
+ * which is invisible, the closest safe equivalent of retail's silent
+ * overread. Only the corners the validator itself ranges over are touched:
+ * TRI reads index[0..2], TRISTRIP reads strip.index[0..2] + its strip
+ * pool, everything else reads index[0..3] -- so a TRI's never-read 4th
+ * corner slot can't inflate the count. Clamp targets: vertex/normal have
+ * no sentinel (preflight hard-rejects a corner whose vertex/normal buffer
+ * is empty), color/st clamp toward their -1 "unused" sentinel.
+ * ========================================================================== */
+static s16 ClampFaceCornerIdx(s16 v, s32 count, s16 lo, u32 *fixCount)
+{
+    s16 hi = (count > 0) ? (s16)(count - 1) : lo;
+    if (v < lo) { (*fixCount)++; return lo; }
+    if (v > hi) { (*fixCount)++; return hi; }
+    return v;
+}
+
+static void SanitizeFaceIndexSet(HSF_FACE_INDEX *idx, s32 vc, s32 nc,
+                                 s32 cc, s32 sc, u32 *fixCount)
+{
+    idx->vertex = ClampFaceCornerIdx(idx->vertex, vc, 0, fixCount);
+    idx->normal = ClampFaceCornerIdx(idx->normal, nc, 0, fixCount);
+    idx->color  = ClampFaceCornerIdx(idx->color,  cc, -1, fixCount);
+    idx->st     = ClampFaceCornerIdx(idx->st,     sc, -1, fixCount);
+}
+
+static void SanitizeMeshFaceCorners(LoadCtx *ctx, HSF_OBJECT *obj)
+{
+    HSF_BUFFER *group = obj->mesh.face;
+    s32 vc = (obj->mesh.vertex != NULL) ? obj->mesh.vertex->count : 0;
+    s32 nc = (obj->mesh.normal != NULL) ? obj->mesh.normal->count : 0;
+    s32 sc = (obj->mesh.st != NULL) ? obj->mesh.st->count : 0;
+    s32 cc = (obj->mesh.color != NULL) ? obj->mesh.color->count : 0;
+    u32 fixed = 0;
+    s32 j;
+    int k;
+
+    /* Preflight guarantees any accepted mesh with face corners has
+     * non-empty vertex+normal buffers; a mesh without them has nothing
+     * drawable to sanitize. */
+    if (group == NULL || group->data == NULL || vc <= 0 || nc <= 0) return;
+
+    for (j = 0; j < group->count; j++) {
+        HSF_FACE *f = &((HSF_FACE *)group->data)[j];
+        if ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRISTRIP) {
+            u32 m;
+            for (k = 0; k < 3; k++) {
+                SanitizeFaceIndexSet(&f->strip.index[k], vc, nc, cc, sc, &fixed);
+            }
+            for (m = 0; f->strip.data != NULL && m < f->strip.count; m++) {
+                SanitizeFaceIndexSet(&f->strip.data[m], vc, nc, cc, sc, &fixed);
+            }
+        } else {
+            int corners = ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRI) ? 3 : 4;
+            for (k = 0; k < corners; k++) {
+                SanitizeFaceIndexSet(&f->index[k], vc, nc, cc, sc, &fixed);
+            }
+        }
+    }
+    ctx->sanitizedFaceCorners += fixed;
+}
+
+/* ==========================================================================
  * Objects (the scene-graph hierarchy). Two-pass: (1) every object's own
  * scalar fields + type-specific sub-struct + its own child-index list,
  * unconditionally over the WHOLE flat array; (2) parent pointers, via a
@@ -1353,6 +1527,12 @@ static void LoadObjects(LoadCtx *ctx)
                 out[i].mesh.unk121 = mrec[FMESH_UNK121];
                 out[i].mesh.shapeType = mrec[FMESH_SHAPETYPE];
                 out[i].mesh.matPass = mrec[FMESH_MATPASS];
+
+                /* Clamp any out-of-range face corner VALUES against this
+                 * mesh's just-bound buffers -- see the function's own
+                 * header comment (retail Boo shopkeeper authoring defect;
+                 * preflight counts, this pass repairs). */
+                SanitizeMeshFaceCorners(ctx, &out[i]);
 
                 /* shape/cluster per-mesh fields stay 0/NULL: the cluster
                  * deform path (game/ClusterExec.c) works off the hsf-level
@@ -1790,6 +1970,7 @@ static void LoadMatrix(LoadCtx *ctx)
     s32 num = ctx->h.sec[FSEC_MATRIX].num;
     const u8 *rec;
     u32 baseIdx, count, meshCount, paletteLen;
+    uint64_t paletteNeed;
     HSF_MATRIX *out;
     Mtx *mtxData;
     s32 i;
@@ -1808,7 +1989,19 @@ static void LoadMatrix(LoadCtx *ctx)
     for (i = 0; i < ctx->objectNum; i++) {
         if (ctx->object[i].type == HSF_OBJ_MESH) meshCount++;
     }
-    paletteLen = baseIdx + count * (meshCount + 3) + 64;  /* generous, crash-proof over-allocation */
+    /* Exact highest consumer families, plus slack: SetMtx indexes
+     * baseIdx+object, SetRevMtx indexes baseIdx+count*mesh+object, and
+     * SetEnvelop indexes baseIdx+count*(mesh+1).  Preflight has already
+     * proved the resulting byte allocation fits signed s32. */
+    paletteNeed = meshCount;
+#define MP6_HSF_MATRIX_NEED(expr) do { uint64_t need = (expr); \
+        if (need > paletteNeed) paletteNeed = need; } while (0)
+    MP6_HSF_MATRIX_NEED((uint64_t)baseIdx + (uint32_t)ctx->objectNum);
+    MP6_HSF_MATRIX_NEED((uint64_t)baseIdx + (uint64_t)count * meshCount
+                        + (uint32_t)ctx->objectNum);
+    MP6_HSF_MATRIX_NEED((uint64_t)baseIdx + (uint64_t)count * (meshCount + 1u));
+#undef MP6_HSF_MATRIX_NEED
+    paletteLen = (u32)(paletteNeed + 64u);
 
     out = (HSF_MATRIX *)HuMemDirectMallocNum(HEAP_MODEL, (s32)sizeof(HSF_MATRIX), ctx->mallocTag);
     memset(out, 0, sizeof(HSF_MATRIX));
@@ -2215,9 +2408,12 @@ static void LoadMotion(LoadCtx *ctx)
 /* ==========================================================================
  * Top-level entry point.
  * ========================================================================== */
-HSF_DATA *MP6_LoadHSFNative(void *dataPtr)
+HSF_DATA *MP6_LoadHSFNative(void *dataPtr, char **stringTableOut)
 {
     const u8 *base = (const u8 *)dataPtr;
+    uint32_t capacity;
+    MP6HsfValidated validated;
+    char validationWhy[160];
     LoadCtx ctx;
     HSF_DATA *hsf;
     s32 realCenvNum, realClusterNum, realShapeNum, realSkeletonNum;
@@ -2227,25 +2423,31 @@ HSF_DATA *MP6_LoadHSFNative(void *dataPtr)
     MP6_LOG_ONCE("HSF", "LoadHSF-native");
 
     memset(&ctx, 0, sizeof(ctx));
+    if (stringTableOut != NULL) *stringTableOut = NULL;
 
-    if (!base) {
-        /* Should never happen (callers always pass a freshly decoded
-         * buffer) -- defensively return a safe, inert, non-NULL model
-         * rather than crash. */
-        hsf = (HSF_DATA *)HuMemDirectMallocNum(HEAP_MODEL, sizeof(HSF_DATA), ctx.mallocTag);
-        memset(hsf, 0, sizeof(HSF_DATA));
-        return hsf;
+    /* No byte is read until the pointer is proved to be the base of a live
+     * game-heap allocation.  The preflight then narrows the rounded allocator
+     * capacity to the string table's checked end (the serialized HSF logical
+     * length) and validates every section/nested pool/allocation cardinality.
+     * Invalid input returns a complete inert root, never a half-published
+     * graph. */
+    capacity = mp6_heap_block_data_size(base);
+    if (!mp6_hsf_preflight(base, (size_t)capacity, &validated,
+                           validationWhy, sizeof(validationWhy))) {
+        /* capacity is logged so a rejection can be attributed to a specific
+         * disc file offline (re-run the preflight over the corpus, match on
+         * size) -- the reject line itself has no filename to give: the game
+         * hands this loader only a decoded heap pointer. */
+        fprintf(stderr, "[HSF] rejected malformed decoded model: %s (capacity=%u)\n",
+                validationWhy[0] ? validationWhy : "unknown validation failure",
+                (unsigned)capacity);
+        fflush(stderr);
+        return MakeInertHSF(base, (size_t)capacity);
     }
 
     ctx.base = base;
+    ctx.fileSize = validated.logicalSize;
     ReadHeader(base, &ctx.h);
-
-    if (memcmp(ctx.h.magic, "HSF", 3) != 0) {
-        fprintf(stderr,
-                "[WARN] MP6_LoadHSFNative: magic \"%.8s\" doesn't start with \"HSF\" -- "
-                "parsing anyway (best-effort); rendering may be wrong for this model\n",
-                ctx.h.magic);
-    }
 
     realCenvNum = ctx.h.sec[FSEC_CENV].num;
     ctx.normalIsFloat = (realCenvNum > 0);
@@ -2257,7 +2459,7 @@ HSF_DATA *MP6_LoadHSFNative(void *dataPtr)
      * See LoadCtx's own mallocTag comment above for the full story. */
     hsf = (HSF_DATA *)HuMemDirectMallocNum(HEAP_MODEL, sizeof(HSF_DATA), ctx.mallocTag);
     memset(hsf, 0, sizeof(HSF_DATA));
-    ctx.mallocTag = (u32)hsf;
+    ctx.mallocTag = (u32)mp6_heap_pointer_tag(hsf);
 
     LoadPalettes(&ctx);
     LoadBitmaps(&ctx);
@@ -2270,6 +2472,19 @@ HSF_DATA *MP6_LoadHSFNative(void *dataPtr)
     LoadFaceGroups(&ctx);
     LoadCenv(&ctx);    /* before LoadObjects, so each mesh can resolve its cenv pointer */
     LoadObjects(&ctx);
+    if (ctx.sanitizedFaceCorners != 0 || validated.oobFaceCorners != 0) {
+        /* Loud but non-fatal: exactly which corners is attributable offline
+         * by re-running the preflight over the disc corpus; logicalSize
+         * uniquely names the three known files (91475/91476/100755 = the
+         * Boo shopkeeper -- see SanitizeMeshFaceCorners' header comment). */
+        fprintf(stderr, "[HSF] sanitized %u face corner index(es) outside mesh buffer "
+                "(preflight counted %u; retail authoring overread, clamped to degenerate; "
+                "logicalSize=%u)\n",
+                (unsigned)ctx.sanitizedFaceCorners,
+                (unsigned)validated.oobFaceCorners,
+                (unsigned)validated.logicalSize);
+        fflush(stderr);
+    }
     /* Part before cluster (cluster references parts); both before motion
      * (motion CLUSTER tracks resolve cluster names). Same dependency order
      * game/hsfload.c's own LoadHSF() uses. */
@@ -2355,6 +2570,13 @@ HSF_DATA *MP6_LoadHSFNative(void *dataPtr)
            ctx.normalNum, ctx.stNum, ctx.colorNum, ctx.faceNum, ctx.objectNum, ctx.bitmapNum,
            ctx.paletteNum, ctx.clusterNum, ctx.partNum, ctx.shapeNum, (void *)ctx.root);
     fflush(stdout);
+
+    /* Publish the legacy hsfload.c StringTable side effect only after the
+     * entire input graph has passed preflight and the native graph is fully
+     * constructed.  A rejected file leaves the caller's global NULL. */
+    if (stringTableOut != NULL && validated.stringSize != 0) {
+        *stringTableOut = (char *)(base + validated.stringOffset);
+    }
 
     return hsf;
 }

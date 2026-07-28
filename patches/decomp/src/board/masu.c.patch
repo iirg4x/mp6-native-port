@@ -1,0 +1,42 @@
+--- a/src/board/masu.c
++++ b/src/board/masu.c
+@@ -3,0 +4,2 @@
++#include "be.h"
++
+@@ -136 +138 @@
+-    (dst) = *(u16 *)(ptr); \
++    (dst) = be16(ptr); /* native port: masu blob is big-endian disc data */ \
+@@ -141 +143 @@
+-    (dst) = *(u16 *)(ptr) + 1; \
++    (dst) = be16(ptr) + 1; /* native port: big-endian link index */ \
+@@ -146 +148 @@
+-    (dst) = *(u32 *)(ptr); \
++    (dst) = be32(ptr); /* native port: big-endian attribute word */ \
+@@ -151 +153 @@
+-    (dst) = *(s32 *)(data); \
++    (dst) = (s32)be32(data); /* native port: big-endian tile count */ \
+@@ -156 +158,3 @@
+-    memcpy(&(dst), (ptr), sizeof(HuVecF)); \
++    (dst).x = bef32((const u8 *)(ptr) + 0); /* native port: 3 big-endian floats */ \
++    (dst).y = bef32((const u8 *)(ptr) + 4); \
++    (dst).z = bef32((const u8 *)(ptr) + 8); \
+@@ -211,0 +216,7 @@
++    {
++        const unsigned char *mp6DiagB = (const unsigned char *)data;
++        OSReport("[MASU-DIAG] mbMasuDataRead(dataNum=%08x): buf=%p masuNum=%d bytes=%02x %02x %02x %02x %02x %02x %02x %02x%c",
++                 (unsigned)dataNum, (void *)data, (int)masuNum[masuLayer],
++                 mp6DiagB[0], mp6DiagB[1], mp6DiagB[2], mp6DiagB[3],
++                 mp6DiagB[4], mp6DiagB[5], mp6DiagB[6], mp6DiagB[7], 10);
++    }
+@@ -236,0 +248,11 @@
++    {
++        int mp6DiagI;
++        for (mp6DiagI = 1; mp6DiagI <= masuNum[masuLayer] && mp6DiagI <= 6; mp6DiagI++) {
++            OSReport("[MASU-DIAG] masu[%d] mAttr=%08x type=%d flag=%04x linkNum=%d pos=(%.1f,%.1f,%.1f)%c",
++                     mp6DiagI, (unsigned)masuData[masuLayer][mp6DiagI].mAttr,
++                     (int)masuData[masuLayer][mp6DiagI].type, (unsigned)masuData[masuLayer][mp6DiagI].flag,
++                     (int)masuData[masuLayer][mp6DiagI].linkNum, masuData[masuLayer][mp6DiagI].pos.x,
++                     masuData[masuLayer][mp6DiagI].pos.y, masuData[masuLayer][mp6DiagI].pos.z, 10);
++        }
++        OSReport("[MASU-DIAG] star-tile (mAttr&0x80) count=%d%c", mbMasuMAttrListGet(0x80, NULL), 10);
++    }

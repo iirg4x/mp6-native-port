@@ -19,7 +19,7 @@
  * 3D backdrop/camera from a cached native baseline once per tick, cheaply,
  * with no resize-event plumbing needed).
  *
- * Included from BOTH decomp-side patches (patches/decomp/**, which read
+ * Included from BOTH decomp-side patches (the patches/decomp tree, which reads
  * these to compute a runtime-adjusted value in place of a compile-time
  * literal -- gated by a RUNTIME check inside these functions, never a
  * compile-time #ifdef, so the decomp gates + default-OFF behavior are

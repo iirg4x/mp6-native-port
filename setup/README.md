@@ -34,9 +34,15 @@ copy the whole `dist\` folder anywhere you like.
    from that file so this can never drift out of sync with it). If
    missing, downloads it from the **official** `ziglang.org` release index
    (`https://ziglang.org/download/index.json`), verifies its sha256, and
-   prints the exact URL it used. Also makes sure `nod` (the GC/Wii
+   prints the exact URL it used. The installed manifest fingerprints every
+   regular Zig file (excluding mutable caches), and `tools/build.py` includes
+   that full-tree identity in its incremental command stamps. Also makes sure `nod` (the GC/Wii
    disc-image library) is present, via the port's own
-   `tools/fetch_nod.py`.
+   `tools/fetch_nod.py`. Android Nod uses the exact Rust 1.97.1 toolchain
+   and a fresh offline vendor tree extracted from all 146 archives whose
+   SHA-256 values are fixed by the pinned `Cargo.lock`; two clean builds must
+   therefore consume identical source/toolchain inputs rather than mutable
+   Cargo registry directories.
 3. **Decomp source** -- clones (or fast-forwards) the pinned decompilation
    repository at the exact commit named in
    [`docs/DECOMP_DEPENDENCY.md`](../docs/DECOMP_DEPENDENCY.md), parsed at
@@ -65,7 +71,12 @@ copy the whole `dist\` folder anywhere you like.
    one-time, machine-local step, utterly unlike the per-player steps
    around it). If it isn't built yet, prints the exact manual recipe
    (`docs/BUILDING.md`); pass `--build-aurora` to attempt doing that
-   automatically instead (best-effort -- see `docs/SETUP_TOOL.md`).
+   automatically instead (best-effort -- see `docs/SETUP_TOOL.md`). Its
+   local stamp first proves Aurora's full resolved `HEAD` is the pinned commit,
+   then authenticates every resolved Windows/Android link archive,
+   deployed runtime DLL, CMake/Ninja build configuration, and the full Zig
+   tree; readiness and direct/link-only builds reject changed bytes even
+   when size and timestamps are restored.
 6. **Build** -- runs `tools/build.py` for both the windowed
    (`mp6native.exe`, links Aurora for a real window) and headless
    (`mp6native_headless.exe`, CI/automation, no Aurora/SDL at all) modes,
@@ -109,7 +120,25 @@ whatever it complained about.
   reuses them; if they're missing, it prints the exact provisioning recipe
   and stops rather than guessing. It deliberately does **not** run
   `sdkmanager --licenses` or install the SDK for you -- accepting Google's
-  SDK license is something only you can do. The disc itself is never
+  SDK license is something only you can do. Before Gradle runs, the setup
+  tool verifies the generated Gradle 8.13 launchers and official wrapper
+  JAR hashes as well as the pinned distribution ZIP checksum. It also pins
+  API 36's compile/lint inputs, the complete Build Tools 35.0.0 tree, Oracle
+  JDK 22.0.2's complete runtime tree, and the SHA-256 metadata for all 488
+  artifacts in the AGP 8.13.2 release/lint graph. Gradle runs with isolated
+  environment/project state, no daemon/build/configuration cache, and a
+  fail-closed reviewed lint baseline. Native debug builds pin every
+  game/platform TU and the standalone APK bootstrap to `-O0`; release builds pin them to
+  `-O2 -fno-strict-aliasing` while retaining `-fwrapv` on decomp/common code,
+  and Gradle
+  rejects staged libraries whose content-hashed native manifest does not match
+  its selected variant, then verifies that the APK contains those exact library
+  and resource bytes. `VERSION_CODE` is explicit and clone-depth-independent.
+  The Android `nod` manifest likewise
+  binds `libnod.a` to the exact Rust compiler, Cargo archives, host and target
+  standard libraries, and exact NDK r27d tools; changing any input makes the
+  artifact stale instead of silently blessing it.
+  The disc itself is never
   touched by this tool for Android: the APK's own first-run onboarding
   (`platform/gx/ui/content_setup.cpp`) handles
   that on-device.

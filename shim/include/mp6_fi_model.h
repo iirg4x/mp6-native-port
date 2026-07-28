@@ -1,93 +1,90 @@
-/* MP6 native port -- Unlocked FPS, MODEL-level frame interpolation (P1).
+/* MP6 native port -- identity metadata for side-effect-free frame replay.
  *
- * The "SM64 way": instead of matching one tick's raw GX command stream to the
- * next and rewriting pos matrices (the STREAM path that used to live in
- * platform/gx/frame_interp.c -- fragile because a replayed frame has no object
- * identity, so a portrait that flipped and a bridge that slid could not be told
- * apart and the draw-order match flickered; deleted after this path beat it
- * on-device), this path interpolates at the Hu3D MODEL level.
- *
- * Each real tick we snapshot every LIVE model's transform (pos/rot/scale, keyed
- * by its stable Hu3DData[] slot index -- identity for free) and every live
- * camera. During mp6_tick_throttle_wait()'s idle window we advance that pose
- * FORWARD past the newest snapshot (t = 1 + alpha along the N-1 -> N delta,
- * alpha = the fraction of a tick elapsed since pose N was presented) and
- * RE-RUN Hu3DExec so the renderer re-derives normals/lighting/draw order from
- * the advanced pose -- no draw-order matching, no matrix surgery. Object
- * identity = the slot index, so a per-slot snap decision (spawn/teleport/
- * fast-flip) never touches an innocent neighbour -- and that per-slot snap is
- * what makes extrapolation safe here where it was not in the stream path.
- *
- * Correctness (GATE A -- no game desync): a re-run must advance ZERO game
- * state. The five state-advancing side effects inside Hu3DExec (modelP->tick++,
- * the Hu3DMotionNext loop, HuSprFinish, Hu3DAnimExec, and the shadow/reflect
- * EFB brackets) are wrapped in `if (!mp6_fi_replay_pass)` by the hsfman.c
- * patch, and the vertex-deform block self-skips on a re-run because its
- * HU3D_ATTR_MOT_EXEC gate is cleared ONLY in Hu3DPreProc (never called on a
- * re-run). After the re-run we restore every model's/camera's tick-N transform
- * exactly, so tick N+1's game logic proceeds byte-identically to feature-off.
- *
- * This is the ONLY interpolation path: there is no mode selector and no
- * fallback. The Mods-page "Unlocked FPS" toggle (video.unlocked_fps) drives it
- * directly; feature-off is an exact no-op (no snapshot, no re-run).
- *
- * This TU lives in platform/hsf/ (needs game/hu3d.h, COMMON_FLAGS -- like
- * mp6_freecam.c) and is host-state carved out of savestates (its snapshot
- * buffers belong to the RUNNING process, not captured game state).
+ * Unlocked-FPS replays never call Hu3DExec.  The real tick's GX stream is
+ * retained and submitted again, with selected matrix payloads rewritten.
+ * This module supplies the information a byte stream does not carry itself:
+ * stable model generations, the active model/camera draw context, and the
+ * previous/current camera poses used to reject camera cuts.  All state here is
+ * host render state and is carved out of savestates.
  */
 #ifndef MP6_FI_MODEL_H
 #define MP6_FI_MODEL_H
+
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Replay-pass guard. 1 only while an interpolated Hu3DExec re-run is in flight
- * (set/cleared around the Hu3DExec() call inside mp6_fi_model_replay, on the
- * game thread, in the idle window). The hsfman.c patch externs this and skips
- * the five state-advancing side-effect sites when it is set. Default 0 -- so
- * every normal tick runs those sites unchanged (byte-identical off-proof). */
-extern int mp6_fi_replay_pass;
+/* A slot generation changes on every model/link/hook-model creation.  Pairing
+ * keys include it, so a killed model and a new model reusing the same slot can
+ * never inherit each other's matrix history. */
+void mp6_fi_model_identity_new(int model_id);
 
-/* Snapshot every live model transform + every live camera at tick N, rotating
- * the prior snapshot down to N-1 (strictly N-1/N retention). Called at
- * note_frame_end when model mode is active and the feature is enabled. */
-void mp6_fi_model_snapshot(void);
+/* Hu3DExec brackets real draws with this context.  The GXLoadPosMtxImm bridge
+ * consumes one ordinal for each matrix load and records
+ * (camera, slot, generation, sub, ordinal) beside the retained FIFO stream. */
+void mp6_fi_capture_context_reset(void);
+void mp6_fi_capture_camera(int camera_id);
+void mp6_fi_capture_model_begin(int model_id);
+void mp6_fi_capture_model_end(void);
+int mp6_fi_capture_context_next(int *camera_id, int *model_id,
+                                uint32_t *generation, uint16_t *sub,
+                                uint16_t *ordinal);
 
-/* 1 iff both the N-1 and N snapshots are populated (an interpolation can be
- * built this window). */
-int mp6_fi_model_ready(void);
+/* The open camera bracket, or -1.  Recorded on matrices that have no model
+ * identity too, so the pairing diagnostics can tell an unidentified draw that
+ * is still INSIDE a 3D camera (a layer hook -- it moves with a pan, so pinning
+ * it to tick N is visible) from one outside every camera (sprites, wipes, the
+ * shadow/reflect passes -- screen-space, so pinning it is not). */
+int mp6_fi_capture_camera_id(void);
 
-/* Present one in-between frame: write pose(N-1 -> N, t = 1 + alpha) -- a
- * FORWARD extrapolation past pose N, alpha bounded to [0,1] -- into every live
- * model + camera, re-run Hu3DExec under mp6_fi_replay_pass, then restore the
- * tick-N state exactly. MUST be called between aurora_begin_frame()/
- * aurora_end_frame().
+/* DEFERRED-DRAW IDENTITY (the pan-phase defect, docs/history/F3_LEAF_STROBE.md
+ * section 7).  Hu3DDraw does not emit every object where it decides to draw it:
+ * translucent / NEAR / ALTBLEND / z-compare-off objects and every hook-func
+ * (particle) model are pushed onto the z-sorted DrawObjData list and emitted
+ * later by Hu3DDrawPost -- which runs AFTER mp6_fi_capture_model_end() and in
+ * DEPTH order, not push order.  On the w01 board that is two thirds of the
+ * frame's position matrices, and without identity none of them can ever pair:
+ * they are pinned to tick N on every interpolated present while the bracketed
+ * third advances, which is invisible with a still camera and is the whole
+ * artifact during a pan.
  *
- * Forward, not backward: the game's own real frame presents pose N untouched by
- * this path, so interpolating BACKWARD (t in [0,1]) made every window present
- * N, then ~N-1, then catch up -- a per-tick sawtooth that judders every moving
- * model (the v212 on-device report). Overshoot is bounded by the per-slot snap
- * gates in mp6_fi_model.c, which the stream path never had. */
-void mp6_fi_model_replay(double alpha);
+ * Identity is therefore RESERVED at push time, where the model bracket is still
+ * open, and re-installed at emit time:
+ *   reset  -- Hu3DDrawPreInit, once per (camera, layer) batch
+ *   push   -- each DrawObjIdx++ site, binding that slot to the open bracket's
+ *             model and to a per-model PUSH-ORDER rank (`sub`)
+ *   begin  -- Hu3DDrawPost, per draw object, keyed by its DrawObjData index
+ * `sub` is push-order, so the depth sort permuting the emission order cannot
+ * disturb it; a model whose deferred membership actually changes still fails
+ * the group-integrity census in frame_interp.c and snaps for that one tick. */
+void mp6_fi_capture_defer_reset(void);
+void mp6_fi_capture_defer_push(int draw_obj_index);
+void mp6_fi_capture_defer_begin(int draw_obj_index);
 
-/* 1 while the screen wipe/transition is drawing (wipeData.mode != DUMMY).
- * WipeExecAlways() draws OUTSIDE Hu3DExec (src/game/main.c), so a replay frame
- * cannot contain it and the transition would strobe; the caller skips replays
- * for those ticks. See the block comment in mp6_fi_model.c. */
-int mp6_fi_model_wipe_active(void);
+/* LAYER-HOOK IDENTITY.  A layer hook (Hu3DLayerHookSet) draws inside a camera
+ * bracket but owns no model slot: HuSprLayerHook, the water / framebuffer-copy
+ * passes, Hu3DZClear.  Several of those emit world-space matrices (hsfanim.c
+ * loads Hu3DCameraMtx itself as the modelview), so they move with a pan exactly
+ * like a model does and must pair for the same reason.  Their identity lives in
+ * a pseudo-slot namespace above HU3D_MODEL_MAX and is generation-stamped from
+ * the hook function pointer, so installing a different hook in the same slot
+ * cannot inherit the previous one's motion.  Closed with
+ * mp6_fi_capture_model_end() like any other bracket. */
+void mp6_fi_capture_layer_hook_begin(int hook_slot, const void *hook_fn);
 
-/* Drop the retained snapshots (feature-off transition, mode switch, or
- * savestate restore) so the next window does not interpolate across a
- * discontinuity. No-op-safe. */
+/* Rotate the real-tick camera snapshots after the real present.  A matrix pair
+ * is eligible only when its camera stayed live and position, target, and up
+ * all remained below their cut thresholds. */
+void mp6_fi_model_snapshot(void);
+int mp6_fi_model_camera_stable(int camera_id);
+
+/* Drop camera history and invalidate every live slot generation after a
+ * feature transition or savestate restore. */
 void mp6_fi_model_reset(void);
 
-/* GATE-A instrument (env MP6_FI_ANIMLOG=1): print a deterministic digest of
- * every live model's tick + motion clocks + transform once per REAL tick.
- * Comparing the digest stream with the feature ON vs OFF proves the re-runs
- * advanced no game state (no anim drift). Silent (one cached getenv) when
- * unset -- never perturbs behavior. Called every real tick from note_frame_end
- * regardless of mode. */
+/* Existing diagnostics retained for automated state-drift comparisons. */
 void mp6_fi_model_animlog(long tick);
 
 #ifdef __cplusplus

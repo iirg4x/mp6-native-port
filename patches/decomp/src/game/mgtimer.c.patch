@@ -1,0 +1,4 @@
+--- a/src/game/mgtimer.c
++++ b/src/game/mgtimer.c
+@@ -8,0 +9 @@
++#include "game/esprite.h"
