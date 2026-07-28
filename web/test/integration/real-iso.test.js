@@ -44,7 +44,7 @@ async function findReferenceTree() {
     const candidates = [
         process.env.MP6_REFERENCE_TREE,
         // This workspace's own layout: <_mp6_rebuild>/external_refs/repos/marioparty6/orig/GP6E01,
-        // sibling to <_mp6_rebuild>/port/mp6-port-clean (this repo).
+        // sibling to <_mp6_rebuild>/port/mp6-native-clean (this repo).
         path.resolve(__dirname, "../../../../../external_refs/repos/marioparty6/orig/GP6E01"),
     ].filter(Boolean);
     for (const candidate of candidates) {

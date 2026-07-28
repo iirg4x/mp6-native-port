@@ -10,7 +10,7 @@ engine this project builds from its own decompiled/reimplemented source.
 ## 0. Prerequisites
 
 - **Build from a synced snapshot, not a live working tree.** This repo
-  (`mp6-port-clean`) is the clean, public snapshot of the port's source --
+  (`mp6-native-clean`) is the clean, public snapshot of the port's source --
   make sure the commit you're releasing from is actually pushed and is the
   real HEAD of the branch you're releasing (`main`/`master`), not a local
   working tree with uncommitted changes, stray test artifacts, or logs
