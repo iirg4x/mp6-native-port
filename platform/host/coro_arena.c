@@ -58,6 +58,8 @@
 #define MINICORO_IMPL
 #include "minicoro.h"
 
+#include "mp6_heap_scale.h" /* MP6_ARENA_* -- the pool base must clear the arena */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +79,34 @@
  * never silently under-size a slot. */
 #define MP6_CORO_SLOT_SIZE  (MP6_CORO_STACK_SIZE + 0x10000u)
 #define MP6_CORO_POOL_SIZE  ((size_t)MP6_CORO_MAX_SLOTS * (size_t)MP6_CORO_SLOT_SIZE)
+
+/* The pool's own base, named rather than first-fitted.
+ *
+ * This reservation is the SECOND one the process makes, and until this
+ * constant existed it simply took the first free entry of the shared
+ * candidate ladder -- which means its address was a function of the GAME
+ * ARENA's size. That was harmless while the arena was a compile-time 256 MB
+ * and the pool always landed at 0x90000000. It stopped being harmless when
+ * the arena's extent became a setting (Enhancements "Expanded heaps":
+ * 256 MB at x1, 550 MB at x4 -- shim/include/mp6_heap_scale.h): at x4 the
+ * arena covers 0x90000000 and 0xA0000000, so the pool slid to 0xB0000000.
+ *
+ * A moving pool base is not a cosmetic difference. Coroutine stacks are the
+ * one savestate region whose CONTENT is absolute addresses INTO ITSELF --
+ * saved stack pointers, frame pointers, and minicoro's own context all
+ * point into the slot they were captured in -- so there is no relocation a
+ * restore could perform, and platform/os/savestate.c correctly refuses any
+ * state whose pool base differs. Pinning the base above the largest arena
+ * the port can request is what lets a state captured at one heap scale load
+ * at another; the asserts below are what keep that true if either constant
+ * moves. Falls back to the ladder if 0xC0000000 is somehow taken, exactly
+ * as before -- a pinned base is a preference, never a new failure mode. */
+#define MP6_CORO_POOL_BASE 0xC0000000u
+_Static_assert(MP6_CORO_POOL_BASE >= MP6_ARENA_LOW_BASE + MP6_ARENA_EXPANDED_BYTES,
+               "the coroutine pool must start above the largest game arena");
+_Static_assert((unsigned long long)MP6_CORO_POOL_BASE +
+                   (unsigned long long)MP6_CORO_POOL_SIZE <= 0x100000000ull,
+               "the coroutine pool must end below 4GB");
 
 /* host.h's opaque Mp6Coro, defined here for the arena backend (the fiber
  * backend has its own definition -- only one is ever compiled). A fixed
@@ -111,7 +141,7 @@ static void mp6_coro_pool_report(void)
 static void mp6_coro_pool_init(void)
 {
     int i;
-    g_pool = (uint8_t *)mp6_host_arena_reserve(MP6_CORO_POOL_SIZE);
+    g_pool = (uint8_t *)mp6_host_arena_reserve(MP6_CORO_POOL_BASE, MP6_CORO_POOL_SIZE);
     if (!g_pool) {
         fprintf(stderr, "[FATAL] coro_arena: could not reserve a %zu-byte low-4GB coroutine stack pool\n",
                 (size_t)MP6_CORO_POOL_SIZE);
@@ -296,6 +326,10 @@ void *mp6_coro_pool_base(void) { return g_pool; }
 size_t mp6_coro_pool_size(void) { return MP6_CORO_POOL_SIZE; }
 size_t mp6_coro_slot_size(void) { return MP6_CORO_SLOT_SIZE; }
 int mp6_coro_slot_count(void) { return MP6_CORO_MAX_SLOTS; }
+/* The high-water mark mp6_coro_pool_report() prints at exit under
+ * MP6_CORO_DEBUG, made readable while the process is still running. Pure
+ * getter: it neither arms nor resets the counter. */
+int mp6_coro_slots_peak(void) { return g_slotsHighWater; }
 
 /* A slot is live iff its wrapper still owns it (slot index self-consistent)
  * AND minicoro still has a coroutine there -- exactly the pair

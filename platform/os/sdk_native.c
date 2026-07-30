@@ -18,13 +18,16 @@ float __fabsf(float value)
     return fabsf(value);
 }
 
-/* Board modules that include game/board/main.h get this as an inline on
- * Gekko.  The recovered capsule owner does not include that header, so the
- * native monolith also provides the exact out-of-line equivalent. */
-s32 MBBoardNoGet(void)
-{
-    return GwSystem.boardNo;
-}
+/* MBBoardNoGet used to be defined here, out of line: on the e32fa5e pin the
+ * accessor was an inline in include/REL/w01Dll_world01.h only, and src/board/
+ * capsule.c -- which calls it -- does not include that REL header, so the
+ * native monolith had to supply the equivalent itself.  The 9da5780 pin
+ * (decomp 8d947f9, "Centralize the board number accessor") moved the inline
+ * into include/game/board/main.h, which capsule.c, world01.c and s01.c all
+ * include, so every caller now resolves it in its own translation unit and
+ * this definition became unreachable.  Deleted rather than kept: an
+ * out-of-line copy that nothing can call is one more thing to keep in sync
+ * with GwSystem for no benefit. */
 
 void PSMTXRotTrig(Mtx m, char axis, f32 sinA, f32 cosA)
 {

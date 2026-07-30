@@ -1,0 +1,36 @@
+--- a/src/game/ShapeExec.c
++++ b/src/game/ShapeExec.c
+@@ -41 +41,25 @@
+-        shapeIdx = obj->mesh.mesh.baseMorph;
++        /* PORT FIX -- bound the pose index BEFORE the float->int cast.
++         *
++         * `baseMorph` is written raw by hsfmotion.c's HSF_CHANNEL_MORPH case
++         * (`objP->mesh.mesh.baseMorph = GetCurve(trackP, time)`) with no
++         * clamp of any kind, and most shape tracks are BEZIER -- whose
++         * tangents can overshoot their own key values between keys. Retail
++         * then indexed `obj->mesh.shape[shapeIdx]` with no range test at all:
++         * `shapeIdxNext` is folded back only when it reaches shapeNum, and
++         * `shapeIdx` itself is never tested, so an authored end key of
++         * exactly shapeNum (or any bezier overshoot, or a dip below 0.0 near
++         * the first key) read straight past the pose array. On Gekko that was
++         * a silent overread of adjacent heap; here it is an out-of-bounds
++         * pointer load, and the cast itself would trap first -- zig cc's
++         * float-cast-overflow check aborts the process on a NaN/huge value
++         * where Gekko's fctiwz saturated (the same hardware-cast class as
++         * src/board/math.c's).
++         *
++         * Clamping in FLOAT space, before the cast, removes both at once and
++         * is a no-op for every value retail actually produced: an in-range
++         * baseMorph is unchanged, and `t` stays exactly `morph - shapeIdx`.
++         * The `!(morph > 0.0f)` form is deliberate -- it catches NaN too.
++         * ShapeProc's own gate guarantees shapeNum >= 1 here. */
++        float morph = obj->mesh.mesh.baseMorph;
++        if (!(morph > 0.0f)) {
++            morph = 0.0f;
++        } else if (morph > (float)(obj->mesh.shapeNum - 1)) {
++            morph = (float)(obj->mesh.shapeNum - 1);
++        }
++        shapeIdx = morph;
+@@ -46 +70 @@
+-        t = obj->mesh.mesh.baseMorph - shapeIdx;
++        t = morph - shapeIdx;

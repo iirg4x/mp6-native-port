@@ -137,3 +137,9 @@
 +        if (i == 0) {
 +            mp6_widescreen_extend_ring(obj->mdlId[i], "CP");
 +        }
+@@ -2222 +2222,4 @@
+-            pos2D.x - 18.0f, (s16)(pos2D.y - 23.0f));
++            /* MP6_NATIVE_PORT: `fctiwz` saturation for this float->s16 cast
++             * of a projected y; see shim/include/mp6_hwcast.h.
++             */
++            pos2D.x - 18.0f, (s16)MP6_FCTIWZ_S32(pos2D.y - 23.0f));

@@ -165,24 +165,72 @@ extern "C" {
  * (only OSInitFastCast's own asm block is guarded) -- clang cannot parse
  * MWCC-style register asm syntax at all, so the header hard-fails the
  * moment it's textually included, whether or not the functions are ever
- * called. Two call sites in our slice (game/hsfdraw.c, game/hsfanim.c)
- * use OSf32tos16 for a float->s16 "fast cast"; PPC's paired-single
- * quantized store truncates toward zero same as a plain C cast, so a
- * plain cast is a faithful stand-in.
+ * called. The call sites in our slice use OSf32tos16 (game/hsfdraw.c,
+ * game/hsfanim.c, board/effect.c, board/roulette.c) and OSf32tou8
+ * (board/effect.c).
+ *
+ * ROUNDING vs RANGE. psq_st rounds toward zero, same as a plain C cast --
+ * that half of the stand-in was always right. Its RANGE behaviour is not
+ * a cast's: a Gekko quantized store CLAMPS the converted value into the
+ * destination type's range (0..255 for U8, -32768..32767 for S16, and so
+ * on) instead of wrapping, and recovered code relies on that.
+ *
+ * board/effect.c's FadeOMExec is the proof. It steps the fade's u8 alpha
+ * by a float `speed` every frame and re-reads the truncated u8 each time,
+ * so a 160 -> 0 fade over maxTime=30 (mbEffFadeOutSet's own arithmetic,
+ * speed = -160/30 = -5.3333) actually loses 6 per frame to that
+ * truncation and reaches 4 on frame 26 -- with work->time still at 4, so
+ * four more frames must run. Frame 27 computes alpha = -1.3333. On
+ * hardware psq_st clamps that to 0 and the fade simply sits at 0 until
+ * time runs out; as a plain C cast it is undefined behaviour, and this
+ * build's float-cast-overflow trap turned it into a hard panic on the
+ * board pause menu's exit fade ("(float) is outside the range of
+ * representable values of type 'unsigned char'").
+ *
+ * So the stand-ins below clamp. That is strictly closer to the
+ * instruction they model, and it cannot change any in-range conversion:
+ * the clamp only engages exactly where a cast would have been undefined.
+ * NaN is mapped to 0 deliberately rather than left to the cast -- no call
+ * site in the slice can produce one (this is not board/math.c's masked
+ * trig index, which is why that TU turns the sanitizer off instead), but
+ * an unordered compare would otherwise fall through to the same UB the
+ * clamp exists to remove.
  * --------------------------------------------------------------------- */
 #define _DOLPHIN_OSFASTCAST
 
 static inline void OSInitFastCast(void) { /* PPC GQR setup -- no-op on x86 */ }
 
-static inline s16 OSf32tos16_impl(f32 f) { return (s16)f; }
-static inline u8  OSf32tou8_impl(f32 f)  { return (u8)f; }
-static inline s8  OSf32tos8_impl(f32 f)  { return (s8)f; }
-static inline u16 OSf32tou16_impl(f32 f) { return (u16)f; }
+/* One clamp per destination type; `!(f > lo)` catches NaN along with the
+ * low side, so every path out of these returns a defined value. */
+static inline s16 OSf32tos16_impl(f32 f)
+{
+    if (!(f > -32768.0f)) return (s16)-32768;
+    if (f > 32767.0f) return (s16)32767;
+    return (s16)f;
+}
+static inline u8 OSf32tou8_impl(f32 f)
+{
+    if (!(f > 0.0f)) return (u8)0;
+    if (f > 255.0f) return (u8)255;
+    return (u8)f;
+}
+static inline s8 OSf32tos8_impl(f32 f)
+{
+    if (!(f > -128.0f)) return (s8)-128;
+    if (f > 127.0f) return (s8)127;
+    return (s8)f;
+}
+static inline u16 OSf32tou16_impl(f32 f)
+{
+    if (!(f > 0.0f)) return (u16)0;
+    if (f > 65535.0f) return (u16)65535;
+    return (u16)f;
+}
 
-static inline void OSf32tos16(f32 *f, s16 *out) { *out = (s16)(*f); }
-static inline void OSf32tou8(f32 *f, u8 *out)   { *out = (u8)(*f); }
-static inline void OSf32tos8(f32 *f, s8 *out)   { *out = (s8)(*f); }
-static inline void OSf32tou16(f32 *f, u16 *out) { *out = (u16)(*f); }
+static inline void OSf32tos16(f32 *f, s16 *out) { *out = OSf32tos16_impl(*f); }
+static inline void OSf32tou8(f32 *f, u8 *out)   { *out = OSf32tou8_impl(*f); }
+static inline void OSf32tos8(f32 *f, s8 *out)   { *out = OSf32tos8_impl(*f); }
+static inline void OSf32tou16(f32 *f, u16 *out) { *out = OSf32tou16_impl(*f); }
 
 static inline void OSs8tof32(const s8 *in, float *out)   { *out = (float)(*in); }
 static inline void OSs16tof32(const s16 *in, float *out) { *out = (float)(*in); }

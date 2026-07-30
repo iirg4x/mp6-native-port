@@ -45,6 +45,7 @@ int mp6_frame_dump_active(void) { return 0; }
 #include "mp6_parse.h"      /* mp6_parse_i32_strict */
 #include "mp6_path.h"       /* mp6_path_copy_checked */
 #include "mp6_utf8_file.h"  /* mp6_fopen_utf8 */
+#include "mp6_console.h"    /* the MP6_FRAME_DUMP runtime lever */
 
 extern long mp6_tick_count;
 
@@ -198,7 +199,14 @@ static void fd_parse_env(void)
 static int fd_enabled(void)
 {
     if (s_fdEnabled == -2) fd_parse_env();
-    return s_fdEnabled == 1;
+    /* env decides the output directory and the burst's shape, so the console
+     * cannot ARM a dump that MP6_FRAME_DUMP never configured -- it can only
+     * suppress one that is configured (`set framedump 0`). That asymmetry is
+     * deliberate: this lever costs ~9.8 ms/frame of GPU readback and eats the
+     * whole idle window (shim/include/mp6_frame_dump.h), so the useful runtime
+     * control is the OFF switch, and turning it ON needs a destination. */
+    return mp6_console_cvar_get(MP6_CVAR_FRAME_DUMP, s_fdEnabled == 1) == 1 &&
+           s_fdEnabled == 1;
 }
 
 int mp6_frame_dump_active(void)

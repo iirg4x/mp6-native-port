@@ -206,26 +206,36 @@
 +    modelP->hsf->root = mp6_hsf_rebase_object(modelP->hsf, objtop, modelP->hsf->root);
 @@ -678,0 +792 @@ HU3D_MODELID Hu3DHookFuncCreate(HU3D_MODEL_HOOK hookFunc)
 +    mp6_fi_model_identity_new(modelId);
-@@ -935,0 +1050,17 @@ void Hu3DModelLayerSet(HU3D_MODELID modelId, s16 layerNo)
-+/* On real hardware this lookup always finds a real object -- a model's
-+ * real HSF data always has the name callers ask for, so returning NULL
-+ * here was pure defensive code, never actually exercised. This port's HSF
-+ * loader stub gives every model an EMPTY object list on purpose, so this
-+ * lookup now genuinely fails every time -- and 18 call sites across 7
-+ * files immediately write through the result with no NULL check of their
-+ * own (the same shape this patch queue already fixed once for
-+ * Hu3DAnimAnimSet's own callers). Patching all 18 call sites individually
-+ * is far more surface area than fixing the one shared chokepoint they all
-+ * already funnel through. This dummy is a plain zeroed HSF_OBJECT, never
-+ * linked into any real hsf->root/object[] tree, so nothing ever traverses
-+ * INTO it (Hu3DDraw/MakeDisplayList never see it); it only ever absorbs a
-+ * caller's writes harmlessly instead of crashing. Shared across every
-+ * "not found" case rather than allocated fresh: nothing ever reads a
-+ * meaningful value back out of it, so there is no cross-talk to avoid. */
+@@ -935,0 +1050,26 @@ void Hu3DModelLayerSet(HU3D_MODELID modelId, s16 layerNo)
++/* Shared "not found" sink for Hu3DModelObjPtrGet. HISTORY / corrected
++ * premise (docs/research/hsf_stub_audit.md D6, D7): this dummy was
++ * introduced under the claim that the port's HSF loader stub gave every
++ * model an EMPTY object list, making this lookup "genuinely fail every
++ * time". That premise is FALSE today -- the native loader
++ * (platform/hsf/hsf_load_native.c) builds the full object array and the
++ * lookup succeeds normally -- so the sink is only ever returned on a
++ * GENUINE miss (e.g. a model replaced by MakeInertHSF after preflight
++ * rejection). 18 call sites across 7 files still write through this
++ * result with no NULL check of their own, so an interim shared sink stays
++ * until they are audited: restoring the original `return NULL` first
++ * would turn every such miss into an immediate crash at whichever caller
++ * dereferences it. But a plain ZEROED HSF_OBJECT is not a safe sink
++ * either: HSF_OBJECT.name is a char*, and REL/fileseldll's card-rename
++ * path strcpy()s THROUGH obj->name -- with name NULL, a real miss became
++ * exactly the strcpy(NULL, "card1") crash its own guard was written to
++ * prevent. So the sink carries a writable name buffer (attached lazily at
++ * the return site), making every absorbed read and write defined and
++ * bounded. The miss itself stays detectable: the "OBJPtr Error!" OSReport
++ * above the return fires on every miss regardless. Never linked into any
++ * real hsf->root/object[] tree, so draw paths never traverse into it. */
++static char mp6_dummyObjName[HSF_OBJNAME_MAX_LEN];
 +static HSF_OBJECT mp6_dummyObj;
 +
-@@ -952 +1083 @@ HSF_OBJECT *Hu3DModelObjPtrGet(HU3D_MODELID modelId, char *objName)
+@@ -952 +1084,4 @@ HSF_OBJECT *Hu3DModelObjPtrGet(HU3D_MODELID modelId, char *objName)
 -    return NULL;
++    if (mp6_dummyObj.name == NULL) {
++        mp6_dummyObj.name = mp6_dummyObjName;
++    }
 +    return &mp6_dummyObj;
 @@ -1287,0 +1419 @@ void Hu3DCameraCreate(int cameraBit)
 +    defCamera.aspect = HU_DISP_ASPECT * mp6_widescreen_scale_factor(); /* 1.0 (no-op) when disabled; reproduces the reference widescreen hack's defCamera aspect widen at the live aspect instead of a fixed ratio */

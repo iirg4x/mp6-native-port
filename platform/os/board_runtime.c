@@ -1,5 +1,6 @@
 #include "mp6_board_runtime.h"
 #include "mp6_events.h" /* w01.live / w01.render game events */
+#include "mp6_diag_probe.h" /* pull-side board liveness -- see the getters below */
 
 #include <stdio.h>
 
@@ -54,4 +55,23 @@ void mp6_board_runtime_draw(void)
         fflush(stdout);
         mp6_event_post("w01.render", (long)s_drawCount, NULL);
     }
+}
+
+/* Pull-side liveness (shim/include/mp6_diag_probe.h). Both counters were
+ * already running on every tick and every draw; they were simply unreadable
+ * once the two one-shot [W01] lines had been printed, so "is the board still
+ * ticking, and is it still drawing" had no answer after boot. Getters only. */
+int mp6_diag_board_no(void)
+{
+    return (int)s_boardNo;
+}
+
+unsigned mp6_diag_board_ticks(void)
+{
+    return (unsigned)s_tickCount;
+}
+
+unsigned mp6_diag_board_draws(void)
+{
+    return (unsigned)s_drawCount;
 }

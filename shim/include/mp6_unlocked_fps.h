@@ -81,11 +81,47 @@
  * motion gate can catch. With the carry O(0) == B exactly: a replay frame can
  * never disagree with the tick frame it was built from.
  *
+ * THE THREE CHANNELS ARE GATED SEPARATELY, AND SCALE IS A HOLD RATHER THAN A
+ * SNAP. A replay evaluates at t = 1+alpha, i.e. it EXTRAPOLATES the last tick's
+ * motion, so each TRS channel needs a bound above which one tick of forward
+ * overshoot stops being imperceptible:
+ *
+ *   translation  |dt| >= FI_TRANS_SNAP_U (50u)      -> snap the whole pair
+ *   rotation     |qdot| <= FI_ROT_SNAP_QDOT (~10deg)-> snap the whole pair
+ *   scale        max_i max(sb_i/sa_i, sa_i/sb_i) - 1 >= FI_SCALE_SNAP_RATIO
+ *                -> HOLD the scale channel (alphaS = 0) and keep advancing
+ *                   translation and rotation
+ *
+ * Scale had no gate and no diagnostic at all until the w01 dice bloom was
+ * measured (src/board/dice.c DiceObjOMExec case 2: a sin-driven 1.0 -> 2.0x
+ * squash over 12 ticks, whose per-tick Y hop of 38.8u sits UNDER the
+ * translation gate), so the bloom extrapolated at full strength and the tick
+ * that ENDS it was carried past the end of a stopped animation. The gate is a
+ * per-channel hold and not a snap because translation and rotation are already
+ * bounded by their own gates: snapping the whole matrix would pin the object to
+ * the tick rate while the scene keeps advancing, which is the pan-phase defect
+ * of docs/history/F3_LEAF_STROBE.md section 7 seen from the other side. All
+ * three scale columns are held together -- the dice grows in x/z as it squashes
+ * in y, so freezing one column and advancing the others would distort the shape
+ * rather than freeze it.
+ *
+ * The scale gate is camera-independent BY PROOF: a pos matrix is camera x model
+ * and the Hu3D view matrix is rigid, so the left-multiply preserves column
+ * lengths and the decomposed scale is the model's own. A camera move cannot
+ * move this ratio (unlike the translation gate, which sees a pan), and a hold
+ * is a no-op at alpha = 0, so O(0) == B is unaffected.
+ *
  * Bisect levers, diagnosis only, never set in a real run:
  *   MP6_FI_NO_INTERP=1     keep the replay cadence, submit the stream verbatim.
  *   MP6_FI_NO_RESIDUAL=1   drop the residual carry (reinstates the defect).
- * MP6_FI_DIAG>=3 reports, per replay, maxResid (the shear being carried) and
- * maxA0Err (|O(0) - B|, which must stay at zero).
+ *   MP6_FI_NO_SCALE_HOLD=1 drop the scale hold (reinstates the bloom overshoot).
+ *   MP6_FI_SCALE_SNAP=<r>  override FI_SCALE_SNAP_RATIO for a calibration sweep.
+ * MP6_FI_DIAG>=3 reports, per replay, maxResid (the shear being carried),
+ * maxA0Err (|O(0) - B|, which must stay at zero), maxScale with the model that
+ * produced it, scaleHold (pairs the scale gate acted on), and a six-bucket
+ * rewrite census -- rewritten / unpaired / camSnap / decompSnap / gateSnap /
+ * byteEq -- which is asserted to PARTITION the position loads seen, so no
+ * rewrite decision can go unnamed.
  */
 #ifndef MP6_UNLOCKED_FPS_H
 #define MP6_UNLOCKED_FPS_H

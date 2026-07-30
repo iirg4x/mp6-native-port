@@ -59,17 +59,37 @@ void mp6_os_globals_init(void);
 /* The crash handler installer is the host seam's mp6_host_crash_install,
  * declared in platform/host/host.h -- call-once-early contract. */
 
-/* Test tooling: parses a deterministic input script
- * ("wait:180;press:start;wait:60;press:a") and arms it for
- * platform/gx/aurora_bridge.c's own per-tick PAD injection -- see that
- * file's input-script section for the full design (removes
- * window-focus/SendKeys timing races from automated testing entirely).
- * Defined in platform/gx/aurora_bridge.c (Aurora/non-headless build only,
- * matching that file's own scope); called from platform/main_native.c's
- * CLI parsing when --input-script is given. A plain no-op declaration
- * would be pointless for --headless (no window/focus concern exists
- * there at all), so this is intentionally not provided for that build. */
+/* Test tooling: the deterministic input script
+ * ("wait:180;press:start;wait:60;press:a", plus the event-bound
+ * waitev:/pressuntil:/period:/timeout: steps). Parsed and armed by
+ * mp6_input_script_init from platform/main_native.c's CLI parsing when
+ * --input-script is given; advanced EXACTLY ONCE PER TICK by whichever
+ * build's PAD path owns the virtual controller status.
+ *
+ * Defined in platform/os/input_script.c, which is in
+ * PLATFORM_SOURCES_COMMON -- BOTH build modes. This used to be
+ * aurora_bridge.c-private and therefore Aurora-only, on the reasoning that
+ * "no window/focus concern exists" headless. That reasoning was about the
+ * problem the engine SOLVES, not about what it needs to run: it needs only
+ * this process's tick counter and the in-process event bus, and its absence
+ * headless meant --headless silently ignored --input-script, so no A-press
+ * route (file-select -> mode-select -> party setup -> board) could be driven
+ * without a window and the shared GPU lock. See input_script.c's header.
+ *
+ * advance() returns the buttons to latch this tick and latches the tick's
+ * analog tilt, which stick_get() then reports; armed() is false until an
+ * --input-script actually parsed at least one step, and every caller keeps
+ * its pre-existing behaviour in that case so an unscripted boot log stays
+ * byte-identical. */
+/* Spelled in stdint types, not the dolphin u16/s8 aliases: this header is
+ * included by TUs that have not necessarily seen dolphin/types.h yet, and
+ * on every target row here s8/u16 ARE int8_t/uint16_t (both the decomp's
+ * and Aurora's dolphin/types.h resolve them that way under TARGET_PC), so
+ * the two spellings name the same types and callers may pass either. */
 void mp6_input_script_init(const char *spec);
+uint16_t mp6_input_script_advance(void);
+void mp6_input_script_stick_get(int8_t *stickX, int8_t *stickY);
+int mp6_input_script_armed(void);
 
 /* The exe has no explicit /SUBSYSTEM flag, so launching it with no parent
  * console (the ordinary "just run the .exe" path) makes Windows allocate
@@ -195,6 +215,15 @@ void mp6_symbolize_addr(void *addr, char *outBuf, size_t outBufSz);
  * next to it). A complete no-op unless MP6_ALLOC_CENSUS_START_TICK is
  * set. */
 void mp6_alloc_census_tick_check(void);
+
+/* platform/hsf/mp6_motion_leaktest.c's standalone motion-bank ownership
+ * probe (env MP6_MOTION_LEAKTEST="dataNumHex[,startTick[,cycles]]") --
+ * drives real Hu3DMotionCreate/Hu3DMotionKill cycles on the game thread
+ * and prints per-cycle HEAP_MODEL used/block deltas, proving the
+ * hsf_stub_audit D4/D5 ownership fixes hold (consumed by
+ * tools/motion_census_gate.py). Same per-tick choke point and no-op-
+ * unless-armed contract as mp6_alloc_census_tick_check above. */
+void mp6_motion_leaktest_tick(void);
 
 /* Bytes readable from `ptr` through the end of its own HuMemDirectMalloc
  * block, or 0 when `ptr` is not verifiably a live block base (wrong shadow

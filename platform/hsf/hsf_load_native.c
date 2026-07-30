@@ -547,6 +547,15 @@ typedef struct {
      * SanitizeMeshFaceCorners (see that function's own comment) -- logged
      * once per model by MP6_LoadHSFNative when non-zero. */
     u32 sanitizedFaceCorners;
+
+    /* Per-mesh shape (vertex-morph) binding tally, both logged once per model
+     * by MP6_LoadHSFNative. `shapeBoundMeshes` is the number of meshes whose
+     * ShapeProc gate this loader actually opened -- the runtime census of
+     * which models morph; `shapeRefusedMeshes` counts meshes that DECLARE a
+     * shape array this loader would not bind (see BindMeshShape's refusal
+     * list), which must stay 0 across the retail corpus. */
+    u32 shapeBoundMeshes;
+    u32 shapeRefusedMeshes;
 } LoadCtx;
 
 /* Keep the standalone preflight's conservative native-allocation strides
@@ -644,6 +653,24 @@ static char *GetMotionStr(const LoadCtx *ctx, u16 strOfs)
 static u32 SymAt(const LoadCtx *ctx, u32 idx)
 {
     return be32(ctx->base + ctx->h.sec[FSEC_SYMBOL].ofs + idx * 4);
+}
+
+/* TRUE when the symbol-pool slice [idx, idx+count) lies wholly inside the
+ * pool. The pool section's `num` is an ENTRY count (one u32 each), which is
+ * exactly how the preflight's own mp6_hsf_v_symbol_slice reads it.
+ *
+ * Only the per-mesh SHAPE slice needs this at load time: every other symbol
+ * slice this loader dereferences (object child lists, material attribute
+ * lists, cluster and shape-SECTION vertex lists) is already proved in-pool by
+ * mp6_hsf_preflight before a single byte is read, but the per-MESH shape slice
+ * (HSF_MESH.shapeNum/.shape) is not -- that field pair had no consumer when
+ * the preflight was written. See BindMeshShape. */
+static BOOL SymSliceInPool(const LoadCtx *ctx, u32 idx, u32 count)
+{
+    u32 total;
+    if (ctx->h.sec[FSEC_SYMBOL].num <= 0) return FALSE;
+    total = (u32)ctx->h.sec[FSEC_SYMBOL].num;
+    return idx <= total && count <= total - idx;
 }
 
 /* Forward-declared here because LoadObjects (which resolves each mesh's
@@ -1395,6 +1422,164 @@ static void SanitizeMeshFaceCorners(LoadCtx *ctx, HSF_OBJECT *obj)
 }
 
 /* ==========================================================================
+ * Per-mesh SHAPE (vertex-morph) binding -- HSF_MESH.shapeNum/.shape.
+ *
+ * This is the channel that drives w01's launcher flower: the file the player
+ * is flung out of (w01.bin entry 0x23 / 0x26) declares a 5-entry shape section
+ * and each of its five petal meshes declares `shapeNum=4, shapeType=0`, i.e.
+ * four authored petal poses the motion lerps between as the petals fold over
+ * the player. game/ShapeExec.c's ShapeProc gates that morph on exactly
+ * `obj->type == HSF_OBJ_MESH && obj->mesh.shapeNum != 0`, so leaving these two
+ * fields 0/NULL -- as this loader did, under a comment asserting no model in
+ * this content had shape>0 -- silently deleted the morph from every model that
+ * has one, in every preset, with the animation itself running correctly (the
+ * motion writes `baseMorph` 0 -> 3.0 every frame; nothing consumed it).
+ * Measured, not inferred: docs/research/flower_isolation.md.
+ *
+ * FILE FORM (game/hsfload.c's DispObject, HSF_OBJ_MESH case):
+ *   `shape` is a SYMBOL-POOL index whose `shapeNum` consecutive entries are
+ *   each a VERTEX-BUFFER index -- `newObj->mesh.shape = &NSymIndex[data->shape]`
+ *   then `newObj->mesh.shape[i] = &vtxtop[(u32)newObj->mesh.shape[i]]`, where
+ *   retail's `vtxtop` is the vertex HSF_BUFFER array base (hsfload.c:303).
+ *   Same indirection as HSF_MESH.child and HSF_CLUSTER.vertex.
+ *   It is NOT an index into the file's shape SECTION: decoded first-hand from
+ *   the shipped disc, w01[0x23]'s petal_s1 carries mesh shape sym 14 -> vertex
+ *   buffers [2,3,4,5] (petal_s1_shape1..4), while shape-section entry 0 holds
+ *   the same four indices at its own, different pool offset 34.
+ *
+ * WHAT THE BOUND DATA MUST SATISFY, from SetShapeMain's own body:
+ *   - every shape[i] is dereferenced unconditionally (`shape->count`,
+ *     `shape->data`), so a NULL entry is a fault, not a skipped pose. The
+ *     binding is therefore ALL-OR-NOTHING: if any pose fails to resolve the
+ *     mesh keeps shapeNum=0 and simply draws its static pose -- exactly what
+ *     this port did for every shape mesh before this function existed.
+ *   - the lerp writes into `obj->mesh.vertex->data` for `shape->count`
+ *     elements, so no pose may be LONGER than the live buffer.  (It may be
+ *     shorter; the tail then keeps its loaded value, which is what a partial
+ *     pose means.)
+ *   - the lerp's READ of the NEXT pose is bounded by the CURRENT pose's count,
+ *     not by its own (`for (i = 0; i < shape->count; i++) ... shapeNext->data[i]`),
+ *     so pose counts must be NON-DECREASING.  On Gekko a short successor was a
+ *     silent overread of whatever the file laid down next; here each pose is
+ *     its own exact-sized allocation, so it would be a genuine out-of-bounds
+ *     read.  Retail's own data satisfies this trivially -- every pose of a
+ *     mesh is that mesh's vertex buffer re-posed, hence identical counts (48
+ *     for each of w01[0x23]'s twenty petal poses) -- so this rejects nothing
+ *     the game ships and forecloses the one unbounded read the enabled path
+ *     would otherwise introduce.
+ *   - ONLY the shapeType==2 branch sums `mesh.morphWeight[i]` for i < shapeNum,
+ *     and HSF_MESH.morphWeight is exactly 33 floats -- so MESH_SHAPE_MAX is a
+ *     type-2 bound and nothing else.  Applying it to every type would be a
+ *     silent regression of this very fix: the shipped corpus holds 31 meshes
+ *     with shapeNum > 33 -- m609's fourteen `poly*` meshes at shapeNum=61
+ *     (shapeType 0, x2 container entries) and `hata01` at shapeNum=34
+ *     (shapeType 1) in s03[5]/w06[20]/w06n[20] -- and a blanket cap would
+ *     leave exactly those posed statically while every smaller morph came
+ *     alive.  The pool bound above is what keeps a large shapeNum honest.
+ *     (Gating on shapeType at LOAD time is sound because shapeType is a file
+ *     byte no runtime path rewrites -- ShapeExec.c's `== 2` compare is its
+ *     only reader in the whole decomp.  For the record, the retail corpus
+ *     contains no shapeType==2 mesh at all: 197 type 0 + 28 type 1, so the
+ *     morphWeight branch is unreachable on shipped data and this cap has no
+ *     effect on it either way.)
+ *     That branch also reads each pose only under its OWN count, so it needs
+ *     the live-buffer bound but not the monotonic one; the checks below apply
+ *     both to every type regardless, since only the cap is type-specific.
+ *
+ * The bind pose is safe by construction here: the poses are SEPARATE vertex
+ * buffers from the mesh's live one (verified on the shipped file above -- the
+ * live petal_s1 buffer is index 6, the poses are 2..5), so the morph never
+ * reads a buffer it is concurrently writing.  That is not a one-file
+ * observation: over the whole disc NO pose index equals its own mesh's live
+ * vertex index (census below), so the morph is idempotent per frame
+ * everywhere -- it recomputes the live buffer from untouched pose data rather
+ * than smoothing the live buffer into itself.  The loader's vtxtop/normtop
+ * bind-pose copies are untouched by this: they are allocated only for cenv
+ * (skinning) meshes and SetShapeMain never writes either one.  A mesh carrying
+ * BOTH shape and cenv chains exactly as retail does -- ShapeProc runs first
+ * and bumps `writeNum`, which is precisely the flag EnvelopeExec.c's
+ * SetEnvelopMain reads to source from the already-morphed live buffer instead
+ * of vtxtop (EnvelopeExec.c:166-170).
+ *
+ * FULL-DISC CENSUS of the conditions below, simulated over every shipped HSF
+ * (9,649 models in 259 containers, read from the retail ISO through
+ * tools/mp6scene/mp6_container.py):
+ *
+ *     shape meshes 225 in 83 models / 23 containers -- BOUND 225, REFUSED 0
+ *     shapeType histogram {0: 197, 1: 28}   (no shapeType==2 anywhere)
+ *     pose buffers aliasing their own live buffer: 0
+ *     bound meshes with shapeNum > 33: 31   (m609 poly* x28 at 61,
+ *                                            hata01 x3 at 34)
+ *
+ * Every refusal condition below is therefore dead on retail content: the
+ * binding is all-or-nothing per mesh, and no shipped mesh takes the "nothing"
+ * branch.  A non-zero `refused` count at runtime names content this loader
+ * has never seen, not a mesh the game expects to morph.
+ * ========================================================================== */
+
+/* SetShapeMain's shapeType==2 branch indexes mesh.morphWeight[i] for
+ * i < shapeNum; that array is 33 floats wide (game/hsfformat.h).  No OTHER
+ * shapeType touches morphWeight, so this is not a general shapeNum cap --
+ * see the header comment's fourth bullet. */
+#define MESH_SHAPE_WEIGHTED_MAX 33
+#define MESH_SHAPETYPE_WEIGHTED 2
+
+static void BindMeshShape(LoadCtx *ctx, HSF_OBJECT *obj, const u8 *mrec)
+{
+    u32 num = be32(mrec + FMESH_SHAPENUM);
+    u32 sym = be32(mrec + FMESH_SHAPE);
+    u8 shapeType = mrec[FMESH_SHAPETYPE];
+    HSF_BUFFER **arr;
+    s32 liveCount;
+    s32 prevCount;
+    u32 j;
+
+    obj->mesh.shapeNum = 0;
+    obj->mesh.shape = NULL;
+    if (num == 0) return;
+
+    /* Refusals below are counted, not fatal: an unbound mesh draws its static
+     * pose, which is strictly the pre-existing behaviour of this loader. */
+    if ((shapeType == MESH_SHAPETYPE_WEIGHTED && num > MESH_SHAPE_WEIGHTED_MAX)
+            || !SymSliceInPool(ctx, sym, num)
+            || obj->mesh.vertex == NULL || obj->mesh.vertex->data == NULL
+            || obj->mesh.vertex->count <= 0) {
+        ctx->shapeRefusedMeshes++;
+        return;
+    }
+    liveCount = obj->mesh.vertex->count;
+    prevCount = 0;
+    for (j = 0; j < num; j++) {
+        u32 vtxIdx = SymAt(ctx, sym + j);
+        const HSF_BUFFER *pose;
+        if (vtxIdx >= (u32)ctx->vertexNum) {
+            ctx->shapeRefusedMeshes++;
+            return;
+        }
+        pose = &ctx->vertex[vtxIdx];
+        /* pose->count > liveCount would overrun the WRITE target; a count
+         * below its predecessor's would overrun the next-pose READ (see the
+         * header comment's second and third bullets). */
+        if (pose->data == NULL || pose->count <= 0
+                || pose->count > liveCount || pose->count < prevCount) {
+            ctx->shapeRefusedMeshes++;
+            return;
+        }
+        prevCount = pose->count;
+    }
+
+    /* Every pose resolved -- allocate only now, so a refusal costs no heap. */
+    arr = (HSF_BUFFER **)HuMemDirectMallocNum(
+        HEAP_MODEL, (s32)(sizeof(HSF_BUFFER *) * num), ctx->mallocTag);
+    for (j = 0; j < num; j++) {
+        arr[j] = &ctx->vertex[SymAt(ctx, sym + j)];
+    }
+    obj->mesh.shape = arr;
+    obj->mesh.shapeNum = num;
+    ctx->shapeBoundMeshes++;
+}
+
+/* ==========================================================================
  * Objects (the scene-graph hierarchy). Two-pass: (1) every object's own
  * scalar fields + type-specific sub-struct + its own child-index list,
  * unconditionally over the WHOLE flat array; (2) parent pointers, via a
@@ -1534,15 +1719,18 @@ static void LoadObjects(LoadCtx *ctx)
                  * preflight counts, this pass repairs). */
                 SanitizeMeshFaceCorners(ctx, &out[i]);
 
-                /* shape/cluster per-mesh fields stay 0/NULL: the cluster
-                 * deform path (game/ClusterExec.c) works off the hsf-level
-                 * cluster array + cluster->target, NOT obj->mesh.cluster
-                 * (confirmed by direct source review), and no model in this
-                 * content has shape>0. */
-                out[i].mesh.shapeNum = 0;
-                out[i].mesh.shape = NULL;
+                /* The cluster per-mesh fields stay 0/NULL: the cluster deform
+                 * path (game/ClusterExec.c) works off the hsf-level cluster
+                 * array + cluster->target, NOT obj->mesh.cluster (confirmed
+                 * by direct source review). */
                 out[i].mesh.clusterNum = 0;
                 out[i].mesh.cluster = NULL;
+
+                /* Shape is the opposite case -- game/ShapeExec.c's ShapeProc
+                 * gates the whole vertex morph on obj->mesh.shapeNum, so this
+                 * binding IS the morph. See BindMeshShape's header comment
+                 * (and note it needs mesh.vertex, bound just above). */
+                BindMeshShape(ctx, &out[i], mrec);
 
                 /* Per-mesh cenv (skinning). Only meaningful when the MODEL
                  * has any cenv at all (ctx->cenvNum > 0); a mesh in a model
@@ -2177,8 +2365,18 @@ static void ResolveTrackCurve(LoadCtx *ctx, const u8 *trackRec, const u8 *poolBa
          * pointers inside, file and native strides match exactly (8
          * bytes/key); still need the BE->host float conversion though. */
         if (numKeyframes > 0) {
-            float (*data)[2] = (float (*)[2])HuMemDirectMalloc(
-                HEAP_MODEL, (s32)(sizeof(float) * 2 * (u32)numKeyframes));
+            /* Tagged + NULL-checked like every other allocation in this
+             * file (the HuMemDirectMallocNum spelling routes through the
+             * HsfCheckedMallocNum macro above). These three curve arrays
+             * were the file's ONLY plain HuMemDirectMalloc calls -- an
+             * untagged sub-allocation defaults to -256, which neither
+             * Hu3DModelKill's bulk free nor Hu3DMotionKill's standalone
+             * teardown ever matches, leaking it permanently (see the
+             * LoadCtx.mallocTag comment; measured 410,747 allocations /
+             * 41.4 MB disc-wide -- docs/research/hsf_stub_audit.md D5). */
+            float (*data)[2] = (float (*)[2])HuMemDirectMallocNum(
+                HEAP_MODEL, (s32)(sizeof(float) * 2 * (u32)numKeyframes),
+                ctx->mallocTag);
             const u8 *src = poolBase + rawDataOfs;
             for (i = 0; i < numKeyframes; i++) {
                 data[i][0] = bef32(src + (u32)i * FCURVEKEY_STEP_SIZE + 0);
@@ -2192,8 +2390,10 @@ static void ResolveTrackCurve(LoadCtx *ctx, const u8 *trackRec, const u8 *poolBa
 
     case HSF_CURVE_BEZIER:
         if (numKeyframes > 0) {
-            float (*data)[4] = (float (*)[4])HuMemDirectMalloc(
-                HEAP_MODEL, (s32)(sizeof(float) * 4 * (u32)numKeyframes));
+            /* Tagged + NULL-checked -- see the HSF_CURVE_STEP case above. */
+            float (*data)[4] = (float (*)[4])HuMemDirectMallocNum(
+                HEAP_MODEL, (s32)(sizeof(float) * 4 * (u32)numKeyframes),
+                ctx->mallocTag);
             const u8 *src = poolBase + rawDataOfs;
             for (i = 0; i < numKeyframes; i++) {
                 data[i][0] = bef32(src + (u32)i * FCURVEKEY_BEZIER_SIZE + 0);
@@ -2215,8 +2415,10 @@ static void ResolveTrackCurve(LoadCtx *ctx, const u8 *trackRec, const u8 *poolBa
          * own bitmap resolution (already loaded earlier in this same
          * MP6_LoadHSFNative() call). */
         if (numKeyframes > 0) {
-            HSF_BITMAP_KEY *data = (HSF_BITMAP_KEY *)HuMemDirectMalloc(
-                HEAP_MODEL, (s32)(sizeof(HSF_BITMAP_KEY) * (u32)numKeyframes));
+            /* Tagged + NULL-checked -- see the HSF_CURVE_STEP case above. */
+            HSF_BITMAP_KEY *data = (HSF_BITMAP_KEY *)HuMemDirectMallocNum(
+                HEAP_MODEL, (s32)(sizeof(HSF_BITMAP_KEY) * (u32)numKeyframes),
+                ctx->mallocTag);
             const u8 *src = poolBase + rawDataOfs;
             for (i = 0; i < numKeyframes; i++) {
                 const u8 *krec = src + (u32)i * FCURVEKEY_BITMAP_SIZE;
@@ -2485,6 +2687,20 @@ HSF_DATA *MP6_LoadHSFNative(void *dataPtr, char **stringTableOut)
                 (unsigned)validated.logicalSize);
         fflush(stderr);
     }
+    if (ctx.shapeBoundMeshes != 0 || ctx.shapeRefusedMeshes != 0) {
+        /* The runtime census of which models actually morph: one line per
+         * shape-carrying model, naming how many meshes had their ShapeProc
+         * gate opened. `refused` must stay 0 on retail content -- a non-zero
+         * count names a file whose per-mesh shape slice this loader would not
+         * bind (BindMeshShape's refusal list), and that mesh then draws its
+         * static pose exactly as it did before the binding existed. */
+        printf("[HSF] shape meshes bound=%u refused=%u (file shape section=%d, "
+               "logicalSize=%u)\n",
+               (unsigned)ctx.shapeBoundMeshes, (unsigned)ctx.shapeRefusedMeshes,
+               ctx.h.sec[FSEC_SHAPE].num, (unsigned)validated.logicalSize);
+        fflush(stdout);
+    }
+
     /* Part before cluster (cluster references parts); both before motion
      * (motion CLUSTER tracks resolve cluster names). Same dependency order
      * game/hsfload.c's own LoadHSF() uses. */

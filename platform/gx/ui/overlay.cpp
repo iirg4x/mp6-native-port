@@ -15,6 +15,26 @@
 #include <dolphin/pad.h>
 #include "launcher_state.hpp" /* [MP6] replaces <port/settings.h> */
 
+/* [MP6] EVERY STAT PANEL IS AN OVERLAY, and they all live in THIS document.
+ *
+ * `stat unit` was the precedent: a corner HUD that replaced the FPS badge
+ * below (same screen furniture, same corner, never both at once) and survived
+ * the console closing. This increment generalizes that -- each panel is its
+ * own latch in console_core.c, and each latched one gets an element here.
+ *
+ * The console's own document holds no panel at all any more, for the reason
+ * the latch existed in the first place: a panel that dies when the console
+ * closes cannot be watched while playing. This document is passive (never
+ * focused, never a nav target, `pointer-events: none`), so overlays never
+ * capture input -- only the bar does.
+ *
+ * build_stat_records() is the console's own record layout, shared so the
+ * reference's colours and right-aligned columns are defined once. */
+#include "console.hpp"
+#include "mp6_console.h"
+#include "mp6_boot.h" /* mp6_tick_count -- the overlays' tick-based refresh limit */
+#include "mp6_display.h" /* the badge names the OUTPUT'S refresh cap and the present mode */
+
 /* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
  * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
@@ -38,6 +58,8 @@ namespace {
 </head>
 <body>
     <fps id="fps" />
+    <statunit id="statunit" />
+    <statstack id="statstack" />
 </body>
 </rml>
 )RML";
@@ -45,6 +67,30 @@ namespace {
     constexpr auto kMenuNotificationDuration = std::chrono::milliseconds(2500);
 
     constexpr std::array<const char *, 4> kFpsCorners = { "tl", "tr", "bl", "br" };
+
+    /* [MP6] How often a stat overlay is rebuilt, in GAME TICKS.
+     *
+     * Ticks, not wall time, on purpose: mp6_tick_count only advances on a REAL
+     * tick, so an interpolated present -- which also calls
+     * mp6_launcher_frame_overlay() and therefore also reaches update() -- can
+     * never trigger a rebuild. That is the mitigation for the one way these
+     * overlays could hurt the thing they measure: anything expensive done
+     * inside the replay path lands in the interval fi_cost_observe() measures,
+     * and fi_budget_observe() latches any larger cost immediately while giving
+     * ground only a quarter at a time, so one heavy replay frame throttles
+     * replays for several windows afterwards.
+     *
+     * 15 ticks is 4 Hz at 60 Hz -- twice the FPS badge's own refresh rate,
+     * which is the precedent for "fast enough to read, slow enough not to
+     * matter". Each panel keeps its OWN last-rebuild tick, so raising a second
+     * overlay staggers against the first instead of doubling one tick's cost. */
+    constexpr long kPanelRefreshTicks = 15;
+
+    /* [MP6] Which corner-shaped panel is the HUD. It is the one latch whose
+     * element is NOT a stacked table: `stat unit` is the reference's compact
+     * corner block and it absorbs the FPS badge, so it keeps the badge's
+     * corner setting and its own element. */
+    constexpr int kHudPanel = MP6_CONSOLE_PANEL_UNIT;
 
     /* [MP6] replaces magic_enum::enum_name in the nav-command warn log. */
     const char *nav_command_name(NavCommand cmd)
@@ -242,6 +288,12 @@ Overlay::Overlay()
     : Document(formatted_source(kDocumentSource))
 {
     mFpsCounter = mDocument->GetElementById("fps");
+    /* [MP6] the stat overlays: `stat unit` keeps its own corner element, every
+     * other panel is created on demand inside the tiling stack. */
+    mPanel.fill(nullptr);
+    mPanelTick.fill(-1);
+    mPanel[kHudPanel] = mDocument->GetElementById("statunit");
+    mPanelStack = mDocument->GetElementById("statstack");
 
     listen(mDocument, Rml::EventId::Focus, [](Rml::Event &) { Log.warn("Overlay received focus"); });
     listen(mDocument, Rml::EventId::Transitionend, [this](Rml::Event &event) {
@@ -266,6 +318,95 @@ void Overlay::show()
     }
 }
 
+/* [MP6] The stat overlays. One pass over the latch array per frame; the DOM is
+ * touched only when a latch CHANGES or a panel's own refresh tick comes due.
+ *
+ * `stat unit` is the corner HUD -- its element pre-exists in the document
+ * source and it takes the FPS badge's corner. Every other panel is a table
+ * created inside <statstack> when its latch goes up and REMOVED when it goes
+ * down: an overlay nobody asked for must cost one predicate and no elements,
+ * because this document runs on every frame of every launcher session whether
+ * or not anyone ever opened the console.
+ *
+ * Panels are appended in enum order, so the stack's reading order does not
+ * shuffle when a latch in the middle is dropped and re-raised... which it
+ * would if new panels were always appended last. That is what the insert-
+ * before search below buys. */
+void Overlay::refresh_stat_overlays()
+{
+    /* Tell the stack which corner the HUD is occupying so it can yield it
+     * (res/rml/overlay.rcss statstack[hud=...]). RCSS cannot ask whether the
+     * HUD is up; this view already knows, so one attribute is the whole
+     * mechanism -- and without it a `stat unit` in the default top-left corner
+     * would sit on top of the first stacked panel. */
+    if (mPanelStack != nullptr) {
+        if (mp6_console_overlay(kHudPanel) != 0) {
+            mPanelStack->SetAttribute("hud", kFpsCorners[cfg().fpsCorner]);
+        }
+        else if (mPanelStack->HasAttribute("hud")) {
+            mPanelStack->RemoveAttribute("hud");
+        }
+    }
+
+    for (int i = MP6_CONSOLE_PANEL_NONE + 1; i < MP6_CONSOLE_PANEL_COUNT; ++i) {
+        const bool on = mp6_console_overlay(i) != 0;
+        Rml::Element *elem = mPanel[i];
+
+        if (!on) {
+            if (elem == nullptr) {
+                continue;
+            }
+            if (i == kHudPanel) {
+                if (elem->HasAttribute("open")) {
+                    elem->RemoveAttribute("open");
+                    elem->SetInnerRML("");
+                }
+            }
+            else if (auto *parent = elem->GetParentNode()) {
+                parent->RemoveChild(elem);
+                mPanel[i] = nullptr;
+            }
+            mPanelTick[i] = -1;
+            continue;
+        }
+
+        if (elem == nullptr) {
+            if (mPanelStack == nullptr) {
+                continue;
+            }
+            auto owned = mDocument->CreateElement("statpanel");
+            elem = owned.get();
+            if (elem == nullptr) {
+                continue;
+            }
+            elem->SetAttribute("panel", mp6_console_panel_name(i));
+            /* Keep enum order in the stack: insert before the first later
+             * panel that is already up. */
+            Rml::Element *before = nullptr;
+            for (int j = i + 1; j < MP6_CONSOLE_PANEL_COUNT && before == nullptr; ++j) {
+                if (j != kHudPanel && mPanel[j] != nullptr) {
+                    before = mPanel[j];
+                }
+            }
+            if (before != nullptr) {
+                mPanelStack->InsertBefore(std::move(owned), before);
+            }
+            else {
+                mPanelStack->AppendChild(std::move(owned));
+            }
+            mPanel[i] = elem;
+        }
+        if (i == kHudPanel) {
+            elem->SetAttribute("open", "");
+            elem->SetAttribute("corner", kFpsCorners[cfg().fpsCorner]);
+        }
+        if (mPanelTick[i] < 0 || mp6_tick_count - mPanelTick[i] >= kPanelRefreshTicks) {
+            mPanelTick[i] = mp6_tick_count;
+            build_stat_records(elem, mp6_console_panel_text(i));
+        }
+    }
+}
+
 void Overlay::update()
 {
     Document::update();
@@ -273,8 +414,12 @@ void Overlay::update()
         return;
     }
 
+    /* [MP6] every latched stat panel, drawn over the live game. */
+    refresh_stat_overlays();
+    const bool hudOn = mp6_console_overlay(kHudPanel) != 0;
+
     if (mFpsCounter != nullptr) {
-        if (cfg().showFps) { /* [MP6] our flat config in place of their ConfigVar registry */
+        if (cfg().showFps && !hudOn) { /* [MP6] our flat config in place of their ConfigVar registry */
             const int idx = cfg().fpsCorner;
             mFpsCounter->SetAttribute("open", "");
             const char *corner = kFpsCorners[idx];
@@ -301,7 +446,30 @@ void Overlay::update()
                 = perfFreq == 0 || mFpsLastUpdate == 0 || static_cast<double>(now - mFpsLastUpdate) >= 0.5 * static_cast<double>(perfFreq);
             if (refreshLabel) {
                 mFpsLastUpdate = now;
-                mFpsCounter->SetInnerRML(escape(fmt::format("{:.0f} FPS", fps)));
+                /* A bare number is unreadable, and that is not a cosmetic
+                 * complaint: this badge counts PRESENTS, and with present sync
+                 * on the present cadence is capped by the refresh rate of
+                 * whichever OUTPUT the window is on -- not by the tick rate and
+                 * not by what the engine could manage. A user reading "70" has
+                 * no way to tell a 70 Hz cap from a 70 fps struggle. Naming the
+                 * cap and the present mode beside the measurement makes the
+                 * number explain itself: "75 / 75 Hz FIFO" says "this IS the
+                 * ceiling", where "75 / 240 Hz FIFO" would not.
+                 *
+                 * The query hangs off THIS twice-per-second gate, so it costs
+                 * two SDL calls per 0.5 s rather than per present, and the
+                 * display walk behind isHighestRefresh is itself memoized.
+                 *
+                 * The fallback keeps today's exact string: if the display query
+                 * ever fails, the badge degrades to what it always showed
+                 * rather than to a blank chip or an invented refresh rate. */
+                Mp6DisplayInfo di;
+                if (mp6_display_info_get(&di) && di.refreshHz > 0) {
+                    mFpsCounter->SetInnerRML(escape(
+                        fmt::format("{:.0f} / {} Hz {}", fps, di.refreshHz, di.presentMode)));
+                } else {
+                    mFpsCounter->SetInnerRML(escape(fmt::format("{:.0f} FPS", fps)));
+                }
             }
         }
         else {

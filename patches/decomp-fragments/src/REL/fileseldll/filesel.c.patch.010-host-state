@@ -19,9 +19,9 @@
 @@ -1598 +1603 @@
 -    bank = (s32)proc->property;
 +    bank = (s32)(intptr_t)proc->property;
-@@ -2130 +2135 @@
+@@ -2135 +2140 @@
 -                proc2->property = (void *)a;
 +                proc2->property = (void *)(intptr_t)a;
-@@ -2194 +2199 @@
+@@ -2199 +2204 @@
 -    idx = (s32)proc->property;
 +    idx = (s32)(intptr_t)proc->property;

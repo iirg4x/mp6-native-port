@@ -168,6 +168,9 @@
 #include "mp6_savestate.h" /* W3: Mp6SsAudioShadow -- the audio re-sync shadow */
 #include "mp6_boot.h"      /* mp6_tick_count -- the regular-proc diag keys off the GAME tick (see its comment) */
 #include "mp6_events.h"    /* se.play -- "the UI just reacted to input", see msmSePlay */
+#include "mp6_diag_probe.h" /* mp6_diag_audio_snapshot -- lock-copy, format outside */
+#include "mp6_console.h"    /* the MP6_AUDIO_TIMELINE runtime lever */
+#include "mp6_enhancements.h" /* mp6_enh_sfx_voices -- the 16/32 voice-table size */
 #include "mp6_host_section.h"
 
 
@@ -232,7 +235,11 @@ static int mp6_se_timeline_on(void)
         const char *e = getenv("MP6_AUDIO_TIMELINE");
         s_on = (e != NULL && *e != '\0' && *e != '0') ? 1 : 0;
     }
-    return s_on;
+    /* env latches the initial value; the dev console may override it live
+     * (`set audiotimeline 1`), which matters here more than for most levers --
+     * a voice that keeps looping is exactly the kind of thing you only think
+     * to instrument once you can already hear it. */
+    return mp6_console_cvar_get(MP6_CVAR_AUDIO_TIMELINE, s_on);
 }
 
 #define MP6_MSM_MAX_CHAN 8
@@ -419,10 +426,21 @@ static MsmChan g_chan[MP6_MSM_MAX_CHAN];
  *     "DYNAMIC GROUPS" section below.
  *   - Only compType==0 (DSP-ADPCM) samples are handled; anything else is
  *     logged loudly and skipped rather than guessed at.
- *   - Only the macro's FIRST StartSample opcode is honored -- no ADSR
- *     envelope shaping, no vibrato/pitch-sweep/portamento. A real, audible
- *     sampled voice plays; the many expressive-synthesis opcodes MuSyX supports
- *     do not run. Resolution also handles KEYMAP/LAYER indirection (an
+ *   - Only the macro's FIRST StartSample opcode is honored -- no vibrato,
+ *     pitch-sweep or portamento. A real, audible sampled voice plays; most
+ *     of the expressive-synthesis opcodes MuSyX supports do not run. The one
+ *     exception is the authored VOLUME ENVELOPE (mcmdScaleVolume /
+ *     mcmdEnvelope / mcmdFadeIn -- 0x0d/0x0f/0x14), which the same macro
+ *     walk compiles into a small piecewise-linear program the mixer applies
+ *     per rendered frame; msm_safe.h's own "AUTHORED MACRO VOLUME ENVELOPE"
+ *     comment is the ground truth for what is modelled, what is refused, and
+ *     why refusing leaves the voice bit-identical to the pre-envelope build.
+ *     MP6_AUDIO_SE_ENV_CENSUS=1 prints the compiled program -- or the verdict
+ *     refusing one -- for every seId whose macro authors a volume opcode at
+ *     all; MP6_AUDIO_SE_MACRO_DUMP=<seId>[,...] prints the raw MSTEP stream
+ *     behind one; MP6_AUDIO_NO_MACRO_ENV=1 turns the whole feature off in the
+ *     SAME binary for an A/B. Resolution also handles
+ *     KEYMAP/LAYER indirection (an
  *     fx's object id can name those, not just a macro -- see
  *     resolve_first_sample), but a multi-row layer still starts only its
  *     FIRST covering row: one voice per SE, skipped rows logged.
@@ -430,9 +448,21 @@ static MsmChan g_chan[MP6_MSM_MAX_CHAN];
  *     stay the existing auto-generated no-op) -- flat stereo pan only,
  *     matching the dry-stereo scope used for streams above.
  * ======================================================================= */
-#define MP6_MSM_MAX_SFX_VOICES 16
+/* The voice table's CAPACITY -- how many slots exist -- which is NOT how
+ * many the runtime uses. The ACTIVE count is mp6_sfx_voice_cap() below: 16
+ * (retail) or 32 (Enhancements: "Extended SFX voices"), latched once at
+ * msmSysInit. Every site that decides BEHAVIOR (allocation, mixing,
+ * stop/pause sweeps, key-group release, the diagnostic census) is bounded by
+ * that active count; only STORAGE -- this array and the fixed-size stack
+ * mirrors of it -- is sized by the capacity. See msm_safe.h's own
+ * "SFX voice-table capacity" comment for why the table is static at 32
+ * rather than sized to the cap. */
+#define MP6_MSM_MAX_SFX_VOICES MP6_MSM_SFX_VOICES_EXTENDED
 #if MP6_MSM_MAX_SFX_VOICES != MP6_SS_AUDIO_MAX_VOICES
 #error "savestate voice shadow must cover every runtime SFX slot"
+#endif
+#if MP6_DIAG_SFX_VOICE_MAX < MP6_MSM_MAX_SFX_VOICES
+#error "diag audio snapshot must cover every runtime SFX slot"
 #endif
 /* Cap on ALL simultaneously-loaded groups: 5 init-time base groups + the
  * real engine's own dynamic-stack caps (MSM_INFO.stackDepthA/B = 0/8 on
@@ -494,8 +524,64 @@ typedef struct {
     uint8_t keyGroup;
     uint8_t keyGroupKill;
     uint8_t hasAdsr; /* macro set its own ADSR (0x0c/0x16/0x21) -> a keyoff may have a real release */
+    /* MP6_ENVWHY_* -- diagnostic only (MP6_AUDIO_SE_ENV_CENSUS), see
+     * find_macro_first_sample. It lives HERE, in two of the three padding
+     * bytes this struct already had between hasAdsr and lifeTicks, while the
+     * compiled PROGRAM lives in the sparse side table below. The split is not
+     * arbitrary: a refusal verdict is set for essentially the whole bank
+     * (MP6_ENVWHY_KEYOFF alone is set on all 2330 resolvable fx, because
+     * `Wait 0xFFFF; StopSample; EndOfMacro` is their universal tail), so a
+     * side row per non-zero envWhy would not be sparse at all -- while a
+     * compiled program exists for exactly 10 of them. */
+    uint16_t envWhy;
     uint32_t lifeTicks;
 } MsmFxEntry;
+
+/* 20 bytes -- the size this entry had before the volume envelope existed, and
+ * the reason the program moved out of it. A group's fx index is a power-of-two
+ * grown array over EVERY fx the group resolves: 1472 entries across the five
+ * resident base groups (fxCap 64+512+512+128+256), so one byte here is 1.4 KB
+ * of permanently resident host metadata. Embedding Mp6MsmSeEnv grew the entry
+ * to 124 bytes and spent 182,528 bytes to carry ten programs. */
+_Static_assert(sizeof(MsmFxEntry) == 20,
+               "MsmFxEntry grew -- per-fx state is paid 1472 times across the resident base "
+               "groups; a compiled volume envelope belongs in the sparse MsmFxEnvRow table");
+
+/* THE AUTHORED VOLUME ENVELOPE, compiled out of the same macro walk that
+ * produced sampleId/lifeMs -- msm_safe.h's Mp6MsmSeEnv has the format and the
+ * three opcodes it models. An absent row means "this macro authors no volume
+ * move this port can reproduce exactly", and then the mixer's per-voice gain
+ * expression is untouched. Copied BY VALUE into the voice at msmSePlay (the
+ * group may unload while the voice still sounds).
+ *
+ * SPARSE, AND KEYED BY THE fx's OWN INDEX in its group's fx[] array.
+ * MP6_AUDIO_SE_ENV_CENSUS=1 over all 115 groups: resolved=2330 compiled=10
+ * APPLIED=10 (envRows=10, 1040 bytes bank-wide). Ten programs is not a shape
+ * worth paying for per fx, and only ONE of the five resident base groups
+ * authors any at all (gid=1, seId 1064 and 1106) -- so the resident cost of
+ * this table is two OCCUPIED rows inside one group's initial 4-row
+ * allocation. The boot log's metadata total charges the CAPACITY, which is
+ * why gid=1 accounts for 416 bytes here and the other four base groups for
+ * zero.
+ *
+ * WHY THE INDEX AND NOT THE fxId. The index is unambiguous. Nothing in the
+ * FX_DATA format forbids a repeated FX_TAB.id, and every reader resolves an
+ * fxId by taking the FIRST matching entry -- so a table keyed by fxId could
+ * hand one duplicate's program to the other. add_fx_entry writes the row for
+ * the entry it is appending, and each reader looks up the index it already had
+ * to scan for.
+ *
+ * NO "HAS AN ENVELOPE" MARKER IN MsmFxEntry, deliberately: that would be a
+ * second copy of a fact this table already holds, i.e. a way for the two to
+ * disagree about which fx is shaped. The ABSENCE of a row is exactly
+ * segCount 0 -- the same neutral state every refusal in find_macro_first_sample
+ * already lands on -- so there is one truth, not two. The lookup scan is over
+ * fxEnvCount (two for the whole resident bank) inside a caller that already
+ * scanned fxCount (up to 420) to find the fx at all. */
+typedef struct {
+    int fxIndex;      /* index into the owning group's fx[] -- unique per row */
+    Mp6MsmSeEnv env;  /* segCount is always non-zero; a refusal writes no row */
+} MsmFxEnvRow;
 
 /* Why find_macro_first_sample could not produce a usable lifeMs, or what
  * else the macro contained. See that function. */
@@ -512,6 +598,23 @@ typedef struct {
  * The second one is the ONE-SHOT idiom -- "hold until this sample ends,
  * then fall through to EndOfMacro -> voiceFree". */
 #define MP6_LIFEWHY_WAITKEYOFF 0x80u /* indefinite Wait resumes on KEYOFF */
+
+/* What the VOLUME-ENVELOPE half of the same macro walk saw. Diagnostic only
+ * (MP6_AUDIO_SE_ENV_CENSUS) -- playback reads only whether the fx has an
+ * MsmFxEnvRow at all, never this bitmask.
+ * Every bit except SAW_VOLOP is a REFUSAL: the scan met something it cannot
+ * reproduce exactly and dropped the whole program, leaving the voice's gain
+ * expression untouched. See msm_safe.h's own envelope comment for why each
+ * of these is unmodellable rather than merely unimplemented. */
+#define MP6_ENVWHY_SAW_VOLOP   0x01u /* macro contains at least one 0x0d/0x0f/0x14 */
+#define MP6_ENVWHY_UNMODELLED  0x02u /* bias byte, real curve, or tick-timed ramp */
+#define MP6_ENVWHY_TIMEUNKNOWN 0x04u /* a volume move after macro time stopped being linear ms */
+#define MP6_ENVWHY_TOOMANY     0x08u /* more moves than MP6_MSM_SE_ENV_MAX_SEGS */
+#define MP6_ENVWHY_OVERLAP     0x10u /* a move began before the previous one finished */
+#define MP6_ENVWHY_ADSR        0x20u /* 0x0c/0x16/0x21 -- a real ADSR/DLS state machine */
+#define MP6_ENVWHY_KEYOFF      0x40u /* 0x11/0x12 after the StartSample -- release not modelled */
+#define MP6_ENVWHY_PRESTART    0x80u /* a RAMP (not just a set) before the StartSample */
+#define MP6_ENVWHY_BRANCH     0x100u /* branch/loop/goto/gosub after the StartSample */
 
 /* The whole grpInfo directory (ALL 115 entries on this disc, not just the
  * 5 base ones), parsed once at init and kept -- msmSysLoadGroup takes a
@@ -566,6 +669,12 @@ typedef struct {
     MsmFxEntry *fx;      /* this group's OWN fx->sample index, malloc'd; freed on unload */
     int fxCount;
     int fxCap;
+    MsmFxEnvRow *fxEnv;  /* SPARSE compiled volume programs for the few entries in
+                          * fx[] that have one -- see MsmFxEnvRow. malloc'd, freed
+                          * with the group, and grown only when a program compiles,
+                          * so a group that authors none never allocates it. */
+    int fxEnvCount;
+    int fxEnvCap;
 } MsmSeGroup;
 
 static MsmSeGroup g_seGroups[MP6_MSM_MAX_SE_GROUPS];
@@ -626,6 +735,21 @@ typedef struct {
     float fadeMul;
     float fadeStep;
     int fadeAction;
+    /* THE MACRO'S AUTHORED VOLUME ENVELOPE, resolved onto THIS voice's own
+     * frame clock at msmSePlay (msm_safe.h's Mp6MsmEnvPlan). segCount == 0 --
+     * the state every voice that has no modellable envelope keeps -- makes
+     * the mixer skip the multiply entirely, so those voices render bit-for-bit
+     * what they rendered before this field existed.
+     *
+     * DERIVED, NOT INTEGRATED, and that is deliberate: the multiplier is a
+     * pure function of the voice's CURRENT sample index, which the mixer
+     * already computes and a savestate already marshals (Mp6SsAudioVoice.
+     * posFrac). There is no envelope accumulator to capture, to validate, or
+     * to get out of step with the position -- a restored voice resumes its
+     * envelope exactly where its position says it is. That is only sound
+     * while position and elapsed time are the same thing, which is why
+     * msmSePlay refuses to install a plan on a voice that still LOOPS. */
+    Mp6MsmEnvPlan envPlan;
     /* MP6_AUDIO_TIMELINE bookkeeping ONLY -- never read by the mixer's audio
      * path, never captured by a savestate. loopWraps is bumped inside the
      * mixer (which already holds g_mixerLock for the whole render), so the
@@ -638,6 +762,53 @@ typedef struct {
 
 static MsmSeVoice g_sfxVoice[MP6_MSM_MAX_SFX_VOICES];
 static int g_seNoCounter = 1;
+
+/* How many of those slots this RUN may use: 16 or 32, resolved once through
+ * mp6_enh_sfx_voices() and never again (0 = not yet latched).
+ *
+ * LATCHED, NOT LIVE, for two independent reasons. Shrinking the count under
+ * live voices would strand whatever sits in the slots that just vanished --
+ * they would keep mixing (the render loop reads g_sfxVoice[] directly) while
+ * becoming unreachable to the allocator and to every sweep. Growing it
+ * mid-scene would change the slot a given msmSePlay lands in partway through
+ * a sequence the game is already tracking by handle. Both are avoided by
+ * deciding once, before any voice can exist: msmSysInit, on the game thread,
+ * at the same point the mixer locks are created.
+ *
+ * SAVESTATE OWNERSHIP: this TU is in the host-state carve-out (see the
+ * #include "mp6_host_section.h" above), so a restore does NOT overwrite this
+ * with the capturing process's value. That is exactly right -- the cap is
+ * host configuration, not game state, and the restoring process's own
+ * setting must win. It is what makes a cross-capacity restore well-defined
+ * at all; mp6_msm_savestate_apply() resolves the difference against THIS
+ * value. */
+static int g_sfxVoiceCap;
+
+/* Read the latch, resolving it on first use if msmSysInit has not run yet.
+ * The lazy path exists only so a caller that runs before init (nothing does
+ * today -- msmSePlay needs g_msmReady and the mixer needs g_mixerLockInit)
+ * cannot read a zero cap and silently behave as if there were no voices. The
+ * store is idempotent: mp6_enh_sfx_voices() is a pure function of the
+ * process environment/config, so a benign race writes the same value. */
+static int mp6_sfx_voice_cap(void)
+{
+    int cap = g_sfxVoiceCap;
+    if (cap == 0) {
+        cap = mp6_msm_voice_cap_clamp(mp6_enh_sfx_voices());
+        g_sfxVoiceCap = cap;
+    }
+    return cap;
+}
+
+/* Running key-group totals for the pull-side audio snapshot
+ * (shim/include/mp6_diag_probe.h). Key-group releases are the one SFX event
+ * with no standing surface at all: they appear only as individual [SETL] kgrel
+ * lines under MP6_AUDIO_TIMELINE, so "is something silently killing this
+ * group's voices" cannot be answered without turning that whole stream on.
+ * Bumped by mp6_se_keygroup_release() under g_mixerLock, like every other
+ * field it touches, and read back under the same lock. */
+static unsigned long g_kgReleaseEvents;
+static unsigned long g_kgVoicesReleased;
 
 static Mp6Mutex g_mixerLock; /* The host seam's caller-storage mutex (win32
                               * backend is the same CRITICAL_SECTION inside) */
@@ -1027,13 +1198,33 @@ static BOOL group_span(MsmSeGroup *grp, uint64_t offset, uint64_t size, const ch
     return TRUE;
 }
 
+/* Everything ONE macro walk recovers: the note length, the volume envelope,
+ * the key group, and the diagnostic bitmasks explaining each. Declared here
+ * rather than next to find_macro_first_sample (which fills it, and whose own
+ * header comment is the ground truth for every field) because add_fx_entry
+ * below takes the whole struct. */
+typedef struct {
+    uint32_t lifeMs;   /* 0 unless the macro was fully linear + ms-timed */
+    uint32_t ticks;    /* total of the tempo-scaled Wait steps it discarded */
+    uint8_t why;       /* MP6_LIFEWHY_* bitmask */
+    uint8_t smpEnd;    /* 1 = an indefinite Wait resumes on SAMPLE END */
+    uint8_t keyGroup;  /* SetKeyGroup (0x59) group id, 0 = none */
+    uint8_t keyGroupKill; /* SetKeyGroup kill flag */
+    uint8_t hasAdsr;   /* macro set its own ADSR envelope */
+    Mp6MsmSeEnv env;   /* the compiled volume program -- segCount 0 == none */
+    uint16_t envWhy;   /* MP6_ENVWHY_* bitmask */
+} MsmMacroScan;
+
 /* Appends to the OWNING GROUP's fx index (freed wholesale with the
- * group on unload -- see MsmFxEntry's own comment for why per-group). */
+ * group on unload -- see MsmFxEntry's own comment for why per-group), plus a
+ * SPARSE MsmFxEnvRow for the rare fx whose macro compiled a volume program.
+ * Takes the macro scan's whole result rather than one positional argument
+ * per recovered field: the two structs carry the same facts, and a scalar
+ * list this long is where a mis-ordered pair of same-typed flags hides. */
 static BOOL add_fx_entry(MsmSeGroup *grp, uint16_t fxId, uint16_t sampleId,
-                         uint32_t lifeMs, uint8_t lifeWhy, uint32_t lifeTicks,
-                         uint8_t lifeSmpEnd, uint8_t keyGroup, uint8_t keyGroupKill,
-                         uint8_t hasAdsr)
+                         const MsmMacroScan *life)
 {
+    MsmFxEntry *e;
     if (grp->fxCount >= grp->fxCap) {
         int newCap = grp->fxCap ? grp->fxCap * 2 : 64;
         MsmFxEntry *n = (MsmFxEntry *)realloc(grp->fx, (size_t)newCap * sizeof(MsmFxEntry));
@@ -1047,17 +1238,59 @@ static BOOL add_fx_entry(MsmSeGroup *grp, uint16_t fxId, uint16_t sampleId,
         grp->fx = n;
         grp->fxCap = newCap;
     }
-    grp->fx[grp->fxCount].fxId = fxId;
-    grp->fx[grp->fxCount].sampleId = sampleId;
-    grp->fx[grp->fxCount].lifeMs = lifeMs;
-    grp->fx[grp->fxCount].lifeWhy = lifeWhy;
-    grp->fx[grp->fxCount].lifeTicks = lifeTicks;
-    grp->fx[grp->fxCount].lifeSmpEnd = lifeSmpEnd;
-    grp->fx[grp->fxCount].keyGroup = keyGroup;
-    grp->fx[grp->fxCount].keyGroupKill = keyGroupKill;
-    grp->fx[grp->fxCount].hasAdsr = hasAdsr;
+    /* The envelope row is appended BEFORE fxCount rises, and its failure is
+     * the same sticky parseError the fx index uses. A group must never be
+     * published carrying an fx whose compiled program went missing: the fx
+     * would then play at the pre-envelope FLAT gain, which for seId 1106 is
+     * exactly the full-scale beep this feature exists to remove -- a silent
+     * downgrade to the bug. The initial capacity is 4 because the whole disc
+     * compiles ten programs across 115 groups (four in the widest group). */
+    if (life->env.segCount != 0) {
+        if (grp->fxEnvCount >= grp->fxEnvCap) {
+            int newCap = grp->fxEnvCap ? grp->fxEnvCap * 2 : 4;
+            MsmFxEnvRow *n = (MsmFxEnvRow *)realloc(grp->fxEnv,
+                                                    (size_t)newCap * sizeof(MsmFxEnvRow));
+            if (!n) {
+                fprintf(stderr,
+                        "[AUDIO] msm group idx=%d gid=%u: out of memory growing FX volume-envelope "
+                        "table to %d rows\n", grp->grpIdx, (unsigned)grp->gid, newCap);
+                grp->parseError = 1;
+                return FALSE;
+            }
+            grp->fxEnv = n;
+            grp->fxEnvCap = newCap;
+        }
+        grp->fxEnv[grp->fxEnvCount].fxIndex = grp->fxCount;
+        grp->fxEnv[grp->fxEnvCount].env = life->env;
+        grp->fxEnvCount++;
+    }
+    e = &grp->fx[grp->fxCount];
+    memset(e, 0, sizeof(*e));
+    e->fxId = fxId;
+    e->sampleId = sampleId;
+    e->lifeMs = life->lifeMs;
+    e->lifeWhy = life->why;
+    e->lifeTicks = life->ticks;
+    e->lifeSmpEnd = life->smpEnd;
+    e->keyGroup = life->keyGroup;
+    e->keyGroupKill = life->keyGroupKill;
+    e->hasAdsr = life->hasAdsr;
+    e->envWhy = life->envWhy;
     grp->fxCount++;
     return TRUE;
+}
+
+/* The compiled volume program for the fx at `fxIndex` in this group's fx[], or
+ * NULL for the overwhelming majority that have none -- which the caller must
+ * treat exactly as segCount 0, because that is what an absent row means (see
+ * MsmFxEnvRow). Read-only; the caller owns whatever lock protects `grp`. */
+static const Mp6MsmSeEnv *se_group_fx_env(const MsmSeGroup *grp, int fxIndex)
+{
+    int i;
+    for (i = 0; i < grp->fxEnvCount; i++) {
+        if (grp->fxEnv[i].fxIndex == fxIndex) return &grp->fxEnv[i].env;
+    }
+    return NULL;
 }
 
 /* GROUP_DATA linked list @ blob+projOfs -- nextOff is BASE-relative to
@@ -1160,17 +1393,40 @@ static const uint8_t *pool_find_node(MsmSeGroup *grp, uint32_t listOfsField, uin
  *
  * `outLife->why` additionally records what the scan SAW (MP6_LIFEWHY_*) --
  * diagnostic only, so the census can attribute an "unbounded" verdict to a
- * specific opcode class rather than lumping every failure together. */
-typedef struct {
-    uint32_t lifeMs;   /* 0 unless the macro was fully linear + ms-timed */
-    uint32_t ticks;    /* total of the tempo-scaled Wait steps it discarded */
-    uint8_t why;       /* MP6_LIFEWHY_* bitmask */
-    uint8_t smpEnd;    /* 1 = an indefinite Wait resumes on SAMPLE END */
-    uint8_t keyGroup;  /* SetKeyGroup (0x59) group id, 0 = none */
-    uint8_t keyGroupKill; /* SetKeyGroup kill flag */
-    uint8_t hasAdsr;   /* macro set its own ADSR envelope */
-} MsmMacroScan;
-
+ * specific opcode class rather than lumping every failure together.
+ *
+ * THE VOLUME ENVELOPE rides on this exact same walk, because it needs the
+ * exact same clock: the ms-timed Wait steps between the StartSample and the
+ * macro's end ARE the time axis the authored volume moves sit on. It is
+ * compiled into `outLife->env` under the same discipline as lifeMs -- every
+ * feature this straight-line reader cannot reproduce EXACTLY drops the whole
+ * program (segCount 0) instead of approximating it, with the reason recorded
+ * in `outLife->envWhy`. msm_safe.h's "AUTHORED MACRO VOLUME ENVELOPE" comment
+ * lists what is modelled and what is refused; the refusals enforced here on
+ * top of the per-opcode ones are:
+ *
+ *   - any 0x0c/0x16/0x21 anywhere (a real ADSR/DLS state machine),
+ *   - any branch/loop/goto/gosub after the StartSample (macro time stops
+ *     being a straight sum of Waits, and a backward jump could re-run a
+ *     volume move at a time this reader never sees),
+ *   - a volume RAMP before the StartSample (it would already be mid-move when
+ *     the sample begins; an instantaneous SET before it is fine, and becomes
+ *     the program's own move at time zero),
+ *   - a volume move once macro time is no longer a known millisecond count,
+ *   - more moves than MP6_MSM_SE_ENV_MAX_SEGS, or two that overlap in time.
+ *
+ * A 0x11 StopSample / 0x12 KeyOff after the StartSample is NOT in that list --
+ * it is recorded (MP6_ENVWHY_KEYOFF) and otherwise ignored. It looks like it
+ * should matter, because keyoff is what drives an ADSR's RELEASE phase, and
+ * refusing on it was the draft's first instinct. It is wrong for this bank: a
+ * volume ADSR exists only where mcmdSetADSR/mcmdSetADSRFromCtrl called
+ * hwSetADSR, and MP6_AUDIO_SE_ENV_CENSUS over all 115 groups finds 0x0c/0x16/
+ * 0x21 in ZERO of the 2330 resolvable fx. With no ADSR ever established,
+ * hwKeyOff has no volume envelope to release, and 0x11/0x12 move no volume at
+ * all -- they are the universal `Wait 0xFFFF; StopSample; EndOfMacro` tail,
+ * present in every single one of those 2330 fx. Refusing on them refused the
+ * entire bank.
+ */
 static BOOL find_macro_first_sample(MsmSeGroup *grp, uint16_t macroId,
                                     uint16_t *outSampleId, MsmMacroScan *outLife)
 {
@@ -1178,15 +1434,26 @@ static BOOL find_macro_first_sample(MsmSeGroup *grp, uint16_t macroId,
     const uint8_t *steps;
     int i;
     int started = 0;
+    /* Accumulated straight into the caller's struct rather than into a dozen
+     * scalars copied out again at each of the three exits below -- that shape
+     * is precisely where a newly-added field gets published on one exit path
+     * and silently zeroed on the other two. */
+    MsmMacroScan sc;
     uint32_t lifeMs = 0;
-    uint32_t lifeTicks = 0;
-    uint8_t why = 0;
-    uint8_t smpEnd = 0;
-    uint8_t keyGroup = 0, keyGroupKill = 0, hasAdsr = 0;
     int lifeUsable = 1;
+    /* Volume-envelope compilation state; see this function's header comment.
+     * The program is built here and published only if nothing refused it. */
+    Mp6MsmSeEnv env;
+    int envUsable = 1;
+    int envTimeKnown = 1;                  /* ms since StartSample is still exact */
+    uint32_t envMs = 0;                    /* ms since StartSample */
+    uint32_t envPrevEndMs = 0;             /* end of the last emitted move */
+    uint32_t curVol = MP6_MSM_ENV_UNITY;   /* running 16.16 volume; starts at the
+                                            * modelled orgVolume (full scale) */
 
-    if (outLife) { outLife->lifeMs = 0; outLife->ticks = 0; outLife->why = 0; outLife->smpEnd = 0;
-                   outLife->keyGroup = 0; outLife->keyGroupKill = 0; outLife->hasAdsr = 0; }
+    memset(&sc, 0, sizeof(sc));
+    memset(&env, 0, sizeof(env));
+    if (outLife) *outLife = sc;
     if (!m) return FALSE;
     steps = m + 8;
     for (i = 0; i < 64; i++) {
@@ -1201,10 +1468,8 @@ static BOOL find_macro_first_sample(MsmSeGroup *grp, uint16_t macroId,
              * runs to the very end of the blob. Stop quietly instead --
              * the fx entry is already earned, only lifeMs is lost. */
             if (stepOff > grp->blobSize || (uint64_t)8 > (uint64_t)grp->blobSize - stepOff) {
-                if (outLife) { outLife->ticks = lifeTicks; outLife->why = (uint8_t)(why | MP6_LIFEWHY_NOEND); outLife->smpEnd = smpEnd;
-                              outLife->keyGroup = keyGroup; outLife->keyGroupKill = keyGroupKill;
-                              outLife->hasAdsr = hasAdsr; }
-                return TRUE;
+                sc.why |= MP6_LIFEWHY_NOEND;
+                break;
             }
         } else if (!group_span(grp, stepOff, 8, "macro MSTEP")) {
             return FALSE;
@@ -1215,59 +1480,145 @@ static BOOL find_macro_first_sample(MsmSeGroup *grp, uint16_t macroId,
         if (opcode == 0x10 && !started) {
             started = 1;
             *outSampleId = (uint16_t)((p0 >> 8) & 0xFFFFu);
+            /* Whatever the pre-StartSample steps left the volume at is the
+             * level the sample BEGINS at, so it is the program's first move --
+             * an instantaneous one at time zero. This is not a corner case: it
+             * is how MP6 authors a muted fx (seId 1106's macro 0x6a scales the
+             * volume to 0 from orgVolume in the step immediately before its
+             * StartSample), and skipping it is exactly what made that SE a
+             * full-scale beep in this port. A level that never moved off full
+             * scale emits nothing, so those voices stay bit-identical. */
+            if (curVol != MP6_MSM_ENV_UNITY) {
+                float mTo = 1.0f;
+                if (!mp6_msm_env_mul_from_vol(curVol, &mTo)) {
+                    envUsable = 0;
+                    sc.envWhy |= MP6_ENVWHY_UNMODELLED;
+                } else {
+                    Mp6MsmEnvSeg *seg = &env.seg[env.segCount++];
+                    seg->startMs = 0;
+                    seg->durMs = 0;
+                    seg->from = 1.0f;
+                    seg->to = mTo;
+                }
+            }
         }
         if (opcode == 0x0 || opcode == 0x1) { /* EndOfMacro / Stop -> voiceFree() */
-            if (outLife) {
-                if (started && lifeUsable) outLife->lifeMs = lifeMs;
-                outLife->ticks = lifeTicks;
-                outLife->why = why;
-                outLife->smpEnd = smpEnd;
-                outLife->keyGroup = keyGroup;
-                outLife->keyGroupKill = keyGroupKill;
-                outLife->hasAdsr = hasAdsr;
-            }
-            return started ? TRUE : FALSE;
+            if (started && lifeUsable) sc.lifeMs = lifeMs;
+            break;
         }
         if (opcode == 0x4 || opcode == 0x7) {
             uint32_t w = (p1 >> 16) & 0xFFFFu;
             /* mcmdWait's own "random duration" bit: the real wait is
              * sndRand() % w, so the authored number is an UPPER bound, not
              * the duration. Recorded, never silently trusted. */
-            if ((p0 >> 16) & 1u) why |= MP6_LIFEWHY_RANDWAIT;
+            int randWait = ((p0 >> 16) & 1u) != 0;
+            if (randWait) sc.why |= MP6_LIFEWHY_RANDWAIT;
             if (w == 0xFFFFu) {
                 lifeUsable = 0; /* held -- resumed by keyoff and/or sample end */
-                why |= MP6_LIFEWHY_KEYOFFWAIT;
-                if ((p0 >> 8) & 1u) why |= MP6_LIFEWHY_WAITKEYOFF;
-                if (((p0 >> 24) & 1u) && started) smpEnd = 1;
+                sc.why |= MP6_LIFEWHY_KEYOFFWAIT;
+                if ((p0 >> 8) & 1u) sc.why |= MP6_LIFEWHY_WAITKEYOFF;
+                if (((p0 >> 24) & 1u) && started) sc.smpEnd = 1;
+                envTimeKnown = 0; /* resumes at an unknowable moment */
             } else if (opcode == 0x7 || ((p1 >> 8) & 1u)) {
                 if (started) lifeMs += w;
+                /* For the ENVELOPE's clock this is only usable when the wait
+                 * is (a) a plain relative one -- mcmdWait's ((u8)para[1] & 1)
+                 * bit re-bases the deadline on macStartTime instead of adding
+                 * to it -- and (b) not the random variant. A zero duration is
+                 * fine: mcmdWait returns without waiting at all. */
+                if (started) {
+                    if (randWait || (p1 & 1u)) envTimeKnown = 0;
+                    else envMs += w;
+                }
             } else {
                 lifeUsable = 0; /* tempo-scaled tick wait -- not knowable here */
-                why |= MP6_LIFEWHY_TICKWAIT;
-                if (started) lifeTicks += w;
+                sc.why |= MP6_LIFEWHY_TICKWAIT;
+                if (started) sc.ticks += w;
+                envTimeKnown = 0;
             }
         } else if (opcode == 0x2 || opcode == 0x3 || opcode == 0x5 ||
                    opcode == 0x6 || opcode == 0x8 || opcode == 0xA ||
                    opcode == 0x13 || opcode == 0x24 || opcode == 0x25) {
             lifeUsable = 0; /* conditional / loop / goto / call -- not linear */
-            why |= MP6_LIFEWHY_BRANCH;
+            sc.why |= MP6_LIFEWHY_BRANCH;
+            if (started) {
+                /* A backward jump can re-run a volume move at a time this
+                 * straight-line reader never visits, so the program is not
+                 * merely incomplete past this point -- it is wrong. */
+                envUsable = 0;
+                sc.envWhy |= MP6_ENVWHY_BRANCH;
+            }
         } else if (opcode == 0x11 && started) {
-            why |= MP6_LIFEWHY_STOPSAMPLE; /* mcmdStopSample -> hwBreak */
+            sc.why |= MP6_LIFEWHY_STOPSAMPLE; /* mcmdStopSample -> hwBreak */
+            sc.envWhy |= MP6_ENVWHY_KEYOFF;   /* recorded, NOT a refusal -- see below */
         } else if (opcode == 0x12 && started) {
-            why |= MP6_LIFEWHY_KEYOFFCMD;  /* mcmdKeyOff */
+            sc.why |= MP6_LIFEWHY_KEYOFFCMD;  /* mcmdKeyOff */
+            sc.envWhy |= MP6_ENVWHY_KEYOFF;
         } else if (opcode == 0x59) {
             /* mcmdSetKeyGroup -- see MsmFxEntry.keyGroup. */
-            keyGroup = (uint8_t)((p0 >> 8) & 0xFFu);
-            keyGroupKill = (uint8_t)(((p0 >> 16) & 0xFFu) != 0);
+            sc.keyGroup = (uint8_t)((p0 >> 8) & 0xFFu);
+            sc.keyGroupKill = (uint8_t)(((p0 >> 16) & 0xFFu) != 0);
         } else if (opcode == 0x0C || opcode == 0x16 || opcode == 0x21) {
-            hasAdsr = 1; /* SetADSR / SetADSRFromCtrl / ScaleVolumeDLS */
+            sc.hasAdsr = 1; /* SetADSR / SetADSRFromCtrl / ScaleVolumeDLS */
+            envUsable = 0;  /* a real ADSR state machine, not a linear move */
+            sc.envWhy |= MP6_ENVWHY_ADSR;
+        } else if (opcode == 0x0D || opcode == 0x0F || opcode == 0x14) {
+            uint32_t vFrom = 0, vTo = 0, durMs = 0;
+            sc.envWhy |= MP6_ENVWHY_SAW_VOLOP;
+            if (!mp6_msm_env_vol_step(opcode, p0, p1, curVol, MP6_MSM_ENV_UNITY,
+                                      &vFrom, &vTo, &durMs)) {
+                envUsable = 0;
+                sc.envWhy |= MP6_ENVWHY_UNMODELLED;
+            } else if (!started) {
+                /* Before the sample exists an instantaneous set only moves the
+                 * running level, which the StartSample step above then emits
+                 * as the program's move at time zero; a RAMP would still be
+                 * moving when the sample begins, which is not expressible as
+                 * a segment measured from the StartSample. */
+                if (durMs != 0) {
+                    envUsable = 0;
+                    sc.envWhy |= MP6_ENVWHY_PRESTART;
+                } else {
+                    curVol = vTo;
+                }
+            } else if (!envTimeKnown) {
+                envUsable = 0;
+                sc.envWhy |= MP6_ENVWHY_TIMEUNKNOWN;
+            } else if (env.segCount >= MP6_MSM_SE_ENV_MAX_SEGS) {
+                envUsable = 0;
+                sc.envWhy |= MP6_ENVWHY_TOOMANY;
+            } else if (envMs < envPrevEndMs) {
+                /* The engine would restart this move from wherever the
+                 * previous ramp had actually got to (synth.c keeps ramping
+                 * envCurrent while the macro runs on), a value this reader
+                 * does not compute. */
+                envUsable = 0;
+                sc.envWhy |= MP6_ENVWHY_OVERLAP;
+            } else {
+                float mFrom = 1.0f, mTo = 1.0f;
+                if (!mp6_msm_env_mul_from_vol(vFrom, &mFrom) ||
+                    !mp6_msm_env_mul_from_vol(vTo, &mTo)) {
+                    envUsable = 0;
+                    sc.envWhy |= MP6_ENVWHY_UNMODELLED;
+                } else {
+                    Mp6MsmEnvSeg *seg = &env.seg[env.segCount++];
+                    seg->startMs = envMs;
+                    seg->durMs = durMs;
+                    seg->from = mFrom;
+                    seg->to = mTo;
+                    envPrevEndMs = envMs + durMs;
+                    curVol = vTo;
+                }
+            }
         }
     }
-    /* Ran off the end of the scanned window without an explicit terminator:
-     * report the sample if one was found, but never a duration. */
-    if (outLife) { outLife->ticks = lifeTicks; outLife->why = (uint8_t)(why | MP6_LIFEWHY_NOEND); outLife->smpEnd = smpEnd;
-                              outLife->keyGroup = keyGroup; outLife->keyGroupKill = keyGroupKill;
-                              outLife->hasAdsr = hasAdsr; }
+    /* Falling out of the 64-step window without an explicit terminator is the
+     * same "no duration, but the sample is real" verdict as running past the
+     * blob: the loop's own exits set NOEND / lifeMs, this only covers running
+     * the counter out. */
+    if (i >= 64) sc.why |= MP6_LIFEWHY_NOEND;
+    if (envUsable && env.segCount > 0) sc.env = env;
+    if (outLife) *outLife = sc;
     return started ? TRUE : FALSE;
 }
 
@@ -1293,8 +1644,7 @@ static BOOL find_macro_first_sample(MsmSeGroup *grp, uint16_t macroId,
 static BOOL resolve_first_sample(MsmSeGroup *grp, uint16_t objId, int key, int depth,
                                  uint16_t *outSampleId, MsmMacroScan *outLife)
 {
-    if (outLife) { outLife->lifeMs = 0; outLife->ticks = 0; outLife->why = 0; outLife->smpEnd = 0;
-                   outLife->keyGroup = 0; outLife->keyGroupKill = 0; outLife->hasAdsr = 0; }
+    if (outLife) memset(outLife, 0, sizeof(*outLife));
     if (depth <= 0) return FALSE;
     if (key < 0) key = 0;
     if (key > 127) key = 127;
@@ -1390,14 +1740,56 @@ static void resolve_fx_table(MsmSeGroup *grp, uint32_t groupDataOff)
         uint8_t key = e[8];                     /* FX_TAB.key -- selects keymap entries/layer rows */
         uint16_t sampleId;
         MsmMacroScan life;
-        life.lifeMs = 0; life.ticks = 0; life.why = 0; life.smpEnd = 0;
-        life.keyGroup = 0; life.keyGroupKill = 0; life.hasAdsr = 0;
+        memset(&life, 0, sizeof(life));
         if (resolve_first_sample(grp, objId, key, 4, &sampleId, &life)) {
-            if (!add_fx_entry(grp, fid, sampleId, life.lifeMs, life.why, life.ticks,
-                              life.smpEnd, life.keyGroup, life.keyGroupKill,
-                              life.hasAdsr)) return;
+            if (!add_fx_entry(grp, fid, sampleId, &life)) return;
         }
     }
+}
+
+/* A/B switch for the authored VOLUME ENVELOPE, diagnostics only:
+ * MP6_AUDIO_NO_MACRO_ENV=1 restores the pre-fix behavior (flat gain for the
+ * whole voice) in the SAME binary, so "before" and "after" are one build and
+ * one method. Same shape and same reason as MP6_AUDIO_NO_MACRO_LIFE below.
+ * Latched on first use: msmSePlay reads it per start, and a value that changed
+ * mid-run would make two voices of the same seId disagree. */
+static int mp6_se_macro_env_disabled(void)
+{
+    static int s_disabled = -1;
+    if (s_disabled < 0) {
+        const char *e = getenv("MP6_AUDIO_NO_MACRO_ENV");
+        s_disabled = (e != NULL && *e != '\0' && *e != '0') ? 1 : 0;
+    }
+    return s_disabled;
+}
+
+/* Resolve an fx's compiled envelope onto a voice about to start, or leave
+ * `out` neutral (segCount 0 -- the mixer never touches that voice's gain).
+ *
+ * THE LOOP GATE is the load-bearing part. The mixer reads the envelope at the
+ * voice's SAMPLE INDEX, which is only a faithful clock for elapsed time while
+ * the index advances monotonically from zero; a voice that still LOOPS rewinds
+ * its index on every wrap and would replay a timed move forever. So a TIMED
+ * program is installed only once the voice is a one-shot -- which is usually
+ * already true here, because a macro linear enough to compile a timed program
+ * is usually also linear enough for mp6_se_authored_note_frames to have
+ * flattened its loop, and that is exactly why msmSePlay calls this AFTER the
+ * flattening rather than before.
+ *
+ * A CONSTANT program (mp6_msm_env_is_constant) has no timed move to replay and
+ * is therefore installed on looping voices too. That is not a nicety: MP6's
+ * muted fx are authored precisely that way -- one instantaneous ScaleVolume
+ * before the StartSample, then a loop-flagged sample held until keyoff -- so
+ * gating them out would leave the loudest wrong sound in the bank untouched. */
+static void mp6_se_install_env(const Mp6MsmSeEnv *env, const MsmSampleInfo *info,
+                               int loopMode, Mp6MsmEnvPlan *out)
+{
+    uint32_t rate;
+    memset(out, 0, sizeof(*out));
+    if (mp6_se_macro_env_disabled() || env == NULL || env->segCount == 0) return;
+    if (loopMode != 0 && !mp6_msm_env_is_constant(env)) return;
+    rate = info->sampleRateHz ? info->sampleRateHz : MP6_MSM_OUT_RATE;
+    if (!mp6_msm_env_plan(env, rate, out)) memset(out, 0, sizeof(*out));
 }
 
 /* THE AUTHORED NOTE LENGTH, in the sample's own native frames, or 0 for
@@ -1610,6 +2002,19 @@ static void se_group_loaded_gids_str(char *buf, size_t bufSize)
     }
 }
 
+/* Every malloc'd host metadata byte one loaded group owns: its data blob, its
+ * fx index, and its sparse volume-envelope rows -- i.e. exactly what
+ * se_group_unload frees. One helper because three call sites report this
+ * number (the load log, msmSysDelGroupAll's freed-bytes total, and
+ * msmSysDelGroupBase's) and all three must agree; when the fx entry changed
+ * size they were three separate expressions to keep in step. */
+static uint32_t se_group_bytes(const MsmSeGroup *G)
+{
+    return G->blobSize +
+           (uint32_t)G->fxCap * (uint32_t)sizeof(MsmFxEntry) +
+           (uint32_t)G->fxEnvCap * (uint32_t)sizeof(MsmFxEnvRow);
+}
+
 /* g_grpLock must be held. Totals for the memory-discipline logs: count +
  * malloc'd metadata bytes of loaded groups. */
 static void se_group_totals(int *outCount, uint32_t *outBytes)
@@ -1619,7 +2024,7 @@ static void se_group_totals(int *outCount, uint32_t *outBytes)
     for (i = 0; i < MP6_MSM_MAX_SE_GROUPS; i++) {
         if (!g_seGroups[i].inUse) continue;
         n++;
-        b += g_seGroups[i].blobSize + (uint32_t)g_seGroups[i].fxCap * (uint32_t)sizeof(MsmFxEntry);
+        b += se_group_bytes(&g_seGroups[i]);
     }
     *outCount = n;
     *outBytes = b;
@@ -1630,6 +2035,7 @@ static void se_group_unload(MsmSeGroup *G)
 {
     free(G->blob);
     free(G->fx);
+    free(G->fxEnv);
     memset(G, 0, sizeof(*G));
 }
 
@@ -1876,6 +2282,303 @@ static void mp6_se_loop_census(void)
     fflush(stdout);
 }
 
+/* =======================================================================
+ * VOLUME-ENVELOPE DIAGNOSTICS -- both opt-in, both read-only, neither
+ * reachable unless its own environment variable is set.
+ *
+ *   MP6_AUDIO_SE_ENV_CENSUS=1            what every seId's macro compiled to
+ *   MP6_AUDIO_SE_MACRO_DUMP=<seId>[,...] the raw MSTEP stream behind one
+ *
+ * They exist because the compiled program is the ONLY place the authored
+ * shaping becomes visible before a sample is rendered: an SE that keeps its
+ * flat gain and an SE whose envelope is a no-op sound identical, and only the
+ * MP6_ENVWHY_* verdict distinguishes "nothing authored" from "authored
+ * something this port refuses to guess at".
+ * ======================================================================= */
+static void mp6_env_why_str(uint16_t why, char *buf, size_t bufSize)
+{
+    struct { uint16_t bit; const char *name; } names[] = {
+        { MP6_ENVWHY_SAW_VOLOP,   "volop" },
+        { MP6_ENVWHY_UNMODELLED,  "UNMODELLED" },
+        { MP6_ENVWHY_TIMEUNKNOWN, "TIMEUNKNOWN" },
+        { MP6_ENVWHY_TOOMANY,     "TOOMANY" },
+        { MP6_ENVWHY_OVERLAP,     "OVERLAP" },
+        { MP6_ENVWHY_ADSR,        "ADSR" },
+        { MP6_ENVWHY_KEYOFF,      "KEYOFF" },
+        { MP6_ENVWHY_PRESTART,    "PRESTART" },
+        { MP6_ENVWHY_BRANCH,      "BRANCH" }
+    };
+    size_t used = 0;
+    int i;
+    if (bufSize == 0) return;
+    buf[0] = '\0';
+    for (i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
+        size_t n;
+        if (!(why & names[i].bit)) continue;
+        n = strlen(names[i].name);
+        if (used + n + 2 >= bufSize) break;
+        if (used) buf[used++] = ' ';
+        memcpy(buf + used, names[i].name, n);
+        used += n;
+        buf[used] = '\0';
+    }
+}
+
+static void mp6_env_program_str(const Mp6MsmSeEnv *env, char *buf, size_t bufSize)
+{
+    size_t used = 0;
+    int i;
+    if (bufSize == 0) return;
+    buf[0] = '\0';
+    for (i = 0; i < (int)env->segCount && i < MP6_MSM_SE_ENV_MAX_SEGS; i++) {
+        int n = snprintf(buf + used, bufSize - used, "%s[%ums +%ums %.3f->%.3f]",
+                         used ? " " : "", (unsigned)env->seg[i].startMs,
+                         (unsigned)env->seg[i].durMs, (double)env->seg[i].from,
+                         (double)env->seg[i].to);
+        if (n < 0 || (size_t)n >= bufSize - used) break;
+        used += (size_t)n;
+    }
+}
+
+/* The effective loop mode a voice for this fx would END UP with, i.e. after
+ * mp6_se_authored_note_frames has had its chance to flatten the loop. The
+ * census must ask exactly what msmSePlay asks, or it would report an envelope
+ * as applied that the loop gate then refuses. */
+static int mp6_se_effective_loop_mode(const MsmSampleInfo *info, uint32_t lifeMs)
+{
+    uint32_t loopEnd = 0;
+    int loopMode = mp6_msm_loop_bounds(info->length, info->loopStart, info->loopLength,
+                                       &loopEnd);
+    if (loopMode <= 0) return loopMode;
+    return mp6_se_authored_note_frames(info, lifeMs, loopMode, loopEnd) != 0 ? 0 : 1;
+}
+
+static void mp6_se_env_census(void)
+{
+    int gi, i;
+    int resolved = 0, sawVolop = 0, compiled = 0, applied = 0, loopBlocked = 0;
+    int planRefused = 0;
+    int whyUnmodelled = 0, whyTime = 0, whyTooMany = 0, whyOverlap = 0;
+    int whyAdsr = 0, whyKeyoff = 0, whyPrestart = 0, whyBranch = 0;
+    int envRows = 0;   /* sparse envelope rows ACTUALLY allocated across all 115
+                        * groups -- the side table's real bank-wide cost, and the
+                        * number `compiled` has to be read against: a row exists per
+                        * compiled program, whether or not an SE def points at it */
+    const char *e = getenv("MP6_AUDIO_SE_ENV_CENSUS");
+    if (!(e != NULL && *e != '\0' && *e != '0')) return;
+
+    printf("[SEENV] begin -- %d SE defs, %d grpInfo entries, maxSegs=%d, disabled=%d, "
+           "fxEntry=%u bytes/fx, envRow=%u bytes/COMPILED program\n",
+           g_seDefCount, g_grpInfoCount, MP6_MSM_SE_ENV_MAX_SEGS,
+           mp6_se_macro_env_disabled(), (unsigned)sizeof(MsmFxEntry),
+           (unsigned)sizeof(MsmFxEnvRow));
+    for (gi = 1; gi < g_grpInfoCount; gi++) {
+        MsmSeGroup tmp;
+        uint16_t gid = g_grpInfo[gi].gid;
+        if (se_group_materialize(&tmp, gi, 0, 0, "envcensus") != 0) continue;
+        for (i = 0; i < g_seDefCount; i++) {
+            const MsmFxEntry *fx = NULL;
+            const Mp6MsmSeEnv *envp;
+            Mp6MsmSeEnv env;
+            MsmSampleInfo info;
+            Mp6MsmEnvPlan plan;
+            int loopMode, j, planned, fxIdx = -1;
+            char whyBuf[128], progBuf[256];
+            if (g_seDefs[i].gid != gid) continue;
+            for (j = 0; j < tmp.fxCount; j++) {
+                if (tmp.fx[j].fxId == g_seDefs[i].fxId) { fx = &tmp.fx[j]; fxIdx = j; break; }
+            }
+            if (!fx || !lookup_sdir(&tmp, fx->sampleId, &info) || info.compType != 0) continue;
+            resolved++;
+            /* Resolved the way msmSePlay resolves it -- by fx INDEX, with an
+             * absent row meaning segCount 0 -- so a census verdict cannot
+             * disagree with the program playback would actually install. */
+            memset(&env, 0, sizeof(env));
+            envp = se_group_fx_env(&tmp, fxIdx);
+            if (envp != NULL) env = *envp;
+            if (fx->envWhy & MP6_ENVWHY_SAW_VOLOP) sawVolop++;
+            if (fx->envWhy & MP6_ENVWHY_UNMODELLED) whyUnmodelled++;
+            if (fx->envWhy & MP6_ENVWHY_TIMEUNKNOWN) whyTime++;
+            if (fx->envWhy & MP6_ENVWHY_TOOMANY) whyTooMany++;
+            if (fx->envWhy & MP6_ENVWHY_OVERLAP) whyOverlap++;
+            if (fx->envWhy & MP6_ENVWHY_ADSR) whyAdsr++;
+            if (fx->envWhy & MP6_ENVWHY_KEYOFF) whyKeyoff++;
+            if (fx->envWhy & MP6_ENVWHY_PRESTART) whyPrestart++;
+            if (fx->envWhy & MP6_ENVWHY_BRANCH) whyBranch++;
+            /* Print every SE that AUTHORED a volume opcode, compiled or not:
+             * a refused one is the interesting row, because its verdict is the
+             * only thing distinguishing "nothing authored" from "authored
+             * something this port declined to guess at". */
+            if (env.segCount == 0 && !(fx->envWhy & MP6_ENVWHY_SAW_VOLOP)) continue;
+            if (env.segCount != 0) compiled++;
+            loopMode = mp6_se_effective_loop_mode(&info, fx->lifeMs);
+            planned = env.segCount != 0 &&
+                      (loopMode == 0 || mp6_msm_env_is_constant(&env)) &&
+                      mp6_msm_env_plan(&env, info.sampleRateHz ? info.sampleRateHz
+                                                              : MP6_MSM_OUT_RATE, &plan);
+            if (env.segCount != 0) {
+                if (planned) applied++;
+                else if (loopMode != 0) loopBlocked++;
+                else planRefused++;
+            }
+            mp6_env_why_str(fx->envWhy, whyBuf, sizeof(whyBuf));
+            mp6_env_program_str(&env, progBuf, sizeof(progBuf));
+            printf("[SEENV] seId=%d gid=%u fxId=%d samp=%d rate=%uHz len=%u loopLen=%u "
+                   "lifeMs=%u segs=%d applied=%d loop=%d why=%#x %s program=%s\n",
+                   i, (unsigned)gid, g_seDefs[i].fxId, (int)fx->sampleId,
+                   (unsigned)info.sampleRateHz, (unsigned)info.length,
+                   (unsigned)info.loopLength, (unsigned)fx->lifeMs,
+                   (int)env.segCount, planned, loopMode != 0,
+                   (unsigned)fx->envWhy, whyBuf, progBuf);
+        }
+        envRows += tmp.fxEnvCount;
+        se_group_unload(&tmp);
+    }
+    printf("[SEENV] done -- resolved=%d withVolumeOpcode=%d compiled=%d APPLIED=%d "
+           "loopBlocked=%d planRefused=%d envRows=%d (%u bytes bank-wide)\n",
+           resolved, sawVolop, compiled, applied, loopBlocked, planRefused, envRows,
+           (unsigned)((size_t)envRows * sizeof(MsmFxEnvRow)));
+    printf("[SEENV] refusals -- unmodelled=%d timeUnknown=%d tooMany=%d overlap=%d "
+           "adsr=%d keyoff=%d preStartRamp=%d branch=%d\n",
+           whyUnmodelled, whyTime, whyTooMany, whyOverlap, whyAdsr, whyKeyoff,
+           whyPrestart, whyBranch);
+    fflush(stdout);
+}
+
+/* One macro node's MSTEP stream, decoded far enough to read the volume and
+ * timing opcodes by eye. Mirrors resolve_first_sample's own object-id dispatch
+ * (0x4000 keymap / 0x8000 layer) so a dump of an SE that reaches its macro
+ * through an indirection shows the whole chain rather than "not a macro". */
+static void mp6_se_macro_dump_obj(MsmSeGroup *grp, uint16_t objId, int key, int depth)
+{
+    const uint8_t *m;
+    int i;
+    if (depth <= 0) { printf("[SEMACRO]   (recursion limit)\n"); return; }
+    if (key < 0) key = 0;
+    if (key > 127) key = 127;
+
+    switch (objId & 0xC000) {
+    case 0x4000: { /* KEYMAP */
+        const uint8_t *entry;
+        uint16_t subId;
+        m = pool_find_node(grp, 8, objId);
+        if (!m) { printf("[SEMACRO]   keymap %#x NOT FOUND\n", (unsigned)objId); return; }
+        entry = m + 8 + (size_t)(key & 0x7f) * 8;
+        if (!group_span(grp, (uint64_t)(entry - grp->blob), 8, "KEYMAP entry")) return;
+        subId = (uint16_t)be16(entry + 0);
+        printf("[SEMACRO]   keymap %#x key=%d -> %#x transpose=%d\n", (unsigned)objId, key,
+               (unsigned)subId, (int)(int8_t)entry[2]);
+        if (subId == 0xFFFF) return;
+        mp6_se_macro_dump_obj(grp, subId, key + (int8_t)entry[2], depth - 1);
+        return;
+    }
+    case 0x8000: { /* LAYER */
+        uint32_t num, r;
+        m = pool_find_node(grp, 0xC, objId);
+        if (!m) { printf("[SEMACRO]   layer %#x NOT FOUND\n", (unsigned)objId); return; }
+        if (!group_span(grp, (uint64_t)(m - grp->blob), 12, "LAYER header")) return;
+        num = be32(m + 8);
+        if (num > 128) return;
+        if (!group_span(grp, (uint64_t)(m - grp->blob) + 12, (uint64_t)num * 12,
+                        "LAYER rows")) return;
+        for (r = 0; r < num; r++) {
+            const uint8_t *row = m + 12 + (size_t)r * 12;
+            uint16_t subId = (uint16_t)be16(row + 0);
+            if (subId == 0xFFFF || key < row[2] || key > row[3]) continue;
+            printf("[SEMACRO]   layer %#x row %u -> %#x keys %u..%u transpose=%d\n",
+                   (unsigned)objId, (unsigned)r, (unsigned)subId, (unsigned)row[2],
+                   (unsigned)row[3], (int)(int8_t)row[4]);
+            mp6_se_macro_dump_obj(grp, subId, key + (int8_t)row[4], depth - 1);
+        }
+        return;
+    }
+    case 0xC000:
+        printf("[SEMACRO]   object %#x has no table\n", (unsigned)objId);
+        return;
+    default:
+        break;
+    }
+
+    m = pool_find_node(grp, 0, objId);
+    if (!m) { printf("[SEMACRO]   macro %#x NOT FOUND\n", (unsigned)objId); return; }
+    printf("[SEMACRO]   macro %#x steps:\n", (unsigned)objId);
+    for (i = 0; i < 64; i++) {
+        uint64_t off = (uint64_t)(m + 8 - grp->blob) + (size_t)i * 8;
+        uint32_t p0, p1;
+        uint8_t op;
+        if (off > grp->blobSize || (uint64_t)8 > (uint64_t)grp->blobSize - off) return;
+        p0 = be32(grp->blob + (size_t)off);
+        p1 = be32(grp->blob + (size_t)off + 4);
+        op = (uint8_t)(p0 & 0x7Fu);
+        printf("[SEMACRO]     %2d: op=%#04x p0=%08x p1=%08x  b1=%u b2=%u b3=%u  "
+               "q0=%u q1=%u time=%u\n",
+               i, (unsigned)op, (unsigned)p0, (unsigned)p1,
+               (unsigned)((p0 >> 8) & 0xFFu), (unsigned)((p0 >> 16) & 0xFFu),
+               (unsigned)((p0 >> 24) & 0xFFu), (unsigned)(p1 & 0xFFu),
+               (unsigned)((p1 >> 8) & 0xFFu), (unsigned)((p1 >> 16) & 0xFFFFu));
+        if (op == 0x0 || op == 0x1) return;
+    }
+}
+
+static void mp6_se_macro_dump(void)
+{
+    char buf[256];
+    char *tok, *next = NULL;
+    size_t n;
+    const char *e = getenv("MP6_AUDIO_SE_MACRO_DUMP");
+    if (!(e != NULL && *e != '\0')) return;
+    n = strlen(e);
+    if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+    memcpy(buf, e, n);
+    buf[n] = '\0';
+
+    for (tok = strtok(buf, ","); tok; tok = next) {
+        int seId = atoi(tok);
+        int gi;
+        int found = 0;
+        next = strtok(NULL, ",");
+        if (seId < 0 || seId >= g_seDefCount) {
+            printf("[SEMACRO] seId=%d out of range (0..%d)\n", seId, g_seDefCount - 1);
+            continue;
+        }
+        printf("[SEMACRO] seId=%d gid=%u fxId=%d vol=%d pan=%d\n", seId,
+               (unsigned)g_seDefs[seId].gid, g_seDefs[seId].fxId,
+               (int)g_seDefs[seId].vol, (int)g_seDefs[seId].pan);
+        for (gi = 1; gi < g_grpInfoCount && !found; gi++) {
+            MsmSeGroup tmp;
+            uint32_t groupDataOff;
+            const uint8_t *fxBase;
+            uint16_t fxNum, k;
+            if (g_grpInfo[gi].gid != g_seDefs[seId].gid) continue;
+            if (se_group_materialize(&tmp, gi, 0, 0, "macrodump") != 0) continue;
+            if (find_group_data(&tmp, g_grpInfo[gi].gid, &groupDataOff) &&
+                group_span(&tmp, (uint64_t)tmp.projOfs + groupDataOff, 0x28, "FX GROUP_DATA")) {
+                uint32_t fxTableOff = be32(tmp.blob + tmp.projOfs + groupDataOff + 0x1C);
+                if (group_span(&tmp, (uint64_t)tmp.projOfs + fxTableOff, 4, "FX_DATA header")) {
+                    fxBase = tmp.blob + tmp.projOfs + fxTableOff;
+                    fxNum = (uint16_t)be16(fxBase + 0);
+                    if (group_span(&tmp, (uint64_t)tmp.projOfs + fxTableOff + 4,
+                                   (uint64_t)fxNum * 10, "FX_DATA entries")) {
+                        for (k = 0; k < fxNum; k++) {
+                            const uint8_t *fe = fxBase + 4 + (size_t)k * 10;
+                            if ((uint16_t)be16(fe + 0) != g_seDefs[seId].fxId) continue;
+                            found = 1;
+                            printf("[SEMACRO]   fx entry: obj=%#x key=%u (grpIdx=%d gid=%u)\n",
+                                   (unsigned)be16(fe + 2), (unsigned)fe[8], gi,
+                                   (unsigned)g_grpInfo[gi].gid);
+                            mp6_se_macro_dump_obj(&tmp, (uint16_t)be16(fe + 2), fe[8], 4);
+                            break;
+                        }
+                    }
+                }
+            }
+            se_group_unload(&tmp);
+        }
+        if (!found) printf("[SEMACRO]   no fx entry found for seId=%d\n", seId);
+    }
+    fflush(stdout);
+}
+
 static void msm_se_bank_init(const char *msmPath)
 {
     uint8_t hdr[0x60];
@@ -2107,6 +2810,8 @@ static void msm_se_bank_init(const char *msmPath)
     }
 
     mp6_se_loop_census();
+    mp6_se_env_census();
+    mp6_se_macro_dump();
 }
 
 /* =======================================================================
@@ -2175,7 +2880,7 @@ s32 msmSysDelGroupAll(void)
     for (i = 0; i < MP6_MSM_MAX_SE_GROUPS; i++) {
         MsmSeGroup *G = &g_seGroups[i];
         if (G->inUse && !G->baseGrpF) {
-            freedBytes += G->blobSize + (uint32_t)G->fxCap * (uint32_t)sizeof(MsmFxEntry);
+            freedBytes += se_group_bytes(G);
             se_group_unload(G);
             removed++;
         }
@@ -2247,7 +2952,7 @@ s32 msmSysDelGroupBase(s32 grpNum)
             }
         }
         if (!newest) break;
-        freedBytes += newest->blobSize + (uint32_t)newest->fxCap * (uint32_t)sizeof(MsmFxEntry);
+        freedBytes += se_group_bytes(newest);
         se_group_unload(newest);
         removed++;
     }
@@ -2491,6 +3196,21 @@ s32 msmSysInit(MSM_INIT *init, MSM_ARAM *aram)
         mp6_host_mutex_init(&g_mixerLock);
         mp6_host_mutex_init(&g_grpLock); /* see g_grpLock's own comment */
         g_mixerLockInit = 1;
+    }
+    /* Decide the voice-table size for this run HERE, before the mixer can be
+     * driven and before any voice exists -- see g_sfxVoiceCap's own comment
+     * for why it must never move afterwards.
+     *
+     * Logged ONLY when the enhancement is on. Retail stays byte-silent on
+     * purpose: docs/TESTING.md's headless 600-tick gate byte-compares every
+     * game-flow line (including [AUDIO] ones) against docs/ua1/
+     * win_headless_600.log and against the Android device log, so an
+     * unconditional line would fail both gates for a run in which nothing
+     * about the audio actually changed. Same "no log noise when the mod is
+     * off" rule mp6_shadow_quality_scale() follows. */
+    if (mp6_sfx_voice_cap() != MP6_MSM_SFX_VOICES_RETAIL) {
+        printf("[AUDIO] extended SFX voice table: %d of %d slots active\n",
+               mp6_sfx_voice_cap(), MP6_MSM_MAX_SFX_VOICES);
     }
 
     printf("[AUDIO] msmSysInit(msmPath=\"%s\", pdtPath=\"%s\", heapSize=%u)\n",
@@ -2873,10 +3593,16 @@ static void mp6_se_timeline_census(void)
     int firstWrap[MP6_MSM_MAX_SFX_VOICES];
     uint32_t wraps[MP6_MSM_MAX_SFX_VOICES];
     uint64_t start[MP6_MSM_MAX_SFX_VOICES];
+    /* Storage above is the capacity; both passes below walk the ACTIVE cap.
+     * Slots at or above it can never be allocated, so their s_prev* entries
+     * stay 0 forever and walking them would only ever print nothing -- but
+     * bounding by the cap keeps the retail per-tick cost, and the retail
+     * [SETL] stream, exactly what they were. */
+    const int cap = mp6_sfx_voice_cap();
     int i;
 
     mp6_lock();
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+    for (i = 0; i < cap; i++) {
         MsmSeVoice *v = &g_sfxVoice[i];
         active[i] = v->active;
         no[i]     = v->no;
@@ -2892,7 +3618,7 @@ static void mp6_se_timeline_census(void)
     }
     mp6_unlock();
 
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+    for (i = 0; i < cap; i++) {
         int gone = (s_prevNo[i] != 0 && (!active[i] || no[i] != s_prevNo[i]));
         if (gone) {
             printf("[SETL] end  tick=%llu slot=%d seNo=%d seId=%d age=%llu ticks wraps=%u\n",
@@ -2920,6 +3646,60 @@ static void mp6_se_timeline_census(void)
         s_prevStart[i] = start[i];
     }
     fflush(stdout);
+}
+
+/* Pull-side audio snapshot (shim/include/mp6_diag_probe.h).
+ *
+ * Same discipline as mp6_se_timeline_census() right above, and for the same
+ * stated reason: the SDL audio callback needs g_mixerLock, so this COPIES the
+ * voice and channel tables under the lock and does no formatting, no printf
+ * and no allocation while holding it. The caller formats from its own copy.
+ *
+ * Every field here was already maintained unconditionally -- only the [SETL]
+ * PRINTING is gated by mp6_se_timeline_on(). So a live audio panel costs one
+ * bounded memcpy-shaped copy per refresh and arms nothing. */
+void mp6_diag_audio_snapshot(Mp6DiagAudio *out)
+{
+    int i;
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+    /* The RUNTIME cap, not the struct capacity: voiceCount is what the audio
+     * panel prints as "of N mixer slots" and what it LOOPS OVER, so reporting
+     * 32 in a 16-slot run would claim 16 slots that provably cannot exist.
+     * No runtime clamp is needed -- the #error next to MP6_MSM_MAX_SFX_VOICES
+     * makes MP6_DIAG_SFX_VOICE_MAX >= every possible cap a build-time fact. */
+    out->voiceCount = mp6_sfx_voice_cap();
+    out->chanCount = MP6_DIAG_CHAN_MAX;
+
+    mp6_lock();
+    out->chanConfigured = g_chanMax;
+    out->masterVol = g_masterVol;
+    out->seMasterVol = g_seMasterVol;
+    out->keygroupEvents = g_kgReleaseEvents;
+    out->keygroupVoices = g_kgVoicesReleased;
+    for (i = 0; i < out->voiceCount; i++) {
+        const MsmSeVoice *v = &g_sfxVoice[i];
+        out->voices[i].active = v->active;
+        out->voices[i].no = v->no;
+        out->voices[i].seId = v->seId;
+        out->voices[i].loop = v->loop;
+        out->voices[i].keyGroup = v->keyGroup;
+        out->voices[i].wraps = v->tlWraps;
+        out->voices[i].startTick = v->tlStartTick;
+        if (v->active) out->voicesActive++;
+    }
+    for (i = 0; i < MP6_DIAG_CHAN_MAX && i < MP6_MSM_MAX_CHAN; i++) {
+        const MsmChan *c = &g_chan[i];
+        out->chans[i].active = c->active;
+        out->chans[i].paused = c->paused;
+        out->chans[i].loop = c->loop;
+        out->chans[i].streamId = c->streamId;
+        out->chans[i].fadeAction = c->fadeAction;
+        out->chans[i].vol = c->vol;
+        out->chans[i].fadeMul = c->fadeMul;
+        if (c->active) out->chansActive++;
+    }
+    mp6_unlock();
 }
 
 void msmSysRegularProc(void)
@@ -2983,6 +3763,7 @@ void mp6_msm_render(int16_t *out, uint32_t frames)
 {
     int i;
     int wavArmed;
+    int voiceCap;
     uint32_t f;
 
     memset(out, 0, (size_t)frames * MP6_MSM_OUT_CHANNELS * sizeof(int16_t));
@@ -3066,8 +3847,14 @@ void mp6_msm_render(int16_t *out, uint32_t frames)
 
     /* SFX voices -- same shape as the BGM channel loop above, with a MONO
      * source dual-panned into stereo via gainL/gainR. Authored loop bounds
-     * wrap in Q16.16; one-shot samples deactivate at their exact length. */
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+     * wrap in Q16.16; one-shot samples deactivate at their exact length.
+     *
+     * The bound is read ONCE into a local: this is the audio callback's own
+     * inner loop, and the cap is a run-constant (g_sfxVoiceCap is latched at
+     * msmSysInit and never moves), so re-reading it per iteration would be
+     * pure noise. At 16 this walks exactly the slots it always walked. */
+    voiceCap = mp6_sfx_voice_cap();
+    for (i = 0; i < voiceCap; i++) {
         MsmSeVoice *v = &g_sfxVoice[i];
         float gain;
 
@@ -3093,6 +3880,15 @@ void mp6_msm_render(int16_t *out, uint32_t frames)
                 idx = (uint32_t)(v->posFrac >> 16);
             }
             fadedGain = gain * v->fadeMul;
+            /* THE MACRO'S AUTHORED VOLUME ENVELOPE. Guarded on segCount, not
+             * folded in unconditionally: a voice with no modellable envelope
+             * must not even acquire an extra multiply, so its samples stay
+             * bit-identical to the pre-envelope build. `idx` is this voice's
+             * position in its own native-rate frames, which is exactly the
+             * clock mp6_msm_env_plan resolved the program onto. */
+            if (v->envPlan.segCount != 0) {
+                fadedGain *= mp6_msm_env_mul(&v->envPlan, (uint64_t)idx);
+            }
             s = v->pcm[idx];
             l = (int32_t)(s * fadedGain * v->gainL);
             r = (int32_t)(s * fadedGain * v->gainR);
@@ -3542,7 +4338,10 @@ static int mp6_se_keygroup_release(int keyGroup, int kill, MsmKgRelRec *recs)
      * rule during replay would have each restored voice kill the previously
      * restored members of its own group. The captured set is authoritative. */
     if (g_savestateMixerMuted) return 0;
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+    /* Bounded by the ACTIVE cap, which is also what sizes the caller's recs[]
+     * (kgRel[] in msmSePlay is the capacity, so it can never overflow) --
+     * releasing is a sweep over the same slots the allocator can hand out. */
+    for (i = 0; i < mp6_sfx_voice_cap(); i++) {
         MsmSeVoice *v = &g_sfxVoice[i];
         if (!v->active || v->keyGroup != keyGroup) continue;
         if (recs) {
@@ -3559,6 +4358,10 @@ static int mp6_se_keygroup_release(int keyGroup, int kill, MsmKgRelRec *recs)
         v->fadeStep = 0.0f;
         v->keyGroup = 0;
         released++;
+    }
+    if (released > 0) {
+        g_kgReleaseEvents++;
+        g_kgVoicesReleased += (unsigned long)released;
     }
     return released;
 }
@@ -3581,7 +4384,7 @@ static void mp6_se_keygroup_report(const MsmKgRelRec *recs, int n, int keyGroup,
 static MsmSeVoice *find_sfx_voice_by_no(int seNo)
 {
     int i;
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+    for (i = 0; i < mp6_sfx_voice_cap(); i++) {
         if (g_sfxVoice[i].active && g_sfxVoice[i].no == seNo) return &g_sfxVoice[i];
     }
     return NULL;
@@ -3591,11 +4394,15 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
 {
     MsmSeDef *def;
     int slot, i, vol, pan, ownerGrpIdx;
+    int fxIdx = -1;   /* the fx's own index in its group's fx[] -- the volume
+                       * envelope side table's key, see MsmFxEnvRow */
     MsmSampleInfo info;
     uint32_t adpcmFrames, byteLen;
     uint32_t sampPoolFileOfs, sampPoolSize;
     uint32_t loopEndFrame = 0;
     uint32_t fxLifeMs = 0;
+    Mp6MsmSeEnv fxEnv;
+    Mp6MsmEnvPlan envPlan;
     int fxKeyGroup = 0, fxKeyGroupKill = 0, keyGroupReleased = 0;
     MsmKgRelRec kgRel[MP6_MSM_MAX_SFX_VOICES];
     int loopMode;
@@ -3636,6 +4443,9 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
         snprintf(seIdText, sizeof(seIdText), "%d", seId);
         mp6_event_post("se.play", (long)seId, seIdText);
     }
+
+    memset(&fxEnv, 0, sizeof(fxEnv));
+    memset(&envPlan, 0, sizeof(envPlan));
 
     if (param) {
         printf("[AUDIO] msmSePlay(seId=%d, flag=%#x vol=%d pan=%d)\n", seId,
@@ -3687,7 +4497,7 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
             return MSM_ERR_INVALIDFILE;
         }
         for (i = 0; i < grp->fxCount; i++) {
-            if (grp->fx[i].fxId == def->fxId) { fx = &grp->fx[i]; break; }
+            if (grp->fx[i].fxId == def->fxId) { fx = &grp->fx[i]; fxIdx = i; break; }
         }
         if (!fx) {
             int grpIdx = grp->grpIdx, fxCount = grp->fxCount;
@@ -3699,6 +4509,15 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
         }
         sampleId = fx->sampleId;
         fxLifeMs = fx->lifeMs; /* copied out with everything else -- see MsmFxEntry */
+        {
+            /* The compiled volume program, if this fx has one at all: copied BY
+             * VALUE like everything else here, because the group's blob AND its
+             * envelope rows may be freed the instant the lock drops while the
+             * voice keeps sounding. No row means segCount 0 (fxEnv was zeroed
+             * above), which is the flat-gain state every refusal lands on. */
+            const Mp6MsmSeEnv *env = se_group_fx_env(grp, fxIdx);
+            if (env != NULL) fxEnv = *env;
+        }
         fxKeyGroup = fx->keyGroup;
         fxKeyGroupKill = fx->keyGroupKill;
         if (!lookup_sdir(grp, sampleId, &info)) {
@@ -3876,6 +4695,11 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
         }
     }
 
+    /* AFTER the flattening above, because the loop gate that decides whether
+     * an envelope may be installed at all reads the FINAL loopMode -- see
+     * mp6_se_install_env's own comment. */
+    mp6_se_install_env(&fxEnv, &info, loopMode, &envPlan);
+
     vol = (param && (param->flag & MSM_SEPARAM_VOL)) ? param->vol : MSM_VOL_MAX;
     pan = (param && (param->flag & MSM_SEPARAM_PAN)) ? param->pan : def->pan;
     if (pan < 0) pan = 0;
@@ -3887,15 +4711,25 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
      * search below sees the freed slots -- which is exactly why the real
      * engine never runs out of voices on a rapid retrigger. */
     keyGroupReleased = mp6_se_keygroup_release(fxKeyGroup, fxKeyGroupKill, kgRel);
-    for (slot = 0; slot < MP6_MSM_MAX_SFX_VOICES; slot++) {
-        if (!g_sfxVoice[slot].active) break;
+    /* First-free over the ACTIVE slots, through the one shared rule in
+     * msm_safe.h (mp6_msm_voice_first_free) so tools/sfx_voices_selftest.c
+     * exercises the same function the runtime allocates with. At cap 16 the
+     * scan cannot reach -- and never reads -- a slot >= 16, so the sequence
+     * of slots a given run hands out is bit-for-bit the pre-enhancement one;
+     * the 17th simultaneous start is refused exactly as it always was. At
+     * cap 32 the 17th succeeds and the 33rd is refused. */
+    {
+        unsigned char busy[MP6_MSM_MAX_SFX_VOICES];
+        int cap = mp6_sfx_voice_cap();
+        for (i = 0; i < cap; i++) busy[i] = (unsigned char)(g_sfxVoice[i].active != 0);
+        slot = mp6_msm_voice_first_free(busy, cap);
     }
-    if (slot == MP6_MSM_MAX_SFX_VOICES) {
+    if (slot < 0) {
         mp6_unlock();
         mp6_se_keygroup_report(kgRel, keyGroupReleased, fxKeyGroup, seId);
         free(mono);
         printf("[AUDIO] msmSePlay: seId=%d -- all %d SFX voice slots busy, dropped\n",
-               seId, MP6_MSM_MAX_SFX_VOICES);
+               seId, mp6_sfx_voice_cap());
         return MP6_MSM_ERR_CHANLIMIT;
     }
     if (g_seNoCounter >= INT_MAX) {
@@ -3941,6 +4775,8 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
     g_sfxVoice[slot].fadeAction = MP6_FADE_NONE;
     g_sfxVoice[slot].fadeStep = 0.0f;
     g_sfxVoice[slot].fadeMul = 1.0f;
+    g_sfxVoice[slot].envPlan = envPlan; /* neutral (segCount 0) unless the macro
+                                         * authored a program this port can run */
     g_sfxVoice[slot].tlStartTick = mp6_tick_count;
     g_sfxVoice[slot].tlWraps = 0;
     g_sfxVoice[slot].tlLastCensusWraps = 0;
@@ -3973,6 +4809,20 @@ int msmSePlay(int seId, MSM_SEPARAM *param)
            (unsigned)totalFramesForLog, (unsigned)adpcmFrames,
            (unsigned)info.loopStart, (unsigned)info.loopLength,
            psCheckOk ? "" : " -- WARNING initialPS!=frame0-PS, offsets suspect");
+
+    /* One line per start whose macro authored a volume program, so a bounded
+     * run's log alone shows whether the envelope actually engaged on the SE
+     * under investigation -- and, when the fx compiled one but the loop gate
+     * refused it, says so instead of staying silent. */
+    if (fxEnv.segCount != 0) {
+        char progBuf[256];
+        mp6_env_program_str(&fxEnv, progBuf, sizeof(progBuf));
+        printf("[AUDIO] msmSePlay: seId=%d authored volume envelope %s -- segs=%d applied=%d%s\n",
+               seId, progBuf, (int)fxEnv.segCount, envPlan.segCount != 0,
+               envPlan.segCount != 0 ? ""
+                   : (mp6_se_macro_env_disabled() ? " (MP6_AUDIO_NO_MACRO_ENV)"
+                                                  : " (voice still loops -- see mp6_se_install_env)"));
+    }
 
     if (mp6_se_timeline_on()) {
         printf("[SETL] play tick=%llu seNo=%d seId=%d gid=%u fxId=%d slot=%d samp=%d "
@@ -4053,7 +4903,7 @@ void msmSeStopAll(BOOL checkGrp, s32 speed)
     }
     mp6_lock();
     step = mp6_fade_step_from_speed(speed);
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+    for (i = 0; i < mp6_sfx_voice_cap(); i++) {
         if (checkGrp) {
             int isBase = 0;
             for (j = 0; j < baseGidCount; j++) {
@@ -4128,7 +4978,7 @@ s32 msmSePauseAll(BOOL pause, s32 speed)
     printf("[AUDIO] msmSePauseAll(pause=%d, speed=%d)\n", (int)pause, (int)speed);
     mp6_lock();
     step = mp6_fade_step_from_speed(speed);
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+    for (i = 0; i < mp6_sfx_voice_cap(); i++) {
         if (!g_sfxVoice[i].active) continue;
         if (step <= 0.0f) {
             g_sfxVoice[i].paused = pause ? 1 : 0;
@@ -4334,6 +5184,9 @@ static int mp6_ss_audio_verify_enabled(void)
 static void mp6_ss_log_shadow(const char *label, const Mp6SsAudioShadow *shadow)
 {
     int i, voices = 0, first = -1;
+    /* The whole on-disk table, not the live cap: this logs what the FILE
+     * says, and a shadow being logged may have been captured by a run with a
+     * different cap than this one. */
     for (i = 0; i < MP6_SS_AUDIO_MAX_VOICES; i++) {
         if (shadow->voice[i].active) {
             if (first < 0) first = i;
@@ -4342,14 +5195,16 @@ static void mp6_ss_log_shadow(const char *label, const Mp6SsAudioShadow *shadow)
     }
     if (first >= 0) {
         const Mp6SsAudioVoice *v = &shadow->voice[first];
-        printf("[SAVESTATE] audio-shadow %s hash=%016llx voices=%d "
+        printf("[SAVESTATE] audio-shadow %s hash=%016llx cap=%d voices=%d "
                "first(slot=%d seId=%d no=%d pos=%llu fade=%d/%g/%g)\n",
-               label, (unsigned long long)mp6_ss_shadow_fingerprint(shadow), voices,
+               label, (unsigned long long)mp6_ss_shadow_fingerprint(shadow),
+               (int)shadow->voiceCap, voices,
                first, v->seId, v->seNo, (unsigned long long)v->posFrac,
                v->fadeAction, (double)v->fadeMul, (double)v->fadeStep);
     } else {
-        printf("[SAVESTATE] audio-shadow %s hash=%016llx voices=0\n",
-               label, (unsigned long long)mp6_ss_shadow_fingerprint(shadow));
+        printf("[SAVESTATE] audio-shadow %s hash=%016llx cap=%d voices=0\n",
+               label, (unsigned long long)mp6_ss_shadow_fingerprint(shadow),
+               (int)shadow->voiceCap);
     }
     fflush(stdout);
 }
@@ -4444,8 +5299,13 @@ int mp6_msm_savestate_validate(const Mp6SsAudioShadow *in)
 
     chanMax = g_chanMax;
     if (chanMax > MP6_SS_AUDIO_MAX_CHAN) chanMax = MP6_SS_AUDIO_MAX_CHAN;
+    /* voiceCap is checked BEFORE it is used to bound anything: a corrupt
+     * capacity must not become a loop bound over the on-disk table. It is
+     * deliberately NOT required to equal this run's cap -- a capture made at
+     * the other size is a supported input, see Mp6SsAudioShadow's comment. */
     if (in->chanCount != chanMax || in->groupCount < 0 ||
         in->groupCount > MP6_SS_AUDIO_MAX_GROUPS ||
+        !mp6_msm_voice_cap_valid(in->voiceCap) ||
         in->masterVol < 0 || in->masterVol > 127 ||
         in->seMasterVol < 0 || in->seMasterVol > 127 ||
         in->seNoCounter < 1 || in->seNoCounter >= INT_MAX) {
@@ -4505,8 +5365,17 @@ int mp6_msm_savestate_validate(const Mp6SsAudioShadow *in)
         }
     }
 
+    /* Every slot of the on-disk table is inspected, including the ones above
+     * the capture's own capacity: those must be canonical zero holes. A
+     * capture claiming a voice in a slot it could not reach is corrupt, and
+     * catching that here is what lets the apply path treat "active && slot >=
+     * live cap" as purely a capacity difference rather than possible garbage. */
     for (i = 0; valid && i < MP6_SS_AUDIO_MAX_VOICES; i++) {
         const Mp6SsAudioVoice *v = &in->voice[i];
+        if (!mp6_msm_voice_slot_restorable(i, in->voiceCap) && v->active) {
+            valid = 0;
+            break;
+        }
         if (!mp6_ss_fade_valid(v->active, v->paused, v->fadeMul,
                                v->fadeStep, v->fadeAction)) {
             valid = 0;
@@ -4570,6 +5439,11 @@ int mp6_msm_savestate_capture(Mp6SsAudioShadow *out)
     out->seNoCounter = g_seNoCounter;
     out->masterVol = g_masterVol;
     out->seMasterVol = g_seMasterVol;
+    /* Record the capacity this capture was taken at. The table written below
+     * is always the full MP6_SS_AUDIO_MAX_VOICES entries wide; this is what
+     * says how many of them were reachable, and it is the only thing that
+     * makes a restore under the OTHER size well-defined. */
+    out->voiceCap = mp6_sfx_voice_cap();
     n = g_chanMax;
     if (n > MP6_SS_AUDIO_MAX_CHAN) {
         failed = 1;
@@ -4618,7 +5492,10 @@ int mp6_msm_savestate_capture(Mp6SsAudioShadow *out)
         out->groupIdx[i] = grp->dynBaseF ? -grp->grpIdx : grp->grpIdx;
     }
 
-    for (i = 0; i < MP6_MSM_MAX_SFX_VOICES; i++) {
+    /* Bounded by the cap, not the capacity: slots at or above it cannot be
+     * active (nothing can allocate them), and leaving them as the memset's
+     * zeros is exactly the canonical hole the preflight demands there. */
+    for (i = 0; i < out->voiceCap; i++) {
         const MsmSeVoice *v = &g_sfxVoice[i];
         Mp6SsAudioVoice *dst = &out->voice[i];
         if (!v->active) continue; /* canonical zero hole */
@@ -4711,7 +5588,8 @@ static void mp6_msm_savestate_apply_fatal(const char *what, int id, int result)
 
 void mp6_msm_savestate_apply(const Mp6SsAudioShadow *in)
 {
-    int i, voiceCount = 0;
+    int i, voiceCount = 0, voicesDropped = 0;
+    const int liveVoiceCap = mp6_sfx_voice_cap();
     /* msmSysLoadGroup rejects a NULL staging buffer (mirroring the real
      * engine, whose game-side malloc really can fail) but never dereferences
      * it -- this port reads the .msm directly. A non-NULL dummy is therefore
@@ -4830,9 +5708,29 @@ void mp6_msm_savestate_apply(const Mp6SsAudioShadow *in)
     /* 6. Recreate every active SFX in its original mixer slot and restore
      * the exact game-visible handle.  Validator proved each owner group is
      * permanent or present in the captured dynamic group set, so msmSePlay
-     * resolves the same immutable sample and re-derives loop/rate/baseVol. */
+     * resolves the same immutable sample and re-derives loop/rate/baseVol.
+     *
+     * CROSS-CAPACITY RULE (mp6_msm_voice_slot_restorable, msm_safe.h). The
+     * cap is host configuration and is carved out of the restore, so THIS
+     * process's cap decides -- not the capturing process's. A captured slot
+     * this run cannot hold is dropped and named, never remapped into a
+     * different slot: slot index is the voice's identity in the mixer order
+     * and in the handle the game already holds. Dropping is safe because
+     * seNoCounter is still restored exactly below, so the dropped handle is
+     * retired rather than recycled, and msmSeGetStatus answers MSM_SE_DONE
+     * for it -- indistinguishable from a one-shot that finished a tick
+     * earlier, which is a thing the game already has to tolerate. */
     for (i = 0; i < MP6_SS_AUDIO_MAX_VOICES; i++) {
         if (!in->voice[i].active) continue;
+        if (!mp6_msm_voice_slot_restorable(i, liveVoiceCap)) {
+            printf("[SAVESTATE] SFX slot %d (seId=%d seNo=%d) captured with a %d-slot "
+                   "voice table cannot be restored into this run's %d slots -- dropped; "
+                   "its handle is retired, not reused\n",
+                   i, (int)in->voice[i].seId, (int)in->voice[i].seNo,
+                   (int)in->voiceCap, liveVoiceCap);
+            voicesDropped++;
+            continue;
+        }
         {
             int result = mp6_msm_savestate_restore_voice(&in->voice[i], i);
             if (result != 0) mp6_msm_savestate_apply_fatal("SFX slot", i, result);
@@ -4849,10 +5747,19 @@ void mp6_msm_savestate_apply(const Mp6SsAudioShadow *in)
 
     printf("[SAVESTATE] audio re-synced: %d channel slot(s), %d SE group(s), %d SFX voice(s)\n",
            (int)in->chanCount, (int)in->groupCount, voiceCount);
+    if (voicesDropped > 0) {
+        printf("[SAVESTATE] %d SFX voice(s) dropped: captured with %d voice slots, this run "
+               "has %d\n", voicesDropped, (int)in->voiceCap, liveVoiceCap);
+    }
     fflush(stdout);
     if (mp6_ss_audio_verify_enabled()) {
         Mp6SsAudioShadow live;
         int captured = mp6_msm_savestate_capture(&live) == 0;
+        /* Exactness is only claimable for a SAME-capacity restore: across a
+         * capacity change the live shadow legitimately differs (voiceCap
+         * itself, plus any dropped slot). The counter above already reports
+         * what was lost; this stays a strict byte compare so it cannot be
+         * quietly weakened for the same-capacity case the gates check. */
         int exact = captured && memcmp(&live, in, sizeof(live)) == 0;
         printf("[SAVESTATE] audio-shadow apply-check expected=%016llx live=%016llx exact=%d\n",
                (unsigned long long)mp6_ss_shadow_fingerprint(in),

@@ -60,7 +60,9 @@ BUILD_TARGETS = ["aurora_pad", "aurora_si", "aurora_card", "aurora_mtx",
 # existence would happily hand a stale archive to the link step, which then
 # fails (or worse, links code that no longer matches the patches in tree).
 STAMP_NAME = ".mp6-aurora-build.json"
-BUILD_CONTRACT_VERSION = 4
+# 5: the carve-out flags enter the fingerprint by repo-RELATIVE header path, so
+#    a worktree and its main checkout agree. See _fingerprint_carveout_args().
+BUILD_CONTRACT_VERSION = 5
 ARTIFACT_STAMP_VERSION = 4
 
 
@@ -68,15 +70,44 @@ def _host_section_header():
     return os.path.join(common.NATIVE_ROOT, "shim", "include", "mp6_host_section.h")
 
 
-def _carveout_cmake_args():
-    """Flags required by tools/build.py's verify_aurora_carveout()."""
-    header = _host_section_header().replace("\\", "/")
+def _carveout_args_for(header):
+    """The carve-out flag triple, built around an already-formatted *header*.
+
+    Single source of truth for the flag SHAPE, so the real cmake arguments and
+    their fingerprint form cannot drift apart.
+    """
     forced = f"-include {header}"
     return [
         f"-DCMAKE_C_FLAGS={forced}",
         f"-DCMAKE_CXX_FLAGS={forced}",
         "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON",
     ]
+
+
+def _carveout_cmake_args():
+    """Flags required by tools/build.py's verify_aurora_carveout().
+
+    These go to a real cmake invocation, so the forced include has to name the
+    header by ABSOLUTE path. Do not hash these -- see
+    _fingerprint_carveout_args().
+    """
+    return _carveout_args_for(_host_section_header().replace("\\", "/"))
+
+
+def _fingerprint_carveout_args():
+    """_carveout_cmake_args() with the checkout's LOCATION factored out.
+
+    The forced-include flag necessarily carries mp6_host_section.h's absolute
+    path, which differs between the main checkout and a worktree of the very
+    same commit. Hashing it made provenance a property of WHERE a tree sits
+    rather than WHAT it contains, so byte-identical trees disagreed and every
+    worktree failed the check. Bind the repo-relative path instead; the
+    header's CONTENT is hashed separately in build_fingerprint(), so editing
+    the carve-out still moves the fingerprint -- only relocating the tree no
+    longer does.
+    """
+    rel = os.path.relpath(_host_section_header(), common.NATIVE_ROOT)
+    return _carveout_args_for(rel.replace("\\", "/"))
 
 
 def _load_build_module():
@@ -153,7 +184,7 @@ def build_fingerprint(pin=None, zig_tree=None):
     h.update(pin.encode("utf-8"))
     h.update(b"\ncheckout-commit:")
     h.update(verified_checkout_commit(pin).encode("ascii"))
-    for arg in _carveout_cmake_args():
+    for arg in _fingerprint_carveout_args():
         h.update(arg.encode("utf-8"))
     header = _host_section_header()
     if os.path.isfile(header):

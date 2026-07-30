@@ -142,9 +142,13 @@ void mp6_host_wallclock(Mp6DateTime *out)
  * (platform/host/coro_arena.c). They are separate reservations; either
  * can fall back to an OS-picked address independently. Every successful
  * reservation is verified as a whole before it leaves this seam.
+ *
+ * `preferredBase` (0 = none) is tried ahead of the candidate list -- see
+ * host.h for why the coroutine pool names one: first-fit made ITS base a
+ * function of the arena's SIZE, which is now a setting.
  * ======================================================================= */
 
-void *mp6_host_arena_reserve(size_t size)
+void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size)
 {
     /* 0x8xxxxxxx first, matching real GameCube MEM1's 0x80000000 base:
      * game/memory.c's allocator sanity-checks every block pointer with
@@ -162,7 +166,14 @@ void *mp6_host_arena_reserve(size_t size)
     size_t i;
     void *got = NULL;
 
-    for (i = 0; i < sizeof(kCandidateBases) / sizeof(kCandidateBases[0]); i++) {
+    if (preferredBase != 0) {
+        got = VirtualAlloc((void *)preferredBase, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (got && !mp6_host_range_below_4gb(got, size)) {
+            VirtualFree(got, 0, MEM_RELEASE);
+            got = NULL;
+        }
+    }
+    for (i = 0; !got && i < sizeof(kCandidateBases) / sizeof(kCandidateBases[0]); i++) {
         void *want = (void *)kCandidateBases[i];
         got = VirtualAlloc(want, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
         if (got && mp6_host_range_below_4gb(got, size)) break;
@@ -310,23 +321,44 @@ int mp6_host_disc_root(char *buf, size_t n)
     *lastSlash = '\0';
 
     /* build/ -> mp6-native/ -> port/ -> workspace root, then back down to
-     * external_refs/repos/marioparty6/orig/GP6E01 -- this workspace's
-     * fixed layout, not a guess. Forward slashes work fine mixed with the
-     * backslash-separated exeDir prefix on Windows. */
-    if (mp6_path_join_checked(candidateRoot, sizeof(candidateRoot), exeDir,
-                              "../../../external_refs/repos/marioparty6/orig/GP6E01") != 0 ||
-        mp6_path_join_checked(candidateFst, sizeof(candidateFst), candidateRoot,
-                              "sys/fst.bin") != 0) {
-        return -1;
+     * external_refs/repos/<checkout>/orig/GP6E01 -- this workspace's fixed
+     * layout, not a guess. Forward slashes work fine mixed with the
+     * backslash-separated exeDir prefix on Windows.
+     *
+     * BOTH checkout names are tried, pinned worktree FIRST, for the same
+     * reason tools/apply_patches.py::_default_decomp() prefers it: the
+     * pinned worktree is the tree the build actually consumes and the one
+     * that carries orig/GP6E01 now, while the legacy sibling belongs to
+     * another workflow and drifts. Naming only the legacy one silently
+     * disabled this whole fallback the day the disc tree moved -- the
+     * probe below failed, the build-time -D paths carried the boot anyway,
+     * and the only visible trace was one diagnostic line going missing
+     * from the headless boot log (which is exactly where it was caught).
+     * Each candidate is verified independently by its own fst.bin probe,
+     * so an empty leftover directory under either name is skipped rather
+     * than accepted. */
+    {
+        static const char *const candidates[] = {
+            "../../../external_refs/repos/marioparty6-pin/orig/GP6E01",
+            "../../../external_refs/repos/marioparty6/orig/GP6E01",
+        };
+        size_t i;
+        for (i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+            if (mp6_path_join_checked(candidateRoot, sizeof(candidateRoot),
+                                      exeDir, candidates[i]) != 0 ||
+                mp6_path_join_checked(candidateFst, sizeof(candidateFst),
+                                      candidateRoot, "sys/fst.bin") != 0) {
+                continue;
+            }
+            probe = mp6_fopen_utf8(candidateFst, "rb");
+            if (!probe) {
+                continue; /* not there -- try the next known checkout name */
+            }
+            fclose(probe);
+            return mp6_path_copy_checked(buf, n, candidateRoot);
+        }
     }
-
-    probe = mp6_fopen_utf8(candidateFst, "rb");
-    if (!probe) {
-        return -1; /* not this repo's layout -- caller keeps its fallback */
-    }
-    fclose(probe);
-
-    return mp6_path_copy_checked(buf, n, candidateRoot);
+    return -1; /* not this repo's layout -- caller keeps its fallback */
 }
 
 int mp6_host_save_dir(char *buf, size_t n)
@@ -516,6 +548,7 @@ size_t mp6_coro_pool_size(void) { return 0; }
 size_t mp6_coro_slot_size(void) { return 0; }
 int    mp6_coro_slot_count(void) { return 0; }
 int    mp6_coro_slot_in_use(int slot) { (void)slot; return 0; }
+int    mp6_coro_slots_peak(void) { return 0; }
 void  *mp6_coro_slot_addr(int slot) { (void)slot; return NULL; }
 
 #endif /* MP6_CORO_FIBERS -- else platform/host/coro_arena.c provides mp6_coro_* */

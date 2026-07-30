@@ -5,6 +5,34 @@
 @@ -108 +109 @@
 -        GXSetTexCopySrc(0, 0, 640, 480);
 +        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
+@@ -140,2 +141,25 @@
+-    C_MTXLightPerspective(
+-        lightMtx, camera->fov, 1.2f, 0.5f, -0.5f, 0.5f, 0.5f);
++    /* This is the OTHER half of the board-confirm transition: fn_1_3F580
++     * (widened just above) photographs the frame, and this material hook
++     * re-projects that photograph back onto the warp plane the confirm
++     * throws across the screen -- the shockwave that swaps the rotating
++     * board-select background for the chosen board's preview.
++     *
++     * C_MTXLightPerspective(m, fovY, ASPECT, scaleS, scaleT, transS,
++     * transT) builds that reprojection, and it only lands on the right
++     * texels if its aspect is the aspect the photograph was actually
++     * rendered at. The author took fov from the live camera but wrote the
++     * aspect as the native literal 1.2f -- fine while every camera in the
++     * game was 4:3, wrong the moment mp6_widescreen_camera_widen() starts
++     * handing cameras 1.2f * scale_factor(). Left native, the reprojection
++     * assumes a narrower frame than the one on screen: the warped copy
++     * comes out horizontally stretched by scale_factor(), and whatever
++     * falls outside u=[0,1] smears as GX_CLAMP edge texels down the left
++     * and right sides. Widening the SOURCE capture alone (the hunk above)
++     * could not fix that -- it made the photograph correct while this
++     * mapping still read it as if it were 4:3.
++     *
++     * scale_factor() is exactly 1.0f when widescreen is disabled, so this
++     * is the byte-identical 1.2f in that case. */
++    C_MTXLightPerspective(
++        lightMtx, camera->fov, 1.2f * mp6_widescreen_scale_factor(),
++        0.5f, -0.5f, 0.5f, 0.5f);
 @@ -314 +315,27 @@
 -    MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f, 10.0f);
 +    /* fn_1_400E0 is a full-screen fade/dissolve overlay (a low-res,
@@ -36,6 +64,15 @@
 @@ -378 +405 @@
 -        GXPosition3f32(640 + i, 480 + i, 0.0f);
 +        GXPosition3f32(mp6_widescreen_render_width() + i, 480 + i, 0.0f);
+@@ -389,0 +413,8 @@
++    /* Closes the GXBegin(GX_QUADS, 16) twenty-five lines up; anchors to
++     * the closing brace of the 4-iteration loop that emits all sixteen
++     * of its vertices. Immediate mode, not a display list, so Aurora's
++     * general auto-close tolerance kept this from being fatal -- but the
++     * bytes it eventually measured belonged to whatever ran in between,
++     * which is what produced this site's chronic "609 bytes for 16
++     * vertices" warning. Empty inline on hardware (GXVert.h). */
++    GXEnd();
 @@ -391 +418 @@
 -    GXSetTexCopySrc(0, 0, 640, 480);
 +    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);

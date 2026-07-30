@@ -18,6 +18,8 @@
 #include "mp6_shim_log.h"
 #include "host.h" /* mp6_host_arena_reserve */
 #include "mp6_alloc_size.h"
+#include "mp6_heap_scale.h" /* the reservation is a function of the heap scale */
+#include "mp6_diag_probe.h" /* pull-side arena snapshot -- see the block at the end */
 
 #include <stddef.h>
 #include <stdio.h>
@@ -31,8 +33,19 @@
  * at once); 256MB covers that plus the arena's other tenants (the game's
  * own workloads, the OS-level bump allocator's remaining HEAP_SPACE heap)
  * with a comfortable margin, while staying trivially "low" for the
- * u32<->pointer round-trips this file's header describes. */
-#define MP6_ARENA_SIZE (256u * 1024u * 1024u)
+ * u32<->pointer round-trips this file's header describes.
+ *
+ * That 256MB is now the SCALE-1 case of one formula rather than a literal,
+ * because the Enhancements "Expanded heaps" toggle multiplies exactly the
+ * four fixed HuMem capacities and the reservation has to grow with them --
+ * scaling the table alone would only produce `HuMem> Failed OSAlloc` at
+ * boot. mp6_heap_arena_bytes() (shim/include/mp6_heap_scale.h) is
+ * `98MB * scale + 158MB of constant headroom`, which returns exactly
+ * 0x10000000 at scale 1, so with the enhancement off the reservation, the
+ * [BOOT] banner below, and every savestate's recorded arena size are
+ * unchanged. The scale is latched process-wide (platform/os/heap_scale.c),
+ * so the value HuMemInitAll later sizes its table with is structurally the
+ * same one this reservation was made for. */
 
 static u8 *g_arenaBase;
 static u8 *g_arenaEnd;
@@ -47,7 +60,15 @@ static int g_heapCount;
 volatile OSHeapHandle __OSCurrHeap = -1;
 
 void *mp6_arena_base(void) { return g_arenaBase; }
-u32 mp6_arena_size(void) { return MP6_ARENA_SIZE; }
+
+/* The size actually reserved, not a compile-time constant -- savestate
+ * capture records this as the arena region's extent and a restore compares
+ * it against the loading process's own (platform/os/savestate.c). It reads
+ * through the host-owned latch rather than a static of this TU on purpose:
+ * this file's statics ARE captured and restored, so a local copy would let a
+ * state captured at one scale overwrite the loading process's true extent
+ * with the capturing process's. See heap_scale.c's own header. */
+u32 mp6_arena_size(void) { return mp6_heap_arena_bytes(); }
 
 void mp6_arena_init(void)
 {
@@ -55,23 +76,29 @@ void mp6_arena_init(void)
      * BLOCK_CHECK_BROKEN high-bit check) plus the verified OS-picked
      * fallback live in mp6_host_arena_reserve (the host backends). This TU
      * keeps the FATAL policy and independently verifies the ABI invariant. */
-    void *got = mp6_host_arena_reserve(MP6_ARENA_SIZE);
+    u32 arenaSize = mp6_arena_size();
+    /* No preferred base: the candidate ladder's own first entry (0x80000000)
+     * is what this reservation wants, and it is the FIRST reservation the
+     * process makes, so first-fit is deterministic here. The coroutine pool
+     * -- which comes second and would otherwise be displaced by this one's
+     * size -- is the caller that names a base. */
+    void *got = mp6_host_arena_reserve(0, arenaSize);
 
-    if (!got || !mp6_host_range_below_4gb(got, MP6_ARENA_SIZE)) {
+    if (!got || !mp6_host_range_below_4gb(got, arenaSize)) {
         fprintf(stderr, "[FATAL] mp6_arena_init: could not reserve an entirely low-4GB "
                         "game arena of %u bytes\n",
-                (unsigned)MP6_ARENA_SIZE);
+                (unsigned)arenaSize);
         exit(1);
     }
 
     g_arenaBase = (u8 *)got;
-    g_arenaEnd = g_arenaBase + MP6_ARENA_SIZE;
+    g_arenaEnd = g_arenaBase + arenaSize;
     g_arenaLo = g_arenaBase;
     g_arenaHi = g_arenaEnd;
 
     printf("[BOOT] arena: base=%p size=%uMB (%s 4GB)\n",
-           (void *)g_arenaBase, MP6_ARENA_SIZE / (1024 * 1024),
-           mp6_host_range_below_4gb(g_arenaBase, MP6_ARENA_SIZE) ? "below" : "ABOVE");
+           (void *)g_arenaBase, arenaSize / (1024 * 1024),
+           mp6_host_range_below_4gb(g_arenaBase, arenaSize) ? "below" : "ABOVE");
     fflush(stdout);
 }
 
@@ -234,4 +261,30 @@ void OSDumpHeap(OSHeapHandle heap)
     if (heap >= 0 && heap < MP6_MAX_HEAPS && g_heaps[heap].valid) {
         printf("[BOOT] OSDumpHeap(%d): %ld bytes free\n", heap, OSCheckHeap(heap));
     }
+}
+
+/* Pull-side arena snapshot (shim/include/mp6_diag_probe.h). The [HEAPTRACE]
+ * lines above report every heap EVENT; this reports the resulting STATE, which
+ * is the thing a live memory panel needs and which no existing surface can
+ * answer between two events. Read-only over the same table OSCheckHeap uses. */
+int mp6_diag_arena_count(void)
+{
+    return g_heapCount;
+}
+
+int mp6_diag_arena_current(void)
+{
+    return (int)__OSCurrHeap;
+}
+
+int mp6_diag_arena(int index, Mp6DiagArenaHeap *out)
+{
+    if (out == NULL || index < 0 || index >= MP6_MAX_HEAPS) return 0;
+    out->valid = g_heaps[index].valid;
+    out->cur = g_heaps[index].cur;
+    out->end = g_heaps[index].end;
+    out->remaining = (g_heaps[index].valid && g_heaps[index].end > g_heaps[index].cur)
+                         ? (unsigned long long)(g_heaps[index].end - g_heaps[index].cur)
+                         : 0ull;
+    return 1;
 }

@@ -73,6 +73,7 @@ from tools/build.py before compilation.
 """
 import os
 import re
+import subprocess
 import sys
 
 NATIVE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../mp6-native
@@ -93,16 +94,51 @@ def _default_decomp():
     are rooted at NATIVE_ROOT, never at the process cwd -- so both entry
     points can never select different trees.
     """
-    default = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6"))
+    repos = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos"))
+    pinned = os.path.join(repos, "marioparty6-pin")
+    legacy = os.path.join(repos, "marioparty6")
     value = os.environ.get("MP6_DECOMP_DIR", "").strip()
     if not value:
-        value = default
+        # Prefer the pinned worktree: it is the tree the build actually uses
+        # and the one docs/DECOMP_DEPENDENCY.md's SHA governs. The legacy
+        # sibling checkout drifts (it belongs to another workflow) and made
+        # decomp-reading tests fail on content that was simply out of date.
+        value = pinned if os.path.isdir(pinned) else legacy
     elif not os.path.isabs(value):
         value = os.path.join(NATIVE_ROOT, value)
     return os.path.normpath(os.path.abspath(os.path.expanduser(value)))
 
 
 DEFAULT_DECOMP = _default_decomp()
+
+
+def require_pinned_decomp(root=None):
+    """Fail loudly when the resolved decomp tree is not at the documented pin.
+
+    Decomp-reading tests call this before asserting on tree CONTENT, so a
+    stale or wrong checkout produces one clear error instead of a page of
+    baffling content-assertion failures. Returns the verified root.
+    """
+    root = os.path.normpath(root or DEFAULT_DECOMP)
+    dep_doc = os.path.join(NATIVE_ROOT, "docs", "DECOMP_DEPENDENCY.md")
+    with open(dep_doc, "r", encoding="utf-8") as fh:
+        pin = next((ln.strip() for ln in fh if re.fullmatch(r"[0-9a-f]{40}", ln.strip())), None)
+    if pin is None:
+        raise RuntimeError(f"no 40-hex pin SHA found in {dep_doc}")
+    try:
+        head = subprocess.run(
+            ["git", "-C", root, "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            f"decomp tree at {root} is not a readable git checkout ({error}) -- set MP6_DECOMP_DIR to the pinned worktree"
+        ) from error
+    if head != pin:
+        raise RuntimeError(
+            f"decomp tree at {root} is stale/mismatched (HEAD {head[:12]}, pin {pin[:12]}) -- set MP6_DECOMP_DIR to the pinned worktree"
+        )
+    return root
 DEFAULT_PATCHES_DIR = os.path.join(NATIVE_ROOT, "patches", "decomp")
 DEFAULT_PATCH_FRAGMENTS_DIR = os.path.join(NATIVE_ROOT, "patches", "decomp-fragments")
 DEFAULT_OUT_DIR = os.path.join(NATIVE_ROOT, "build", "patched-src")

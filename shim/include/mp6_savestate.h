@@ -85,8 +85,14 @@ extern "C" {
 #define MP6_HOST_STATE_SECTION_DATA ".mp6hdat"
 
 /* Bump on ANY layout change to the on-disk format below. The loader
- * refuses a mismatch rather than guessing. */
-#define MP6_SAVESTATE_VERSION 6u
+ * refuses a mismatch rather than guessing.
+ *
+ * v7: the audio shadow's SFX voice table went from 16 to 32 fixed entries
+ * and gained an explicit capture-time capacity (Mp6SsAudioShadow.voiceCap).
+ * Both are header-layout changes, so v6 files are refused as before -- the
+ * compatibility this version buys is between two RUNS of a v7 build with
+ * DIFFERENT voice-table sizes, not with older files. See Mp6SsAudioShadow. */
+#define MP6_SAVESTATE_VERSION 7u
 
 #define MP6_SAVESTATE_MAGIC   0x36505336u /* "6PS6" */
 
@@ -243,7 +249,14 @@ void mp6_widescreen_savestate_apply_natives(const void *blob, size_t blobSize);
  * has no address of its own to restore to. */
 #define MP6_SS_AUDIO_MAX_CHAN   8
 #define MP6_SS_AUDIO_MAX_GROUPS 16
-#define MP6_SS_AUDIO_MAX_VOICES 16
+/* The on-disk voice table is ALWAYS the mixer's full capacity, never the
+ * run's active count -- one fixed shape, so a file written by a 16-slot run
+ * and a file written by a 32-slot run are the same size and the same layout,
+ * and neither needs the reader to know the writer's setting before it can
+ * parse. Which of those entries were REACHABLE is carried separately, in
+ * Mp6SsAudioShadow.voiceCap. Coupled to msm_bridge.c's
+ * MP6_MSM_MAX_SFX_VOICES by a #error there. */
+#define MP6_SS_AUDIO_MAX_VOICES 32
 
 typedef struct {
     int32_t  active;
@@ -284,6 +297,32 @@ typedef struct {
     int32_t        seNoCounter;
     int32_t        masterVol;
     int32_t        seMasterVol;
+    /* How many of the voice slots below the CAPTURING run could actually use:
+     * exactly MP6_MSM_SFX_VOICES_RETAIL (16) or MP6_MSM_SFX_VOICES_EXTENDED
+     * (32), per the "Extended SFX voices" enhancement. Zero only in the
+     * canonical all-zero shadow that represents "audio never initialized".
+     *
+     * WHY IT IS IN THE FILE. The voice-table size is HOST configuration, not
+     * game state: msm_bridge.c is in the carve-out, so a restore keeps the
+     * RESTORING process's size. Without this field the loader could not tell
+     * "slot 20 is empty" from "slot 20 did not exist", which is the whole
+     * difference between an exact restore and a silent, unreported loss of a
+     * voice. With it, both directions are defined and both LOAD:
+     *
+     *   captured 16 -> restored under 32: every captured slot restores in
+     *       place; slots 16..31 were canonical zeros and stay free.
+     *   captured 32 -> restored under 16: slots 0..15 restore in place; a
+     *       voice captured in slot 16..31 is DROPPED and named in the log --
+     *       never remapped into a lower slot (that would change mixer order
+     *       and re-home a game-visible handle) and never a load failure (a
+     *       dropped one-shot is indistinguishable from one that just ended,
+     *       which msmSeGetStatus already answers MSM_SE_DONE). seNoCounter is
+     *       still restored exactly, so a dropped handle is never re-issued.
+     *
+     * The preflight rejects any other value, and rejects a non-zero slot at
+     * or above voiceCap -- a capture cannot claim a voice it could not hold.
+     * See platform/audio/msm_safe.h's mp6_msm_voice_slot_restorable(). */
+    int32_t        voiceCap;
     /* Fixed runtime voice slots, including holes.  Slot identity determines
      * mixer order and future first-free allocation, so compacting this list
      * would not be an exact restore. */

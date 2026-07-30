@@ -47,8 +47,29 @@ struct Mp6LauncherConfig {
     int windowMode;         /* video.window_mode */
     float windowScale;      /* video.window_scale: 0 = leave alone; 1/1.5/2/3 = 640x480 * s */
     int aspectLocked;       /* video.aspect_locked */
-    int vsync;              /* video.vsync (next launch) */
+    int vsync;              /* video.vsync -- the BOOT state; applies LIVE when toggled */
     char backend[24];       /* video.backend (next launch) */
+    /* video.display: which attached output the window opens on. "auto" (the
+     * default) = the output with the HIGHEST REFRESH RATE; "primary" = the OS
+     * default placement, i.e. exactly the behaviour that predates this key;
+     * anything else = a case-insensitive match against SDL_GetDisplayName,
+     * degrading to "auto" with one printed line when nothing matches.
+     *
+     * This is the ONE key in this struct whose default deliberately does NOT
+     * preserve the previous behaviour. A window that opens on the OS-default
+     * primary is capped by the primary's refresh rate with vsync on, which on
+     * a machine whose primary is a 75 Hz virtual display means presents can
+     * never exceed 75/s no matter what the engine can do. Resolving an absent
+     * key to "primary" would leave every existing config in exactly that
+     * state, which is the state this key exists to fix. */
+    char display[64];       /* video.display */
+    /* video.window_x / video.window_y: the window's last position, in absolute
+     * desktop coordinates. -1 means unset, which preserves the previous
+     * behaviour exactly. Written once per session at clean shutdown, never per
+     * move, and refused at launch when the position no longer lands on any
+     * attached output (unplugging a monitor must not hide the window). */
+    int windowX;            /* video.window_x */
+    int windowY;            /* video.window_y */
     /* Anti-Aliasing (video.aa): the single Mp6AaMode enum above -- the source
      * of truth for all AA. P1's MSAA sample count, P2's live FXAA post pass
      * and P3's SSAA factor are all DERIVED from this one field (see
@@ -97,6 +118,17 @@ struct Mp6LauncherConfig {
      * video.fi_mode is ignored by the tolerant parser (launcher_core.cpp),
      * exactly like the retired video.aspect_locked. */
     int unlockedFps;        /* video.unlocked_fps */
+    /* Extended SFX voices (enhancements.sfx_voices): the mixer's voice table
+     * size -- 16 is retail, 32 is the raise. UI + config only in this lane;
+     * the mixer-side consumer (and the savestate version bump the table-size
+     * change needs) land in the audio lane. Stored as the COUNT, not a
+     * boolean, so a future third rung needs no key change. */
+    int sfxVoices;          /* enhancements.sfx_voices: 16 or 32 */
+    /* Expanded heaps (enhancements.heap_scale): the multiplier applied to
+     * HuMem's capacities over HeapSizeTbl -- 1 is retail, 4 is the raise.
+     * UI + config only in this lane; the HuMem-side consumer (and its
+     * configured-size audit) land in the memory lane. */
+    int heapScale;          /* enhancements.heap_scale: 1 or 4 */
 };
 
 namespace mp6::ui {
@@ -104,6 +136,13 @@ namespace mp6::ui {
 /* --- config store (launcher_core.cpp) --- */
 Mp6LauncherConfig &cfg();
 void cfg_save();            /* persist immediately (their setValue+config::Save() pairing) */
+
+/* --- Enhancements presets (shim/include/mp6_enhancements.h has the contract) ---
+ * The settings UI never derives or applies a preset itself: the pure table and
+ * the derivation live in platform/enh/mp6_enhancements.c (which is what the
+ * unit test drives), and these two bridge them to the config store. */
+int enh_preset_current();          /* Mp6EnhPreset derived from the six live values */
+void enh_preset_apply(int preset); /* write a tier's six values into cfg(); caller saves/applies */
 
 /* --- restart-pending (backend/vsync captured at launch) --- */
 bool restart_pending();

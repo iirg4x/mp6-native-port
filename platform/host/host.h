@@ -137,8 +137,21 @@ void mp6_host_wallclock(Mp6DateTime *out);
  * fails or that invariant cannot be met; callers keep their own
  * [FATAL]+exit policy. win32:
  * VirtualAlloc(MEM_RESERVE|MEM_COMMIT). android: mmap over the same
- * candidate list. */
-void *mp6_host_arena_reserve(size_t size);
+ * candidate list.
+ *
+ * `preferredBase` is tried BEFORE the candidate list; 0 means "no
+ * preference" and is the historical first-fit behaviour exactly. It exists
+ * because first-fit makes the SECOND reservation's address a function of
+ * the FIRST one's SIZE: the game arena is reserved first and its extent is
+ * now a setting (Expanded heaps -- 256 MB or 550 MB, see
+ * shim/include/mp6_heap_scale.h), which silently relocated the coroutine
+ * stack pool from 0x90000000 to 0xB0000000 the first time the arena grew
+ * past 256 MB. Coroutine stacks are the one region a savestate cannot
+ * relocate -- the captured stacks hold absolute saved SPs and frame
+ * pointers into the pool -- so a moving pool base turns every cross-setting
+ * restore into ERR_LAYOUT_MISMATCH. A caller that needs an address
+ * independent of what was reserved before it names one. */
+void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size);
 
 /* Nonzero iff the running game image (code + statics) sits entirely below
  * 4 GB -- the "whole image low" invariant every u32<->pointer round-trip
@@ -181,6 +194,11 @@ size_t mp6_coro_slot_size(void);
 int    mp6_coro_slot_count(void);
 int    mp6_coro_slot_in_use(int slot);
 void  *mp6_coro_slot_addr(int slot);
+/* Peak concurrent slots since boot. Already tracked by the arena backend for
+ * its MP6_CORO_DEBUG exit line; exported so a live memory panel can show it
+ * without arming that lever and without waiting for exit. The fiber backend
+ * has no pool, and reports 0 for the same reason it reports an empty pool. */
+int    mp6_coro_slots_peak(void);
 /* NOTE (review C18): two further accessors (slot_of / from_slot) existed
  * here with a comment claiming process_native.c serializes its coroutine
  * handles as slot indices. It does not, and never needed to: the wrapper

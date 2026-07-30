@@ -81,6 +81,12 @@
 @@ -340 +395 @@
 -            GXPosition2s16(HU_FB_WIDTH-10, HU_FB_HEIGHT-10);
 +            GXPosition2s16(mp6_widescreen_render_width()-10, HU_FB_HEIGHT-10);
+@@ -344,0 +388,5 @@
++        /* Closes the GXBegin(GX_QUADS, 4) nineteen lines up; anchors to the
++         * closing brace of the if/else that emits all four of its vertices,
++         * before Hu3DFbCopyExec just below. Empty inline on hardware
++         * (GXVert.h). */
++        GXEnd();
 @@ -345 +400 @@
 -        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
 +        Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
@@ -98,6 +104,11 @@
 @@ -448 +509 @@
 -                GXSetViewport((HU_FB_WIDTH/6.0)*i, (HU_FB_HEIGHT/6.0)*j, HU_FB_WIDTH/6.0, HU_FB_HEIGHT/6.0, 0, 1);
 +                GXSetViewport((mp6_widescreen_render_width()/6.0)*i, (HU_FB_HEIGHT/6.0)*j, mp6_widescreen_render_width()/6.0, HU_FB_HEIGHT/6.0, 0, 1);
+@@ -463,0 +518,4 @@
++                /* Closes this 6x6 cell's own GXBegin(GX_QUADS, 4); anchors to the
++                 * last of its four position/texcoord pairs, still inside the cell
++                 * loop, so each cell closes its own primitive. */
++                GXEnd();
 @@ -708 +769,11 @@
 -    MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 10);
 +    /* WipeGXInit is the SHARED ortho/viewport/scissor setup for several

@@ -52,6 +52,8 @@
 #include "game/process.h"
 #include "game/memory.h"
 #include "mp6_boot.h"
+#include "mp6_console.h"    /* the dev console's per-process slice hook */
+#include "mp6_diag_probe.h" /* the pull-side scheduler probe at the bottom */
 #include "host.h" /* mp6_coro_* context backend + mp6_host_sleep_ns; this
                    * file owns the ENTIRE scheduler (dispatch loop, yield
                    * status, slot-reuse table, HUPROCESS observables) --
@@ -172,7 +174,31 @@ static int DispatchProcessAndWait(HUPROCESS *process)
          * (arena pool by default; OS-managed in the fiber fallback). */
         pf->coro = mp6_coro_create(ProcessTrampoline, process, NULL, MP6_FIBER_STACK_SIZE);
     }
-    mp6_coro_switch(pf->coro);
+    /* THE ONE PLACE A PROCESS SLICE CAN BE TIMED.
+     *
+     * `stat game`'s cycle rows are the retail game's own structure -- the
+     * HuPrc processes -- and this switch is the entire boundary of one slice:
+     * control enters the process's coroutine here and comes back when it
+     * yields. Nothing else in the port sees a process run.
+     *
+     * Identity is process->jump.lr, which HuPrcCreate sets to the entry
+     * function and nothing ever rewrites (the native scheduler reads it once,
+     * in ProcessTrampoline; ForceTerminateKilledProcess replaced the original's
+     * lr-rewrite trick precisely so it stays put). So the row a slice belongs
+     * to is the process's own entry symbol, resolved by the same
+     * mp6_symbolize_addr() the OM census names objFuncs with.
+     *
+     * Cost when the console is closed: one relaxed load of
+     * mp6_console_stats_active, the shape every other hot hook in this port
+     * uses -- the clock is never even read. */
+    if (mp6_console_stats_active) {
+        unsigned long long t0 = mp6_host_monotonic_ns();
+        mp6_coro_switch(pf->coro);
+        mp6_console_note_proc_slice((void *)(uintptr_t)(uint32_t)process->jump.lr,
+                                    (long long)(mp6_host_monotonic_ns() - t0));
+    } else {
+        mp6_coro_switch(pf->coro);
+    }
     /* Resumes here once `process` calls YieldToDispatcher (below), which
      * runs on `process`'s own context and switches straight back to
      * whichever context is CURRENTLY the dispatcher -- always this
@@ -681,6 +707,22 @@ void HuPrcAllPause(s32 flag)
         }
     }
 }
+
+/* Pull-side scheduler probe (shim/include/mp6_diag_probe.h). processcnt and the
+ * fiber table were already maintained on every path and had no reader at all;
+ * these add no measurement and have no side effect on what they report. */
+int mp6_diag_process_count(void) { return (int)processcnt; }
+
+int mp6_diag_process_fibers(void)
+{
+    int i, used = 0;
+    for (i = 0; i < g_procFiberCount; i++) {
+        if (g_procFibers[i].process != NULL) used++;
+    }
+    return used;
+}
+
+int mp6_diag_process_fiber_max(void) { return MP6_MAX_PROC_FIBERS; }
 
 void HuPrcAllUPause(s32 flag)
 {

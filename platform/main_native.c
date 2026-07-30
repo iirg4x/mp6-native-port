@@ -39,6 +39,7 @@
  */
 #include "mp6_boot.h"
 #include "mp6_widescreen.h" /* mp6_widescreen_set_enabled */
+#include "mp6_enhancements.h" /* mp6_enh_widescreen -- the switch's one front door */
 #include "mp6_aa_resolve.h"
 #include "host.h" /* mp6_host_crash_install, mp6_host_image_below_4gb */
 #include "mp6_path.h"
@@ -46,6 +47,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h> /* strcmp -- the --input-script arg scan in BOTH mains */
 
 extern void GameMain(void); /* game/main.c's `main`, renamed via -Dmain=GameMain */
 
@@ -127,10 +129,28 @@ int mp6_headless_main(int ticks)
 int main(int argc, char **argv)
 {
     int ticks = 0;
-    if (argc > 1 && !mp6_parse_i32_strict(argv[1], 1, INT_MAX, &ticks)) {
-        fprintf(stderr, "[BOOT] invalid headless tick budget '%s' (expected 1..%d)\n",
-                argv[1], INT_MAX);
-        return 2;
+    int i;
+    /* Same arg grammar as the Aurora main() below, and for the same reason:
+     * `--input-script "<spec>"` must be able to coexist with the numeric
+     * tick budget in either order. Headless used to parse argv[1] and
+     * NOTHING else, so `mp6native_headless.exe 40000 --input-script "..."`
+     * ran the full budget with the script silently discarded -- a scripted
+     * headless drive looked like a game that simply never left the warning
+     * screen. The engine is shared now (platform/os/input_script.c), so the
+     * only thing that was missing here is this scan. An unrecognized arg is
+     * still ignored, exactly as before; a malformed NUMERIC arg is still
+     * fatal. */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--input-script") == 0 && i + 1 < argc) {
+            mp6_input_script_init(argv[i + 1]);
+            i++; /* consume the spec argument too */
+        } else if (!mp6_parse_i32_strict(argv[i], 1, INT_MAX, &ticks)) {
+            /* Unchanged strictness: any arg that is not the script flag
+             * still has to be a valid tick budget or the run is refused. */
+            fprintf(stderr, "[BOOT] invalid headless tick budget '%s' (expected 1..%d)\n",
+                    argv[i], INT_MAX);
+            return 2;
+        }
     }
     return mp6_headless_main(ticks);
 }
@@ -143,6 +163,9 @@ int main(int argc, char **argv)
 #include <aurora/main.h> /* #define main aurora_main -- see file header comment */
 
 #include <string.h> /* memset, strcmp */
+
+#include "mp6_display.h" /* launch-output selection, the boot present-mode scrape,
+                          * and the live present-sync seam (aurora_bridge.c) */
 
 /* Pre-boot launcher settings menu. The implementation behind this
  * six-function seam is platform/gx/ui/launcher_core.cpp + the RmlUi
@@ -167,12 +190,15 @@ int main(int argc, char **argv)
 extern int mp6_launcher_decide_mode(int hasNumericArg, int hasInputScript, int *outShowMenu);
 extern int mp6_launcher_cfg_backend(void);
 extern int mp6_launcher_cfg_vsync(void);
+/* The three Anti-Aliasing accessors are PROJECTIONS of mp6_enh_aa_mode() (the
+ * enhancements seam), not reads of the config -- see their definitions in
+ * launcher_core.cpp. Safe to call on every boot path, automation included:
+ * unpublished means retail means AA off. */
 extern int mp6_launcher_cfg_msaa(void); /* Anti-Aliasing (MSAA): aurora_initialize-time, restart-pending like backend/vsync */
 extern int mp6_launcher_cfg_post_aa(void); /* Anti-Aliasing P2 (FXAA): AuroraPostAA value, applied LIVE (not restart-pending) */
 extern float mp6_launcher_cfg_ssaa(void);  /* Anti-Aliasing P3 (SSAA): AuroraConfig.ssaa factor, aurora_initialize-time, restart-pending (desktop-only) */
 extern void mp6_launcher_note_session_aa(int msaa, float ssaa, int postAa); /* Anti-Aliasing: what aurora ACTUALLY got this session (config + env levers resolved) */
 extern int mp6_launcher_cfg_aspect_locked(void); /* A5: gameplay-time-only aspect policy */
-extern int mp6_launcher_cfg_widescreen(void); /* gameplay-time-only dynamic-widescreen policy */
 extern void mp6_launcher_apply_display_settings(void *sdlWindow);
 extern int mp6_launcher_run_menu(void *sdlWindow);
 extern void mp6_launcher_apply_game_settings(void);
@@ -202,6 +228,31 @@ static void mp6_aurora_scan_log_for_texture_limit(const char *message)
     }
 }
 
+/* Scans one already-received log message for the present mode Aurora actually
+ * negotiated, out of its own "Using surface format {}, present mode {}" INFO
+ * line (lib/webgpu/gpu.cpp:1189-1192). Identical technique and identical
+ * reason to the texture-limit scrape above: the value is a live negotiation
+ * result, aurora exports no getter for it (include/aurora/gfx.h has only
+ * aurora_get_stats / aurora_get_fps / aurora_enable_vsync), and the vendored
+ * checkout is SHARED with every other worktree -- patching it in to add one
+ * would rebuild the shared archives and fail the next link in every lane that
+ * does not carry the patch. Reading a line that is already printed costs
+ * nothing and changes no bytes there.
+ *
+ * The needle keeps its trailing space so it cannot match "present mode:" or a
+ * different sentence; the token copy itself is bounded and alphanumeric-only,
+ * so a truncated or garbled line degrades the badge's label to the requested
+ * class instead of poisoning it. */
+static void mp6_aurora_scan_log_for_present_mode(const char *message)
+{
+    static const char needle[] = "present mode ";
+    const char *hit = strstr(message, needle);
+    if (hit == NULL) {
+        return;
+    }
+    mp6_display_note_init_present_mode(hit + sizeof(needle) - 1);
+}
+
 static void mp6_aurora_log_callback(AuroraLogLevel level, const char *module, const char *message, unsigned int len)
 {
     const char *levelStr;
@@ -217,6 +268,7 @@ static void mp6_aurora_log_callback(AuroraLogLevel level, const char *module, co
     printf("[AURORA %s: %s] %s\n", levelStr, module, message);
     fflush(stdout);
     mp6_aurora_scan_log_for_texture_limit(message);
+    mp6_aurora_scan_log_for_present_mode(message);
     if (level == LOG_FATAL) {
         fflush(stdout);
         abort();
@@ -243,8 +295,8 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
         mp6_ticks_unlimited = 1;
     }
     /* Scan all args so --input-script "<spec>" (deterministic PAD-button
-     * scripting for tests, see platform/gx/aurora_bridge.c's input-script
-     * section) can coexist with the numeric tick-budget arg in either
+     * scripting for tests, see platform/os/input_script.c's own header)
+     * can coexist with the numeric tick-budget arg in either
      * order. Note argc>1 is true the instant ANY arg (including
      * --input-script itself) is given, so the `if(argc<=1)` unlimited
      * default above never fires for scripted runs -- --input-script
@@ -370,23 +422,33 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * Invalid/off values do not beat a lower-priority enabled request; if no
      * env request is enabled, the effective mode is Off. This makes e.g.
      * MP6_FXAA=0 a real unified-AA override instead of accidentally leaving a
-     * configured MSAA/SSAA mode active. SSAA remains desktop-only. */
+     * configured MSAA/SSAA mode active. SSAA remains desktop-only.
+     *
+     * The three cfg* values below are the ENHANCEMENTS SEAM's answer, not the
+     * config's: mp6_launcher_cfg_msaa/_ssaa/_post_aa are now projections of
+     * mp6_enh_aa_mode() (see their definitions in launcher_core.cpp), which
+     * resolves MP6_ENH_AA -> MP6_ENH_PRESET -> the published config -> RETAIL.
+     * That is why the `if (launcherMode)` gate that used to wrap them is gone
+     * and NOT missing: it existed to keep automation at retail, and the seam's
+     * retail initializer does that by construction now -- automation never
+     * publishes, so the three reads answer 1 / 1.0f / 0, the same fixed values
+     * the gate's else-arm left in place. Keeping the gate would have re-broken
+     * the thing this wiring fixes, because it is exactly what stopped
+     * MP6_ENH_AA/MP6_ENH_PRESET from reaching a scripted run. */
     {
         const char *ms = getenv("MP6_MSAA");
         const char *ss = getenv("MP6_SSAA");
         const char *fx = getenv("MP6_FXAA");
-        int cfgMsaa = 1;
+        int cfgMsaa;
         float cfgSsaa = 1.0f;
-        int cfgFxaa = 0;
+        int cfgFxaa;
         Mp6AaResolved aa;
 
-        if (launcherMode) {
-            cfgMsaa = mp6_launcher_cfg_msaa();
+        cfgMsaa = mp6_launcher_cfg_msaa();
 #ifndef __ANDROID__
-            cfgSsaa = mp6_launcher_cfg_ssaa();
+        cfgSsaa = mp6_launcher_cfg_ssaa();
 #endif
-            cfgFxaa = mp6_launcher_cfg_post_aa();
-        }
+        cfgFxaa = mp6_launcher_cfg_post_aa();
         aa = mp6_aa_resolve(ms, ss, fx, cfgMsaa, cfgSsaa, cfgFxaa,
 #ifndef __ANDROID__
                             1
@@ -427,6 +489,36 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * borderless while the frame is actually parked above the desktop. */
     config.windowPosX = -1;
     config.windowPosY = -1;
+    /* LAUNCH OUTPUT SELECTION (video.display / video.window_x / _y, or the
+     * MP6_WINDOW_DISPLAY lever). The -1/-1 above stays the default and is
+     * overwritten only on a positive answer, so the "negative is mandatory for
+     * SDL_WINDOWPOS_UNDEFINED" fact directly above is not merely still true --
+     * it is now load-bearing for `video.display: "primary"`, which is the
+     * explicit opt-out and resolves to exactly this code path.
+     *
+     * Placement matters here because with present sync on, the refresh rate of
+     * the output the window lands on is a hard ceiling on presents/s. The OS
+     * default is the PRIMARY display, which on a machine whose primary is a
+     * low-refresh virtual display caps the port there regardless of what the
+     * GPU or the engine could do.
+     *
+     * AFTER the MP6_WINDOW_SIZE block on purpose: the resolver centres the
+     * window in the chosen output's usable bounds, so it needs the FINAL
+     * requested size. BEFORE aurora_initialize because aurora creates and
+     * SHOWS the window inside it -- there is no later moment.
+     *
+     * In automation the resolver returns 0 without even reading a config
+     * (mp6_display_resolve_launch_pos's own first guard), so a harness run's
+     * placement, and its log, are bit-for-bit what they were before this
+     * existed. */
+    {
+        int posX = -1, posY = -1;
+        if (mp6_display_resolve_launch_pos(launcherMode, config.windowWidth,
+                                           config.windowHeight, &posX, &posY)) {
+            config.windowPosX = posX;
+            config.windowPosY = posY;
+        }
+    }
 
     printf("[BOOT] calling aurora_initialize() before GameMain() reaches the game's GXInit\n");
     fflush(stdout);
@@ -452,8 +544,36 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * applied separately, later -- see mp6_bridge_apply_content_aspect_policy()
      * below. */
     mp6_bridge_window_policy_init((void *)info.window);
+    /* Seed the live present-sync state from what aurora ACTUALLY got, seed the
+     * cross-output latch from the output the window came up on, and register the
+     * `vsync` console command. config.vsync is the resolved answer -- the
+     * launcher config in interactive mode, MP6_VSYNC (default off) in automation
+     * -- and it is the only value that is true for this session. Without the
+     * vsync seed the FPS badge and the cross-output follow logic would both
+     * assume present sync was on in an automation run that came up with it off.
+     *
+     * AFTER mp6_bridge_window_policy_init(), not immediately after
+     * aurora_initialize(): that call is where the SDL window handle is stashed,
+     * and the latch seed reads the window's current output through it. Nothing
+     * between the two reads this module's state. Without the latch seed the
+     * FIRST genuine cross-output crossing of the session is consumed as the
+     * initial latch and does nothing at all. */
+    mp6_display_init(config.vsync ? 1 : 0);
+    /* PUT THE WINDOW ON THE CHOSEN OUTPUT. The resolver above wrote its answer
+     * into config.windowPosX/Y as well, but aurora's create_window() maps any
+     * NEGATIVE coordinate back to SDL_WINDOWPOS_UNDEFINED
+     * (external_refs/repos/aurora/lib/window.cpp:314-318) -- and on a desktop
+     * whose highest-refresh output is arranged left of the primary, every
+     * position on it is negative. So the choice was discarded at precisely the
+     * output it exists to reach. The shared aurora checkout must stay
+     * byte-unchanged for the other lanes, so the window is moved from this side
+     * instead; SDL_SetWindowPosition has no such sentinel. A no-op in automation,
+     * under `video.display: "primary"`, and whenever the resolved coordinates
+     * were positive (aurora honored them and the window is already there). */
+    mp6_display_apply_launch_pos();
     /* Move a self-owned debug console clear of the game window now that
-     * it exists -- see mp6_boot.h and platform/gx/aurora_bridge.c. */
+     * it exists -- see mp6_boot.h and platform/gx/aurora_bridge.c. AFTER the
+     * placement above so it is measured against the window's final position. */
     mp6_bridge_post_window_init((void *)info.window);
 
     /* The launcher menu, interactive launches only. Runs the exact
@@ -501,17 +621,29 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
 
     /* Decided once, right before
      * GameMain(), on every boot path (automation, launcher.skip, and
-     * interactive Play alike) -- mp6_launcher_cfg_widescreen() returns
-     * g_cfg.widescreen in launcher mode or a fixed 0 (matching every
-     * existing automated gate's assumption, and this setting's own
-     * default) otherwise. MUST run BEFORE mp6_bridge_apply_content_aspect_
-     * policy() right below: that call reads mp6_widescreen_enabled() to
-     * decide FIT-at-native-4:3 vs FIT-at-the-live-wide-aspect, so the
-     * enabled/disabled state must already be set by the time it runs.
-     * Everything else downstream (render width, camera aspect, 2D shim)
-     * also reads mp6_widescreen_enabled() fresh on every call -- this is
-     * the only place the ON/OFF decision itself is made. */
-    mp6_widescreen_set_enabled(mp6_launcher_cfg_widescreen());
+     * interactive Play alike). The value comes from the ENHANCEMENTS SEAM
+     * (shim/include/mp6_enhancements.h), which is the single front door for
+     * this switch and resolves, in its own documented order,
+     * MP6_ENH_WIDESCREEN -> MP6_ENH_PRESET -> the value the launcher
+     * published from mp6_config.json -> RETAIL.
+     *
+     * That last step is why this is still exactly what automation has always
+     * seen: automation mode never calls mp6_enh_set_values(), so the seam's
+     * store is at its retail initializer and this latches 0 -- the same
+     * fixed 0 the old mp6_launcher_cfg_widescreen() read hard-coded off the
+     * launcher path. The difference is that a scripted run can now opt in
+     * with either MP6_ENH_* lever, and an interactive run in which a lever
+     * says OFF gets OFF instead of the config's ON, which is the priority
+     * the settings row already claims for the lever.
+     *
+     * MUST run BEFORE mp6_bridge_apply_content_aspect_policy() right below:
+     * that call reads mp6_widescreen_enabled() to decide FIT-at-native-4:3
+     * vs FIT-at-the-live-wide-aspect, so the enabled/disabled state must
+     * already be set by the time it runs. Everything else downstream
+     * (render width, camera aspect, 2D shim) also reads
+     * mp6_widescreen_enabled() fresh on every call -- this is the only place
+     * the boot-time ON/OFF decision itself is made. */
+    mp6_widescreen_set_enabled(mp6_enh_widescreen());
 
     /* A5: the CONTENT half of the fixed-aspect policy, engaged exactly
      * here -- right before GameMain(), on every boot path (automation,

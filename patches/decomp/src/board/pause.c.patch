@@ -2,6 +2,38 @@
 +++ b/src/board/pause.c
 @@ -13,0 +14 @@
 +#include "mp6_widescreen.h" /* widescreen support */
+@@ -251,4 +252,24 @@
+-        mbTelopTimeSprRotSet(work->telopId, 0.0f);
+-        mbTelopTimeDispSet(work->telopId, FALSE);
+-        HuSprGrpPosSet(work->telopId, 288.0f * 0.35f, 216.0f);
+-        HuSprGrpScaleSet(work->telopId, 0.65f, 0.65f);
++        /* PORT SEAM GUARD -- mbTelopTimeSprCreate (the line above) is a
++         * logged placeholder in platform/os/board_placeholders.c that
++         * returns -1, "no sprite": the pinned decomp declares it (pause.c's
++         * own extern, line 54) but has not recovered it, and the
++         * no-disassembly rule keeps it a seam rather than an invention.
++         * Every call in this block then indexes HuSprGrpData[grpId] with no
++         * bounds check of its own -- sprman.c:427 in HuSprAttrSet, reached
++         * through mbTelopTimeDispSet -> HuSprDispOff (telop.c:122), and
++         * sprman.c:566 / :604 in HuSprGrpPosSet / HuSprGrpScaleSet, the
++         * latter two of which WRITE through that pointer, so -1 is an
++         * out-of-bounds STORE and not merely a read.  Opening the board
++         * pause menu panicked on the first of them: "index -1 out of bounds
++         * for type 'HUSPR_GROUP[256]'".
++         *
++         * The guard is this file's OWN idiom rather than a new convention:
++         * the pinned source already reads telopId < 0 as "no telop sprite
++         * exists" at all four of its other use sites (the kill at pin line
++         * 287, the show/hide pair at 412 and 460, the spin at 512).  Only
++         * the creation block was written assuming mbTelopTimeSprCreate
++         * cannot fail -- true on retail, which is why this is inert on a
++         * hardware build.  Delete when that seam lands on decomp main. */
++        if(work->telopId >= 0) {
++            mbTelopTimeSprRotSet(work->telopId, 0.0f);
++            mbTelopTimeDispSet(work->telopId, FALSE);
++            HuSprGrpPosSet(work->telopId, 288.0f * 0.35f, 216.0f);
++            HuSprGrpScaleSet(work->telopId, 0.65f, 0.65f);
++        }
 @@ -750,2 +751,21 @@
 -        mbWinSizeSet(work->mgWin[i], 268, winSize.y);
 -        mbWinPosSet(work->mgWin[i], winPos.x + ((i & 1) ? 268 : 0), winPos.y);

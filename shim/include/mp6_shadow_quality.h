@@ -23,21 +23,26 @@
  *
  * Two definitions exist (platform/hsf/mp6_shadow_quality.c, split
  * internally by #ifdef MP6_HEADLESS_BUILD -- mirroring mp6_widescreen.h's
- * own documented dual-definition precedent): the real one reads the
- * Mods-tab config (video.shadow_quality: 1/2/4/8/16, 1 = native) through
- * mp6_launcher_cfg_shadow_quality() (launcher_core.cpp, Aurora-only) and
+ * own documented dual-definition precedent): the real one asks the
+ * ENHANCEMENTS SEAM (shim/include/mp6_enhancements.h) via
+ * mp6_enh_shadow_quality(), which resolves MP6_ENH_SHADOW_QUALITY ->
+ * MP6_ENH_PRESET -> the published Enhancements config
+ * (enhancements.shadow_quality: 1/2/4/8/16, 1 = retail) -> retail, and then
  * clamps the request to what HEAP_MODEL's largest free block can actually
- * hold; --headless has no launcher/config at all (tools/build.py's
- * PLATFORM_AURORA_ONLY), so it always returns 1 (native, byte-identical)
- * -- the automated headless boot gate never sees a scaled shadow map.
+ * hold. --headless has no shadow RENDERER (its half of the .c stubs the
+ * offscreen bracket out), so it returns 1 unconditionally and does not
+ * consult the seam at all -- the automated headless boot gate never sees a
+ * scaled shadow map.
  *
  * MP6_SHADOW_QUALITY=<1|2|4|8|16> env lever, checked first and winning over
- * the config when set (same shape as MP6_WIDESCREEN/MP6_TICK_HZ): needed
- * because docs/TESTING.md's "automation contract (sacred)" makes any
- * MP6_AUTO_START_TICKS/--input-script/tick-budget-argv run automation
- * mode, which by design never reads mp6_config.json -- without this lever
- * no scripted gate or screenshot drive could ever exercise a non-native
- * scale at all.
+ * everything the seam would answer (same shape as MP6_WIDESCREEN/
+ * MP6_TICK_HZ), which is the priority docs/SETTINGS.md promises the legacy
+ * per-feature levers keep at their own consumption site. MP6_ENH_SHADOW_
+ * QUALITY reaches the same decision through the seam instead; either one
+ * works from a scripted run, which matters because docs/TESTING.md's
+ * "automation contract (sacred)" makes any MP6_AUTO_START_TICKS/
+ * --input-script/tick-budget-argv run automation mode, and automation never
+ * reads mp6_config.json.
  *
  * Return value: the EFFECTIVE linear scale actually applied (always >=1).
  * Returns exactly 1 whenever the mod is off, the config is absent/

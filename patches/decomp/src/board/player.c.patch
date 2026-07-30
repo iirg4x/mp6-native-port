@@ -1,4 +1,0 @@
---- a/src/board/player.c
-+++ b/src/board/player.c
-@@ -3791,0 +3792 @@
-+    return NULL;

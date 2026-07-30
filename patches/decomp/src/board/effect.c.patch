@@ -1,5 +1,54 @@
 --- a/src/board/effect.c
 +++ b/src/board/effect.c
+@@ -11,0 +12,2 @@
++
++#include "mp6_widescreen.h" /* widescreen support -- FadeDraw below */
+@@ -47,2 +49,21 @@
+-    unsigned killF : 1;
+-    unsigned pauseF : 1;
++    /* HOST ABI -- bit-field storage unit, not a behaviour change.
++     *
++     * This struct is never allocated: FadeOMExec and friends reach it
++     * through omObjGetWork(obj, FADEEFFWORK), which game/object.h defines
++     * as a plain cast onto OMOBJ's inline `u32 work[4]` -- 16 bytes, with
++     * `void *data` as the very next member.  Declared `unsigned`, the two
++     * flags claim a whole 4-byte unit under this compiler and push `alpha`
++     * to offset 4, which makes the struct 20 bytes: `speed` then lands ON
++     * obj->data.  omDelObjEx frees obj->data when it tears the object
++     * down, so closing the board pause menu handed the allocator the bit
++     * pattern of a float -- "misaligned address 0xc0aaaa83 for type
++     * 'MEMORY_BLOCK'", 0xc0aaaa83 being -5.3333f, the fade's own speed.
++     *
++     * `u8` puts the flags in a 1-byte unit, `alpha` back at offset 1, and
++     * the struct back to exactly 16 bytes -- which is the size the
++     * recovered source was written against, since anything larger would
++     * have corrupted obj->data on real hardware too.  The assert below
++     * makes the constraint explicit instead of implicit. */
++    u8 killF : 1;
++    u8 pauseF : 1;
+@@ -55,0 +75,8 @@
++
++/* omObjGetWork() aliases FADEEFFWORK onto OMOBJ::work[4] and OMOBJ::data
++ * sits immediately after it, so overflowing work[] silently turns a
++ * member write into a corrupted heap pointer.  Fail the build instead. */
++_Static_assert(sizeof(FADEEFFWORK) <= sizeof(((OMOBJ *)0)->work),
++               "FADEEFFWORK overflows OMOBJ::work[4] -- omObjGetWork aliases "
++               "it there and the next member is the pointer omDelObjEx frees");
+@@ -175 +177,13 @@
+-	x2 = HU_FB_WIDTH;
++	/* FadeDraw is the board's own full-screen colour fade (the flash/
++	 * blackout the board throws up over everything). x2 is the ONLY place
++	 * its width enters: the MTXOrtho right edge, the viewport, the scissor
++	 * and all four quad corners below are every one of them derived from
++	 * it, so widening this single local widens the whole effect coherently.
++	 * Left at HU_FB_WIDTH the fade covered exactly the native 640 of a
++	 * wider frame and the sides showed the unfaded scene straight through
++	 * -- one of the two board pause/overlay leftovers the widescreen work flagged as
++	 * NOT FIXED. HU_FB_WIDTH (640, byte-identical) when widescreen is
++	 * disabled; GXPosition2u16's u16 range comfortably holds any width
++	 * mp6_widescreen_render_width() can return (it is clamped to the GPU's
++	 * own max 2D texture dimension). */
++	x2 = (float)mp6_widescreen_render_width();
 @@ -436,4 +436,68 @@
  static void ParticleDraw(HU3D_MODEL *modelP, Mtx *mtx);
  static void ParManFunc(HU3D_MODEL *modelP, MBPARTICLE *particleP, Mtx mtx);
@@ -71,6 +120,27 @@
 +}
 +
  HU3D_MODELID mbParticleCreate(ANIMDATA *anim, s16 maxCnt)
+@@ -516,0 +583,20 @@
++    /* Closes mbParticleCreate's own GXBegin(GX_QUADS, maxCnt*4) fourteen
++     * lines up; anchors to the closing brace of that GXBegin's quad-index
++     * loop, the last statement inside the GXBeginDisplayList/
++     * GXEndDisplayList bracket that ends just below.
++     *
++     * A no-op on real hardware: GXEnd is an empty inline
++     * (include/dolphin/gx/GXVert.h) and the GX FIFO parser ends a
++     * primitive purely by vertex count, so retail source omits it
++     * wherever the declared count was streamed exactly -- as it is here.
++     * Aurora instead byte-accounts each primitive at the GXEnd call, and
++     * its display-list recording buffer is tracked separately from the
++     * immediate-mode buffer that accounting reads (platform/gx/
++     * aurora_bridge.c section 5). A primitive left open inside a
++     * display-list bracket is therefore measured against whatever
++     * unrelated immediate-mode traffic runs until the next GXBegin
++     * auto-closes it -- garbage bytes, and the CHECK fires at an innocent
++     * later call site. Same fix and same reason as
++     * patches/decomp/src/game/hsfdraw.c.patch's explicit GXEnd() after
++     * each of MDFaceDraw's three vertex loops. */
++    GXEnd();
 @@ -517,2 +581,4 @@
      particleP->dlSize = GXEndDisplayList();
 +    /* See mp6ParticleArraysRegister above -- without this the display

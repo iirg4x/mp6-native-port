@@ -8,13 +8,13 @@ steady-state RSS samples. PASS iff the slope is under the threshold. This is
 the mandatory verification step for ANY change that touches allocation paths
 (loaders, bridges, shims, caches) -- see docs/TESTING.md's leak gate section.
 
-Usage:
-  python tools/leakgate.py build/mp6native_headless.exe --duration 300
-  python tools/leakgate.py build/mp6native.exe --args "--input-script" "wait:300;press:start" \
+Usage (the exe path is normalized before Popen, so either slash style works):
+  python tools/leakgate.py build\\mp6native_headless.exe --duration 300
+  python tools/leakgate.py build\\mp6native.exe --args "--input-script" "wait:300;press:start" \
       --duration 300 --threshold-kb-min 500 --lockfile ../.visual_test.lock
   # capture the exe's own stdout (e.g. an MP6_ALLOC_CENSUS_START_TICK log)
   # alongside the official verdict, instead of losing it to DEVNULL:
-  python tools/leakgate.py build/mp6native.exe --duration 300 --capture-stdout run.log ...
+  python tools/leakgate.py build\\mp6native.exe --duration 300 --capture-stdout run.log ...
 
 Exit code 0 = PASS, 1 = FAIL (leak), 2 = harness error (process died early, etc).
 """
@@ -28,11 +28,47 @@ class PMC(ctypes.Structure):
                    "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
                    "PagefileUsage", "PeakPagefileUsage")]
 
-def rss_mb(handle):
+def mem_mb(handle):
+    """(working set, private commit) in MB, from ONE GetProcessMemoryInfo call.
+
+    WHY BOTH. WorkingSetSize is the *resident* footprint and Windows trims it
+    whenever it likes: measured on the windowed build, RSS is a 12-24 MB
+    peak-to-trough swing snapping between a handful of discrete levels, on top
+    of a one-time load step. A least-squares slope over the 25-37 post-warmup
+    samples this gate collects turns that swing's PHASE into a rate -- the same
+    binary produced -447.5, +655.8 and +2766.7 KB/min against a 500 KB/min
+    threshold. A longer warmup does not fix it (one captured run went +656 ->
+    +1196 -> +3124 KB/min as the warmup grew), nor does a robust Theil-Sen
+    slope (+184 -> +1238), nor a per-bucket RSS floor (+1672 -> +2779).
+
+    PagefileUsage -- private COMMIT, charged at allocation and released only at
+    free, never trimmed -- was measured as the candidate replacement and IS NOT
+    ONE: on the headless build it swings 20.3 MB peak-to-trough (414.5 - 434.9
+    MB) over 90s, the same order as RSS. Both series are bounded, mean-
+    reverting oscillations, so neither is quiet enough for a short window and
+    swapping the verdict onto commit would buy nothing while invalidating every
+    RSS baseline already recorded in docs/history. The verdict therefore stays
+    on RSS; commit is sampled from the SAME call and reported so a future
+    investigation can see both without re-running anything.
+
+    What actually decides a borderline verdict is WINDOW LENGTH -- see the
+    resolvable-rate line printed with every verdict.
+    """
     pmc = PMC(); pmc.cb = ctypes.sizeof(PMC)
     if not ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(pmc), pmc.cb):
         return None
-    return pmc.WorkingSetSize / (1024 * 1024)
+    return (pmc.WorkingSetSize / (1024 * 1024), pmc.PagefileUsage / (1024 * 1024))
+
+
+def slope_kb_min(pts):
+    """Least-squares slope of (t_seconds, mb) in KB/minute."""
+    n = len(pts)
+    sx = sum(t for t, _ in pts); sy = sum(m for _, m in pts)
+    sxx = sum(t * t for t, _ in pts); sxy = sum(t * m for t, m in pts)
+    denom = n * sxx - sx * sx
+    if denom == 0:
+        return None
+    return (n * sxy - sx * sy) / denom * 1024 * 60
 
 def handle_count(handle):
     """A second, orthogonal signal alongside RSS -- a HANDLE leak (GPU
@@ -72,11 +108,24 @@ def main():
     a, extra = ap.parse_known_args()
     a.args = list(a.args) + extra
 
+    # Normalize the exe path before anything else touches it. A caller who
+    # types the POSIX-looking `build/mp6native_headless.exe` -- which is what
+    # docs/TESTING.md's own examples showed, and what a bash-shaped habit
+    # produces -- hands CreateProcess a relative path with forward slashes and
+    # gets a bare FileNotFoundError out of Popen with no hint that the path
+    # spelling was the problem. Resolving it here means both slash styles and
+    # both relative and absolute forms work, and a genuinely missing exe is
+    # reported as one readable line naming the resolved path it looked for.
+    exe_path = os.path.abspath(os.path.normpath(a.exe))
+    if not os.path.isfile(exe_path):
+        print(f"[leakgate] no executable at {exe_path} -- build it first "
+              f"(python tools/build.py [--headless])")
+        return 2
     if a.lockfile:
         if os.path.exists(a.lockfile) and time.time() - os.path.getmtime(a.lockfile) < 600:
             print("[leakgate] lockfile busy -- refusing to start a windowed run"); return 2
         open(a.lockfile, "w").write("leakgate\n")
-    samples = []  # (t_seconds, rss_mb)
+    samples = []  # (t_seconds, rss_mb, commit_mb, handle_count)
     verdict, reason = None, ""
     proc, capture_fh = None, None
     try:
@@ -92,7 +141,7 @@ def main():
         # passes MP6_TICK_HZ still wins).
         child_env = dict(os.environ)
         child_env.setdefault("MP6_TICK_HZ", "60")
-        proc = subprocess.Popen([a.exe] + a.args + [a.ticks], env=child_env,
+        proc = subprocess.Popen([exe_path] + a.args + [a.ticks], env=child_env,
                                 stdout=capture_fh, stderr=subprocess.STDOUT if a.capture_stdout else subprocess.DEVNULL)
         handle = int(proc._handle)
         t0 = time.time()
@@ -101,13 +150,15 @@ def main():
             if proc.poll() is not None:
                 verdict, reason = 2, f"process exited early (code {proc.returncode}) at t={int(time.time()-t0)}s"
                 break
-            m = rss_mb(handle)
+            mem = mem_mb(handle)
             t = time.time() - t0
-            if m is None:
+            if mem is None:
                 verdict, reason = 2, "GetProcessMemoryInfo failed"; break
+            m, commit = mem
             hc = handle_count(handle)
-            samples.append((t, m, hc))
-            print(f"[leakgate] t={int(t):4d}s rss={m:9.1f} MB handles={hc}", flush=True)
+            samples.append((t, m, commit, hc))
+            print(f"[leakgate] t={int(t):4d}s rss={m:9.1f} MB commit={commit:9.1f} MB handles={hc}",
+                  flush=True)
             if m > a.hard_cap_mb:
                 verdict, reason = 1, f"hard cap exceeded: {m:.0f} MB > {a.hard_cap_mb:.0f} MB"
                 break
@@ -120,24 +171,47 @@ def main():
             capture_fh.close()
     if a.csv and samples:
         with open(a.csv, "w") as f:
-            f.write("t_s,rss_mb,handles\n")
-            for t, m, hc in samples: f.write(f"{t:.1f},{m:.2f},{hc if hc is not None else ''}\n")
+            f.write("t_s,rss_mb,commit_mb,handles\n")
+            for t, m, c, hc in samples:
+                f.write(f"{t:.1f},{m:.2f},{c:.2f},{hc if hc is not None else ''}\n")
     if verdict is None:
-        fit = [(t, m) for t, m, _hc in samples if t >= a.warmup]
-        if len(fit) < 5:
+        rss_fit    = [(t, m) for t, m, _c, _hc in samples if t >= a.warmup]
+        commit_fit = [(t, c) for t, _m, c, _hc in samples if t >= a.warmup]
+        if len(commit_fit) < 5:
             verdict, reason = 2, "not enough steady-state samples (raise --duration)"
         else:
-            n = len(fit)
-            sx = sum(t for t, _ in fit); sy = sum(m for _, m in fit)
-            sxx = sum(t * t for t, _ in fit); sxy = sum(t * m for t, m in fit)
-            slope_mb_s = (n * sxy - sx * sy) / (n * sxx - sx * sx)
-            slope_kb_min = slope_mb_s * 1024 * 60
             limit = a.threshold_kb_min
-            verdict = 0 if slope_kb_min <= limit else 1
-            handles_fit = [hc for _t, _m, hc in samples if _t >= a.warmup and hc is not None]
+            rss_slope    = slope_kb_min(rss_fit)
+            commit_slope = slope_kb_min(commit_fit)
+            verdict = 0 if rss_slope <= limit else 1
+            # RESOLVABLE RATE. A slope fitted over a window shorter than the
+            # series' own peak-to-trough swing cannot resolve a rate below
+            # swing/window: under that floor the fit reports where in the swing
+            # the endpoints happened to land, not a trend. This does not change
+            # the verdict -- it tells the reader whether to believe it, and how
+            # long a run would have to be to settle the question. A borderline
+            # verdict printed with a floor above the threshold is a run that
+            # must be LENGTHENED, never one whose threshold should be raised.
+            span_min = (rss_fit[-1][0] - rss_fit[0][0]) / 60.0
+            swing_kb = (max(m for _t, m in rss_fit) - min(m for _t, m in rss_fit)) * 1024.0
+            floor = swing_kb / span_min if span_min > 0 else float("inf")
+            handles_fit = [hc for _t, _m, _c, hc in samples if _t >= a.warmup and hc is not None]
             handles_note = (f"; handles {handles_fit[0]} -> {handles_fit[-1]}" if handles_fit else "")
-            reason = (f"steady-state slope {slope_kb_min:+.1f} KB/min over {len(fit)} samples "
-                      f"(threshold {limit:.0f} KB/min); rss {fit[0][1]:.0f} -> {fit[-1][1]:.0f} MB{handles_note}")
+            reason = (f"steady-state slope {rss_slope:+.1f} KB/min over {len(rss_fit)} samples "
+                      f"(threshold {limit:.0f} KB/min); rss {rss_fit[0][1]:.0f} -> "
+                      f"{rss_fit[-1][1]:.0f} MB{handles_note}")
+            if floor > limit:
+                need = swing_kb / limit if limit > 0 else float("inf")
+                reason += (f"\n[leakgate] CAUTION: rss swings {swing_kb/1024:.1f} MB peak-to-trough "
+                           f"over this {span_min:.1f} min fit window, so the run can only resolve "
+                           f"rates above {floor:.0f} KB/min -- the {limit:.0f} KB/min verdict above "
+                           f"is not separable from swing phase. Settle it with a post-warmup window "
+                           f"of at least {need:.0f} min (--duration {int((need*60)+a.warmup)}), not "
+                           f"with a higher threshold.")
+            else:
+                reason += f" [window resolves down to {floor:.0f} KB/min]"
+            reason += (f"\n[leakgate] commit (diagnostic): {commit_fit[0][1]:.0f} -> "
+                       f"{commit_fit[-1][1]:.0f} MB, slope {commit_slope:+.1f} KB/min")
     print(f"[leakgate] {'PASS' if verdict == 0 else 'FAIL' if verdict == 1 else 'ERROR'}: {reason}")
     return verdict
 

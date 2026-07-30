@@ -1,0 +1,12 @@
+--- a/src/board/roulette.c
++++ b/src/board/roulette.c
+@@ -582 +582,8 @@
+-    int playerBest;
++    /* MP6_NATIVE_PORT: playerBest is assigned only when GWPartyGet() is TRUE,
++     * and the very next line reads it (-Werror=sometimes-uninitialized). -1 is
++     * the value this function already treats as "no best-path player": the
++     * test below is `playerBest == -1 || playerBest == playerNo`, whose -1 arm
++     * exists to fall through to the random pick. So minigame mode now takes
++     * the random pick deterministically instead of taking it or not depending
++     * on stack contents. */
++    int playerBest = -1;

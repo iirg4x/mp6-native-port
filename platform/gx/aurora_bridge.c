@@ -84,6 +84,7 @@
 #include "mp6_shim_log.h"
 #include "mp6_gxarray_registry.h"
 #include "mp6_widescreen.h" /* dynamic true-widescreen support */
+#include "mp6_enhancements.h" /* mp6_enh_widescreen -- the switch's one front door */
 #include "mp6_savestate.h"  /* F5/F8 hotkeys -> queued, serviced at the frame boundary */
 #include "mp6_unlocked_fps.h" /* Mods-page Unlocked FPS: retained-stream frame interpolation
                                * (platform/gx/frame_interp.c); hooks at the frame boundaries
@@ -92,6 +93,10 @@
 #include "mp6_frame_gate.h" /* Android: no simulation work without a presentable frame */
 #include "mp6_parse.h" /* strict operational env/script numbers */
 #include "mp6_events.h" /* the game-event bus the input script's waitev/pressuntil steps block on */
+#include "mp6_console.h" /* dev console: keyboard ownership, the stat sampler's hooks,
+                          * and the runtime overrides for this file's own diag levers */
+#include "mp6_display.h" /* the output the window is on + live present sync -- section 2b
+                          * below is this seam's one implementation */
 #include "host.h" /* mp6_host_monotonic_ns/mp6_host_sleep_ns/mp6_host_init
                    * -- the tick throttle's OS primitives
                    * (QPC/Sleep/timeBeginPeriod) live behind the host
@@ -280,7 +285,8 @@ static bool mp6_arrayprobe_enabled(void)
         const char *e = getenv("MP6_ARRAYPROBE");
         g_mp6ArrayProbeEnabled = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
     }
-    return g_mp6ArrayProbeEnabled == 1;
+    /* env latches the initial value; the dev console may override it live. */
+    return mp6_console_cvar_get(MP6_CVAR_ARRAYPROBE, g_mp6ArrayProbeEnabled) != 0;
 }
 
 /* Dedupe table so per-frame re-binds don't flood stdout: one line per
@@ -496,6 +502,10 @@ u32 mp6_GXEndDisplayList(void)
         printf("[ARRAYPROBE] DLREC-END buf=%p wrote=%u\n", g_mp6DlRecBuf, (unsigned)written);
         fflush(stdout);
     }
+    /* Display-list bytes RECORDED this frame -- the return value is already
+     * here, so the console's scenerendering panel can report authored-vs-
+     * replayed DL volume for free. */
+    if (mp6_console_stats_active) mp6_console_note_dl_recorded((unsigned)written);
     g_mp6InDlRecording = false;
     g_mp6DlRecBuf = NULL;
     return written;
@@ -828,6 +838,15 @@ static void mp6_latch_key_down_event(const SDL_Event *sdlEvent)
     if (sdlEvent->type != SDL_EVENT_KEY_DOWN) {
         return;
     }
+    /* While the dev console owns the keyboard, a keystroke is text -- not a
+     * button. Guarding the LATCH as well as the poll below matters because the
+     * latch is sticky until the next pump: without it, the last character
+     * typed before a command is submitted would still be delivered to the game
+     * one tick later. Always false in automation (the console is unavailable
+     * there, see shim/include/mp6_console.h). */
+    if (mp6_console_captures_input()) {
+        return;
+    }
     for (i = 0; i < MP6_KEYBIND_COUNT; i++) {
         if (sdlEvent->key.scancode == g_keyBinds[i].scancode) {
             g_padKeyLatch |= g_keyBinds[i].button;
@@ -895,371 +914,57 @@ static void mp6_latch_menu_key_event(const SDL_Event *sdlEvent)
     }
 }
 
-/* ---------------------------------------------------------------------
- * 6. Deterministic input-script bridge (test tooling).
+/* Dev console hotkey (shim/include/mp6_console.h). Grave/backtick is the
+ * console key every developer already has muscle memory for; F9 is the
+ * keyboard-layout escape hatch, since on AZERTY/JIS the key left of "1" is not
+ * a backtick at all. Neither collides: F5/F8 are the savestate pair above,
+ * F10/F1 open the in-game menu, and g_keyBinds is letters and arrows only.
  *
- * SendKeys/keybd_event-driven testing has a real reliability problem
- * independent of anything in the game itself: window-focus races (a bare
- * ALT keypress can activate a window's system menu and swallow the very
- * next key), OS input-injection timing, and possible cross-talk between
- * multiple automated test runs against similarly-named windows all
- * introduce noise that's indistinguishable, from the outside, from a
- * genuine "did the game actually see this button" question.
- * --input-script "<spec>" removes ALL of that: it injects
- * PAD button state directly into the SAME virtual-status mechanism the
- * keyboard bridge above already uses (PADSetVirtualStatus), timed purely
- * by this process's own internal tick counter -- no window focus, no OS
- * input queue, no real keyboard hardware involved at any point. This is
- * strictly a TESTING tool (real players still use the keyboard bridge
- * above, unaffected); it exists so a scripted test run is 100%
- * reproducible frame-for-frame, independent of automation timing.
+ * The bar has THREE states and the bare key cycles them (closed -> bar ->
+ * bar+log -> closed). SHIFT is the shortcut straight to the scrollback and
+ * straight back, so reading the log never costs a trip through closed --
+ * which matters because closing the bar is also what returns the keyboard to
+ * the game, and losing input for one frame while hunting for a log line is
+ * exactly the kind of papercut a debug tool must not have.
  *
- * Spec syntax: semicolon-separated steps, e.g.
- * "wait:180;press:start;wait:60;press:a" --
- *   wait:N   -- advance N ticks before the next step.
- *   press:X  -- latch button X (start/a/b/up/down/left/right) for
- *               exactly one tick (matching mp6_latch_key_down_event's own
- *               one-tick-then-consumed semantics above -- a script press
- *               is exactly as "instantaneous" as a real key-down event
- *               is), then immediately move to the next step. Multiple
- *               press steps with no wait between them all land on the
- *               SAME tick (OR'd together) -- add an explicit wait:1 if a
- *               script needs them on separate ticks instead.
- *   stick:X  -- tilt the ANALOG stick (up/down/left/right, +-72 of the
- *               +-~72 hardware range) for exactly one tick, same
- *               one-tick semantics as press. Needed because several
- *               menus (file-select name entry via
- *               REL/fileseldll/filename.c) read ONLY HuPadDStkRep --
- *               game/pad.c's PadADConv derives that from the analog
- *               stick alone, so press:up/down/left/right (dpad BUTTON
- *               bits) can never move those cursors.
- *
- * EVENT-BOUND STEPS -- why wait:N is not enough
- * --------------------------------------------
- * wait:N is a TICK OFFSET, and tick offsets are the wrong unit for
- * driving this game. The boot/menu path interleaves frame-counted waits
- * with wall-clock waits (boot.c: `for (frame = 0; frame < 90; frame++)`
- * next to `while (OSTicksToMilliseconds(OSGetTick() - start) < 1500)`),
- * so the tick at which any screen becomes input-ready moves with host CPU
- * speed, host-file latency, GPU frame pacing and first-run shader
- * compilation. A press scheduled at a guessed tick lands in the wrong
- * screen and is silently swallowed -- the single most common failure mode
- * of every tick-offset route tried against this port.
- *
- * The following steps bind input to OBSERVED GAME STATE instead
- * (shim/include/mp6_events.h owns the event vocabulary). `/` separates a
- * step's sub-arguments, since `:` already separates keyword from value:
- *
- *   waitev:<key>          -- block until event <key> fires (strictly after
- *                            this step began -- an event that already fired
- *                            earlier does NOT satisfy it, so a route can
- *                            wait on the same key twice).
- *   waitev:<key>/<value>  -- block until <key>'s latest value equals
- *                            <value>. Value matching accepts either the
- *                            event's string form or its numeric form, so
- *                            "waitev:ovl.start/w01dll" and
- *                            "waitev:ovl.start/123" are the same wait.
- *                            Unlike the bare form this is satisfied
- *                            immediately if the key ALREADY holds that
- *                            value -- it asserts a state, not an edge.
- *   pressuntil:<btn>/<key>[/<value>]
- *                         -- press <btn> every `period` ticks until that
- *                            same condition holds. This is the timing-
- *                            immune confirm: if the screen was not ready
- *                            yet, the press simply repeats. Nothing about
- *                            it depends on knowing when the screen came up.
- *   period:<N>            -- ticks between repeats for subsequent
- *                            pressuntil steps (default 60 = ~1s).
- *   timeout:<N>           -- tick cap for subsequent waitev/pressuntil
- *                            steps (default 5400 = ~90s). On expiry the
- *                            step prints "[EVENT] script.timeout=<key>"
- *                            and the script CONTINUES to the next step
- *                            rather than hanging. That is deliberate: a
- *                            stalled route must still terminate and must
- *                            leave, in the log, the exact event it was
- *                            waiting for -- which is precisely the "report
- *                            the furthest state reached" evidence a failed
- *                            run needs.
- *
- * A fully event-bound route therefore contains no tick guesses at all,
- * e.g.:
- *   "waitev:selmenu.ready;stick:right;...;pressuntil:a/ovl.start/w01dll"
- */
-typedef enum {
-    MP6_SCRIPT_WAIT,
-    MP6_SCRIPT_PRESS,
-    MP6_SCRIPT_STICK,
-    MP6_SCRIPT_WAITEV,
-    MP6_SCRIPT_PRESSUNTIL,
-    MP6_SCRIPT_SET_PERIOD,
-    MP6_SCRIPT_SET_TIMEOUT
-} MP6ScriptStepType;
-
-#define MP6_SCRIPT_EVKEY_MAX 24
-#define MP6_SCRIPT_EVVAL_MAX 40
-
-typedef struct {
-    MP6ScriptStepType type;
-    u32 waitFrames; /* MP6_SCRIPT_WAIT / SET_PERIOD / SET_TIMEOUT */
-    u16 button;     /* MP6_SCRIPT_PRESS / MP6_SCRIPT_PRESSUNTIL */
-    s8 stickX;      /* MP6_SCRIPT_STICK */
-    s8 stickY;      /* MP6_SCRIPT_STICK */
-    char evKey[MP6_SCRIPT_EVKEY_MAX]; /* WAITEV / PRESSUNTIL */
-    char evVal[MP6_SCRIPT_EVVAL_MAX]; /* "" == any-fire (edge) form */
-} MP6ScriptStep;
-
-#define MP6_SCRIPT_MAX_STEPS 256
-static MP6ScriptStep g_script[MP6_SCRIPT_MAX_STEPS];
-static int g_scriptStepCount = 0;
-static int g_scriptCursor = 0;
-static u32 g_scriptWaitRemaining = 0;
-static bool g_scriptActive = false;
-
-/* Event-bound step state (see the spec comment above). g_scriptEvBaseSeq is
- * the global event sequence sampled when the CURRENT waitev/pressuntil step
- * was entered -- that is what makes the bare "waitev:<key>" form an EDGE
- * ("fires from now on") rather than a level ("has ever fired"), so a route
- * may wait on the same key repeatedly. g_scriptEvElapsed is the per-step
- * tick counter both the timeout and the pressuntil repeat period run off. */
-static bool g_scriptEvEntered = false;
-static unsigned long g_scriptEvBaseSeq = 0;
-static u32 g_scriptEvElapsed = 0;
-static u32 g_scriptEvPeriod = 60;    /* period:N default -- ~1s between repeats */
-static u32 g_scriptEvTimeout = 5400; /* timeout:N default -- ~90s cap per wait */
-
-static u16 mp6_script_button_from_name(const char *name, size_t len)
+ * Both entry points are inert until the launcher grants availability, which
+ * happens inside mp6_launcher_frame_overlay()'s launcher-mode guard -- so a
+ * tick-budget, --input-script or MP6_AUTO_START_TICKS run cannot open the
+ * console even if these keys are pressed. Same KEY_DOWN-event discipline as
+ * the two latches above: a state poll would miss a fast tap. */
+static void mp6_latch_console_key_event(const SDL_Event *sdlEvent)
 {
-    if (len == 5 && strncmp(name, "start", 5) == 0) return PAD_BUTTON_START;
-    if (len == 1 && name[0] == 'a') return PAD_BUTTON_A;
-    if (len == 1 && name[0] == 'b') return PAD_BUTTON_B;
-    if (len == 2 && strncmp(name, "up", 2) == 0) return PAD_BUTTON_UP;
-    if (len == 4 && strncmp(name, "down", 4) == 0) return PAD_BUTTON_DOWN;
-    if (len == 4 && strncmp(name, "left", 4) == 0) return PAD_BUTTON_LEFT;
-    if (len == 5 && strncmp(name, "right", 5) == 0) return PAD_BUTTON_RIGHT;
-    printf("[TEST] input-script: unrecognized button name (len=%zu)\n", len);
-    fflush(stdout);
-    return 0;
-}
-
-/* Splits an event argument span "<key>" or "<key>/<value>" into the step's
- * two bounded fields. Both are truncated rather than rejected on overflow:
- * an over-long key simply never matches a real event, which surfaces as a
- * clean, logged wait timeout instead of a parse-time abort. */
-static void mp6_script_copy_ev_args(MP6ScriptStep *st, const char *span, size_t spanLen)
-{
-    const char *slash = (const char *)memchr(span, '/', spanLen);
-    size_t keyLen = slash ? (size_t)(slash - span) : spanLen;
-    size_t valLen = slash ? spanLen - keyLen - 1 : 0;
-
-    if (keyLen >= sizeof(st->evKey)) {
-        keyLen = sizeof(st->evKey) - 1;
+    if (sdlEvent->type != SDL_EVENT_KEY_DOWN || sdlEvent->key.repeat) {
+        return;
     }
-    memcpy(st->evKey, span, keyLen);
-    st->evKey[keyLen] = '\0';
-
-    if (valLen >= sizeof(st->evVal)) {
-        valLen = sizeof(st->evVal) - 1;
-    }
-    if (valLen > 0) {
-        memcpy(st->evVal, slash + 1, valLen);
-    }
-    st->evVal[valLen] = '\0';
-}
-
-void mp6_input_script_init(const char *spec)
-{
-    const char *p = spec;
-    printf("[TEST] input-script armed: %s\n", spec);
-    while (*p && g_scriptStepCount < MP6_SCRIPT_MAX_STEPS) {
-        const char *sep = strchr(p, ';');
-        size_t stepLen = sep ? (size_t)(sep - p) : strlen(p);
-        const char *colon = (const char *)memchr(p, ':', stepLen);
-        if (colon) {
-            size_t keyLen = (size_t)(colon - p);
-            const char *valStart = colon + 1;
-            size_t valLen = stepLen - keyLen - 1;
-            if (keyLen == 4 && strncmp(p, "wait", 4) == 0) {
-                uint32_t waitFrames;
-                if (mp6_parse_u32_span(valStart, valLen, 0, 10000000u, &waitFrames)) {
-                    g_script[g_scriptStepCount].type = MP6_SCRIPT_WAIT;
-                    g_script[g_scriptStepCount].waitFrames = waitFrames;
-                    g_scriptStepCount++;
-                } else {
-                    printf("[TEST] input-script: invalid wait (expected 0..10000000 ticks)\n");
-                }
-            } else if (keyLen == 5 && strncmp(p, "press", 5) == 0) {
-                g_script[g_scriptStepCount].type = MP6_SCRIPT_PRESS;
-                g_script[g_scriptStepCount].button = mp6_script_button_from_name(valStart, valLen);
-                g_scriptStepCount++;
-            } else if (keyLen == 5 && strncmp(p, "stick", 5) == 0) {
-                /* analog-stick tilt step -- see the spec comment above. */
-                MP6ScriptStep *st = &g_script[g_scriptStepCount];
-                st->type = MP6_SCRIPT_STICK;
-                st->button = 0;
-                st->stickX = 0;
-                st->stickY = 0;
-                if (valLen == 2 && strncmp(valStart, "up", 2) == 0) st->stickY = 72;
-                else if (valLen == 4 && strncmp(valStart, "down", 4) == 0) st->stickY = -72;
-                else if (valLen == 4 && strncmp(valStart, "left", 4) == 0) st->stickX = -72;
-                else if (valLen == 5 && strncmp(valStart, "right", 5) == 0) st->stickX = 72;
-                else { printf("[TEST] input-script: unrecognized stick direction (len=%zu)\n", valLen); }
-                g_scriptStepCount++;
-            } else if (keyLen == 6 && strncmp(p, "waitev", 6) == 0) {
-                /* waitev:<key>[/<value>] -- see the spec comment above. */
-                MP6ScriptStep *st = &g_script[g_scriptStepCount];
-                st->type = MP6_SCRIPT_WAITEV;
-                st->button = 0;
-                mp6_script_copy_ev_args(st, valStart, valLen);
-                g_scriptStepCount++;
-            } else if (keyLen == 10 && strncmp(p, "pressuntil", 10) == 0) {
-                /* pressuntil:<btn>/<key>[/<value>] */
-                const char *slash = (const char *)memchr(valStart, '/', valLen);
-                if (slash == NULL) {
-                    printf("[TEST] input-script: pressuntil needs <button>/<event-key>[/<value>]\n");
-                } else {
-                    MP6ScriptStep *st = &g_script[g_scriptStepCount];
-                    size_t btnLen = (size_t)(slash - valStart);
-                    st->type = MP6_SCRIPT_PRESSUNTIL;
-                    st->button = mp6_script_button_from_name(valStart, btnLen);
-                    mp6_script_copy_ev_args(st, slash + 1, valLen - btnLen - 1);
-                    g_scriptStepCount++;
-                }
-            } else if (keyLen == 6 && strncmp(p, "period", 6) == 0) {
-                uint32_t ticks;
-                if (mp6_parse_u32_span(valStart, valLen, 1, 100000u, &ticks)) {
-                    g_script[g_scriptStepCount].type = MP6_SCRIPT_SET_PERIOD;
-                    g_script[g_scriptStepCount].waitFrames = ticks;
-                    g_scriptStepCount++;
-                } else {
-                    printf("[TEST] input-script: invalid period (expected 1..100000 ticks)\n");
-                }
-            } else if (keyLen == 7 && strncmp(p, "timeout", 7) == 0) {
-                uint32_t ticks;
-                if (mp6_parse_u32_span(valStart, valLen, 1, 10000000u, &ticks)) {
-                    g_script[g_scriptStepCount].type = MP6_SCRIPT_SET_TIMEOUT;
-                    g_script[g_scriptStepCount].waitFrames = ticks;
-                    g_scriptStepCount++;
-                } else {
-                    printf("[TEST] input-script: invalid timeout (expected 1..10000000 ticks)\n");
-                }
-            } else {
-                printf("[TEST] input-script: unrecognized step keyword (len=%zu)\n", keyLen);
-            }
-        }
-        if (!sep) break;
-        p = sep + 1;
-    }
-    g_scriptCursor = 0;
-    g_scriptWaitRemaining = 0;
-    g_scriptActive = (g_scriptStepCount > 0);
-    printf("[TEST] input-script: parsed %d step(s)\n", g_scriptStepCount);
-    fflush(stdout);
-}
-
-/* Called once per tick, before mp6_pump_keyboard_to_pad's own status
- * computation -- advances the script state machine and returns any
- * button(s) that should be latched THIS tick (0 if none, or no script
- * armed at all). */
-static s8 g_scriptTickStickX = 0; /* this tick's scripted analog tilt */
-static s8 g_scriptTickStickY = 0;
-
-static u16 mp6_input_script_advance(void)
-{
-    u16 pressedThisTick = 0;
-    g_scriptTickStickX = 0;
-    g_scriptTickStickY = 0;
-    while (g_scriptActive && g_scriptCursor < g_scriptStepCount) {
-        MP6ScriptStep *step = &g_script[g_scriptCursor];
-        if (step->type == MP6_SCRIPT_WAIT) {
-            if (g_scriptWaitRemaining == 0) {
-                if (step->waitFrames == 0) {
-                    g_scriptCursor++;
-                    continue; /* zero-length wait -- no-op separator, move on now */
-                }
-                g_scriptWaitRemaining = step->waitFrames;
-            }
-            g_scriptWaitRemaining--;
-            if (g_scriptWaitRemaining == 0) {
-                g_scriptCursor++;
-            }
-            break; /* this tick is spent on the wait either way */
-        } else if (step->type == MP6_SCRIPT_SET_PERIOD) {
-            g_scriptEvPeriod = step->waitFrames;
-            g_scriptCursor++;
-            continue; /* configuration only -- costs no tick */
-        } else if (step->type == MP6_SCRIPT_SET_TIMEOUT) {
-            g_scriptEvTimeout = step->waitFrames;
-            g_scriptCursor++;
-            continue; /* configuration only -- costs no tick */
-        } else if (step->type == MP6_SCRIPT_WAITEV || step->type == MP6_SCRIPT_PRESSUNTIL) {
-            /* The event-bound steps -- the whole point of this engine (see
-             * the spec comment). Both share one condition evaluator; the
-             * only difference is that PRESSUNTIL also emits its button on
-             * entry and then once per `period` ticks while it waits. */
-            bool satisfied;
-            if (!g_scriptEvEntered) {
-                g_scriptEvEntered = true;
-                g_scriptEvBaseSeq = mp6_event_seq();
-                g_scriptEvElapsed = 0;
-                printf("[EVENT] script.wait=%s num=0 tick=%ld seq=%lu\n",
-                       step->evKey, mp6_tick_count, g_scriptEvBaseSeq);
-                fflush(stdout);
-                if (step->type == MP6_SCRIPT_PRESSUNTIL) {
-                    pressedThisTick |= step->button; /* first attempt lands immediately */
-                }
-            }
-            if (step->evVal[0] != '\0') {
-                /* Value form asserts a STATE: satisfied the moment the key
-                 * holds that value, even if it got there before this step
-                 * (a route that says "be in overlay X" is already right if
-                 * it is already in overlay X). */
-                satisfied = mp6_event_matches(step->evKey, step->evVal) != 0;
-            } else {
-                /* Bare form asserts an EDGE: only a fire strictly after
-                 * this step began counts. */
-                satisfied = mp6_event_last_seq(step->evKey) > g_scriptEvBaseSeq;
-            }
-            if (satisfied) {
-                printf("[EVENT] script.satisfied=%s num=%u tick=%ld seq=%lu\n",
-                       step->evKey, (unsigned)g_scriptEvElapsed, mp6_tick_count, mp6_event_seq());
-                fflush(stdout);
-                g_scriptEvEntered = false;
-                g_scriptCursor++;
-                break; /* the satisfying tick is spent; next step starts next tick */
-            }
-            g_scriptEvElapsed++;
-            if (step->type == MP6_SCRIPT_PRESSUNTIL &&
-                g_scriptEvPeriod != 0 && (g_scriptEvElapsed % g_scriptEvPeriod) == 0) {
-                pressedThisTick |= step->button;
-            }
-            if (g_scriptEvElapsed >= g_scriptEvTimeout) {
-                /* Deliberately non-fatal: the run must still terminate and
-                 * the log must name the exact event it never saw. */
-                printf("[EVENT] script.timeout=%s num=%u tick=%ld seq=%lu\n",
-                       step->evKey, (unsigned)g_scriptEvElapsed, mp6_tick_count, mp6_event_seq());
-                fflush(stdout);
-                g_scriptEvEntered = false;
-                g_scriptCursor++;
-            }
-            break; /* this tick is spent waiting either way */
-        } else if (step->type == MP6_SCRIPT_STICK) {
-            g_scriptTickStickX = step->stickX; /* last stick step this tick wins */
-            g_scriptTickStickY = step->stickY;
-            g_scriptCursor++;
-            /* keep looping: consume any further zero-gap steps too */
+    if (sdlEvent->key.scancode == SDL_SCANCODE_GRAVE ||
+        sdlEvent->key.scancode == SDL_SCANCODE_F9) {
+        if ((sdlEvent->key.mod & SDL_KMOD_SHIFT) != 0) {
+            mp6_console_toggle_log();
         } else {
-            pressedThisTick |= step->button;
-            g_scriptCursor++;
-            /* keep looping: consume any further zero-gap press steps too */
+            mp6_console_toggle();
         }
     }
-    if (g_scriptActive && g_scriptCursor >= g_scriptStepCount) {
-        g_scriptActive = false;
-        printf("[TEST] input-script: complete\n");
-        fflush(stdout);
-    }
-    return pressedThisTick;
 }
+
+/* ---------------------------------------------------------------------
+ * 6. Deterministic input-script bridge (test tooling) -- MOVED.
+ *
+ * The engine (spec syntax, parser, per-tick state machine and the
+ * event-bound waitev/pressuntil steps) now lives in
+ * platform/os/input_script.c, which is in PLATFORM_SOURCES_COMMON so the
+ * --headless build gets it too. Read that file's header comment for the
+ * full design and for why the move was necessary: nothing in the engine was
+ * ever windowed -- it reads this process's tick counter and the in-process
+ * event bus and returns PAD bits -- yet living here made `--input-script` an
+ * Aurora-only feature, which forced every board-reaching drive through the
+ * shared GPU lock at ~6 minutes a run.
+ *
+ * What stayed here is the only genuinely Aurora-side part: OR-merging this
+ * tick's scripted buttons and analog tilt into the same virtual PADStatus
+ * (PADSetVirtualStatus) that the keyboard bridge above feeds. See
+ * mp6_pump_keyboard_to_pad() below.
+ * --------------------------------------------------------------------- */
 
 static void mp6_pump_keyboard_to_pad(void)
 {
@@ -1268,6 +973,26 @@ static void mp6_pump_keyboard_to_pad(void)
     PADStatus status;
     size_t i;
     memset(&status, 0, sizeof(status));
+
+    /* THE DEV CONSOLE OWNS THE KEYBOARD WHILE IT IS OPEN.
+     *
+     * This function polls SDL_GetKeyboardState directly and consults neither
+     * ImGui's io.WantCaptureKeyboard nor RmlUi focus -- it never had to,
+     * because PADBlockInput() shuts the pad off downstream whenever a launcher
+     * document is visible. That is a downstream guard on a different signal,
+     * and relying on it for a TEXT FIELD is how "typing stat fps also presses
+     * the buttons s, t, a, f and p" happens. So the console gets its own guard
+     * here, at the source: no state poll, and the sticky down-edge latch is
+     * dropped rather than deferred to the next tick.
+     *
+     * mp6_input_script_advance() below stays UNCONDITIONAL. The scripted-input
+     * path is the automation path, the console is unavailable in automation by
+     * construction, and gating it here would silently freeze every gate that
+     * drives the game with --input-script. */
+    if (mp6_console_captures_input()) {
+        keys = NULL;
+        g_padKeyLatch = 0;
+    }
 
     if (keys) {
         for (i = 0; i < MP6_KEYBIND_COUNT; i++) {
@@ -1279,9 +1004,13 @@ static void mp6_pump_keyboard_to_pad(void)
     status.button |= g_padKeyLatch;
     g_padKeyLatch = 0;
     status.button |= mp6_input_script_advance();
-    if (g_scriptTickStickX != 0 || g_scriptTickStickY != 0) { /* stick:X step */
-        status.stickX = g_scriptTickStickX;
-        status.stickY = g_scriptTickStickY;
+    {   /* stick:X step -- the analog half of the same one advance above */
+        s8 scriptStickX = 0, scriptStickY = 0;
+        mp6_input_script_stick_get(&scriptStickX, &scriptStickY);
+        if (scriptStickX != 0 || scriptStickY != 0) {
+            status.stickX = scriptStickX;
+            status.stickY = scriptStickY;
+        }
     }
 #ifdef __ANDROID__
     {
@@ -1398,6 +1127,19 @@ static void mp6_clean_shutdown_exit(const char *reason)
     }
     printf("[BOOT] %s -- shutting down Aurora, exiting 0\n", reason);
     fflush(stdout);
+    { /* Persist the window's last position (video.window_x/_y) exactly ONCE
+       * per session, here -- never per SDL_EVENT_WINDOW_MOVED, which would
+       * rewrite the config file on every pixel of a drag. Launcher-mode-gated
+       * inside the launcher accessor, so automation can never write a config.
+       * Deliberately AFTER the savestate `_exit` branch above: a restored
+       * process's window state is not this session's own. */
+        extern int mp6_display_window_pos_get(int *x, int *y);
+        extern void mp6_launcher_note_window_position(int x, int y);
+        int wx = 0, wy = 0;
+        if (mp6_display_window_pos_get(&wx, &wy)) {
+            mp6_launcher_note_window_position(wx, wy);
+        }
+    }
     { /* Tear the RmlUi document stacks down while the context is still
        * alive -- left to CRT static destructors they run AFTER
        * aurora_shutdown() has freed the context, an observed teardown UAF
@@ -1538,6 +1280,59 @@ static int64_t g_tickLateMaxNs = 0;
 static int64_t g_tickLateSumNs = 0;
 static long    g_tickLateSamples = 0;
 
+/* Idle-budget stats: how much of each tick's period was still unspent when the
+ * tick's own work handed control back to the throttle. This is the quantity
+ * that decides whether an Unlocked-FPS idle window EXISTS -- the replay path is
+ * offered the window only while this exceeds MP6_TICK_SPIN_WINDOW_MS -- so a
+ * present rate pinned at the tick rate is attributable here before any
+ * replay-side reason is consulted. Reset every log window, like the lateness
+ * stats above. */
+static int64_t g_tickSlackMaxNs = 0;
+static int64_t g_tickSlackMinNs = 0;
+static int64_t g_tickSlackSumNs = 0;
+static long    g_tickSlackSamples = 0;
+static long    g_tickSlackStarved = 0; /* ticks with no idle window at all */
+
+/* Where a tick's non-idle time actually goes, so a starved idle window can
+ * name its consumers instead of being blamed on "the scene is heavy":
+ *   game     -- everything outside VIWaitForRetrace: decomp game logic plus
+ *               the GX command emission it performs
+ *   endframe -- the present block: overlay composite plus aurora_end_frame(),
+ *               i.e. aurora's own FIFO process + GPU submit
+ *   seal     -- mp6_fi_note_frame_end(): the retained-stream walk and pairing.
+ *               PORT-SIDE cost that exists only because the feature is on, so
+ *               it is the one bucket a fix here may legitimately attack.
+ *   vipost   -- the rest of VIWaitForRetrace after the throttle returns
+ * Sampled only while MP6_TICK_RATE_LOG is on (four QPC reads/tick otherwise
+ * skipped); reset every log window with the stats above. */
+static int64_t g_phGameNs, g_phEndFrameNs, g_phSealNs, g_phViPostNs;
+static long    g_phSamples = 0;
+static int64_t g_phLastReturnNs = 0; /* when the previous VIWaitForRetrace returned */
+
+/* The overlay composite's own sub-bracket, carved OUT of the endframe bucket
+ * above rather than added beside it.
+ *
+ * mp6_launcher_frame_overlay() runs inside the endframe block, and the dev
+ * console's whole panel refresh happens inside that call -- so without this
+ * split the console's `stat unit` page would report its own cost as "GX
+ * submit" and an instrument would be measuring itself. The measured precedent
+ * for how badly that goes is in this tree: shim/include/mp6_frame_dump.h
+ * records a full-screen readback costing ~9.8ms/frame and consuming the entire
+ * tick idle window, so every captured frame came back replay=0 -- the
+ * instrument destroyed the population it was observing.
+ *
+ * g_phEndFrameNs keeps its existing meaning (the WHOLE present block) so the
+ * [MP6-TICKRATE] line is unchanged; the console subtracts this bucket from it
+ * and reports the remainder as submit and this as its own excluded row. */
+static int64_t g_phOverlayNs;
+
+/* This tick's raw lateness and idle slack, kept alongside the window SUMS
+ * above. The sums are what [MP6-TICKRATE] averages; the console needs the
+ * per-tick values, because a percentile cannot be recovered from a mean. Two
+ * stores per tick, unconditional. */
+static int64_t g_tickLastLateNs = 0;
+static int64_t g_tickLastSlackNs = 0;
+
 static int mp6_tick_clock_now(int64_t *out)
 {
     uint64_t now = mp6_host_monotonic_ns();
@@ -1563,6 +1358,7 @@ static void mp6_tick_throttle_overflow(void)
 static void mp6_tick_throttle_wait(void)
 {
     int64_t now;
+    int fiDeclined;
     if (g_tickHz < 0.0) {
         mp6_tick_throttle_init();
     }
@@ -1597,6 +1393,36 @@ static void mp6_tick_throttle_wait(void)
         }
         return; /* already past even the NEW deadline's start point -- run now */
     }
+    {
+        /* `now` was sampled on entry and g_tickNextDeadline is this tick's
+         * deadline, so their difference IS this tick's leftover budget. */
+        int64_t slack = g_tickNextDeadline - now;
+        if (slack < 0) slack = 0;
+        g_tickLastSlackNs = slack; /* per-tick, for the console's percentiles */
+        if (g_tickSlackSamples == 0 || slack < g_tickSlackMinNs) g_tickSlackMinNs = slack;
+        if (slack > g_tickSlackMaxNs) g_tickSlackMaxNs = slack;
+        if (slack > INT64_MAX - g_tickSlackSumNs) g_tickSlackSumNs = INT64_MAX;
+        else g_tickSlackSumNs += slack;
+        g_tickSlackSamples++;
+        if ((double)slack / 1000000.0 <= MP6_TICK_SPIN_WINDOW_MS) g_tickSlackStarved++;
+    }
+    /* One idle window, one replay verdict per decline.
+     *
+     * The sleep below truncates to whole milliseconds, so whenever the window
+     * ends in the 2..3ms band the loop degenerates into mp6_host_sleep_ns(0)
+     * yields -- and it used to re-offer the window to mp6_fi_idle_present on
+     * every one of them. Measured on the w01 board: 500-1000 calls per tick.
+     * That is not merely wasted work. Each declined call runs
+     * fi_budget_decay(), which shrinks the measured replay-cost estimate by
+     * an eighth, so several hundred declines annihilate it inside a single
+     * tick; admission then alternates between "budget 0, admit anything" and
+     * "budget 5ms, refuse everything" instead of tracking the real cost.
+     *
+     * A decline is final for this window by construction: slack only shrinks
+     * as the deadline approaches, so a replay that does not fit now cannot fit
+     * later in the same window. (A SUCCESSFUL replay still re-offers the
+     * window -- that is how a light scene fits its eight.) */
+    fiDeclined = 0;
     for (;;) {
         int64_t remain;
         if (!mp6_tick_clock_now(&now)) {
@@ -1619,8 +1445,11 @@ static void mp6_tick_throttle_wait(void)
                  * Declines (feature off, snapshots not ready, or insufficient
                  * time/resources) fall through to the ordinary sleep below;
                  * the sub-2ms spin tail never attempts a present. */
-                if (mp6_fi_idle_present(g_tickNextDeadline, g_tickPeriodNs)) {
-                    continue;
+                if (!fiDeclined) {
+                    if (mp6_fi_idle_present(g_tickNextDeadline, g_tickPeriodNs)) {
+                        continue;
+                    }
+                    fiDeclined = 1; /* final for this window -- see above */
                 }
                 uint32_t sleepMs = (uint32_t)(remainMs - MP6_TICK_SPIN_WINDOW_MS);
                 if (sleepMs > 0) {
@@ -1647,6 +1476,7 @@ static void mp6_tick_throttle_wait(void)
          * few-hundred-ns spin-exit granularity -- both count as "on time".) */
         int64_t late = now - g_tickNextDeadline;
         if (late < 0) late = 0;
+        g_tickLastLateNs = late; /* per-tick, for the console's percentiles */
         if (late > g_tickLateMaxNs) g_tickLateMaxNs = late;
         if (late > INT64_MAX - g_tickLateSumNs) g_tickLateSumNs = INT64_MAX;
         else g_tickLateSumNs += late;
@@ -1670,6 +1500,850 @@ void mp6_present_counters_add(long begins, long ends)
 {
     g_mp6BeginFrames += begins;
     g_mp6EndFrames += ends;
+    /* The dev console's present sampler rides the SAME funnel, so it sees every
+     * present the user actually sees -- the real frame end (0,1), the real
+     * frame begin (1,0) and every interpolated present frame_interp.c pushes
+     * (1,1) -- with no second interception and no new call site to keep in
+     * sync. It returns before reading a clock while the console is closed. */
+    mp6_console_note_present(begins, ends);
+}
+
+/* Read-only accessor for the same two counters (the console's fps panel cross-
+ * checks its measured rate against them; they are the Unlocked-FPS off-proof's
+ * own quantities). */
+void mp6_present_counters_get(long *begins, long *ends)
+{
+    if (begins != NULL) *begins = g_mp6BeginFrames;
+    if (ends != NULL) *ends = g_mp6EndFrames;
+}
+
+/* The clock every stat-unit number is relative to. */
+void mp6_tick_config_get(double *hz, long long *periodNs)
+{
+    if (hz != NULL) *hz = (g_tickHz > 0.0) ? g_tickHz : 0.0;
+    if (periodNs != NULL) *periodNs = (long long)g_tickPeriodNs;
+}
+
+/* The stat-unit HUD's RenderRes row. The window size is the real backing
+ * pixel size (the same SDL query mp6_widescreen_render_width() uses); the
+ * render size is that times the session's SSAA factor, which is what aurora
+ * actually allocates the content framebuffer at (aurora-patches/0018, applied
+ * at aurora_initialize and restart-pending, so reading it here is exact rather
+ * than a live guess). Both zeroed when the window is not readable yet -- the
+ * HUD then omits the row rather than printing a made-up percentage. */
+void mp6_render_res_get(int *winW, int *winH, int *renderW, int *renderH)
+{
+    /* Section 6's aspect window, declared there and used here -- the same
+     * handle mp6_widescreen_render_width() queries, so the two can never
+     * disagree about which window "the window" is. */
+    extern SDL_Window *mp6_aspect_window(void);
+    SDL_Window *win = mp6_aspect_window();
+    int w = 0, h = 0;
+    float ssaa;
+    extern float mp6_launcher_cfg_ssaa(void);
+    if (win == NULL || !SDL_GetWindowSizeInPixels(win, &w, &h) ||
+        w <= 0 || h <= 0) {
+        w = 0;
+        h = 0;
+    }
+    ssaa = mp6_launcher_cfg_ssaa();
+    if (!(ssaa > 0.0f)) ssaa = 1.0f;
+    if (winW != NULL) *winW = w;
+    if (winH != NULL) *winH = h;
+    if (renderW != NULL) *renderW = (int)((float)w * ssaa + 0.5f);
+    if (renderH != NULL) *renderH = (int)((float)h * ssaa + 0.5f);
+}
+
+/* =======================================================================
+ * 2b. The host OUTPUT the window is on, and the present sync that paces it.
+ *     (shim/include/mp6_display.h holds the seam's contract; this is its
+ *     one implementation.)
+ *
+ * WHY THESE FOUR THINGS ARE ONE MODULE. They are all the same fact seen from
+ * different sides: with present sync ON, the present cadence equals the
+ * refresh rate of whichever output the window sits on. So "what does the FPS
+ * badge mean", "which output should the window open on", "the window moved to
+ * another output" and "present sync just changed" cannot be answered
+ * independently -- each one changes the answer to the others, and each one
+ * invalidates the same cached display query.
+ *
+ * WHY THE STATE LIVES IN THIS TU. Every static below is live host state: an
+ * SDL display id, a desktop position, a monotonic cache stamp, the live
+ * present-sync flag. This TU is already inside the savestate carve-out (the
+ * `#include "mp6_host_section.h"` at preprocessor depth 0 near the top, plus
+ * a HOST_STATE_SECTION_SOURCES entry in tools/build.py), so these statics are
+ * excluded from capture and restore by construction. A new TU would have
+ * needed both halves of that arrangement, and the build-time check exists
+ * precisely because the include once sat inside an `#ifdef _WIN32` and
+ * silently compiled UNCARVED on the only platform savestates run on.
+ *
+ * WHY NOTHING HERE PATCHES AURORA. `external_refs/repos/aurora` is a SINGLE
+ * shared checkout for every worktree, and `setup/lib/step_aurora.py`'s
+ * build_fingerprint() hashes the calling lane's own aurora-patches/* bytes
+ * against a stamp stored INSIDE that shared checkout -- so adding a patch
+ * here would fail the next link in every other lane. Hence: the present mode
+ * is scraped from a log line aurora already prints, and the forced surface
+ * reconfigure is reached through aurora_enable_vsync(), which already exists,
+ * is already exported, and already pushes the RefreshSurface event that leads
+ * to resize_swapchain_internal(..., force=true).
+ * ======================================================================= */
+
+/* aurora's exported present-sync entry point (external_refs/repos/aurora/
+ * include/aurora/gfx.h:34, impl lib/webgpu/gpu.cpp:1331). Declared locally
+ * with the same C-linkage-seam discipline platform/gx/console/console_stats.c
+ * uses for aurora_get_stats/aurora_get_fps: this TU compiles against aurora's
+ * include path but the gfx header's C half spells the parameter `bool`
+ * without including <stdbool.h>, so it cannot be included from a C TU. `_Bool`
+ * is the identical one-byte type the C++ side compiled, so the ABI matches
+ * exactly -- an `int` here would be a 4-byte-for-1-byte mismatch that happens
+ * to work on this ABI and would be a real bug on another. */
+extern void aurora_enable_vsync(_Bool enabled);
+
+/* Live present sync. aurora tracks NO queryable vsync state -- gpu.cpp:1331
+ * writes g_graphicsConfig.surfaceConfiguration.presentMode and nothing else --
+ * so this side must own it. Seeded from what aurora was actually initialized
+ * with (config + MP6_VSYNC resolved by main_native.c), never guessed. */
+static int s_dispVsyncOn = 1;
+/* What the session actually BOOTED with. Not readable from the config: in
+ * automation MP6_VSYNC overrides it, and main_native.c is the only place that
+ * has resolved config-vs-env by the time aurora is initialized. Kept so the
+ * `vsync` console command can say what changed since launch. */
+static int s_dispVsyncBoot = 1;
+
+/* The exact wgpu present mode aurora logged at startup, and whether the label
+ * is still that exact value. After a runtime toggle only the CLASS is known:
+ * best_present_mode() (gpu.cpp:272-295) picks FifoRelaxed-or-Fifo for on and
+ * Mailbox-or-Immediate-or-Fifo for off, from surface capabilities this side
+ * cannot see. */
+static char s_dispPresentMode[24] = "";
+static int  s_dispPresentModeExact = 0;
+
+/* Cross-output follow state. s_dispLastDisplay is the SDL display id the
+ * window was last SEEN on; it is mutated in exactly two places -- the launch
+ * SEED and the one crossing action -- which is what makes the reconfigure
+ * edge-triggered by construction rather than by a per-frame comparison.
+ *
+ * THE SEED IS NOT A FORMALITY. Measured: on this machine SDL emits no
+ * SDL_EVENT_WINDOW_DISPLAY_CHANGED at window creation, so with the latch
+ * starting empty the FIRST genuine crossing was consumed as the initial latch
+ * and did nothing -- only the second one acted (build/verify/r34.out:12117
+ * logged the drag BACK as "#1"). Seeding from SDL_GetDisplayForWindow at init
+ * makes the first crossing a real edge. */
+static SDL_DisplayID s_dispLastDisplay = 0;
+static int  s_dispHaveLastDisplay = 0;
+static long s_dispFollowCount = 0;
+
+/* The second half of the crossing's present-mode FLIP, owed to the next event
+ * drain. See mp6_display_follow_crossing() for why one Configure is not
+ * enough and why the pair cannot be issued back to back. */
+static int s_dispPendingRestore = 0;
+
+/* The launch position mp6_display_resolve_launch_pos() decided, kept so it can
+ * be RE-APPLIED after aurora has created the window.
+ *
+ * WHY IT HAS TO BE RE-APPLIED. aurora's create_window() treats any negative
+ * coordinate as "unset" -- lib/window.cpp:314-318 maps `posX < 0 || posY < 0`
+ * to SDL_WINDOWPOS_UNDEFINED -- and on a desktop whose highest-refresh output
+ * is arranged to the LEFT of the primary, every position on that output has a
+ * negative x. So the resolver's answer was silently discarded at exactly the
+ * output it exists to reach: measured 100% failure on the 240 Hz panel
+ * (build/verify/r2a.out, r2b.out) against a working positive-coordinate
+ * control (r2c.out). The checkout is shared with every other lane and must
+ * stay byte-unchanged, so the fix is port-side: let aurora place the window
+ * wherever it likes and move it afterwards with SDL_SetWindowPosition, which
+ * has no such sentinel. config.windowPosX/Y still carries the value too, so a
+ * positive answer is honored at creation and the move below is then a no-op. */
+static int s_dispLaunchX = 0, s_dispLaunchY = 0;
+static int s_dispHaveLaunchPos = 0;
+
+/* Last window position seen, for video.window_x/_y persistence. Updated from
+ * SDL_EVENT_WINDOW_MOVED and flushed to the config exactly once, at clean
+ * shutdown -- never a per-move file write. */
+static int s_dispWinX = -1, s_dispWinY = -1;
+static int s_dispHaveWinPos = 0;
+
+/* Memoized answer to "is this the highest-refresh attached output", which is
+ * the only part of the info query that walks every display. The badge asks
+ * twice per second; the stamp keeps that from becoming a per-present walk,
+ * and the two events that can invalidate it (a crossing, a vsync toggle)
+ * clear it explicitly so a stale answer cannot outlive its cause. */
+static uint64_t s_dispCacheStampNs = 0;
+static int      s_dispCacheValid = 0;
+static int      s_dispCacheIsHighest = 0;
+
+static void mp6_display_cache_invalidate(void)
+{
+    s_dispCacheValid = 0;
+    s_dispCacheStampNs = 0;
+}
+
+/* The exact rate in thousandths of a Hz. SDL3 gives a rational pair alongside
+ * the float, and it is the pair that is authoritative: a 240 Hz panel reports
+ * 240/1 exactly there while Win32_VideoController rounds the same panel to
+ * 239, and a nominal "75 Hz" virtual display can genuinely be 74.973. Falls
+ * back to the float only when the denominator is zero (SDL's own
+ * "unspecified" encoding). */
+static int mp6_display_milli_hz(const SDL_DisplayMode *mode)
+{
+    if (mode == NULL) return 0;
+    if (mode->refresh_rate_denominator > 0 && mode->refresh_rate_numerator > 0) {
+        double exact = (double)mode->refresh_rate_numerator /
+                       (double)mode->refresh_rate_denominator;
+        return (int)(exact * 1000.0 + 0.5);
+    }
+    if (mode->refresh_rate > 0.0f) {
+        return (int)((double)mode->refresh_rate * 1000.0 + 0.5);
+    }
+    return 0;
+}
+
+int mp6_display_info_get(Mp6DisplayInfo *out)
+{
+    extern SDL_Window *mp6_aspect_window(void);
+    SDL_Window *win;
+    SDL_DisplayID id;
+    const SDL_DisplayMode *mode;
+    const char *name;
+    Mp6DisplayInfo info;
+    int milli;
+
+    if (out == NULL) return 0;
+    win = mp6_aspect_window();
+    if (win == NULL) return 0;
+    id = SDL_GetDisplayForWindow(win);
+    if (id == 0) return 0;
+    mode = SDL_GetCurrentDisplayMode(id);
+    if (mode == NULL) return 0;
+    milli = mp6_display_milli_hz(mode);
+    if (milli <= 0) return 0;
+
+    memset(&info, 0, sizeof(info));
+    info.valid = 1;
+    name = SDL_GetDisplayName(id);
+    snprintf(info.name, sizeof(info.name), "%s", (name != NULL) ? name : "display");
+    info.w = mode->w;
+    info.h = mode->h;
+    info.refreshMilliHz = milli;
+    info.refreshHz = (milli + 500) / 1000;
+    info.vsyncOn = s_dispVsyncOn ? 1 : 0;
+
+    /* isHighestRefresh: one bounded walk of the attached outputs, memoized
+     * for 500 ms. Deliberately a >-comparison against this display's own
+     * exact rate, so an identical-rate second monitor does NOT flag the
+     * window as being on a slower output. */
+    {
+        uint64_t now = mp6_host_monotonic_ns();
+        if (!s_dispCacheValid || now < s_dispCacheStampNs ||
+            now - s_dispCacheStampNs >= 500000000ull) {
+            int count = 0;
+            SDL_DisplayID *ids = SDL_GetDisplays(&count);
+            int highest = 1;
+            if (ids != NULL) {
+                int i;
+                for (i = 0; i < count; ++i) {
+                    const SDL_DisplayMode *m = SDL_GetCurrentDisplayMode(ids[i]);
+                    if (mp6_display_milli_hz(m) > milli) {
+                        highest = 0;
+                        break;
+                    }
+                }
+                SDL_free(ids);
+            }
+            s_dispCacheIsHighest = highest;
+            s_dispCacheValid = 1;
+            s_dispCacheStampNs = now;
+        }
+        info.isHighestRefresh = s_dispCacheIsHighest;
+    }
+
+    /* The present-mode label. Exact while it is still aurora's own logged
+     * value; the requested class once a runtime toggle has moved it. */
+    if (s_dispPresentModeExact && s_dispPresentMode[0] != '\0') {
+        snprintf(info.presentMode, sizeof(info.presentMode), "%s", s_dispPresentMode);
+        info.presentModeExact = 1;
+    } else {
+        snprintf(info.presentMode, sizeof(info.presentMode), "%s",
+                 s_dispVsyncOn ? "FIFO" : "IMMEDIATE");
+        info.presentModeExact = 0;
+    }
+
+    *out = info;
+    return 1;
+}
+
+int mp6_display_vsync_enabled(void)
+{
+    return s_dispVsyncOn ? 1 : 0;
+}
+
+long mp6_display_follow_count(void)
+{
+    return s_dispFollowCount;
+}
+
+void mp6_display_note_init_present_mode(const char *token)
+{
+    size_t i = 0;
+    char buf[24];
+    if (token == NULL) return;
+    /* Bounded, alphanumeric-only copy, upper-cased. aurora formats the wgpu
+     * enum name with {fmt} (gpu.cpp:1191), so the token is a bare identifier
+     * ("Fifo", "FifoRelaxed", "Mailbox", "Immediate") -- anything else means
+     * the line was not what this expects and the label stays a class. */
+    while (token[i] != '\0' && i + 1u < sizeof(buf)) {
+        char c = token[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9'))) {
+            break;
+        }
+        buf[i] = (char)((c >= 'a' && c <= 'z') ? (c - 'a' + 'A') : c);
+        ++i;
+    }
+    buf[i] = '\0';
+    if (i == 0) return;
+    snprintf(s_dispPresentMode, sizeof(s_dispPresentMode), "%s", buf);
+    s_dispPresentModeExact = 1;
+    mp6_display_cache_invalidate();
+}
+
+/* WHY A LIVE presentMode CHANGE CANNOT LAND MID-FRAME. aurora_enable_vsync()
+ * assigns the mode and then push_custom_event(RefreshSurface) -- it does not
+ * reconfigure anything itself. The reconfigure runs inside
+ * window::process_event's RefreshSurface arm (aurora/lib/window.cpp:209-214)
+ * when that event is DEQUEUED. This port has exactly two dequeue sites, and
+ * both sit outside an open frame:
+ *   - the game loop's mp6_dispatch_aurora_events(aurora_update()) below, which
+ *     runs with g_frameOpen == false (the previous frame closed it; the next
+ *     aurora_begin_frame has not run);
+ *   - the pre-boot launcher menu's own walk (launcher_core.cpp), which runs
+ *     before its aurora_begin_frame().
+ * frame_interp.c's replay path only SDL_PumpEvents() and never dequeues, so an
+ * interpolated present cannot trigger it either. The cost is one tick of
+ * latency; the benefit is that gfx::gpu_synchronize()'s render-worker drain
+ * can never intersect an open frame. */
+void mp6_display_set_vsync(int on)
+{
+    const int want = on ? 1 : 0;
+    if (want == s_dispVsyncOn) return; /* re-selecting the current value is free */
+    s_dispVsyncOn = want;
+    /* The label can no longer claim aurora's logged mode: on -> FifoRelaxed
+     * or Fifo, off -> Mailbox or Immediate or Fifo, chosen from surface
+     * capabilities this side cannot read (gpu.cpp:272-295). */
+    s_dispPresentModeExact = 0;
+    mp6_display_cache_invalidate();
+    aurora_enable_vsync(want ? (_Bool)1 : (_Bool)0);
+    printf("[MP6-DISPLAY] present sync %s -- requesting %s (surface reconfigures "
+           "on the next event drain, between frames)\n",
+           want ? "ON" : "OFF", want ? "FIFO" : "IMMEDIATE");
+    fflush(stdout);
+}
+
+/* THE LAUNCH SEED -- the first of the latch's two writers. Priming it with the
+ * output the window actually came up on is what makes the FIRST genuine
+ * crossing an edge; see the latch's own comment for the measurement that
+ * proved the unseeded latch swallowed it. */
+static void mp6_display_seed_latch_to(SDL_DisplayID id)
+{
+    if (id == 0) return;
+    s_dispLastDisplay = id;
+    s_dispHaveLastDisplay = 1;
+    mp6_display_cache_invalidate();
+}
+
+/* THE SWAPCHAIN-FOLLOW ACTION -- the one place a crossing is acted on, and the
+ * one place besides the launch seed that writes the latch.
+ *
+ * WHY A CROSSING NEEDS ANY ACTION. A monitor drag changes no pixel dimension,
+ * so aurora's resize_swapchain_internal() takes its
+ * `if (!force && !sizeChanged) return;` early-out (gpu.cpp:1269-1274) and the
+ * DXGI surface keeps its ORIGINAL output association: presents stay pinned at
+ * the old display's refresh indefinitely.
+ *
+ * WHY ONE FORCED Configure IS NOT ENOUGH, MEASURED. The first attempt called
+ * aurora_enable_vsync() with the CURRENT state, reasoning that the only effect
+ * would be refresh_surface(false) -> resize_swapchain_internal(force=true) ->
+ * g_surface.Configure(). It reached that path and did nothing: the crossing
+ * logged, aurora even logged its own "Display scale changed to 1.25", and
+ * [MP6-PRESENTRATE] stayed at 74.8-75.2 presents/s across four consecutive 5 s
+ * windows with the window verified on the 240 Hz output (build/verify/r34.out:
+ * 13113 + r34.err). Dawn's D3D swapchain reuses the existing DXGI swapchain
+ * across a Configure whose parameters are unchanged, and the parameters
+ * include the present mode; reuse keeps the original output association.
+ *
+ * WHAT DOES WORK, ALSO MEASURED. Toggling the present mode away and back --
+ * `vsync 0` then `vsync 1` by hand at the same window position -- took the same
+ * process to 238.4-240.2 presents/s (r34.err). A different presentMode is a
+ * different swapchain configuration, so Dawn must create a real one, and the
+ * new one is created against the output the HWND is on NOW.
+ *
+ * WHY THE PAIR CANNOT BE ISSUED BACK TO BACK. aurora_enable_vsync() assigns
+ * g_graphicsConfig.surfaceConfiguration.presentMode and pushes a RefreshSurface
+ * custom event; the Configure happens when that event is DEQUEUED (window.cpp:
+ * 209-214). Two calls in a row would leave presentMode back at its original
+ * value before EITHER event was drained, so both Configures would see the
+ * unchanged configuration -- precisely the case that provably does nothing. The
+ * flip is therefore split across drains: this function requests !current, and
+ * mp6_display_pump_pending_reconfigure() restores current at the next drain
+ * boundary, one drain later. Cost: two forced reconfigures on one edge, and one
+ * or two presented frames at the other sync mode.
+ *
+ * EDGE-TRIGGERED BY CONSTRUCTION: the only callers are the DISPLAY_CHANGED
+ * observer's changed branch and the launch placement, both of which compare
+ * against the latch first. A forced reconfigure runs gfx::gpu_synchronize() --
+ * a full render-worker drain plus framebuffer recreation -- so doing it per
+ * frame would be catastrophic; doing it twice per crossing costs two drains. */
+static void mp6_display_follow_crossing(SDL_DisplayID was, SDL_DisplayID now,
+                                        const char *why)
+{
+    /* Kill switch as an ENV LEVER, not a config key: this is a bug fix, not a
+     * preference, so it must not grow a settings row that invites leaving it
+     * off. It exists only so a bisect can attribute a visual regression to the
+     * forced reconfigure. */
+    const char *followEnv = getenv("MP6_SWAPCHAIN_FOLLOW");
+    s_dispLastDisplay = now;
+    s_dispHaveLastDisplay = 1;
+    ++s_dispFollowCount;
+    mp6_display_cache_invalidate();
+    /* The label can no longer claim aurora's logged boot mode: the surface is
+     * about to be re-created against a different output, and best_present_mode()
+     * re-picks within each pair from THAT surface's capabilities
+     * (gpu.cpp:272-295), which this side cannot read. */
+    s_dispPresentModeExact = 0;
+    if (followEnv != NULL && followEnv[0] == '0') {
+        printf("[MP6-DISPLAY] swapchain follow: display %u -> %u (%s), "
+               "SUPPRESSED (MP6_SWAPCHAIN_FOLLOW=0)\n",
+               (unsigned)was, (unsigned)now, why);
+        fflush(stdout);
+        return;
+    }
+    printf("[MP6-DISPLAY] swapchain follow: display %u -> %u (%s), forcing a real "
+           "surface reconfigure via a present-mode flip (#%ld)\n",
+           (unsigned)was, (unsigned)now, why, s_dispFollowCount);
+    fflush(stdout);
+    aurora_enable_vsync(s_dispVsyncOn ? (_Bool)0 : (_Bool)1);
+    s_dispPendingRestore = 1;
+}
+
+/* The flip's second half, owed to the NEXT event drain. Called once per drain
+ * from both SDL event walks, immediately after aurora_update() has returned --
+ * i.e. after the drain in which the first half's RefreshSurface was processed,
+ * so the restore is a genuinely different configuration and forces a second
+ * real swapchain creation.
+ *
+ * NOT a per-frame reconfigure: the flag is set in exactly one place (the
+ * crossing action) and cleared here, so on every frame of a session with no
+ * crossing this function is one integer compare and a return. */
+void mp6_display_pump_pending_reconfigure(void)
+{
+    if (!s_dispPendingRestore) return;
+    s_dispPendingRestore = 0;
+    aurora_enable_vsync(s_dispVsyncOn ? (_Bool)1 : (_Bool)0);
+    printf("[MP6-DISPLAY] swapchain follow: restoring present sync %s -- second "
+           "Configure of flip #%ld (the one that re-associates the output)\n",
+           s_dispVsyncOn ? "ON" : "OFF", s_dispFollowCount);
+    fflush(stdout);
+}
+
+/* Observes the two window events this module cares about and nothing else.
+ * SDL-typed, so it is declared at its call sites rather than in
+ * shim/include/mp6_display.h (which console_stats.c includes in the headless
+ * build too) -- the same local-extern idiom mp6_launcher_forward_sdl_event
+ * already uses one function below. */
+void mp6_display_note_sdl_event(const SDL_Event *ev)
+{
+    if (ev == NULL) return;
+
+    if (ev->type == SDL_EVENT_WINDOW_MOVED) {
+        s_dispWinX = ev->window.data1;
+        s_dispWinY = ev->window.data2;
+        s_dispHaveWinPos = 1;
+        return;
+    }
+
+    if (ev->type != SDL_EVENT_WINDOW_DISPLAY_CHANGED) return;
+
+    {
+        const SDL_DisplayID now = (SDL_DisplayID)ev->window.data1;
+        if (now == 0) return;
+        /* The latch is seeded at init from the window's own launch output, so
+         * an unseeded latch here means SDL answered nothing at init -- treat
+         * this event as the seed rather than as an edge, exactly as before. */
+        if (!s_dispHaveLastDisplay) {
+            mp6_display_seed_latch_to(now);
+            return;
+        }
+        if (now == s_dispLastDisplay) return;
+        mp6_display_follow_crossing(s_dispLastDisplay, now, "window moved");
+    }
+}
+
+/* The last window position seen this session, for the config flush at clean
+ * shutdown. Returns 0 when no move was ever observed, so a window that never
+ * moved does not overwrite a saved position with its launch value. */
+int mp6_display_window_pos_get(int *outX, int *outY)
+{
+    if (!s_dispHaveWinPos) return 0;
+    if (outX != NULL) *outX = s_dispWinX;
+    if (outY != NULL) *outY = s_dispWinY;
+    return 1;
+}
+
+/* --- the `vsync` console command ---------------------------------------
+ * Registered from THIS TU, not from console_core.c's console_register_builtins:
+ * console_core.c is in PLATFORM_SOURCES_COMMON and links in the --headless
+ * build, where aurora_enable_vsync does not exist at all. Registering it here
+ * keeps the headless link free of any aurora reference by construction rather
+ * than by an #ifdef in a both-mode file.
+ *
+ * A command, not a cvar: console_core.c's kCvars model is for integers a
+ * consumer POLLS, whereas this is a one-shot apply with a side effect. Keeping
+ * the two models distinct is why `toggles` does not and must not list it. */
+static void mp6_display_cmd_vsync(int argc, const char *const *argv)
+{
+    Mp6DisplayInfo info;
+    if (argc >= 2 && argv[1] != NULL &&
+        (argv[1][0] == '0' || argv[1][0] == '1') && argv[1][1] == '\0') {
+        mp6_display_set_vsync(argv[1][0] == '1');
+    } else if (argc >= 2) {
+        mp6_console_log("vsync: expected 0 or 1 (no argument reports the live state)");
+        return;
+    }
+    mp6_console_log("present sync: %s  (booted %s)", s_dispVsyncOn ? "ON" : "OFF",
+                    s_dispVsyncBoot ? "ON" : "OFF");
+    mp6_console_log("boot present mode: %s%s",
+                    (s_dispPresentMode[0] != '\0') ? s_dispPresentMode : "(not logged)",
+                    s_dispPresentModeExact ? "  (exact, from aurora's own log)"
+                                           : "  (superseded by a runtime toggle)");
+    if (mp6_display_info_get(&info)) {
+        mp6_console_log("output: %s %dx%d @ %.3f Hz%s", info.name, info.w, info.h,
+                        (double)info.refreshMilliHz / 1000.0,
+                        info.isHighestRefresh ? "" : "  (NOT the highest-refresh output)");
+        mp6_console_log("present mode now: %s%s", info.presentMode,
+                        info.presentModeExact ? "" : "  (requested class)");
+    }
+    mp6_console_log("swapchain follows: %ld cross-output reconfigure(s) this session",
+                    s_dispFollowCount);
+}
+
+void mp6_display_init(int vsyncOn)
+{
+    extern SDL_Window *mp6_aspect_window(void);
+    SDL_Window *win;
+    s_dispVsyncOn = vsyncOn ? 1 : 0;
+    s_dispVsyncBoot = s_dispVsyncOn;
+    mp6_display_cache_invalidate();
+    /* SEED THE CROSS-OUTPUT LATCH from the output the window actually came up
+     * on. Requires a real SDL_Window, which is why main_native.c calls this
+     * AFTER mp6_bridge_window_policy_init() (the earliest point the handle is
+     * stashed) rather than immediately after aurora_initialize(). A NULL handle
+     * degrades to the old behaviour: the first DISPLAY_CHANGED event seeds
+     * instead, and is not treated as an edge. */
+    win = mp6_aspect_window();
+    if (win != NULL) mp6_display_seed_latch_to(SDL_GetDisplayForWindow(win));
+    mp6_console_register("vsync",
+                         "vsync [0|1] -- present sync; no argument reports the live state",
+                         mp6_display_cmd_vsync);
+}
+
+/* R2's SECOND HALF: put the window where the resolver decided, now that a real
+ * SDL_Window exists. See s_dispLaunchX's comment for why aurora's own config
+ * channel cannot carry a negative coordinate, and therefore cannot reach the
+ * output this whole feature exists for.
+ *
+ * A no-op unless it has something to do: no resolved position (automation, or
+ * `video.display: "primary"`), no window, or the window is already exactly
+ * there because the coordinates were positive and aurora honored them.
+ *
+ * THE MOVE IS A CROSSING and is handled as one. aurora created and SHOWED the
+ * window on the OS default output and configured the surface against it, so
+ * moving to a different output leaves the swapchain pinned to the old one --
+ * the same defect a user's drag hits. The latch was seeded by
+ * mp6_display_init() one call earlier, so the comparison here is against the
+ * genuine launch output and the flip runs exactly once. */
+void mp6_display_apply_launch_pos(void)
+{
+    extern SDL_Window *mp6_aspect_window(void);
+    SDL_Window *win;
+    SDL_DisplayID before, after;
+    int x, y, curX = 0, curY = 0;
+
+    if (!s_dispHaveLaunchPos) return;
+    win = mp6_aspect_window();
+    if (win == NULL) return;
+    x = s_dispLaunchX;
+    y = s_dispLaunchY;
+
+    /* CAPTION SAFETY, now computable. The resolver centres a CLIENT rectangle
+     * inside the target's usable bounds without knowing the frame's borders,
+     * because no window exists yet to measure them. Here one does, so nudge the
+     * client origin down/right by exactly the caption and left border when the
+     * frame would otherwise start above or left of the usable area -- the same
+     * arithmetic (and the same failure it prevents: a window that looks
+     * borderless because its title bar is parked off-desktop) as the rescue in
+     * this file's window-policy section. */
+    {
+        SDL_Point centre;
+        SDL_DisplayID target;
+        SDL_Rect usable;
+        int w = 0, h = 0, bt = 0, bl = 0, bb = 0, br = 0;
+        SDL_GetWindowSize(win, &w, &h);
+        centre.x = x + w / 2;
+        centre.y = y + h / 2;
+        target = SDL_GetDisplayForPoint(&centre);
+        if (target != 0 && SDL_GetDisplayUsableBounds(target, &usable)) {
+            if (!SDL_GetWindowBordersSize(win, &bt, &bl, &bb, &br)) { bt = 0; bl = 0; }
+            if (y - bt < usable.y) y = usable.y + bt;
+            if (x - bl < usable.x) x = usable.x + bl;
+        }
+    }
+
+    if (SDL_GetWindowPosition(win, &curX, &curY) && curX == x && curY == y) {
+        printf("[MP6-DISPLAY] window already at (%d,%d) -- aurora honored the "
+               "resolved position, no move needed\n", x, y);
+        fflush(stdout);
+        return;
+    }
+
+    before = SDL_GetDisplayForWindow(win);
+    if (!SDL_SetWindowPosition(win, x, y)) {
+        printf("[MP6-DISPLAY] SDL_SetWindowPosition(%d,%d) failed (%s) -- the "
+               "window stays where the OS put it\n", x, y, SDL_GetError());
+        fflush(stdout);
+        return;
+    }
+    /* Block until the move is real: the answer to "which output is it on now"
+     * is the whole point of the next few lines, and SDL_SetWindowPosition is
+     * documented as possibly asynchronous (SDL_video.h:1762). */
+    SDL_SyncWindow(win);
+    SDL_GetWindowPosition(win, &curX, &curY);
+    after = SDL_GetDisplayForWindow(win);
+    printf("[MP6-DISPLAY] moved the window to (%d,%d) after aurora created it "
+           "(landed at (%d,%d)) -- aurora's create path discards negative "
+           "positions\n", x, y, curX, curY);
+    fflush(stdout);
+    if (after != 0 && after != before) {
+        mp6_display_follow_crossing(before, after, "launch placement");
+    }
+}
+
+/* --- launch output selection (video.display / video.window_x / _y) -----
+ *
+ * WHY BEFORE aurora_initialize. aurora's own aurora_initialize() calls
+ * window::initialize(), then create_window() (possibly twice, via the backend
+ * fallback loop -- so the position must live in its config, not be applied
+ * once), and then window::show_window(), all inside itself. By the time
+ * main_native.c regains control the window is already visible on whichever
+ * output the OS default chose. There is no later moment.
+ *
+ * WHY IT QUITS THE VIDEO SUBSYSTEM AGAIN. aurora's window::initialize() sets
+ * SDL_HINT_ORIENTATIONS *before* its own SDL_InitSubSystem(SDL_INIT_VIDEO)
+ * (lib/window.cpp:380-402). Leaving the subsystem initialized here would turn
+ * that into a post-init hint set. Quitting drops the refcount to zero so
+ * aurora's init is a genuinely fresh one and the hint keeps its ordering. The
+ * consequence shapes the return value: SDL_DisplayIDs are not valid across
+ * the quit, which is exactly why this returns an ABSOLUTE DESKTOP POSITION
+ * and not SDL_WINDOWPOS_CENTERED_DISPLAY(id). */
+#ifndef __ANDROID__
+static int mp6_display_pick_by_name(const SDL_DisplayID *ids, int count,
+                                    const char *want)
+{
+    int i;
+    if (want == NULL || want[0] == '\0') return -1;
+    for (i = 0; i < count; ++i) {
+        const char *name = SDL_GetDisplayName(ids[i]);
+        if (name == NULL) continue;
+        if (SDL_strcasecmp(name, want) == 0) return i;
+    }
+    /* Substring, case-insensitive, as a second pass -- a user typing
+     * "ULTRAGEAR" for "LG ULTRAGEAR 27GR93U" should work.
+     *
+     * This pass is also what makes a TRUNCATED stored name still resolve:
+     * video.display is char[64], so a longer SDL display name is saved as its
+     * own prefix, and a prefix matches here at the start of the haystack. Not
+     * a happy accident -- it is why the fallback is a substring scan rather
+     * than a second exact compare. */
+    for (i = 0; i < count; ++i) {
+        const char *name = SDL_GetDisplayName(ids[i]);
+        const char *hay;
+        size_t nWant;
+        if (name == NULL) continue;
+        nWant = strlen(want);
+        for (hay = name; *hay != '\0'; ++hay) {
+            if (SDL_strncasecmp(hay, want, nWant) == 0) return i;
+        }
+    }
+    return -1;
+}
+#endif /* !__ANDROID__ */
+
+int mp6_display_resolve_launch_pos(int launcherMode, unsigned int reqW,
+                                   unsigned int reqH, int *outX, int *outY)
+{
+#ifdef __ANDROID__
+    (void)launcherMode; (void)reqW; (void)reqH; (void)outX; (void)outY;
+    return 0; /* one display, and no desktop coordinates to speak of */
+#else
+    extern const char *mp6_launcher_cfg_display(void);
+    extern int mp6_launcher_cfg_window_pos(int *x, int *y);
+    const char *envDisplay = getenv("MP6_WINDOW_DISPLAY");
+    const char *cfgDisplay = "auto";
+    int savedX = -1, savedY = -1, haveSaved = 0;
+    int count = 0, chosen = -1, ok = 0;
+    SDL_DisplayID *ids = NULL;
+    const char *reason = "highest refresh";
+    int effW, effH;
+
+    if (outX == NULL || outY == NULL) return 0;
+    /* Automation placement must stay bit-for-bit what it was: no config read,
+     * no enumeration, no printed line -- unless the run explicitly opts in
+     * with the env lever, the same shape MP6_WINDOW_SIZE already has. */
+    if (!launcherMode && (envDisplay == NULL || envDisplay[0] == '\0')) return 0;
+
+    if (launcherMode) {
+        cfgDisplay = mp6_launcher_cfg_display();
+        haveSaved = mp6_launcher_cfg_window_pos(&savedX, &savedY);
+    }
+    if (envDisplay == NULL || envDisplay[0] == '\0') {
+        /* "primary" is the explicit opt-out: today's OS-default placement,
+         * byte-for-byte, and the control arm every measurement compares
+         * against. */
+        if (cfgDisplay != NULL && SDL_strcasecmp(cfgDisplay, "primary") == 0) return 0;
+    }
+
+    /* aurora's own create_window() defaulting, mirrored (lib/window.cpp:
+     * 301-312): a zero request becomes 1280x960, and anything smaller than
+     * 640x480 is clamped up. Centering against the wrong rectangle centers in
+     * the wrong place. */
+    effW = (reqW > 0u) ? (int)reqW : 1280;
+    effH = (reqH > 0u) ? (int)reqH : 960;
+    if (effW < 640) effW = 640;
+    if (effH < 480) effH = 480;
+
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) return 0;
+    ids = SDL_GetDisplays(&count);
+    if (ids == NULL || count <= 0) {
+        if (ids != NULL) SDL_free(ids);
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        return 0;
+    }
+
+    /* RESOLUTION ORDER, one place, no hidden precedence:
+     *   MP6_WINDOW_DISPLAY  >  saved window_x/y  >  video.display  >  no change */
+    if (envDisplay != NULL && envDisplay[0] != '\0') {
+        /* A 1-based index or a name/substring, mirroring MP6_WINDOW_SIZE's
+         * lever shape. This is the ONLY way an automation run opts in. */
+        char *end = NULL;
+        long idx = strtol(envDisplay, &end, 10);
+        if (end != envDisplay && (end == NULL || *end == '\0') &&
+            idx >= 1 && idx <= (long)count) {
+            chosen = (int)idx - 1;
+        } else {
+            chosen = mp6_display_pick_by_name(ids, count, envDisplay);
+        }
+        if (chosen >= 0) reason = "MP6_WINDOW_DISPLAY";
+    }
+
+    if (chosen < 0 && haveSaved && savedX > -32768 && savedY > -32768) {
+        /* STALE-POSITION REFUSAL. A saved position is only usable while the
+         * desktop it described still exists: unplugging a monitor would
+         * otherwise leave the window permanently invisible. Require the
+         * window's CENTRE to land inside some output's usable bounds. */
+        const int cx = savedX + effW / 2, cy = savedY + effH / 2;
+        int i, inside = 0;
+        for (i = 0; i < count; ++i) {
+            SDL_Rect usable;
+            if (!SDL_GetDisplayUsableBounds(ids[i], &usable)) continue;
+            if (cx >= usable.x && cx < usable.x + usable.w &&
+                cy >= usable.y && cy < usable.y + usable.h) {
+                inside = 1;
+                break;
+            }
+        }
+        if (inside) {
+            *outX = savedX;
+            *outY = savedY;
+            /* Stash for the post-creation re-apply -- see
+             * mp6_display_apply_launch_pos(). A saved position on a
+             * left-of-primary output is negative too, so this path needs the
+             * bypass just as much as the auto one. */
+            s_dispLaunchX = savedX;
+            s_dispLaunchY = savedY;
+            s_dispHaveLaunchPos = 1;
+            printf("[MP6-DISPLAY] chose saved position (%d,%d) for a %dx%d window "
+                   "-- saved position\n", savedX, savedY, effW, effH);
+            fflush(stdout);
+            SDL_free(ids);
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+            return 1;
+        }
+        printf("[MP6-DISPLAY] saved position (%d,%d) is off-desktop -- falling back "
+               "to auto\n", savedX, savedY);
+        fflush(stdout);
+    }
+
+    if (chosen < 0 && launcherMode && cfgDisplay != NULL &&
+        SDL_strcasecmp(cfgDisplay, "auto") != 0) {
+        chosen = mp6_display_pick_by_name(ids, count, cfgDisplay);
+        if (chosen >= 0) {
+            reason = "video.display";
+        } else {
+            printf("[MP6-DISPLAY] video.display=\"%s\" matches no attached output "
+                   "-- falling back to auto\n", cfgDisplay);
+            fflush(stdout);
+        }
+    }
+
+    if (chosen < 0) {
+        /* "auto": the attached output with the highest refresh. Ties keep the
+         * first enumerated one, which is SDL's primary-first order. */
+        int i, bestMilli = -1;
+        for (i = 0; i < count; ++i) {
+            const int milli = mp6_display_milli_hz(SDL_GetCurrentDisplayMode(ids[i]));
+            if (milli > bestMilli) {
+                bestMilli = milli;
+                chosen = i;
+            }
+        }
+        reason = "highest refresh";
+    }
+
+    if (chosen >= 0) {
+        SDL_Rect usable;
+        if (SDL_GetDisplayUsableBounds(ids[chosen], &usable)) {
+            const char *name = SDL_GetDisplayName(ids[chosen]);
+            const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(ids[chosen]);
+            /* USABLE bounds, not full bounds: they exclude the taskbar, so a
+             * centered window's caption cannot start underneath it. The two
+             * clamps keep a window LARGER than the output from being pushed
+             * above/left of the usable origin, which is the exact shape of the
+             * "looks borderless, frame parked off-desktop" failure. */
+            int x = usable.x + (usable.w - effW) / 2;
+            int y = usable.y + (usable.h - effH) / 2;
+            if (x < usable.x) x = usable.x;
+            if (y < usable.y) y = usable.y;
+            *outX = x;
+            *outY = y;
+            /* Stash for the post-creation re-apply. THIS is the path the whole
+             * feature exists for and the one aurora's negative-position
+             * sentinel silently discarded. */
+            s_dispLaunchX = x;
+            s_dispLaunchY = y;
+            s_dispHaveLaunchPos = 1;
+            printf("[MP6-DISPLAY] chose \"%s\" %dx%d@%.3f Hz at (%d,%d) for a %dx%d "
+                   "window -- %s\n",
+                   (name != NULL) ? name : "display",
+                   (mode != NULL) ? mode->w : 0, (mode != NULL) ? mode->h : 0,
+                   (double)mp6_display_milli_hz(mode) / 1000.0, x, y, effW, effH,
+                   reason);
+            fflush(stdout);
+            ok = 1;
+        }
+    }
+
+    SDL_free(ids);
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    return ok;
+#endif /* __ANDROID__ */
 }
 
 static int mp6_present_rate_log_enabled(void)
@@ -1679,7 +2353,8 @@ static int mp6_present_rate_log_enabled(void)
         const char *env = getenv("MP6_PRESENT_RATE_LOG");
         s_enabled = (env && *env && *env != '0') ? 1 : 0;
     }
-    return s_enabled;
+    /* env latches the initial value; the dev console may override it live. */
+    return mp6_console_cvar_get(MP6_CVAR_PRESENT_RATE_LOG, s_enabled);
 }
 
 static void mp6_present_rate_log(void)
@@ -1729,18 +2404,43 @@ static void mp6_present_rate_log_final(void)
  * lateness stats gathered above. Works with the throttle DISABLED too
  * (MP6_TICK_HZ=0 prints the free-run rate; lateness stats just stay 0/0)
  * -- an A/B instrument for pacing investigations. */
-static void mp6_tick_rate_log(void)
+static int mp6_tick_rate_log_enabled(void)
 {
-    static int     s_enabled = -1;   /* -1 = env not checked yet */
-    static int64_t s_windowStartNs = 0;
-    static long    s_windowStartTick = 0;
-    int64_t now;
-    double elapsed;
+    static int s_enabled = -1;   /* -1 = env not checked yet */
     if (s_enabled < 0) {
         const char *env = getenv("MP6_TICK_RATE_LOG");
         s_enabled = (env && *env && *env != '0') ? 1 : 0;
     }
-    if (!s_enabled) {
+    /* env latches the initial value; the dev console may override it live. */
+    return mp6_console_cvar_get(MP6_CVAR_TICK_RATE_LOG, s_enabled);
+}
+
+/* Phase stamp: the monotonic clock while the phase accounting is armed, 0
+ * otherwise. A 0 sample makes every phase delta below fold to zero, so the
+ * accounting is inert -- not merely cheap -- with both consumers off.
+ *
+ * The predicate is widened, NOT duplicated: the dev console's `stat unit` page
+ * wants exactly these buckets, so it arms the same clock rather than adding a
+ * second one. Off, this remains the deliberately-skipped QPC read the block
+ * above documents. */
+static int64_t mp6_tick_phase_now(void)
+{
+    return (mp6_tick_rate_log_enabled() || mp6_console_stats_armed())
+               ? (int64_t)mp6_host_monotonic_ns() : 0;
+}
+
+static void mp6_tick_phase_add(int64_t *bucket, int64_t from, int64_t to)
+{
+    if (from > 0 && to > from) *bucket += to - from;
+}
+
+static void mp6_tick_rate_log(void)
+{
+    static int64_t s_windowStartNs = 0;
+    static long    s_windowStartTick = 0;
+    int64_t now;
+    double elapsed;
+    if (!mp6_tick_rate_log_enabled()) {
         return;
     }
     now = (int64_t)mp6_host_monotonic_ns();
@@ -1756,16 +2456,37 @@ static void mp6_tick_rate_log(void)
         double lateAvgMs = g_tickLateSamples > 0
             ? ((double)g_tickLateSumNs / (double)g_tickLateSamples) / 1000000.0
             : 0.0;
+        double slackAvgMs = g_tickSlackSamples > 0
+            ? ((double)g_tickSlackSumNs / (double)g_tickSlackSamples) / 1000000.0
+            : 0.0;
+        double phN = (g_phSamples > 0) ? (double)g_phSamples : 1.0;
         fprintf(stderr, "[MP6-TICKRATE] window=%.2fs ticks=%ld rate=%.3f ticks/s "
-                        "late(max=%.3fms avg=%.3fms n=%ld) tick=%ld\n",
+                        "late(max=%.3fms avg=%.3fms n=%ld) "
+                        "idle-slack(min=%.3fms avg=%.3fms max=%.3fms starved=%ld/%ld) "
+                        "phase-avg-ms(game=%.3f endframe=%.3f seal=%.3f vipost=%.3f n=%ld) "
+                        "tick=%ld\n",
                 elapsed, (long)(mp6_tick_count - s_windowStartTick), rate,
-                lateMaxMs, lateAvgMs, g_tickLateSamples, mp6_tick_count);
+                lateMaxMs, lateAvgMs, g_tickLateSamples,
+                (double)g_tickSlackMinNs / 1000000.0, slackAvgMs,
+                (double)g_tickSlackMaxNs / 1000000.0,
+                g_tickSlackStarved, g_tickSlackSamples,
+                (double)g_phGameNs / phN / 1e6, (double)g_phEndFrameNs / phN / 1e6,
+                (double)g_phSealNs / phN / 1e6, (double)g_phViPostNs / phN / 1e6,
+                g_phSamples, mp6_tick_count);
         fflush(stderr);
         s_windowStartNs = now;
         s_windowStartTick = mp6_tick_count;
         g_tickLateMaxNs = 0;
         g_tickLateSumNs = 0;
         g_tickLateSamples = 0;
+        g_tickSlackMaxNs = 0;
+        g_tickSlackMinNs = 0;
+        g_tickSlackSumNs = 0;
+        g_tickSlackSamples = 0;
+        g_tickSlackStarved = 0;
+        g_phGameNs = g_phEndFrameNs = g_phSealNs = g_phViPostNs = 0;
+        g_phOverlayNs = 0;
+        g_phSamples = 0;
     }
 }
 
@@ -1841,6 +2562,12 @@ static void mp6_dll_stub_draw_black_screen(void)
 
 static void mp6_dispatch_aurora_events(const AuroraEvent *event)
 {
+    /* The cross-output flip's second half (section 2b). Runs here because this
+     * is a DRAIN BOUNDARY: aurora_update() has already processed the
+     * RefreshSurface the first half pushed, so the restore issued now is a
+     * genuinely different surface configuration rather than a duplicate of one
+     * Dawn would reuse. One integer compare on every other frame. */
+    mp6_display_pump_pending_reconfigure();
     while (event != NULL && event->type != AURORA_NONE) {
         if (event->type == AURORA_EXIT) {
             mp6_clean_shutdown_exit("window closed");
@@ -1849,12 +2576,23 @@ static void mp6_dispatch_aurora_events(const AuroraEvent *event)
             mp6_latch_key_down_event(&event->sdl);
             mp6_latch_savestate_key_event(&event->sdl);
             mp6_latch_menu_key_event(&event->sdl); /* F10 in-game menu toggle */
+            mp6_latch_console_key_event(&event->sdl); /* ` / F9 dev console toggle */
             { /* in-game UI + freecam event forwards -- both inert unless the
                * launcher/freecam actually armed them (launcher mode only). */
                 extern void mp6_launcher_forward_sdl_event(const SDL_Event *ev);
                 extern void mp6_freecam_input_event(const SDL_Event *ev);
                 mp6_launcher_forward_sdl_event(&event->sdl);
                 mp6_freecam_input_event(&event->sdl);
+            }
+            /* Cross-output swapchain follow + window-position cache (section
+             * 2b). Inert until the window actually crosses to a different
+             * display or is moved, so an automation run prints nothing and
+             * reconfigures nothing. Declared locally rather than in
+             * shim/include/mp6_display.h because it is SDL-typed and that
+             * header is included by a TU that also links --headless. */
+            {
+                extern void mp6_display_note_sdl_event(const SDL_Event *ev);
+                mp6_display_note_sdl_event(&event->sdl);
             }
 #ifdef __ANDROID__
             mp6_touch_pad_event(&event->sdl); /* finger tracking (touch_pad.cpp) */
@@ -1910,9 +2648,18 @@ static void mp6_frame_gate_idle(void *user)
 void VIWaitForRetrace(void)
 {
     int frameBegan = 0;
+    /* Tick-phase attribution (see the g_ph* block above). tEntry closes the
+     * game's own slice, which began when the previous call returned. */
+    int64_t tEntry = mp6_tick_phase_now(), tEndFrame = 0, tSeal = 0, tThrottleOut = 0;
+    int64_t tOverlayIn = 0, tOverlayOut = 0; /* the overlay's own excluded bucket */
+    /* g_phLastReturnNs is overwritten at the bottom of this function, so this
+     * tick's game slice has to be taken while it still names the PREVIOUS
+     * return -- the same instant mp6_tick_phase_add uses two lines below. */
+    int64_t tPrevReturn = g_phLastReturnNs;
 #ifdef __ANDROID__
     Mp6AndroidFrameGate androidGate = { NULL };
 #endif
+    mp6_tick_phase_add(&g_phGameNs, g_phLastReturnNs, tEntry);
     if (g_frameOpen) {
         if (mp6_dll_stub_black_screen_active) {
             mp6_dll_stub_draw_black_screen();
@@ -1925,12 +2672,24 @@ void VIWaitForRetrace(void)
          * launcher TUs compile there -- the same launcher-mode-only guard
          * inside means straight_boot/automation launches never touch it
          * on either platform. */
+        /* Bracketed into g_phOverlayNs (see its declaration): the dev console
+         * composites inside this call, and an instrument that reported its own
+         * cost as renderer time would be lying about the thing it exists to
+         * measure. g_phEndFrameNs still covers the WHOLE block, so
+         * [MP6-TICKRATE] is unchanged; the console subtracts. */
+        tOverlayIn = mp6_tick_phase_now();
         { extern void mp6_launcher_frame_overlay(void); mp6_launcher_frame_overlay(); }
+        tOverlayOut = mp6_tick_phase_now();
         mp6_gx_close_stale_primitive("closing it before aurora_end_frame()");
         aurora_end_frame();
+        tEndFrame = mp6_tick_phase_now();
         mp6_present_counters_add(0, 1); /* MP6_PRESENT_RATE_LOG accounting */
         mp6_fi_note_frame_end(); /* Unlocked FPS: seal tick N's retained GX stream,
                                   * snapshot camera-cut history, and timestamp its present */
+        tSeal = mp6_tick_phase_now();
+        mp6_tick_phase_add(&g_phEndFrameNs, tEntry, tEndFrame);
+        mp6_tick_phase_add(&g_phOverlayNs, tOverlayIn, tOverlayOut);
+        mp6_tick_phase_add(&g_phSealNs, tEndFrame, tSeal);
         { extern void mp6_fs_frame_end(void); mp6_fs_frame_end(); } /* framescope */
         { /* MP6_FRAME_DUMP (shim/include/mp6_frame_dump.h): capture the frame
            * that was just presented. Same hook point as framescope right
@@ -1961,6 +2720,7 @@ void VIWaitForRetrace(void)
     mp6_tick_throttle_wait();
     mp6_tick_rate_log();
     mp6_present_rate_log();
+    tThrottleOut = mp6_tick_phase_now(); /* the idle window is over; vipost starts */
 
 #ifdef __ANDROID__
     /* SDL/Aurora blocks here while the activity is paused.  If a transient
@@ -2041,10 +2801,24 @@ void VIWaitForRetrace(void)
      * bisect session immediately find a sane MP6_SKIP_DRAWS upper bound
      * (typical per-frame counts are ~60, far lower than a naive guess)
      * instead of trial-and-error against the actual per-frame ceiling. */
-    if (getenv("MP6_DIAG_DRAWCOUNT") && (mp6_tick_count % 60) == 0) {
-        printf("[MP6-DIAG-DRAWCOUNT] tick=%ld prev-frame draw count=%u\n", mp6_tick_count, g_mp6DrawIndex);
-        fflush(stdout);
+    {
+        /* env latches the initial value once (it used to re-getenv every tick);
+         * the dev console may override it live. */
+        static int s_drawCountEnv = -1;
+        if (s_drawCountEnv < 0) {
+            const char *e = getenv("MP6_DIAG_DRAWCOUNT");
+            s_drawCountEnv = (e != NULL && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+        }
+        if (mp6_console_cvar_get(MP6_CVAR_DIAG_DRAWCOUNT, s_drawCountEnv) &&
+            (mp6_tick_count % 60) == 0) {
+            printf("[MP6-DIAG-DRAWCOUNT] tick=%ld prev-frame draw count=%u\n", mp6_tick_count, g_mp6DrawIndex);
+            fflush(stdout);
+        }
     }
+    /* Same instant, same reason: the console's scenerendering panel reports the
+     * PREVIOUS complete frame, so it snapshots the per-frame GX census here,
+     * right before the draw index is reset. */
+    mp6_console_note_frame_reset();
     g_mp6DrawIndex = 0;
     /* On Windows, aurora_begin_frame() returning false (window minimized, etc.) just
      * means this logical tick renders nothing new -- the NEXT call's step
@@ -2064,6 +2838,25 @@ void VIWaitForRetrace(void)
     if (g_postRetraceCB) {
         g_postRetraceCB((u32)mp6_tick_count);
     }
+
+    g_phLastReturnNs = mp6_tick_phase_now();
+    mp6_tick_phase_add(&g_phViPostNs, tThrottleOut, g_phLastReturnNs);
+    if (tEntry > 0) g_phSamples++;
+
+    /* Publish THIS tick's phase slices to the console's sampler. The buckets
+     * above are window SUMS that mp6_tick_rate_log() zeroes every 5s, so the
+     * individual ticks are gone by the time anyone asks for a percentile --
+     * this hands over the per-tick deltas instead. Called unconditionally: it
+     * also refreshes the one relaxed int the GX census hook sites read, and it
+     * returns immediately while the console is closed (every argument is 0
+     * then anyway, since the phase clock is not armed). */
+    mp6_console_note_tick_phase(
+        (tPrevReturn > 0 && tEntry > tPrevReturn) ? tEntry - tPrevReturn : 0,
+        (tEndFrame > tEntry) ? tEndFrame - tEntry : 0,
+        (tOverlayOut > tOverlayIn) ? tOverlayOut - tOverlayIn : 0,
+        (tSeal > tEndFrame) ? tSeal - tEndFrame : 0,
+        (g_phLastReturnNs > tThrottleOut) ? g_phLastReturnNs - tThrottleOut : 0,
+        g_tickLastLateNs, g_tickLastSlackNs);
 
     if (mp6_tick_advance()) {
         char reason[64];
@@ -2323,13 +3116,19 @@ static void mp6_parse_skip_draws(void)
 
 static bool mp6_draw_should_skip(u32 idx)
 {
+    int lo, hi;
     if (!g_mp6SkipDrawParsed) {
         mp6_parse_skip_draws();
     }
-    if (g_mp6SkipDrawLo < 0) {
+    /* env parses "lo-hi" once; the dev console can move either end live
+     * (`set skipdrawlo 40` / `set skipdrawhi 60`), which turns a bisect from an
+     * edit-restart-look loop into a live one. -1 on either end = off. */
+    lo = mp6_console_cvar_get(MP6_CVAR_SKIP_DRAW_LO, g_mp6SkipDrawLo);
+    hi = mp6_console_cvar_get(MP6_CVAR_SKIP_DRAW_HI, g_mp6SkipDrawHi);
+    if (lo < 0 || hi < lo) {
         return false;
     }
-    return (int)idx >= g_mp6SkipDrawLo && (int)idx <= g_mp6SkipDrawHi;
+    return (int)idx >= lo && (int)idx <= hi;
 }
 
 /* Once-per-distinct-call-site log throttle, matching g_gxToleratedSites's
@@ -2420,6 +3219,10 @@ void mp6_GXBegin(GXPrimitive type, GXVtxFmt vtxfmt, u16 nverts)
     if (g_gxOpenHidden) {
         mp6_draw_hide_begin(drawIdx, ret, "GXBegin");
     }
+    /* Primitive-type histogram + vertex total for the console's scenerendering
+     * panel: both arguments are already in hand, so this intercepts nothing
+     * new. One relaxed int load when the console is closed. */
+    if (mp6_console_stats_active) mp6_console_note_prim((int)type, nverts);
     GXBegin(type, vtxfmt, nverts);
 }
 
@@ -2457,6 +3260,7 @@ void mp6_GXCallDisplayList(const void *list, u32 nbytes)
     if (hidden) {
         mp6_draw_hide_begin(drawIdx, ret, "GXCallDisplayList");
     }
+    if (mp6_console_stats_active) mp6_console_note_dl_call(nbytes); /* replayed DL bytes */
     GXCallDisplayList(list, nbytes);
     if (hidden) {
         mp6_draw_hide_end();
@@ -2542,6 +3346,12 @@ void mp6_GXCallDisplayList(const void *list, u32 nbytes)
  * the size at boot, and this is the one place a real SDL_Window* is
  * available this early with no extra plumbing. */
 static SDL_Window *g_mp6AspectWindow = NULL;
+
+/* The one reader outside this section is mp6_render_res_get() (section 2,
+ * compiled above this point), which needs the SAME handle so the HUD's
+ * RenderRes row and mp6_widescreen_render_width() can never disagree about
+ * which window they mean. */
+SDL_Window *mp6_aspect_window(void) { return g_mp6AspectWindow; }
 
 void mp6_bridge_window_policy_init(void *sdlWindowPtr)
 {
@@ -2716,20 +3526,41 @@ void mp6_widescreen_set_enabled(int enabled)
 
 int mp6_widescreen_enabled(void)
 {
-    /* MP6_WIDESCREEN: automation-compatible test/verification lever, same
-     * shape as MP6_AUTO_START_TICKS/--input-script/MP6_FREE_ASPECT.
-     * Automation mode NEVER reads mp6_config.json (docs/TESTING.md's
-     * automation contract), so g_mp6WidescreenEnabled is always false on
-     * every automation boot regardless of anything a real user
-     * configured -- without this lever, a scripted/ticked verification
-     * run could never reach or screenshot Widescreen mode at all. Unset
-     * (the default): zero effect, every existing automated gate is
-     * byte-unchanged. Consulted here (not re-checked at every call site)
-     * so every consumer -- window-shape policy, content-aspect policy,
-     * render_width/scale_factor/half_width_delta, and every decomp-side
-     * patch that calls mp6_widescreen_enabled() directly -- agrees on one
-     * answer. */
+    /* THE ONE ON/OFF ANSWER every widescreen consumer reads -- window-shape
+     * policy, content-aspect policy, render_width/scale_factor/
+     * half_width_delta, mp6_widescreen_extrude.c's whole gate, and every
+     * decomp-side patch that calls this directly. Resolved here, once, so no
+     * two of them can disagree.
+     *
+     * Three sources:
+     *
+     *   1. g_mp6WidescreenEnabled -- the LIVE latch. main_native.c sets it
+     *      once right before GameMain() from mp6_enh_widescreen() (see that
+     *      call site), and the settings window re-sets it the instant the
+     *      user flips the row mid-session. It is the latch, not the seam,
+     *      that a live toggle can move within a tick: settings.cpp applies
+     *      the change BEFORE cfg_save() republishes to the seam.
+     *
+     *   2. the ENHANCEMENTS SEAM (shim/include/mp6_enhancements.h), which
+     *      resolves MP6_ENH_WIDESCREEN -> MP6_ENH_PRESET -> the published
+     *      config -> RETAIL. This is consulted HERE and not only through the
+     *      latch because mp6_bridge_window_policy_init() runs right after
+     *      aurora_initialize(), long before main_native.c's latch call -- so
+     *      without it the window shape at boot could not see either
+     *      MP6_ENH_* lever, only the legacy one below. Automation publishes
+     *      nothing to the seam, so this term is 0 on every automated boot
+     *      and every existing gate stays byte-unchanged.
+     *
+     *   3. MP6_WIDESCREEN -- the pre-existing per-feature lever, unchanged.
+     *      Same shape as MP6_AUTO_START_TICKS/--input-script/MP6_FREE_ASPECT:
+     *      it forces widescreen ON in either mode, and unset it has zero
+     *      effect. docs/SETTINGS.md's promise that the legacy levers keep
+     *      their own priority at their own consumption site is exactly this
+     *      OR term. */
     if (g_mp6WidescreenEnabled) {
+        return 1;
+    }
+    if (mp6_enh_widescreen()) {
         return 1;
     }
     {

@@ -1,0 +1,219 @@
+/* Developer console (platform/gx/ui/console.cpp) -- THE BOTTOM INPUT BAR.
+ *
+ * Deliberately NOT modelled on window.rcss: this is an instrument, not a menu.
+ * It is one translucent line pinned to the bottom edge of the game window, a
+ * completion popup rising above it, and -- only in the LOG state -- a
+ * scrollback page above that. Nothing here is centred and nothing covers the
+ * game by default, because the whole increment is "play while watching the
+ * numbers": the stat panels are persistent OVERLAYS drawn by overlay.cpp and
+ * this document no longer contains one at all.
+ *
+ * WHY THE CONTAINER IS BOTTOM-ANCHORED AND HEIGHT-AUTO. An absolutely
+ * positioned box with `bottom: 0` and no height is sized by its content, so
+ * the popup and the log page grow UPWARD from the prompt without a single
+ * measured coordinate -- which is what makes "the popup appears above the line
+ * you are typing" a layout property rather than a per-frame calculation.
+ *
+ * ANDROID CAVEAT, STATED HONESTLY. The soft keyboard owns the bottom of the
+ * screen and SystemInterface_Aurora does not expose its height, so on a phone
+ * the keyboard can cover the bar itself while it is focused. The previous
+ * top-half window avoided that by never being where the keyboard is; a bottom
+ * bar is the shape this increment asks for, and the mitigation is that the
+ * LOG state puts everything worth reading above the keyboard's line. Nothing
+ * here pretends to know the keyboard's height.
+ */
+*, *:before, *:after {
+    box-sizing: border-box;
+}
+
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: "Inter";
+    font-weight: normal;
+    font-size: 13dp;
+    color: #D8E6F0;
+    z-index: 40;
+}
+
+console {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: stretch;
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+}
+
+/* --- the scrollback page (LOG state only) ----------------------------- */
+
+/* The pane holds the WHOLE 256-line ring and scrolls: mouse wheel and
+ * PgUp/PgDn on desktop, touch-drag with inertia on Android. The Android half
+ * needs nothing but `overflow-y: auto` -- RmlUi's Context::ProcessTouchMove
+ * walks up from the touched element to the nearest scroll container itself,
+ * and aurora's rmlui.cpp already feeds it ProcessTouchStart/Move/End. */
+logpage {
+    display: none;
+}
+
+console[mode=log] logpage {
+    display: block;
+    flex: 0 0 auto;
+}
+
+output {
+    display: block;
+    height: 42vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    white-space: pre;
+    padding: 8dp 14dp;
+    border-top: 1dp rgba(0, 157, 218, 30%);
+    background-color: rgba(6, 10, 26, 90%);
+    color: #A9C4D6;
+}
+
+/* Visible enough to say "there is more above", thin enough not to eat the
+ * pane. The arrow buttons are collapsed the same way window.rcss does it. */
+scrollbarvertical {
+    width: 6dp;
+    margin: 2dp 0 2dp 2dp;
+}
+
+scrollbarvertical sliderarrowdec,
+scrollbarvertical sliderarrowinc {
+    width: 0;
+    height: 0;
+}
+
+scrollbarvertical slidertrack {
+    width: 6dp;
+    background-color: rgba(0, 157, 218, 12%);
+}
+
+scrollbarvertical sliderbar {
+    width: 6dp;
+    min-height: 24dp;
+    border-radius: 3dp;
+    background-color: rgba(0, 157, 218, 55%);
+}
+
+scrollbarvertical sliderbar:hover,
+scrollbarvertical sliderbar:active {
+    background-color: #4CC7F5;
+}
+
+scrollbarhorizontal {
+    height: 0;
+}
+
+/* --- the autocomplete popup ------------------------------------------- */
+
+/* Left-aligned with the prompt and only as wide as it needs to be: a popup
+ * spanning the window would cover the game to advertise nine command names.
+ * The "[N more matches]" row is the FIRST child (console.cpp appends it
+ * first), which is the top of a list rising off the bottom edge -- exactly
+ * where the reference puts it. */
+acpopup {
+    display: none;
+}
+
+acpopup[open] {
+    display: block;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    min-width: 260dp;
+    max-width: 70%;
+    margin: 0 0 2dp 14dp;
+    padding: 4dp 0;
+    border: 1dp rgba(0, 157, 218, 55%);
+    border-radius: 6dp 6dp 0 0;
+    background-color: rgba(6, 10, 26, 94%);
+    box-shadow: 0 -4dp 14dp 2dp rgba(0, 0, 0, 55%);
+}
+
+acrow {
+    display: block;
+    padding: 3dp 14dp;
+    color: #CFE4F2;
+    white-space: nowrap;
+}
+
+acrow.sel {
+    color: #06121F;
+    background-color: #009dda;
+    font-weight: bold;
+}
+
+/* Dimmer than an acrow (#CFE4F2) and that is the WHOLE differentiation: this
+ * row used to add `font-style: italic`, and ui.cpp loads Regular and Bold
+ * faces only (ui.cpp:78-79 -- res/fonts has no italic Inter at all).
+ * FontFamily::GetFaceHandle matches style EXACTLY (FontFamily.cpp:27, an
+ * `== style` test with no fallback), so an italic request found no face,
+ * returned handle 0, and ElementText::OnRender returned before generating any
+ * geometry (ElementText.cpp:129) -- the row occupied its padding and drew no
+ * glyphs. Dropping the one declaration leaves every box declaration in this
+ * rule untouched; what changes is that the text now has a face to render
+ * with. */
+acmore {
+    display: block;
+    padding: 3dp 14dp;
+    color: #8FA9BC;
+    white-space: nowrap;
+}
+
+/* --- the bar itself ---------------------------------------------------- */
+
+cmdbar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8dp;
+    flex: 0 0 auto;
+    padding: 3dp 12dp;
+    border-top: 1dp #009dda;
+    background-color: rgba(6, 10, 26, 86%);
+}
+
+prompt {
+    display: inline-block;
+    color: #4CC7F5;
+    font-weight: bold;
+    font-size: 15dp;
+}
+
+/* No border and no background of its own: the translucent strip IS the field.
+ * A boxed input inside a boxed bar reads as a dialog, which is the shape this
+ * increment exists to stop being. */
+cmdbar input {
+    flex: 1 1 auto;
+    height: 26dp;
+    padding: 0;
+    border: 0;
+    background-color: transparent;
+    color: #E6F2FA;
+    caret-color: #4CC7F5;
+}
+
+/* SELECTION IS AN ELEMENT, NOT A PROPERTY. This rule used to be a
+ * `selection-background` / `selection-color` pair inside the block above.
+ * RmlUi has no such properties -- StyleSheetSpecification never registers
+ * them, so both declarations were dropped at parse time and the field's
+ * selection kept painting the default (RmlUi's fallback is the INVERSE of the
+ * text colour, i.e. a near-black block on #E6F2FA).
+ *
+ * The supported mechanism is a child element: WidgetTextInput's constructor
+ * instances a `<selection>` element under the input
+ * (WidgetTextInput.cpp:192), and UpdateSelectionColours() reads `color` and
+ * `background-color` off it (WidgetTextInput.cpp:400/417) via
+ * Element::GetLocalProperty -- which resolves the element DEFINITION as well
+ * as inline style (ElementStyle.cpp:309), so a stylesheet rule reaches it.
+ * Same two colours the dead pair asked for, now actually painted. */
+cmdbar input selection {
+    background-color: rgba(0, 157, 218, 55%);
+    color: #FFFFFF;
+}

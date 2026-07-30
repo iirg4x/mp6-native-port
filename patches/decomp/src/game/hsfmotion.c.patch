@@ -1,6 +1,8 @@
 --- a/src/game/hsfmotion.c
 +++ b/src/game/hsfmotion.c
-@@ -75 +75,12 @@
+@@ -9,0 +10 @@
++#include "mp6_boot.h" /* mp6_heap_pointer_tag -- standalone motion teardown fix below */
+@@ -75 +76,12 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
 +    /* mdsel's teardown calls this with the "no motion" sentinel (-1) when
 +     * a mode is confirmed (reproduced as a panic at &Hu3DMotion[-1]). On
@@ -13,7 +15,34 @@
 +        return FALSE;
 +    }
 +    motP = &Hu3DMotion[motId];
-@@ -191 +202,21 @@
+@@ -100 +112,25 @@
+-        HuMemDirectFree(motP->hsf);
++        /* Port ownership fix (docs/research/hsf_stub_audit.md D4). On
++         * hardware this single free was complete: LoadHSF parsed the file
++         * IN PLACE, so motP->hsf IS the caller's file buffer
++         * (hsfload.c's SetHsfModel returns fileptr itself) and one
++         * HuMemDirectFree returned the entire standalone motion bank.
++         * This port's LoadHSF (platform/hsf/hsf_load_native.c) instead
++         * allocates a fresh outer HSF_DATA (plain, freed by the line
++         * below) plus a native graph whose EVERY sub-allocation --
++         * HSF_MOTION record, HSF_TRACK array, curve arrays -- is tagged
++         * mp6_heap_pointer_tag(hsf), exactly the tag Hu3DModelKill's own
++         * bulk free reclaims for models (`HuMemDirectFreeNum(HEAP_MODEL,
++         * modelP->mallocNo)`, hsfman.c). This standalone branch had no
++         * bulk free at all, so every Hu3DMotionCreate/Hu3DMotionKill
++         * cycle leaked the graph into HEAP_MODEL (5,561 motion-only banks
++         * on the disc churn through here; median 17,600 B per teardown
++         * before counting curve arrays). Compute the tag BEFORE the outer
++         * free (mp6_heap_pointer_tag validates a live block base and
++         * exits loudly on anything else), then mirror Hu3DModelKill's
++         * plain-free + bulk-free pair. Retail-visible behaviour is
++         * unchanged: the bulk free matches only this graph's own tag. */
++        {
++            u32 mp6GraphTag = mp6_heap_pointer_tag(motP->hsf);
++            HuMemDirectFree(motP->hsf);
++            HuMemDirectFreeNum(HEAP_MODEL, mp6GraphTag);
++        }
+@@ -191 +227,21 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
 +    /* 64-bit/checked-build portability fix, negative-sentinel-index class:
 +     * motId == HU3D_MOTIONID_NONE (-1) reaches this function ORGANICALLY.

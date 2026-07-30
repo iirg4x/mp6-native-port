@@ -21,6 +21,73 @@
 +     * Perspective/ViewportSet, so this camera stayed frozen at scene-load
 +     * size without this. Same literals, same effect on this call. */
 +    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
+@@ -773,0 +788,9 @@
++    /* fn_1_2A78 is the board-preview transition: layer-15 hook (installed
++     * by fn_1_30FC) that re-photographs the whole frame into lbl_1_bss_28
++     * every tick and redraws it a touch larger and a touch more rotated,
++     * so picking a board dissolves the rotating sky into the board preview
++     * as a slowly turning, fading stack of frames. Every coordinate in it
++     * is hardcoded to the native 640-wide frame -- the ortho, the pivot,
++     * the quad and the capture -- so the whole effect was pinned to the
++     * left 640 of a wider one. These two carry the live frame's width. */
++    float mp6MdselW;
++    float mp6MdselMargin;
+@@ -776 +794,10 @@
+-        MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f, 10.0f);
++        /* MTXOrtho(m, top, bottom, left, right, near, far): the right edge
++         * is the frame width, so this hook's own 2D space has to span the
++         * live render width or everything below is laid out in a 640-wide
++         * box drawn into a wider viewport. mp6MdselMargin keeps the quad's
++         * own overscan (the native +-50) at the SAME proportion of frame
++         * width it had at 640, so the effect's slight zoom and its rotation
++         * headroom both stay exactly what retail authored. Byte-identical
++         * (640.0f / 50.0f) when widescreen is disabled. */
++        mp6MdselW = (float)mp6_widescreen_render_width();
++        mp6MdselMargin = 50.0f * (mp6MdselW / 640.0f);
++        MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6MdselW, 0.0f, 10.0f);
+@@ -779 +806,5 @@
+-            &texObj, lbl_1_bss_28, 640, 480, GX_TF_RGBA8, GX_CLAMP,
++            /* The declared size of a copy-destination texture is only a
++             * lookup key under this port (aurora resolves GXCopyTex
++             * GPU-side and binds it by destination POINTER), but it is kept
++             * truthful here so the two sides of this effect never disagree
++             * about how wide the photograph is. */
++            &texObj, lbl_1_bss_28, (u16)mp6_widescreen_render_width(), 480, GX_TF_RGBA8, GX_CLAMP,
+@@ -819 +851 @@
+-        MTXTrans(trans, -320.0f, -240.0f, 0.0f);
++        MTXTrans(trans, -0.5f * mp6MdselW, -240.0f, 0.0f);
+@@ -822 +854,4 @@
+-        mtxTransCat(model, 320.0f, 240.0f, 0.0f);
++        /* Translate-to-origin / rotate / translate-back: the pivot is the
++         * frame's centre, so it moves with the frame. Left at 320 the whole
++         * stack would spin about a point left of centre. */
++        mtxTransCat(model, 0.5f * mp6MdselW, 240.0f, 0.0f);
+@@ -827 +862 @@
+-        GXPosition3f32(-50.0f, -50.0f, 0.0f);
++        GXPosition3f32(-mp6MdselMargin, -50.0f, 0.0f);
+@@ -830 +865 @@
+-        GXPosition3f32(690.0f, -50.0f, 0.0f);
++        GXPosition3f32(mp6MdselW + mp6MdselMargin, -50.0f, 0.0f);
+@@ -833 +868 @@
+-        GXPosition3f32(690.0f, 530.0f, 0.0f);
++        GXPosition3f32(mp6MdselW + mp6MdselMargin, 530.0f, 0.0f);
+@@ -836 +871 @@
+-        GXPosition3f32(-50.0f, 530.0f, 0.0f);
++        GXPosition3f32(-mp6MdselMargin, 530.0f, 0.0f);
+@@ -838,0 +852,4 @@
++        /* Closes the GXBegin(GX_QUADS, 4) twelve lines up; anchors to the
++         * last of its four position/colour/texcoord triples, before the
++         * Hu3DFbCopyExec below. Empty inline on hardware (GXVert.h). */
++        GXEnd();
+@@ -842 +860,7 @@
+-                0, 0, 640, 480, GX_TF_RGBA8, GX_FALSE, lbl_1_bss_28);
++                /* The photograph this effect feeds back on itself next tick.
++                 * Captured at the native 640 it held only the frame's left
++                 * 640 while the quad above spans the whole width, so the
++                 * feedback stack pumped a stretched copy of the left portion
++                 * across the frame and never showed the right of the board
++                 * preview at all. 640 (byte-identical) when disabled. */
++                0, 0, mp6_widescreen_render_width(), 480, GX_TF_RGBA8, GX_FALSE, lbl_1_bss_28);
 @@ -1540,0 +1556,32 @@
 +/* Matches every decoration sub-object that must REPOSITION (never resize)
 + * alongside "sora"'s own widening -- all 6 "cloud*" and 7 "star*" objects
@@ -145,3 +212,30 @@
 +        mp6_widescreen_extrude_model_selective_reposition_x(obj->mdlId[2], mp6_mdsel_sky_is_star, 1.0f, skyCenterX);
 +        mp6_widescreen_extrude_model_reposition_x_clamped(obj->mdlId[2], mp6_mdsel_sky_is_cloud, 2.0f, skyCenterX, skyCenterX + 350.0f);
 +        mp6_widescreen_extend_tiles(obj->mdlId[2], "sora", 3000.0f, 512, 93, 95, 4.0f);
+@@ -1352 +1352,7 @@
+-        pan = 64.0f + (screenPos.x * panRange);
++        /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
++         * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
++         * clamp too late. `fctiwz` saturation via the shared helper; see
++         * shim/include/mp6_hwcast.h. The (s16) that follows it is the
++         * ordinary, well-defined narrowing hardware also performed.
++         */
++        pan = (s16)MP6_FCTIWZ_S32(64.0f + (screenPos.x * panRange));
+@@ -2724 +2724,7 @@
+-    pan = 64.0f + (16.0f * screenPos.x);
++    /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
++     * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
++     * clamp too late. `fctiwz` saturation via the shared helper; see
++     * shim/include/mp6_hwcast.h. The (s16) that follows it is the
++     * ordinary, well-defined narrowing hardware also performed.
++     */
++    pan = (s16)MP6_FCTIWZ_S32(64.0f + (16.0f * screenPos.x));
+@@ -2745 +2745,7 @@
+-        pan = 64.0f + (screenPos.x * panRange);
++        /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
++         * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
++         * clamp too late. `fctiwz` saturation via the shared helper; see
++         * shim/include/mp6_hwcast.h. The (s16) that follows it is the
++         * ordinary, well-defined narrowing hardware also performed.
++         */
++        pan = (s16)MP6_FCTIWZ_S32(64.0f + (screenPos.x * panRange));

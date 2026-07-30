@@ -12,27 +12,60 @@
 +#ifndef MP6_NATIVE_PORT
 @@ -171,0 +177 @@
 +#endif
-@@ -342,0 +349 @@
+@@ -377,0 +384 @@
 +#ifndef MP6_NATIVE_PORT
-@@ -344,0 +352 @@
+@@ -383,0 +391 @@
 +#endif
-@@ -354,0 +363 @@
+@@ -385,0 +394 @@
 +#ifndef MP6_NATIVE_PORT
-@@ -356,0 +366 @@
+@@ -387,0 +397 @@
 +#endif
-@@ -476,0 +487 @@
+@@ -395,0 +406 @@
 +#ifndef MP6_NATIVE_PORT
-@@ -480,0 +492 @@
+@@ -397,0 +409 @@
 +#endif
-@@ -579,0 +592 @@
+@@ -517,0 +530 @@
 +#ifndef MP6_NATIVE_PORT
-@@ -585,0 +599 @@
+@@ -521,0 +535 @@
 +#endif
-@@ -595,0 +610 @@
+@@ -620,0 +635 @@
 +#ifndef MP6_NATIVE_PORT
-@@ -597,0 +613 @@
+@@ -626,0 +642 @@
 +#endif
-@@ -713,0 +730 @@
+@@ -636,0 +653 @@
 +#ifndef MP6_NATIVE_PORT
-@@ -727,0 +745 @@
+@@ -638,0 +656 @@
 +#endif
+@@ -754,0 +773 @@
++#ifndef MP6_NATIVE_PORT
+@@ -768,0 +788 @@
++#endif
+@@ -3289,0 +3310,7 @@
++    /* Closes the GXBegin(GX_QUADS, max*4) seven lines up; anchors to the
++     * closing brace of its quad-index loop, before the
++     * GXEndDisplayList() just below. Empty inline on hardware
++     * (GXVert.h); needed for Aurora's byte accounting inside a
++     * display-list bracket -- see src/board/effect.c.patch's GXEnd hunk
++     * for the full mechanism. */
++    GXEnd();
+@@ -2598 +2598,13 @@
+-    i >= 8;
++    /* MP6_NATIVE_PORT: `i >= 8;` is a relational expression used as a
++     * statement -- no code on MWCC, no code here, but clang's
++     * -Wunused-comparison is fatal under tools/abi_warning_audit.py --deep.
++     * The void cast is provably codegen-neutral.
++     *
++     * It deliberately does NOT paper over the real finding, which is left
++     * exactly as recovered: when the search above matches nothing, `i` is 8
++     * and the line below writes (OMOBJ *)-1 ONE PAST THE END of
++     * ev_CapEffElectricOMObj (capevent.c:58 declares it [8]). Adding the
++     * guard that read is missing changes behaviour the retail DOL also had,
++     * so it belongs to its own investigation, not to a warning sweep.
++     */
++    (void)(i >= 8);
+@@ -2612 +2612,4 @@
+-    i >= 8;
++    /* MP6_NATIVE_PORT: same value-less comparison as
++     * mbev_CapEffElectricKill above, same void cast, same reason. This one
++     * does not go on to index with `i` at all. */
++    (void)(i >= 8);

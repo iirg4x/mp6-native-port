@@ -32,6 +32,17 @@
  * HEAP_SOUND/HEAP_DVD keep their original sizes -- the audio bridge
  * allocates modestly and DVD reads complete synchronously into
  * caller-owned buffers, neither under the same pressure.
+ *
+ * Those four widened numbers are the port's BASELINE -- what it ships with
+ * the Enhancements "Expanded heaps" toggle off -- and they now live as named
+ * constants in shim/include/mp6_heap_scale.h so the enhancement can multiply
+ * them without restating them. Everything else in this file reads capacities
+ * out of HeapSizeTbl, and HuMemInitAll rewrites that one table from the
+ * baseline at the active scale, so the whole consumer set below (the
+ * pointer-to-heap classifier, the block-bounds probe, HuMemHeapSizeGet, the
+ * DC flush extent, the census/diag panels) sees ACTIVE capacities with no
+ * per-consumer change. At scale 1 the rewrite is the identity and the table
+ * is byte-for-byte what it was before the toggle existed.
  */
 #include "game/memory.h"
 #include "game/init.h"
@@ -40,19 +51,77 @@
 #include "mp6_savestate.h"
 #include "mp6_alloc_size.h"
 #include "mp6_anim_native.h"
+#include "mp6_heap_scale.h" /* Enhancements: expanded HuMem capacities */
+#include "mp6_diag_probe.h" /* pull-side heap snapshot -- see the block at the end */
+#include "mp6_console.h"    /* the MP6_ALLOC_CENSUS_START_TICK runtime lever */
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-static u32 HeapSizeTbl[HEAP_MAX] = { 0x220000*2, 0xC0000, 0xB00000*8, 0x500000, 0 };
+_Static_assert(MP6_HEAP_TABLE_LEN == HEAP_MAX,
+               "mp6_heap_scale.h's table length must equal the decomp's HEAP_MAX");
+_Static_assert(MP6_HEAP_FIXED_COUNT < HEAP_MAX,
+               "HEAP_SPACE must stay outside the configured/scaled range");
+
+/* The live table. Written once by HuMemInitAll from the baseline constants
+ * (never multiplied IN PLACE -- a second call would compound the scale), and
+ * a second time for HEAP_SPACE, whose size is a measured remainder rather
+ * than a configured capacity. Ordinary restorable .data, deliberately: the
+ * capacities a savestate was captured under are part of the world it
+ * describes, and restoring them alongside the heaps they measure is what
+ * keeps a state self-consistent when it is loaded into a process configured
+ * at a different scale. */
+static u32 HeapSizeTbl[HEAP_MAX] = {
+    MP6_HEAP_RETAIL_HEAP, MP6_HEAP_RETAIL_SOUND,
+    MP6_HEAP_RETAIL_MODEL, MP6_HEAP_RETAIL_DVD, 0
+};
 static void *HeapTbl[HEAP_MAX];
+
+/* MP6_HEAP_SCALE_PROBE=1 -- the one measurement that distinguishes a scaled
+ * table from a scaled-looking one: ask the ALLOCATOR for a block that does
+ * not fit the baseline capacity and see whether it is served. Requests
+ * 1.5x the BASELINE HEAP_MODEL capacity, which is unserviceable at scale 1
+ * (the whole heap is smaller than the request) and comfortably inside
+ * HEAP_MODEL at scale 4, then frees it again. Prints exactly one line and
+ * changes nothing else; absent the env var this is a complete no-op,
+ * matching every other instrument in this file.
+ *
+ * It runs against the real HuMemMemoryAlloc through the real HuMemDirectMalloc
+ * wrapper -- not against HeapSizeTbl -- so a table that was scaled without the
+ * arena growing to match (the failure mode this whole change exists to avoid)
+ * reports GRANTED=no at scale 4 rather than passing on the strength of a
+ * number nobody allocated against. tools/heap_scale_gate.py is the consumer. */
+static void mp6_heap_scale_probe(unsigned int scale)
+{
+    const char *env = getenv("MP6_HEAP_SCALE_PROBE");
+    s32 request;
+    void *block;
+
+    if (env == NULL || env[0] == '\0' || env[0] == '0') return;
+    request = (s32)(MP6_HEAP_RETAIL_MODEL + MP6_HEAP_RETAIL_MODEL / 2u);
+    block = HuMemDirectMalloc(HEAP_MODEL, request);
+    printf("[HEAPSCALE-PROBE] scale=x%u heap=HEAP_MODEL capacity=0x%08x request=0x%08x granted=%s\n",
+           scale, HeapSizeTbl[HEAP_MODEL], (unsigned)request, block != NULL ? "yes" : "no");
+    fflush(stdout);
+    if (block != NULL) HuMemDirectFree(block);
+}
 
 void HuMemInitAll(void)
 {
     s32 i;
     void *ptr;
     u32 free_size;
+    unsigned int scale = mp6_heap_scale_active();
+    /* Enhancements "Expanded heaps": the four CONFIGURED capacities, re-derived
+     * from the baseline at the active scale. Derived rather than multiplied so
+     * this is idempotent and so scale 1 provably reproduces the exact baseline
+     * table; the arena that has to hold the result was reserved from the same
+     * latched scale (platform/os/arena.c). HEAP_SPACE is untouched here -- it
+     * is whatever the OS heap has left, and the loop below records that. */
+    for (i = 0; i < MP6_HEAP_FIXED_COUNT; i++) {
+        HeapSizeTbl[i] = mp6_heap_scaled_capacity((int)i, scale);
+    }
     for (i = 0; i < 4; i++) {
         ptr = OSAlloc(HeapSizeTbl[i]);
         if (ptr == NULL) {
@@ -77,6 +146,7 @@ void HuMemInitAll(void)
     }
     HeapTbl[4] = HuMemInit(ptr, free_size);
     HeapSizeTbl[4] = free_size;
+    mp6_heap_scale_probe(scale);
 }
 
 void *HuMemInit(void *ptr, s32 size)
@@ -260,8 +330,18 @@ static void mp6_alloc_census_parse_env(void)
 
 static int mp6_alloc_census_active(void)
 {
+    long startTick;
     if (!g_allocCensusParsed) mp6_alloc_census_parse_env();
-    return g_allocCensusStartTick >= 0 && mp6_tick_count >= g_allocCensusStartTick;
+    /* env latches the initial arming tick; the dev console may override it live
+     * (`set alloccensus 0` arms from now, -1 disarms). The override deliberately
+     * does NOT write g_allocCensusStartTick: that static is savestate-marshalled
+     * with its own validation (mp6_malloc_savestate_apply_host_config above),
+     * and a console value written into it would be captured into a state file
+     * and re-applied on every later restore. The console's value belongs to the
+     * live debug session, so it stays in the console's own table. */
+    startTick = (long)mp6_console_cvar_get(MP6_CVAR_ALLOC_CENSUS,
+                                           (int)g_allocCensusStartTick);
+    return startTick >= 0 && mp6_tick_count >= startTick;
 }
 
 /* Called once per tick from mp6_tick_advance() (platform/null/shims_manual.c,
@@ -558,4 +638,42 @@ u32 HuMemHeapSizeGet(HEAPID heap)
 void *HuMemHeapPtrGet(HEAPID heap)
 {
     return HeapTbl[heap];
+}
+
+/* =======================================================================
+ * Pull-side heap snapshot (shim/include/mp6_diag_probe.h).
+ *
+ * Exactly the loop mp6_alloc_census_tick_check() above already runs, minus
+ * the printf: used bytes and block count per heap, plus the capacity from
+ * HeapSizeTbl and the largest free block from HuMemMaxMemorySizeGet (the same
+ * call HuMemInitAll's own boot diagnostic uses). No new measurement, no arming
+ * and no side effect -- reading this must never perturb the census the env
+ * lever controls.
+ *
+ * HEAP_SPACE is deliberately reported as uninitialized rather than skipped:
+ * HuMemInitAll only creates heaps 0..3 (HeapSizeTbl[4] is 0), and a panel that
+ * silently dropped the fifth row would read as "there are four heaps".
+ * ======================================================================= */
+int mp6_diag_heap_count(void)
+{
+    return (HEAP_MAX < MP6_DIAG_HEAP_MAX) ? HEAP_MAX : MP6_DIAG_HEAP_MAX;
+}
+
+int mp6_diag_heap(int index, Mp6DiagHeap *out)
+{
+    if (out == NULL || index < 0 || index >= mp6_diag_heap_count()) return 0;
+    out->name = g_heapNames[index];
+    out->capacity = HeapSizeTbl[index];
+    if (HeapTbl[index] == NULL) {
+        out->initialized = 0;
+        out->used = 0;
+        out->blocks = 0;
+        out->largestFree = 0;
+        return 1;
+    }
+    out->initialized = 1;
+    out->used = (int)HuMemUsedMemorySizeGet(HeapTbl[index]);
+    out->blocks = (int)HuMemUsedMemoryBlockGet(HeapTbl[index]);
+    out->largestFree = (int)HuMemMaxMemorySizeGet(HeapTbl[index]);
+    return 1;
 }

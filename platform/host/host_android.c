@@ -165,11 +165,13 @@ static void *mp6_try_fixed_low(uintptr_t base, size_t size)
     return NULL;
 }
 
-void *mp6_host_arena_reserve(size_t size)
+void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size)
 {
     /* Same candidate list, same order, same rationale as host_win32.c
      * (0x8xxxxxxx first: game/memory.c's BLOCK_CHECK_BROKEN wants the
-     * high bit -- the full comment travels with the win32 copy). */
+     * high bit -- the full comment travels with the win32 copy), and the
+     * same preferredBase-before-the-list precedence (host.h explains why
+     * the coroutine pool names one). */
     static const uintptr_t kCandidateBases[] = {
         0x80000000u, 0x90000000u, 0xA0000000u, 0xB0000000u,
         0x40000000u, 0x50000000u, 0x60000000u, 0x70000000u, 0x20000000u, 0x30000000u,
@@ -177,7 +179,14 @@ void *mp6_host_arena_reserve(size_t size)
     size_t i;
     void *got = NULL;
 
-    for (i = 0; i < sizeof(kCandidateBases) / sizeof(kCandidateBases[0]); i++) {
+    if (preferredBase != 0) {
+        got = mp6_try_fixed_low(preferredBase, size);
+        if (got && !mp6_host_range_below_4gb(got, size)) {
+            munmap(got, size);
+            got = NULL;
+        }
+    }
+    for (i = 0; !got && i < sizeof(kCandidateBases) / sizeof(kCandidateBases[0]); i++) {
         got = mp6_try_fixed_low(kCandidateBases[i], size);
         if (got && mp6_host_range_below_4gb(got, size)) break;
         if (got) {

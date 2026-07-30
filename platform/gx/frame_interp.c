@@ -47,6 +47,9 @@
 #include "mp6_unlocked_fps.h"
 #include "mp6_fi_model.h" /* model generations, draw context, camera-cut history */
 #include "mp6_fi_timing.h"
+#include "mp6_console.h"    /* the fi_diag runtime lever (env latches, console overrides) */
+#include "mp6_diag_probe.h" /* mp6_fi_stats_get -- the census this file already keeps */
+#include "mp6_enhancements.h" /* mp6_enh_unlocked_fps -- the switch's one front door */
 #include "host.h" /* mp6_host_monotonic_ns -- same clock as the tick throttle */
 
 /* Diagnostics only (MP6_FI_DIAG>=3): the VI tick counter, so a diag line can
@@ -74,7 +77,6 @@ extern void aurora_gx_export_vtx_layout(uint8_t *vtxDescOut /*21*/, uint8_t *vat
                                         uint8_t *vatTypeOut /*8x21*/);
 
 /* --- launcher/bridge seams --- */
-extern int mp6_launcher_cfg_unlocked_fps(void); /* launcher_core.cpp; 0 in automation */
 extern void mp6_launcher_frame_overlay(void);   /* launcher_core.cpp; replay frames draw the
                                                  * same ImGui/RmlUi overlay as real frames so
                                                  * the FPS counter / in-game menu don't strobe
@@ -87,6 +89,8 @@ extern void mp6_launcher_frame_overlay(void);   /* launcher_core.cpp; replay fra
 #define FI_ATTR_COUNT 21   /* GX_VA_PNMTXIDX..GX_VA_TEX7 -- the stride-relevant attrs */
 #define FI_MAX_REPLAYS_PER_WINDOW 8 /* only ever binds with vsync off/Mailbox; under Fifo
                                      * the present block itself paces to the display */
+#define FI_MIN_SPACING_WAIT_NS 250000 /* 0.25ms -- under the host sleep granularity,
+                                       * a spacing wait cannot be honoured anyway */
 
 /* --- Per-pair interpolation gate (see fi_build_replay). ---------------------
  * A replayed frame advances each pos matrix FORWARD along the last tick's
@@ -106,9 +110,75 @@ extern void mp6_launcher_frame_overlay(void);   /* launcher_core.cpp; replay fra
  *     flip-in drives up to 14 portraits at 45-120 deg/tick at once (the reported
  *     "flickering all over the place"). 10 deg cleanly separates the two: the old
  *     120 deg guard (qdot>0.5) let every flip extrapolate and overshoot.
- * The old guard was 200u / qdot>0.5 (=120 deg) -- far too loose for both. */
+ * The old guard was 200u / qdot>0.5 (=120 deg) -- far too loose for both.
+ *
+ * SCALE IS THE THIRD CHANNEL AND IT WAS UNGATED. Translation and rotation each
+ * had a gate from the start; scale had neither a gate nor a diagnostic, so a
+ * pop-in whose motion is mostly a scale change slid through both tests and
+ * extrapolated at full strength. The w01 dice bloom is the reference case
+ * (`src/board/dice.c` DiceObjOMExec case 2): `scale = HuSin(time*180)` over
+ * `maxTime = 12` ticks drives 1.0 -> 2.0x and back, so
+ *
+ *     tick 0 -> 1   s = 1.0000 -> 1.2588   (+25.9%),  y hop +38.8u
+ *     tick 11 -> 12 s = 1.2588 -> 1.0000   (-20.6%),  y hop -38.8u
+ *
+ * Both Y hops sit UNDER FI_TRANS_SNAP_U (50u) and the model barely rotates, so
+ * every replay in those windows interpolated -- and because a replay evaluates
+ * at t = 1+alpha, the last tick of the bloom is extrapolated PAST the end of an
+ * animation that has already stopped: the dice is drawn down to ~0.74x scale
+ * and ~39u below its resting height on a frame whose neighbours both show it at
+ * rest. That is an A-B-A pop with no counterpart in the motion the gates test.
+ *
+ * The scale gate is therefore NOT a whole-matrix snap. It holds the SCALE
+ * CHANNEL at tick N's value (per-channel alphaS = 0) while translation and
+ * rotation keep advancing, because those two are separately gated already and
+ * snapping them as well would give this object the tick rate for no measured
+ * reason -- the F3 pan defect in reverse (docs/history/F3_LEAF_STROBE.md
+ * section 7: an object pinned to tick N while the scene advances is itself the
+ * artifact). All three columns are held together, not just the offending one:
+ * the dice grows in x/z while it squashes in y, so holding one column and
+ * advancing the others would distort the shape instead of freezing it.
+ *
+ * CAMERA-SAFE BY PROOF, not by measurement. Every pos matrix is a modelview,
+ * camera x model, and the Hu3D view matrix is rigid (PSMTXLookAt: orthonormal
+ * basis + translation). A rigid left-multiply preserves column LENGTHS, so the
+ * decomposed scale of a modelview is exactly the model's own scale and a camera
+ * move cannot move this ratio at all -- unlike the translation gate, which sees
+ * the pan. Were a view matrix ever non-rigid the gate would only over-trigger,
+ * and over-triggering costs one channel's smoothness for one window; it can
+ * never displace geometry (O(0) == B still holds exactly, since alphaS = 0
+ * changes nothing at alpha = 0).
+ *
+ * The ratio is measured symmetrically -- max_i max(sb_i/sa_i, sa_i/sb_i) - 1,
+ * so a 2x grow and a 2x shrink both read 1.0.
+ *
+ * THE THRESHOLD IS CALIBRATED, from the maxScale meter this change also added
+ * (17,968 replay builds over one boot->board drive, plus a 900-present frame
+ * dump of the party-setup board-select confirm; full table in
+ * docs/history/F3_LEAF_STROBE.md section 8). Two facts set it, both from the
+ * SAME fifteen ticks so they are directly comparable:
+ *   - the smooth population tops out at 0.029. Almost every animated scale in
+ *     the game is a LINEAR ramp, so its ratio is 1/k where k is how many ticks
+ *     of growth remain; a slow ramp (model 72, k~60) reads 0.016-0.017 and
+ *     nothing measured anywhere on the route exceeded 0.029 without being a
+ *     pop.
+ *   - the measured ARTIFACT starts at 0.0345. Model 21's linear shrink-to-death
+ *     ran 0.0345 -> 0.0500 over ticks 3133..3142 with maxTrans pinned at 28.3u
+ *     (under the 50u gate) and minQdot at 0.99999 (far above the rotation
+ *     gate), and the interpolated present at 0.0500 tripped the A-B-A detector
+ *     at 32.4 MAD d(prev) against 0.73 d(span) -- i.e. both existing gates
+ *     passed it and the frame was visibly wrong.
+ * 0.03 is between them. The gap is narrow (0.029 vs 0.0345) and that is
+ * acceptable because the two error directions are not comparable: holding a
+ * smooth ramp costs one tick of size staleness on a camera-independent
+ * quantity -- under 3% of the object, invisible, and it cannot tear against
+ * anything because no pan feeds it -- while passing a pop costs a 32-MAD
+ * one-frame flash. When in doubt, hold. */
 #define FI_TRANS_SNAP_U   50.0    /* |delta translation| >= this -> snap the pair */
 #define FI_ROT_SNAP_QDOT  0.99619 /* |quat dot| <= this (>~10 deg/tick) -> snap the pair */
+#define FI_SCALE_SNAP_RATIO 0.03  /* worst per-column scale ratio-1 >= this ->
+                                   * hold the scale channel (translation and
+                                   * rotation still advance) */
 
 static int s_diag = -1; /* MP6_FI_DIAG level: 1 = periodic capture/walk/replay
                          * diagnostics + chunk proof; 2 adds one QPC-stamped
@@ -125,7 +195,11 @@ static int fi_diag(void)
         s_diag = (env != NULL && *env != '\0') ? atoi(env) : 0;
         if (s_diag < 0) s_diag = 0;
     }
-    return s_diag;
+    /* The env value stays the latched baseline; the dev console may override it
+     * live (`set fi_diag 3`), and mp6_console_cvar_get records the env value on
+     * the way through so the toggles page can show both and name the winner.
+     * With no console and no override this is an array index and a branch. */
+    return mp6_console_cvar_get(MP6_CVAR_FI_DIAG, s_diag);
 }
 
 /* MP6_FI_NO_INTERP=1 -- diagnosis bisect only. Keeps the replay CADENCE
@@ -160,6 +234,82 @@ static int fi_no_residual(void)
     return s_val;
 }
 
+/* MP6_FI_NO_SCALE_HOLD=1 -- A/B lever for the scale gate (see
+ * FI_SCALE_SNAP_RATIO). Restores the pre-gate behaviour -- the scale channel
+ * extrapolates at t = 1+alpha like translation and rotation -- so the same
+ * binary can be re-gated both ways against one frame-dump burst. With it set,
+ * a bloom/pop tick is expected to be LOUD on the A-B-A detector; that is the
+ * measurement, not a regression. */
+static int fi_no_scale_hold(void)
+{
+    static int s_val = -1;
+    if (s_val < 0) {
+        const char *env = getenv("MP6_FI_NO_SCALE_HOLD");
+        s_val = (env != NULL && *env != '\0' && *env != '0') ? 1 : 0;
+    }
+    return s_val;
+}
+
+/* MP6_FI_SCALE_SNAP=<ratio> -- threshold override for the same gate, so the
+ * calibration sweep does not need a rebuild per candidate. Parsed once; a
+ * value that is not a finite positive number leaves the compiled default in
+ * place (a typo must not silently disable a gate -- MP6_FI_NO_SCALE_HOLD is
+ * the way to turn it off, and it says so). */
+static double fi_scale_snap_ratio(void)
+{
+    static double s_val = -1.0;
+    if (s_val < 0.0) {
+        const char *env = getenv("MP6_FI_SCALE_SNAP");
+        double v = (env != NULL && *env != '\0') ? atof(env) : 0.0;
+        s_val = (isfinite(v) && v > 0.0) ? v : FI_SCALE_SNAP_RATIO;
+    }
+    return s_val;
+}
+
+/* MP6_FI_MARGIN_DIV -- pacing A/B lever for the admission margin (period/N).
+ * Clamped to a sane band so a typo cannot disable admission or remove the pad
+ * entirely. See the margin computation in mp6_fi_idle_present. */
+static int fi_margin_div(void)
+{
+    static int s_val = -1;
+    if (s_val < 0) {
+        const char *env = getenv("MP6_FI_MARGIN_DIV");
+        s_val = (env != NULL && *env != '\0') ? atoi(env) : 32;
+        if (s_val < 2) s_val = 2;
+        if (s_val > 512) s_val = 512;
+    }
+    return s_val;
+}
+
+/* THE ARMING DECISION for the whole file -- read live, every tick, by
+ * mp6_fi_idle_present and the capture arming below.
+ *
+ * Two sources, in this order:
+ *
+ *   1. MP6_UNLOCKED_FPS -- the pre-existing per-feature lever. Unchanged, and
+ *      it still wins outright in both directions (0 disables, anything else
+ *      enables), which is the priority docs/SETTINGS.md promises the legacy
+ *      levers keep "at their own consumption sites". Latched once: the
+ *      environment cannot change under a running process.
+ *
+ *   2. the ENHANCEMENTS SEAM (shim/include/mp6_enhancements.h), which is the
+ *      single front door for this switch and resolves, in its own documented
+ *      order, MP6_ENH_UNLOCKED_FPS -> MP6_ENH_PRESET -> the value the
+ *      launcher published from mp6_config.json -> RETAIL.
+ *
+ * Step 2 replaces a direct mp6_launcher_cfg_unlocked_fps() read. That read
+ * was the config and ONLY the config, which is why the switch was declared
+ * LIVE in the seam header while no engine consumer could actually see either
+ * of its two levers: MP6_ENH_UNLOCKED_FPS and MP6_ENH_PRESET=vanilla-plus
+ * both resolved correctly inside the seam and were then thrown away here.
+ *
+ * The automation contract is unchanged and is preserved BY CONSTRUCTION, not
+ * by a branch: automation mode never calls mp6_enh_set_values(), so the
+ * seam's store is still at its retail initializer and this returns 0 -- the
+ * same 0 mp6_launcher_cfg_unlocked_fps() hard-coded off the launcher path.
+ * In launcher mode the seam's published store IS g_cfg's six values
+ * (mp6_launcher_publish_enh(), called on config load and from every
+ * cfg_save()), so the Mods/Enhancements toggle still applies within a tick. */
 int mp6_unlocked_fps_enabled(void)
 {
     static int s_envState = -2; /* -2 unparsed; -1 unset; 0 forced off; 1 forced on */
@@ -172,9 +322,9 @@ int mp6_unlocked_fps_enabled(void)
         }
     }
     if (s_envState >= 0) {
-        return s_envState; /* env lever set: it wins outright */
+        return s_envState; /* legacy env lever set: it wins outright */
     }
-    return mp6_launcher_cfg_unlocked_fps() != 0; /* live config (Mods toggle); 0 in automation */
+    return mp6_enh_unlocked_fps() != 0;
 }
 
 /* =======================================================================
@@ -245,6 +395,69 @@ static int64_t s_lastPresentNs;   /* end of the last present (real or replay) --
 static long s_statReplays, s_statSnaps, s_statSkippedWindows;
 static int64_t s_replayBudgetNs;  /* measured CPU cost after spacing, including try-admission */
 
+/* --- Decline census ------------------------------------------------------
+ * Every early return in mp6_fi_idle_present is a REASON this window produced
+ * no interpolated present, and the reasons are not interchangeable: "the
+ * stream failed the walk" is a builder defect, "the deadline never fits" is
+ * the tick having no idle time left to give, and "the cap is reached" is the
+ * feature working. Without the split, a present rate pinned at the tick rate
+ * is unattributable -- which is exactly the state the w01 board report started
+ * from. Counted unconditionally (one increment per call, all paths); printed
+ * only under MP6_FI_DIAG. */
+enum {
+    FI_DECL_INACTIVE = 0,    /* feature off, or no sealed stream retained yet */
+    FI_DECL_NOSTREAM,        /* stream N unsealed, walk-failed, or empty */
+    FI_DECL_CAP,             /* FI_MAX_REPLAYS_PER_WINDOW already reached */
+    FI_DECL_DEADLINE_ENTRY,  /* no room at the window's first admission check */
+    FI_DECL_DEADLINE_SPACE,  /* the spacing slot itself would land past the deadline */
+    FI_DECL_DEADLINE_SLEPT,  /* the spacing sleep overshot the remaining room */
+    FI_DECL_BUILD,           /* fi_build_replay returned 0 */
+    FI_DECL_DEADLINE_BUILT,  /* the rewrite consumed the remaining room */
+    FI_DECL_DEADLINE_PUMPED, /* SDL_PumpEvents consumed the remaining room */
+    FI_DECL_BEGINFRAME,      /* aurora refused a non-blocking frame slot */
+    FI_DECL_OK,              /* presented */
+    FI_DECL_COUNT
+};
+static const char *const kFiDeclNames[FI_DECL_COUNT] = {
+    "inactive", "nostream", "cap", "dl-entry", "dl-space", "dl-slept",
+    "build", "dl-built", "dl-pumped", "beginframe", "ok"
+};
+static long s_declCount[FI_DECL_COUNT];
+static long s_declWindowBase[FI_DECL_COUNT];
+/* Slack seen at the entry admission check, i.e. how much of the tick period
+ * was still unspent when the throttle first offered this window to replay.
+ * Separates "the deadline test is too strict" from "there is no idle time". */
+static int64_t s_declSlackSumNs, s_declSlackMaxNs, s_declSlackMinNs;
+static long s_declSlackSamples;
+static long s_censusSeals, s_censusSealWalkFail, s_censusSealNoPrev;
+/* What a replay's wall cost is actually made of. The admission budget is one
+ * number, but the two halves have different owners: BUILD is this file's own
+ * rewrite (walk + copy + matrix maths -- port-side, optimisable), PRESENT is
+ * aurora re-processing the stream and submitting it, which can also BLOCK on
+ * the render worker. A feature that is capacity-limited by the second is a
+ * different problem from one limited by the first. */
+static int64_t s_costBuildSumNs, s_costBuildMaxNs, s_costBuildLastNs;
+static int64_t s_costPresentSumNs, s_costPresentMaxNs;
+static long s_costSamples;
+
+static void fi_cost_observe(int64_t buildNs, int64_t totalNs)
+{
+    int64_t presentNs = (totalNs > buildNs) ? totalNs - buildNs : 0;
+    s_costBuildSumNs += buildNs;
+    s_costPresentSumNs += presentNs;
+    if (buildNs > s_costBuildMaxNs) s_costBuildMaxNs = buildNs;
+    if (presentNs > s_costPresentMaxNs) s_costPresentMaxNs = presentNs;
+    s_costSamples++;
+}
+
+static int fi_decline(int reason)
+{
+    s_declCount[reason]++;
+    return 0;
+}
+
+static void mp6_fi_census_log(long tick); /* defined with the frame-boundary hooks */
+
 static void fi_budget_observe(int64_t costNs)
 {
     if (costNs > s_replayBudgetNs) {
@@ -252,6 +465,23 @@ static void fi_budget_observe(int64_t costNs)
     } else {
         s_replayBudgetNs -= (s_replayBudgetNs - costNs) / 4;
     }
+}
+
+/* What of this replay's measured cost is still OWED at `now`.
+ *
+ * s_replayBudgetNs is the cost of a whole replay measured from t0, so the
+ * re-checks that run partway through one (after the rewrite, after the event
+ * pump) must not demand it again in full: the work already done since t0 has
+ * been paid, and only the remainder still has to fit before the deadline.
+ * Demanding the whole budget at every stage cost the board its replays twice
+ * over -- it built the frame (~0.8ms of real work) and then threw it away
+ * because it re-reserved room for that same 0.8ms. MP6_FI_DIAG's census named
+ * it outright: dl-built was the largest decline reason once the spacing and
+ * spin defects were out of the way. */
+static int64_t fi_budget_remaining(int64_t t0, int64_t now)
+{
+    int64_t spent = (now > t0) ? now - t0 : 0;
+    return (s_replayBudgetNs > spent) ? s_replayBudgetNs - spent : 0;
 }
 
 static void fi_budget_decay(void)
@@ -776,8 +1006,123 @@ static int fi_key_same_group(const FiPosKey *a, const FiPosKey *b)
            a->camera == b->camera && a->generation == b->generation;
 }
 
-/* Count keys in `keys[0..n)` belonging to key `k`'s group, and how many of
- * them carry k's exact (sub, ordinal) name (dup detection), in one pass. */
+/* --- Key census tables ---------------------------------------------------
+ *
+ * The census fi_pair_stream needs is, per matrix: how many keys share its
+ * GROUP, and how many share its exact name -- on both sides -- plus, for a
+ * reordered matrix, WHERE its twin sits in N-1.  Each of those used to be a
+ * linear scan run once per matrix, so pairing cost grew as posCount squared
+ * and the reordering search added a second such term (the deferred pass is
+ * depth-sorted, so on a moving camera nearly every matrix takes it).
+ *
+ * That cost is not academic and it is not the game's: it is spent inside
+ * mp6_fi_note_frame_end, on the tick's own clock, and it therefore comes
+ * straight out of the idle window this feature exists to fill.  Measured on
+ * the w01 board (~250 pos loads/tick, ~300KB streams): the whole seal ran
+ * 1.07ms of a 16.67ms period against a 4.3ms idle window -- the feature was
+ * spending a quarter of its own budget deciding what to do with it.
+ *
+ * Hashing the keys once per stream makes every one of those questions a
+ * lookup, so pairing is linear.  Scratch only: rebuilt from scratch each
+ * tick, grow-only like the retained streams, and carrying no meaning across
+ * ticks (nothing here needs invalidating on a savestate load). */
+typedef struct {
+    FiPosKey *slot;   /* slot[i].valid == 0 marks an empty bucket */
+    uint32_t *count;  /* keys hashing equal to this bucket's key */
+    int32_t  *first;  /* lowest stream index carrying it */
+    uint32_t  cap;    /* power of two, or 0 when unbuilt */
+    int       ok;
+} FiKeyTable;
+
+static uint32_t fi_key_hash(const FiPosKey *k, int withName)
+{
+    uint32_t h = 2166136261u;
+    h = (h ^ (uint32_t)(uint16_t)k->model) * 16777619u;
+    h = (h ^ (uint32_t)(uint8_t)k->camera) * 16777619u;
+    h = (h ^ k->generation) * 16777619u;
+    if (withName) {
+        h = (h ^ k->sub) * 16777619u;
+        h = (h ^ k->ordinal) * 16777619u;
+    }
+    return h;
+}
+
+/* Bucket equality mirrors fi_key_same_group / fi_key_equal exactly. */
+static int fi_key_match(const FiPosKey *a, const FiPosKey *b, int withName)
+{
+    return withName ? fi_key_equal(a, b) : fi_key_same_group(a, b);
+}
+
+static uint32_t fi_table_probe(const FiKeyTable *t, const FiPosKey *k, int withName)
+{
+    uint32_t mask = t->cap - 1u;
+    uint32_t i = fi_key_hash(k, withName) & mask;
+    while (t->slot[i].valid && !fi_key_match(&t->slot[i], k, withName)) {
+        i = (i + 1u) & mask;
+    }
+    return i;
+}
+
+/* Build the table over `keys[0..n)`. Invalid keys are never inserted: they
+ * have no identity, so they belong to no group and name nothing. */
+static void fi_table_build(FiKeyTable *t, const FiPosKey *keys, uint32_t n, int withName)
+{
+    uint32_t need = 64, j;
+    t->ok = 0;
+    while ((uint64_t)need < (uint64_t)n * 2u) {
+        if (need > UINT32_MAX / 2u) return;
+        need *= 2u;
+    }
+    if (need > t->cap) {
+        uint32_t capKey = t->cap, capCount = t->cap, capFirst = t->cap;
+        if (!fi_grow((void **)&t->slot, &capKey, need, sizeof(FiPosKey)) ||
+            !fi_grow((void **)&t->count, &capCount, need, sizeof(uint32_t)) ||
+            !fi_grow((void **)&t->first, &capFirst, need, sizeof(int32_t))) {
+            return;
+        }
+        /* fi_grow rounds each independently; the table indexes all three with
+         * one mask, so adopt the smallest common power of two it produced. */
+        t->cap = capKey < capCount ? capKey : capCount;
+        if (capFirst < t->cap) t->cap = capFirst;
+    }
+    memset(t->slot, 0, (size_t)t->cap * sizeof(FiPosKey));
+    for (j = 0; j < n; ++j) {
+        uint32_t at;
+        if (!keys[j].valid) continue;
+        at = fi_table_probe(t, &keys[j], withName);
+        if (!t->slot[at].valid) {
+            t->slot[at] = keys[j];
+            t->count[at] = 1;
+            t->first[at] = (int32_t)j;
+        } else {
+            t->count[at]++;
+        }
+    }
+    t->ok = 1;
+}
+
+/* Count of keys matching `k`, and the lowest index carrying it (-1 if none). */
+static uint32_t fi_table_lookup(const FiKeyTable *t, const FiPosKey *k, int withName,
+                                int32_t *firstOut)
+{
+    uint32_t at;
+    if (firstOut != NULL) *firstOut = -1;
+    if (!t->ok || t->cap == 0) return 0;
+    at = fi_table_probe(t, k, withName);
+    if (!t->slot[at].valid) return 0;
+    if (firstOut != NULL) *firstOut = t->first[at];
+    return t->count[at];
+}
+
+/* Per-side scratch, reused every tick (grow-only). */
+static FiKeyTable s_curGroupTab, s_curNameTab, s_prevGroupTab, s_prevNameTab;
+
+/* The linear REFERENCE census the tables replaced: counts keys in
+ * `keys[0..n)` belonging to key `k`'s group, and how many carry k's exact
+ * (sub, ordinal) name. Retained deliberately -- under MP6_FI_DIAG>=3
+ * fi_pair_stream runs it alongside the tables on every key of every tick and
+ * prints any disagreement, so the optimisation has a live oracle rather than
+ * an argument. */
 static void fi_group_census(const FiPosKey *k, const FiPosKey *keys, uint32_t n,
                             uint32_t *groupCount, uint32_t *ordinalCount)
 {
@@ -854,9 +1199,15 @@ static void fi_pair_stream(FiStream *cur, const FiStream *prev)
         cur->walkOk = 0;
         return;
     }
+    if (prev != NULL && prev->walkOk) {
+        fi_table_build(&s_curGroupTab, cur->posKey, cur->keyCount, 0);
+        fi_table_build(&s_curNameTab, cur->posKey, cur->keyCount, 1);
+        fi_table_build(&s_prevGroupTab, prev->posKey, prev->keyCount, 0);
+        fi_table_build(&s_prevNameTab, prev->posKey, prev->keyCount, 1);
+    }
     for (i = 0; i < cur->posCount; ++i) {
-        uint32_t j;
         uint32_t gCur, oCur, gPrev, oPrev;
+        int32_t prevAt;
         cur->prevPos[i] = -1;
         if (!prev || !prev->walkOk) { diagNoPrev++; continue; }
         if (!cur->posKey[i].valid) {
@@ -864,8 +1215,34 @@ static void fi_pair_stream(FiStream *cur, const FiStream *prev)
             if (cur->posKey[i].camera >= 0) diagNoKeyInCam++;
             continue;
         }
-        fi_group_census(&cur->posKey[i], cur->posKey, cur->keyCount, &gCur, &oCur);
-        fi_group_census(&cur->posKey[i], prev->posKey, prev->keyCount, &gPrev, &oPrev);
+        /* An allocation failure in any table degrades to "nothing pairs this
+         * tick" -- the same one-directional degradation every other rejection
+         * here uses, never a wrong pair. */
+        gCur = fi_table_lookup(&s_curGroupTab, &cur->posKey[i], 0, NULL);
+        oCur = fi_table_lookup(&s_curNameTab, &cur->posKey[i], 1, NULL);
+        gPrev = fi_table_lookup(&s_prevGroupTab, &cur->posKey[i], 0, NULL);
+        oPrev = fi_table_lookup(&s_prevNameTab, &cur->posKey[i], 1, &prevAt);
+        if (fi_diag() >= 3) {
+            /* Oracle for the linear-to-hashed census change: the reference
+             * scan and the table must agree on every key of every tick, and
+             * the table's first-index must be the exact match the old search
+             * returned. Any line here means the optimisation changed a
+             * pairing decision, which is a correctness bug, not a slow path. */
+            uint32_t rg, ro, pg, po;
+            uint32_t j;
+            int32_t refAt = -1;
+            fi_group_census(&cur->posKey[i], cur->posKey, cur->keyCount, &rg, &ro);
+            fi_group_census(&cur->posKey[i], prev->posKey, prev->keyCount, &pg, &po);
+            for (j = 0; j < prev->keyCount; ++j) {
+                if (fi_key_equal(&cur->posKey[i], &prev->posKey[j])) { refAt = (int32_t)j; break; }
+            }
+            if (rg != gCur || ro != oCur || pg != gPrev || po != oPrev || refAt != prevAt) {
+                fprintf(stderr, "[MP6-FI] CENSUS MISMATCH tick=%ld idx=%u table(g=%u o=%u pg=%u po=%u at=%d) "
+                                "scan(g=%u o=%u pg=%u po=%u at=%d)\n",
+                        cur->tick, i, gCur, oCur, gPrev, oPrev, prevAt,
+                        rg, ro, pg, po, refAt);
+            }
+        }
         if (gCur != gPrev || oCur != 1 || oPrev != 1) {
             /* membership changed, or ambiguous duplicate key: snap this pair */
             if (gPrev == 0) diagNoPrevGroup++;
@@ -878,12 +1255,9 @@ static void fi_pair_stream(FiStream *cur, const FiStream *prev)
             cur->prevPos[i] = (int32_t)i;
             continue;
         }
-        for (j = 0; j < prev->posCount; ++j) {
-            if (fi_key_equal(&cur->posKey[i], &prev->posKey[j])) {
-                cur->prevPos[i] = (int32_t)j;
-                break;
-            }
-        }
+        /* oPrev == 1 above, so the table's first index IS the unique exact
+         * match the old linear search would have returned. */
+        cur->prevPos[i] = prevAt;
         if (cur->prevPos[i] >= 0) diagReordered++; else diagUnmatched++;
     }
     if (fi_diag() >= 3) {
@@ -1019,15 +1393,44 @@ static int fi_decompose(const FiMtx *M, FiTrs *out)
     return 1;
 }
 
+/* Worst per-column SCALE CHANGE between two decomposed matrices, expressed as a
+ * ratio above 1: max_i max(sb_i/sa_i, sa_i/sb_i) - 1. Symmetric on purpose, so
+ * a 2x grow and a 2x shrink both read 1.0 and one threshold covers both
+ * directions of a pop. fi_decompose rejects any column shorter than 1e-9 and
+ * every length it accepts is finite, so both divisions are safe on any pair
+ * that reached here. */
+static double fi_scale_ratio(const FiTrs *a, const FiTrs *b)
+{
+    double worst = 1.0;
+    int i;
+    for (i = 0; i < 3; ++i) {
+        double u = b->s[i] / a->s[i];
+        double v = a->s[i] / b->s[i];
+        double m = (u > v) ? u : v;
+        if (m > worst) worst = m;
+    }
+    return worst - 1.0;
+}
+
 /* Advance a->b one step further, evaluated at t = 1 + alpha (slerp with
- * t > 1 extrapolates the same arc; translation/scale extend linearly). */
-static void fi_advance(const FiTrs *a, const FiTrs *b, double alpha, FiTrs *out)
+ * t > 1 extrapolates the same arc; translation/scale extend linearly).
+ *
+ * holdScale pins the SCALE channel to b's own scale (alphaS = 0) while
+ * translation and rotation still advance -- the scale gate's action, see
+ * FI_SCALE_SNAP_RATIO. It is a per-CHANNEL degradation, not a snap of the
+ * matrix, and it is a no-op at alpha = 0 (where b->s is what the linear term
+ * returns anyway), which is what keeps O(0) == B exact. */
+static void fi_advance(const FiTrs *a, const FiTrs *b, double alpha, int holdScale, FiTrs *out)
 {
     double dot, t = 1.0 + alpha;
     double qa[4];
     int i;
     for (i = 0; i < 3; ++i) {
         out->t[i] = b->t[i] + (b->t[i] - a->t[i]) * alpha;
+        if (holdScale) {
+            out->s[i] = b->s[i];
+            continue;
+        }
         out->s[i] = b->s[i] + (b->s[i] - a->s[i]) * alpha;
         if (out->s[i] < 1e-9) out->s[i] = b->s[i]; /* sign-flip guard */
     }
@@ -1162,6 +1565,9 @@ void mp6_fi_note_frame_end(void)
     s_prev = s_latest;
     s_latest = s_cur;
     fi_pair_stream(s, s_prev >= 0 ? &s_streams[s_prev] : NULL);
+    s_censusSeals++;
+    if (!s->walkOk) s_censusSealWalkFail++;
+    if (s_prev < 0 || !s_streams[s_prev].walkOk) s_censusSealNoPrev++;
     mp6_fi_model_snapshot();
     s_cur = -1;
     s_lastSealNs = (int64_t)mp6_host_monotonic_ns();
@@ -1186,6 +1592,104 @@ void mp6_fi_note_frame_end(void)
                 s->tick, s->size, s->chunkCount, s->walkOk ? "ok" : "FAIL", s->posCount, posChanged,
                 s_diagChunkAligned, s_diagChunkChecked, s_diagChunkMisaligned,
                 s_statReplays, s_statSnaps, s_statSkippedWindows);
+        mp6_fi_census_log(s->tick);
+    }
+}
+
+/* One line naming WHY the last 300 ticks' idle windows did or did not present.
+ * Deltas, not cumulatives: a scene change moves the answer, and a cumulative
+ * count would bury it under the boot path's history. */
+static void mp6_fi_census_log(long tick)
+{
+    int i;
+    long calls = 0;
+    char buf[512];
+    size_t used = 0;
+    if (!fi_diag()) return;
+    for (i = 0; i < FI_DECL_COUNT; ++i) {
+        long delta = s_declCount[i] - s_declWindowBase[i];
+        calls += delta;
+        if (delta != 0 && used < sizeof(buf) - 1) {
+            int n = snprintf(buf + used, sizeof(buf) - used, " %s=%ld",
+                             kFiDeclNames[i], delta);
+            if (n > 0) used += (size_t)n;
+            if (used >= sizeof(buf)) used = sizeof(buf) - 1;
+        }
+    }
+    fprintf(stderr,
+            "[MP6-FI-CENSUS] vitick=%ld tick=%ld calls=%ld |%s | slack(min=%.3fms avg=%.3fms "
+            "max=%.3fms n=%ld) budget=%.3fms | cost-ms(build avg=%.3f max=%.3f, "
+            "present avg=%.3f max=%.3f, n=%ld) | seals=%ld walkfail=%ld noprev=%ld\n",
+            mp6_tick_count, tick, calls, used ? buf : " (none)",
+            (double)s_declSlackMinNs / 1e6,
+            s_declSlackSamples ? (double)s_declSlackSumNs / (double)s_declSlackSamples / 1e6 : 0.0,
+            (double)s_declSlackMaxNs / 1e6, s_declSlackSamples,
+            (double)s_replayBudgetNs / 1e6,
+            s_costSamples ? (double)s_costBuildSumNs / (double)s_costSamples / 1e6 : 0.0,
+            (double)s_costBuildMaxNs / 1e6,
+            s_costSamples ? (double)s_costPresentSumNs / (double)s_costSamples / 1e6 : 0.0,
+            (double)s_costPresentMaxNs / 1e6, s_costSamples,
+            s_censusSeals, s_censusSealWalkFail, s_censusSealNoPrev);
+    fflush(stderr);
+    for (i = 0; i < FI_DECL_COUNT; ++i) s_declWindowBase[i] = s_declCount[i];
+    s_declSlackSumNs = 0;
+    s_declSlackMaxNs = 0;
+    s_declSlackMinNs = 0;
+    s_declSlackSamples = 0;
+    s_costBuildSumNs = s_costBuildMaxNs = 0;
+    s_costPresentSumNs = s_costPresentMaxNs = 0;
+    s_costSamples = 0;
+    s_censusSeals = s_censusSealWalkFail = s_censusSealNoPrev = 0;
+}
+
+/* =======================================================================
+ * Pull-side census reader (shim/include/mp6_diag_probe.h).
+ *
+ * Everything below already existed and is already maintained on every path --
+ * only the PRINTING is gated by MP6_FI_DIAG. So the dev console reads the very
+ * counters [MP6-FI-CENSUS] formats instead of keeping its own, which is the
+ * point: two independent counts of "why did this window not present" could
+ * disagree, and then neither could be trusted. Pure read; it does not reset
+ * the census window (mp6_fi_census_log owns that).
+ * ======================================================================= */
+typedef char fi_decl_fits_probe[(FI_DECL_COUNT <= MP6_FI_DECL_MAX) ? 1 : -1];
+
+const char *mp6_fi_decl_name(int index)
+{
+    if (index < 0 || index >= FI_DECL_COUNT) return "?";
+    return kFiDeclNames[index];
+}
+
+void mp6_fi_stats_get(Mp6FiStats *out)
+{
+    int i;
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+    out->active = s_active;
+    out->declCount = FI_DECL_COUNT;
+    for (i = 0; i < FI_DECL_COUNT; ++i) out->decl[i] = s_declCount[i];
+    out->slackMinNs = s_declSlackMinNs;
+    out->slackMaxNs = s_declSlackMaxNs;
+    out->slackSumNs = s_declSlackSumNs;
+    out->slackSamples = s_declSlackSamples;
+    out->budgetNs = s_replayBudgetNs;
+    out->costBuildSumNs = s_costBuildSumNs;
+    out->costBuildMaxNs = s_costBuildMaxNs;
+    out->costPresentSumNs = s_costPresentSumNs;
+    out->costPresentMaxNs = s_costPresentMaxNs;
+    out->costSamples = s_costSamples;
+    out->seals = s_censusSeals;
+    out->sealWalkFail = s_censusSealWalkFail;
+    out->sealNoPrev = s_censusSealNoPrev;
+    out->statReplays = s_statReplays;
+    out->statSnaps = s_statSnaps;
+    out->statSkipped = s_statSkippedWindows;
+    if (s_latest >= 0) {
+        const FiStream *cur = &s_streams[s_latest];
+        out->streamBytes = cur->size;
+        out->chunkCount = cur->chunkCount;
+        out->posCount = cur->posCount;
+        out->walkOk = cur->walkOk;
     }
 }
 
@@ -1200,9 +1704,40 @@ static uint32_t s_replayCap;
  * the stream, so a replay frame's on-screen change can be attributed to (or
  * cleared of) the matrix rewrite without filtering by magnitude. */
 static uint32_t s_dbgPosSeen, s_dbgRewritten, s_dbgSnapUnpaired, s_dbgSnapGate, s_dbgVerbatimEq;
+/* The two classes that used to be counted NOWHERE, which is why s_dbgPosSeen
+ * never equalled the sum of the buckets and neither class could be argued about
+ * from a log:
+ *   snapCamera  -- paired, but its camera moved discontinuously this tick
+ *                  (mp6_fi_model_camera_stable said no).
+ *   snapDecompose -- fi_decompose refused one of the two matrices (a column
+ *                  shorter than 1e-9, a mirrored/badly-skewed basis with
+ *                  det < 0.5, a non-finite element). Mirrored geometry is real
+ *                  in this game -- reflections and some flipped sprites -- so
+ *                  this bucket is expected to be nonzero, and "expected to be
+ *                  nonzero" is exactly the state that needs a counter rather
+ *                  than a silent fall-through.
+ * With these two the six buckets partition s_dbgPosSeen exactly, and
+ * fi_build_replay asserts that at MP6_FI_DIAG>=3. */
+static uint32_t s_dbgSnapCamera, s_dbgSnapDecompose;
 static uint32_t s_dbgDropOffscreen, s_dbgDropCopyBind, s_dbgDropCopyExec, s_dbgDropDestroy,
                 s_dbgDropOther, s_dbgDropPosLoads, s_dbgCopyClear;
 static double s_dbgMaxTrans, s_dbgMinQdot;
+/* Worst per-column scale ratio-1 seen this replay (fi_scale_ratio), with the
+ * model/ordinal that produced it, and how many pairs the scale gate acted on.
+ * maxTrans/minQdot have always been here; scale had no meter at all, so the
+ * dice bloom was invisible in every diagnostic this file emits. */
+static double s_dbgMaxScaleRatio;
+static int s_dbgScaleModel, s_dbgScaleOrd;
+static uint32_t s_dbgScaleHold;
+/* The worst ratio the gate ACTUALLY ACTED ON, i.e. the largest scale change
+ * that reached the hold after passing FI_TRANS_SNAP_U and FI_ROT_SNAP_QDOT.
+ * maxScale alone cannot answer this and it matters: many of the loudest scale
+ * changes in the game are pop-ins that SPIN as they grow, so the rotation gate
+ * already snaps the whole pair and the scale channel was never the actor there.
+ * maxHeld is the size of the overshoot that was genuinely unbounded before this
+ * gate existed -- the number the change is worth. */
+static double s_dbgMaxHeldScale;
+static int s_dbgHeldModel, s_dbgHeldOrd;
 /* Worst TRS round-trip residual over the replay: max |compose(decompose(B)) - B|
  * element-wise. TRS decomposition is exact only for a similarity transform; a
  * modelview with non-uniform object scale under rotation has non-orthogonal
@@ -1230,10 +1765,16 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
 
     memset(lastPosState, 0, sizeof(lastPosState));
     s_dbgPosSeen = s_dbgRewritten = s_dbgSnapUnpaired = s_dbgSnapGate = s_dbgVerbatimEq = 0;
+    s_dbgSnapCamera = s_dbgSnapDecompose = 0;
     s_dbgDropOffscreen = s_dbgDropCopyBind = s_dbgDropCopyExec = s_dbgDropDestroy = 0;
     s_dbgDropOther = s_dbgDropPosLoads = s_dbgCopyClear = 0;
     s_dbgMaxTrans = 0.0;
     s_dbgMinQdot = 1.0;
+    s_dbgMaxScaleRatio = 0.0;
+    s_dbgScaleModel = s_dbgScaleOrd = -1;
+    s_dbgScaleHold = 0;
+    s_dbgMaxHeldScale = 0.0;
+    s_dbgHeldModel = s_dbgHeldOrd = -1;
     s_dbgMaxRoundTrip = 0.0;
     s_dbgRoundTripModel = s_dbgRoundTripOrd = -1;
     s_dbgMaxAlpha0Err = 0.0;
@@ -1320,10 +1861,16 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
                 uint32_t slot = c.xfAddr / 4 / 3; /* addr = id*4, id = slot*3 (GX_PNMTX0..9) */
                 uint8_t *payload = s_replayBuf + out + 5;
                 int rewritten = 0;
+                /* Hoisted so the decline census can NAME which of the two
+                 * pre-conditions failed instead of one of them vanishing into a
+                 * silent fall-through, and so camera_stable is still evaluated
+                 * exactly once, only for a paired matrix. */
+                int paired = interp && streamPosIdx < cur->posCount &&
+                             cur->prevPos[streamPosIdx] >= 0;
+                int camStable = paired &&
+                    mp6_fi_model_camera_stable(cur->posKey[streamPosIdx].camera);
                 s_dbgPosSeen++;
-                if (interp && streamPosIdx < cur->posCount &&
-                    cur->prevPos[streamPosIdx] >= 0 &&
-                    mp6_fi_model_camera_stable(cur->posKey[streamPosIdx].camera)) {
+                if (camStable) {
                     uint32_t prevIdx = (uint32_t)cur->prevPos[streamPosIdx];
                     const uint8_t *pa = prev->data + prev->posOff[prevIdx];
                     const uint8_t *pb = cur->data + c.offset + 5;
@@ -1335,10 +1882,22 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
                         FiTrs ta, tb, to;
                         fi_read_mtx(pa, &A);
                         fi_read_mtx(pb, &B);
-                        if (fi_decompose(&A, &ta) && fi_decompose(&B, &tb)) {
+                        if (!fi_decompose(&A, &ta) || !fi_decompose(&B, &tb)) {
+                            /* Mirrored/degenerate basis: this pair is presented
+                             * verbatim. Counted, not swallowed -- see
+                             * s_dbgSnapDecompose. */
+                            s_dbgSnapDecompose++;
+                        } else {
                             double dx = tb.t[0] - ta.t[0], dy = tb.t[1] - ta.t[1], dz = tb.t[2] - ta.t[2];
                             double qdot = fabs(ta.q[0] * tb.q[0] + ta.q[1] * tb.q[1] +
                                                ta.q[2] * tb.q[2] + ta.q[3] * tb.q[3]);
+                            /* Scale is the third TRS channel and the only one
+                             * that had no gate. Measured for every pair
+                             * (attributed, so a log names the model), and gated
+                             * by a CHANNEL HOLD rather than a snap. */
+                            double sratio = fi_scale_ratio(&ta, &tb);
+                            int holdScale = !fi_no_scale_hold() &&
+                                            sratio >= fi_scale_snap_ratio();
                             /* Per-pair gate (FI_TRANS_SNAP_U / FI_ROT_SNAP_QDOT):
                              * a replay advances this matrix one tick FORWARD, so
                              * interpolate only when the tick's motion is small
@@ -1352,6 +1911,11 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
                             double dmag = sqrt(dx * dx + dy * dy + dz * dz);
                             if (dmag > s_dbgMaxTrans) s_dbgMaxTrans = dmag;
                             if (qdot < s_dbgMinQdot) s_dbgMinQdot = qdot;
+                            if (sratio > s_dbgMaxScaleRatio) {
+                                s_dbgMaxScaleRatio = sratio;
+                                s_dbgScaleModel = (int)cur->posKey[streamPosIdx].model;
+                                s_dbgScaleOrd = (int)cur->posKey[streamPosIdx].ordinal;
+                            }
                             if (dx * dx + dy * dy + dz * dz >= FI_TRANS_SNAP_U * FI_TRANS_SNAP_U ||
                                 qdot <= FI_ROT_SNAP_QDOT) {
                                 s_dbgSnapGate++;
@@ -1431,8 +1995,16 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
                                  * copies the translation verbatim, so the
                                  * residual there is identically zero. */
                                 fi_compose(&tb, &RB);
-                                fi_advance(&ta, &tb, alpha, &to);
+                                fi_advance(&ta, &tb, alpha, holdScale, &to);
                                 fi_compose(&to, &O);
+                                if (holdScale) {
+                                    s_dbgScaleHold++;
+                                    if (sratio > s_dbgMaxHeldScale) {
+                                        s_dbgMaxHeldScale = sratio;
+                                        s_dbgHeldModel = (int)cur->posKey[streamPosIdx].model;
+                                        s_dbgHeldOrd = (int)cur->posKey[streamPosIdx].ordinal;
+                                    }
+                                }
                                 if (!fi_no_residual()) {
                                     for (rr = 0; rr < 3; ++rr) {
                                         for (cc = 0; cc < 3; ++cc) {
@@ -1449,7 +2021,13 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
                                      * measure |O0 - B|, which must be 0. */
                                     FiTrs t0chk;
                                     FiMtx O0;
-                                    fi_advance(&ta, &tb, 0.0, &t0chk);
+                                    /* Same holdScale the real rewrite used: the
+                                     * self-check must exercise the code path
+                                     * that shipped, not a second variant of it.
+                                     * (alphaS = 0 is a no-op at alpha = 0, so
+                                     * maxA0Err must stay 0 either way -- that
+                                     * is the property being checked.) */
+                                    fi_advance(&ta, &tb, 0.0, holdScale, &t0chk);
                                     fi_compose(&t0chk, &O0);
                                     for (rr = 0; rr < 3; ++rr) {
                                         for (cc = 0; cc < 4; ++cc) {
@@ -1483,11 +2061,17 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
                         }
                     }
                 }
+                /* Exhaustive by construction: rewritten / unpaired / camera-cut
+                 * / byte-equal / decompose-refused / motion-gated are disjoint
+                 * and cover every pos load counted in s_dbgPosSeen. The sum is
+                 * checked below so a later edit cannot reintroduce a silent
+                 * class. */
                 if (rewritten) {
                     s_dbgRewritten++;
-                } else if (!interp || streamPosIdx >= cur->posCount ||
-                           cur->prevPos[streamPosIdx] < 0) {
+                } else if (!paired) {
                     s_dbgSnapUnpaired++;
+                } else if (!camStable) {
+                    s_dbgSnapCamera++;
                 }
                 if (!rewritten && slot < 10) {
                     lastPosState[slot] = 0; /* verbatim pos -> leave its nrm verbatim too */
@@ -1504,6 +2088,22 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
         }
         pos += n;
     }
+    if (fi_diag() >= 3) {
+        /* The census must PARTITION the position loads it saw. Before the two
+         * missing buckets existed it did not, and the difference was silently
+         * absorbed -- so "no pair was refused for reason X" was unfalsifiable
+         * from a log. Any line here means a rewrite decision exists that no
+         * counter names, which is a diagnostic defect even when the pixels are
+         * right. */
+        uint32_t sum = s_dbgRewritten + s_dbgSnapUnpaired + s_dbgSnapCamera +
+                       s_dbgVerbatimEq + s_dbgSnapDecompose + s_dbgSnapGate;
+        if (sum != s_dbgPosSeen) {
+            fprintf(stderr, "[MP6-FI] CENSUS SUM MISMATCH tick=%ld seen=%u sum=%u "
+                            "(rw=%u unpaired=%u cam=%u byteEq=%u decomp=%u gate=%u)\n",
+                    cur->tick, s_dbgPosSeen, sum, s_dbgRewritten, s_dbgSnapUnpaired,
+                    s_dbgSnapCamera, s_dbgVerbatimEq, s_dbgSnapDecompose, s_dbgSnapGate);
+        }
+    }
     return out;
 }
 
@@ -1515,23 +2115,48 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     uint32_t len;
     int64_t t0, now, margin;
 
-    if (!s_active || s_latest < 0 || periodNs <= 0) return 0;
+    if (!s_active || s_latest < 0 || periodNs <= 0) return fi_decline(FI_DECL_INACTIVE);
     cur = &s_streams[s_latest];
     if (!cur->sealed || !cur->walkOk || cur->size == 0) {
         if (fi_diag()) s_statSkippedWindows++;
-        return 0;
+        return fi_decline(FI_DECL_NOSTREAM);
     }
-    if (s_replaysThisWindow >= FI_MAX_REPLAYS_PER_WINDOW) return 0;
+    if (s_replaysThisWindow >= FI_MAX_REPLAYS_PER_WINDOW) return fi_decline(FI_DECL_CAP);
     /* Admission is always evaluated against the throttle's one absolute
      * deadline. A small fixed margin plus the measured replay CPU cost keeps
      * work out of the next simulation tick; the estimate decays on a decline
      * so one transient stall cannot permanently latch replay off. Every stage
      * below re-samples the same deadline after work that can consume slack. */
-    margin = periodNs / 8; /* ~2ms at 60Hz -- one present's worth of headroom */
+    /* Admission margin: the pad that absorbs the COST ESTIMATE being wrong,
+     * on top of the estimate itself.
+     *
+     * It used to be periodNs/8 (~2.08ms at 60Hz), described as "one present's
+     * worth of headroom" -- but s_replayBudgetNs already covers a whole
+     * present, and it is a max-tracking estimator (it latches any larger cost
+     * immediately and gives ground only a quarter at a time), so the pad was
+     * double-counting the same present. On a light scene that is invisible: a
+     * ~14ms window swallows it. On the w01 board it is decisive -- measured
+     * there, the tick's own work leaves ~4.3-6.0ms of window against a
+     * ~4.5ms replay, so a 2.08ms pad refuses a replay that demonstrably fits
+     * (game 6.5 + endframe 4.1 + seal 0.4 + replay 4.5 = 15.5ms of a 16.67ms
+     * period) and the board sits at exactly the tick rate.
+     *
+     * periodNs/32 (~0.52ms at 60Hz) keeps a real pad for estimator error and
+     * scheduler jitter without reserving a second frame's worth of time.
+     * MP6_FI_MARGIN_DIV overrides the divisor for pacing A/Bs (the lever this
+     * value was chosen with); larger = more conservative. */
+    margin = periodNs / fi_margin_div();
     now = (int64_t)mp6_host_monotonic_ns();
+    {   /* census: the idle room this window actually had to offer */
+        int64_t slack = (deadlineNs > now) ? deadlineNs - now : 0;
+        if (s_declSlackSamples == 0 || slack < s_declSlackMinNs) s_declSlackMinNs = slack;
+        if (slack > s_declSlackMaxNs) s_declSlackMaxNs = slack;
+        s_declSlackSumNs += slack;
+        s_declSlackSamples++;
+    }
     if (!mp6_fi_deadline_fits(deadlineNs, now, margin, s_replayBudgetNs)) {
         fi_budget_decay();
-        return 0;
+        return fi_decline(FI_DECL_DEADLINE_ENTRY);
     }
 
     /* Spread replays across the window instead of bursting them at its
@@ -1551,11 +2176,35 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
                              ? INT64_MAX : s_lastPresentNs + spacing;
         if (target > now) {
             int64_t wait = target - now;
-            if (!mp6_fi_deadline_fits(deadlineNs, target, margin, s_replayBudgetNs)) {
+            /* The wait may only be paid out of SURPLUS -- the room left after
+             * the margin and this replay's own measured cost are set aside.
+             *
+             * The grid is anchored on the real tick present, but on a heavy
+             * scene the idle window does not open until most of the period is
+             * already spent: measured on the w01 board, the tick's own work
+             * runs ~11.9ms of a 16.67ms period, so slot 1 (present + period/9)
+             * still lies ~1.85ms in the future while only ~4.3ms of window
+             * remains. Sleeping to it consumed 43% of the entire window and
+             * the replay was then declined on the remainder -- the feature
+             * spent the only room it had waiting to use it. Clamping the wait
+             * to the surplus keeps the anti-bunching behaviour intact wherever
+             * there IS surplus (a light scene has ~14ms of window against a
+             * ~1ms replay, so the full slot wait is still paid) and simply
+             * stops it from evicting the one replay a heavy window can hold. */
+            int64_t surplus = deadlineNs - now - margin - s_replayBudgetNs;
+            if (surplus <= 0) {
                 fi_budget_decay();
-                return 0;
+                return fi_decline(FI_DECL_DEADLINE_SPACE);
             }
-            mp6_host_sleep_ns((uint64_t)wait);
+            if (wait > surplus) wait = surplus;
+            /* Below the host's sleep granularity a wait buys no spacing and
+             * only risks overshooting into the replay's own room -- which is
+             * exactly what a surplus-clamped wait tends to be on a heavy
+             * scene (tens of microseconds). Skip it rather than gamble the
+             * window on Sleep() rounding. */
+            if (wait > FI_MIN_SPACING_WAIT_NS) {
+                mp6_host_sleep_ns((uint64_t)wait);
+            }
         }
     }
 
@@ -1564,7 +2213,7 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     t0 = (int64_t)mp6_host_monotonic_ns();
     if (!mp6_fi_deadline_fits(deadlineNs, t0, margin, s_replayBudgetNs)) {
         fi_budget_decay();
-        return 0;
+        return fi_decline(FI_DECL_DEADLINE_SLEPT);
     }
 
     prev = (s_prev >= 0) ? &s_streams[s_prev] : NULL;
@@ -1579,24 +2228,30 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
                 mp6_tick_count, cur->tick, prev ? prev->tick : -1L, alpha, interp, cur->posCount);
     }
     len = fi_build_replay(cur, prev, interp, alpha);
+    s_costBuildLastNs = (int64_t)mp6_host_monotonic_ns() - t0;
     if (fi_diag() >= 3) {
         fprintf(stderr, "[MP6-FI] built vitick=%ld len=%u pos=%u rewritten=%u unpaired=%u "
-                        "gateSnap=%u byteEq=%u maxTrans=%.3f minQdot=%.6f | drops: "
+                        "camSnap=%u decompSnap=%u gateSnap=%u byteEq=%u "
+                        "maxTrans=%.3f minQdot=%.6f maxScale=%.4f (model=%d ord=%d) "
+                        "scaleHold=%u maxHeld=%.4f (model=%d ord=%d) | drops: "
                         "offscreen=%u copyExec=%u copyBind=%u destroy=%u other=%u "
                         "posLoads=%u copyClear=%u | maxResid=%.4f (model=%d ord=%d) "
                         "maxA0Err=%.6f (model=%d ord=%d)\n",
                 mp6_tick_count, len, s_dbgPosSeen, s_dbgRewritten, s_dbgSnapUnpaired,
-                s_dbgSnapGate, s_dbgVerbatimEq, s_dbgMaxTrans, s_dbgMinQdot,
+                s_dbgSnapCamera, s_dbgSnapDecompose, s_dbgSnapGate, s_dbgVerbatimEq,
+                s_dbgMaxTrans, s_dbgMinQdot,
+                s_dbgMaxScaleRatio, s_dbgScaleModel, s_dbgScaleOrd, s_dbgScaleHold,
+                s_dbgMaxHeldScale, s_dbgHeldModel, s_dbgHeldOrd,
                 s_dbgDropOffscreen, s_dbgDropCopyExec, s_dbgDropCopyBind, s_dbgDropDestroy,
                 s_dbgDropOther, s_dbgDropPosLoads, s_dbgCopyClear,
                 s_dbgMaxRoundTrip, s_dbgRoundTripModel, s_dbgRoundTripOrd,
                 s_dbgMaxAlpha0Err, s_dbgAlpha0Model, s_dbgAlpha0Ord);
     }
-    if (len == 0) return 0;
+    if (len == 0) return fi_decline(FI_DECL_BUILD);
     now = (int64_t)mp6_host_monotonic_ns();
-    if (!mp6_fi_deadline_fits(deadlineNs, now, margin, s_replayBudgetNs)) {
+    if (!mp6_fi_deadline_fits(deadlineNs, now, margin, fi_budget_remaining(t0, now))) {
         fi_budget_decay();
-        return 0;
+        return fi_decline(FI_DECL_DEADLINE_BUILT);
     }
 
     /* Service the OS message pump once per replay frame. The bridge polls
@@ -1610,16 +2265,17 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     SDL_PumpEvents();
 
     now = (int64_t)mp6_host_monotonic_ns();
-    if (!mp6_fi_deadline_fits(deadlineNs, now, margin, s_replayBudgetNs)) {
+    if (!mp6_fi_deadline_fits(deadlineNs, now, margin, fi_budget_remaining(t0, now))) {
         fi_budget_decay();
-        return 0;
+        return fi_decline(FI_DECL_DEADLINE_PUMPED);
     }
 
     s_inReplay = 1;
     if (!aurora_try_begin_frame()) {
         s_inReplay = 0;
         fi_budget_decay();
-        return 0; /* busy/minimized/surface lost: never wait inside the idle window */
+        /* busy/minimized/surface lost: never wait inside the idle window */
+        return fi_decline(FI_DECL_BEGINFRAME);
     }
     mp6_launcher_frame_overlay(); /* keep FPS overlay/menu present on every frame */
 #ifdef __ANDROID__
@@ -1636,6 +2292,15 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     { extern void mp6_touch_pad_draw(void); mp6_touch_pad_draw(); }
 #endif
     aurora_gx_submit_raw(s_replayBuf, len);
+    /* NO second clock around this aurora_end_frame(). Replay-side submit cost
+     * is ALREADY measured: fi_cost_observe() below splits the replay's wall
+     * time into BUILD (this file's rewrite, up to s_costBuildLastNs) and
+     * PRESENT (everything after it -- the pump, the begin-frame permit and
+     * this submit), and that split is the one the admission budget is fed
+     * from. A separate bracket here would be a second measurement of the same
+     * interval that could disagree with the budget the scheduler actually
+     * uses; the console reads s_costPresent* through mp6_fi_stats_get()
+     * instead. */
     aurora_end_frame();
     /* MP6_FRAME_DUMP (shim/include/mp6_frame_dump.h): an interpolated frame
      * is a PRESENTED frame -- the user sees it, and this layer is the prime
@@ -1652,9 +2317,14 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     s_replaysThisWindow++;
     if (interp) s_statReplays++; else s_statSnaps++;
 
-    fi_budget_observe((int64_t)mp6_host_monotonic_ns() - t0);
+    {
+        int64_t totalNs = (int64_t)mp6_host_monotonic_ns() - t0;
+        fi_budget_observe(totalNs);
+        fi_cost_observe(s_costBuildLastNs, totalNs);
+    }
 
     s_lastPresentNs = (int64_t)mp6_host_monotonic_ns(); /* spacing base for the next replay */
+    s_declCount[FI_DECL_OK]++;
     return 1;
 }
 

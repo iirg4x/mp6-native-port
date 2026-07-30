@@ -2757,6 +2757,46 @@ static BOOL mp6_ws_extend_grow(HU3D_MODELID modelId, HSF_OBJECT *o,
     return TRUE;
 }
 
+/* Is this mesh a target of the model's own cluster-deform data? ClusterProc
+ * (game/ClusterExec.c) writes obj->mesh.vertex->data for every cluster whose
+ * `target` resolves to this object -- straight through the vertex counts the
+ * extruder rewrites -- so cluster-driven meshes must be refused. The per-mesh
+ * `mesh.clusterNum` field CANNOT answer this: the loader zeroes it forever
+ * (engine-benign -- no engine consumer reads it; see hsf_load_native.c
+ * :1544-1545 and docs/research/hsf_stub_audit.md D3), which left the refusal
+ * below permanently disarmed while cluster deform itself is LIVE off the
+ * hsf-level array. Resolve targets the same way the engine does, at per-mesh
+ * precision: after ClusterAdjustObject has run (latched on cluster[0]
+ * .adjusted, the exact latch the engine tests) `target` is an object index;
+ * before it, `targetName` is a string that ClusterAdjustObject will resolve
+ * via SearchObjectSetName, whose CmpObjectName is a plain strcmp. Per-mesh
+ * rather than model-level (hsf->clusterNum != 0) on purpose: the disc's 53
+ * cluster-target meshes sit in 38 models (title/miraclebook storybooks,
+ * filesel, ending, several minigames) whose OTHER meshes are plain backdrops
+ * -- a model-level refusal would cost exactly the containers widescreen work
+ * targets their coverage. */
+static int mp6_ws_mesh_is_cluster_target(const HSF_DATA *hsf, const HSF_OBJECT *o)
+{
+    s32 idx = (s32)(o - hsf->object);
+    s32 j;
+
+    if (hsf->clusterNum <= 0 || hsf->cluster == NULL) {
+        return 0;
+    }
+    for (j = 0; j < hsf->clusterNum; j++) {
+        const HSF_CLUSTER *cl = &hsf->cluster[j];
+        if (hsf->cluster[0].adjusted) {
+            if (cl->target == idx) {
+                return 1;
+            }
+        } else if (cl->targetName != NULL && o->name != NULL
+                   && strcmp(cl->targetName, o->name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Shared registration preamble: liveness/identity, object lookup by exact
  * name, and the layout checks every treatment needs (a real mesh, QUAD/TRI
  * face data, no skinning/cluster/shape channels, and -- because every
@@ -2794,7 +2834,21 @@ static HSF_OBJECT *mp6_ws_extend_locate(HU3D_MODELID modelId, const char *objNam
         mp6_ws_extend_refuse(objName, "missing vertex/st/face/normal data");
         return NULL;
     }
-    if (o->mesh.cenvNum != 0 || o->mesh.clusterNum != 0 || o->mesh.shapeNum != 0) {
+    /* Deform refusal -- each term reads the same source its deform pass
+     * reads, so guard and deform arm together and can never disagree:
+     *   - cenv (skinning): per-mesh `cenvNum`, genuinely loaded; the field
+     *     EnvelopeExec keys on.
+     *   - shape (morph): per-mesh `shapeNum` -- the EXACT field
+     *     game/ShapeExec.c gates SetShapeMain on. While the loader zeroes it
+     *     both this term and morph deform are off (no unprotected window);
+     *     the moment the per-mesh shape binding lands, deform and refusal
+     *     arm simultaneously by construction.
+     *   - cluster: per-mesh `clusterNum` is permanently zeroed by the loader
+     *     while cluster deform runs off the hsf-level array, so the last
+     *     term resolves the model's real cluster targets instead -- see
+     *     mp6_ws_mesh_is_cluster_target above (hsf_stub_audit.md D3). */
+    if (o->mesh.cenvNum != 0 || o->mesh.clusterNum != 0 || o->mesh.shapeNum != 0
+        || mp6_ws_mesh_is_cluster_target(hsf, o)) {
         mp6_ws_extend_refuse(objName, "skinned/cluster/shape mesh -- buffer growth not designed for it");
         return NULL;
     }

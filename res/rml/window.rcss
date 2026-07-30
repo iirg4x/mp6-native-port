@@ -428,6 +428,72 @@ button.achievement-clear {
     text-align: center;
 }
 
+/* [MP6] ADDITIVE BLOCK -- the Enhancements preset comparison table (settings
+ * window, right pane beside the Preset row). Not partyboard's.
+ *
+ * ASPECT-ADAPTIVE, the same way every other launcher surface in this port is
+ * (docs/A5_LAUNCHER_ASPECT.md): the columns are flex-sized rather than fixed,
+ * and the @media breakpoint below is partyboard's OWN mobile breakpoint --
+ * the identical (max-height: 640dp) rule the window padding, the prelaunch
+ * hero and the overlay already switch on -- so a phone in landscape gets the
+ * tighter table through the same mechanism, not a second one invented here.
+ * On the narrowest surfaces the value columns shrink and the label column
+ * absorbs the loss; the pane it lives in already scrolls. */
+.enh-matrix {
+    display: flex;
+    flex-flow: column;
+    gap: 4dp;
+    width: 100%;
+    font-size: 15dp;
+}
+
+.enh-matrix-row {
+    display: flex;
+    flex-flow: row;
+    gap: 8dp;
+    width: 100%;
+}
+
+.enh-matrix-label {
+    display: block;
+    flex: 1 1 0;
+    min-width: 0;
+    color: rgba(224, 219, 200, 65%);
+}
+
+.enh-matrix-val {
+    display: block;
+    flex: 0 1 76dp;
+    min-width: 0;
+    text-align: right;
+}
+
+.enh-matrix-head {
+    font-family: "Inter";
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 12dp;
+    color: #009dda;
+    border-bottom: 1dp rgba(146, 135, 91, 30%);
+    padding-bottom: 4dp;
+}
+
+@media (max-height: 640dp) {
+    .enh-matrix {
+        font-size: 13dp;
+        gap: 2dp;
+    }
+    .enh-matrix-row {
+        gap: 4dp;
+    }
+    .enh-matrix-val {
+        flex: 0 1 56dp;
+    }
+    .enh-matrix-head {
+        font-size: 11dp;
+    }
+}
+
 .modal-dialog {
     display: flex;
     flex-direction: column;

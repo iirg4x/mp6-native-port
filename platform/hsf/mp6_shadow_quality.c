@@ -19,6 +19,7 @@
 #include "game/memory.h" /* HEAPID, HuMemHeapPtrGet, HuMemMaxMemorySizeGet */
 #include "mp6_boot.h" /* mp6_heap_block_data_size: restored allocation fingerprint */
 #include "mp6_shadow_quality.h"
+#include "mp6_enhancements.h" /* mp6_enh_shadow_quality -- the switch's one front door */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -205,8 +206,8 @@ void mp6_shadow_offscreen_scissor(int x, int y, int w, int h)
 /* Aurora extension entry points (external_refs/repos/aurora,
  * include/dolphin/gx/GXAurora.h + aurora-patches/0014): declared locally
  * instead of including the aurora header because this TU compiles in BOTH
- * build modes with the decomp's own dolphin headers, not aurora's --
- * same C-linkage seam as mp6_launcher_cfg_shadow_quality() below.
+ * build modes with the decomp's own dolphin headers, not aurora's -- the
+ * same plain C-linkage seam trick the rest of this file uses.
  * GXSetScissorRender is base aurora (GX_AURORA_LOAD_SCISSOR_RENDER, already
  * in the vendored tree -- no patch), used to dodge the 11-bit SU_SCIS
  * register overflow the header comment on mp6_shadow_offscreen_scissor
@@ -252,35 +253,50 @@ void mp6_shadow_offscreen_end(void)
 }
 #endif
 
-#ifndef MP6_HEADLESS_BUILD
-/* Aurora/windowed build only: launcher_core.cpp (Aurora-only TU, see
- * tools/build.py's PLATFORM_AURORA_ONLY) owns the actual mp6_config.json-
- * backed value -- same cross-TU C-linkage pattern main_native.c already
- * uses for mp6_launcher_cfg_widescreen()/mp6_launcher_cfg_aspect_locked(). */
-extern int mp6_launcher_cfg_shadow_quality(void);
-#endif
-
 int mp6_shadow_quality_scale(int baseSize)
 {
 #ifdef MP6_HEADLESS_BUILD
-    /* No launcher/config exists in this build at all -- fixed native,
-     * matching mp6_widescreen.h's shims_manual.c headless precedent.
-     * Every automated headless gate (docs/TESTING.md) is unaffected by
-     * this feature by construction. */
+    /* Fixed native -- and deliberately NOT a read of the enhancements seam,
+     * even though that seam links here (it is in build.py's
+     * PLATFORM_SOURCES_COMMON). There is no shadow renderer in this build at
+     * all: mp6_shadow_offscreen_begin/end/scissor above are empty in the
+     * headless half of this very file, so a scale above 1 would size a map
+     * nothing ever draws into. The switch has no consumer here to wire to.
+     * Every automated headless gate (docs/TESTING.md) is therefore unaffected
+     * by this feature by construction, exactly as before. */
     (void)baseSize;
     return 1;
 #else
-    /* MP6_SHADOW_QUALITY env lever: docs/TESTING.md's "automation contract
-     * (sacred)" means any run driven by MP6_AUTO_START_TICKS/--input-script/
-     * a numeric tick-budget argv is automation mode, which by design NEVER
-     * reads mp6_config.json (g_launcherMode stays 0, so
-     * mp6_launcher_cfg_shadow_quality() would always read back 1/native) --
-     * so the Mods-tab config alone is unreachable from any scripted gate or
-     * screenshot drive. Same shape as MP6_WIDESCREEN (aurora_bridge.c's
-     * mp6_widescreen_enabled()) and MP6_TICK_HZ (docs/TESTING.md: "it
-     * wins"): an explicit env lever that works in EITHER mode, for
-     * verification, layered on top of the real interactive/config path
-     * rather than replacing it. Invalid/unset falls through to config. */
+    /* THE SHADOW-QUALITY DECISION, in the one place the scale is chosen.
+     *
+     * Two sources, in this order:
+     *
+     *   1. MP6_SHADOW_QUALITY -- the pre-existing per-feature lever,
+     *      unchanged, and it still wins outright at its own consumption site,
+     *      which is the priority docs/SETTINGS.md promises the legacy levers
+     *      keep. Same shape as MP6_WIDESCREEN (aurora_bridge.c's
+     *      mp6_widescreen_enabled()) and MP6_TICK_HZ (docs/TESTING.md: "it
+     *      wins"). An off-ladder value degrades to 1/retail rather than to a
+     *      guess.
+     *
+     *   2. the ENHANCEMENTS SEAM (shim/include/mp6_enhancements.h), which is
+     *      the single front door for this switch and resolves, in its own
+     *      documented order, MP6_ENH_SHADOW_QUALITY -> MP6_ENH_PRESET -> the
+     *      value the launcher published from mp6_config.json -> RETAIL. It
+     *      ladder-clamps too, so both sources agree on what "invalid" means.
+     *
+     * Step 2 replaces a direct mp6_launcher_cfg_shadow_quality() read, which
+     * was the config and ONLY the config. That is why the Enhancements row's
+     * own claim -- that MP6_ENH_SHADOW_QUALITY and MP6_ENH_PRESET override
+     * video.shadow_quality, which is why the row greys itself out while
+     * either is set (settings.cpp) -- was not true of the engine: both levers
+     * resolved correctly inside the seam and were then thrown away here.
+     *
+     * The automation contract holds BY CONSTRUCTION rather than by a
+     * `g_launcherMode ?` branch: automation mode never calls
+     * mp6_enh_set_values(), so the seam's store is still at its retail
+     * initializer and this answers 1 -- the same fixed 1 the old accessor
+     * hard-coded off the launcher path. */
     const char *envSq = getenv("MP6_SHADOW_QUALITY");
     int requested;
     int scale;
@@ -289,7 +305,7 @@ int mp6_shadow_quality_scale(int baseSize)
         int v = atoi(envSq);
         requested = (v == 1 || v == 2 || v == 4 || v == 8 || v == 16) ? v : 1;
     } else {
-        requested = mp6_launcher_cfg_shadow_quality();
+        requested = mp6_enh_shadow_quality();
     }
 
     /* No artificial detail ceiling: 8x/16x are real, buffer-dump verified

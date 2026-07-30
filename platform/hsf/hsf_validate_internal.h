@@ -968,11 +968,19 @@ static int mp6_hsf_preflight(const void *data, size_t capacity,
                                          "shape vertex allocation overflow")
                     || !mp6_hsf_v_symbol_slice(&c, idx, count,
                                                "shape vertex symbols outside pool")) return 0;
-            /* Retail shape records use a different/one-based authoring ID in
-             * this symbol slice (e.g. [1..5] for five vertex buffers, and 10
-             * in a one-buffer motion-only asset).  LoadShapes bounds each to
-             * NULL, and this port deliberately keeps every mesh.shapeNum at
-             * zero, so no consumer dereferences these legacy IDs. */
+            /* This is the file-level SHAPE SECTION's own vertex slice, which
+             * has no runtime consumer: some retail shape records put a
+             * different/one-based authoring ID here (e.g. [1..5] for five
+             * vertex buffers, and 10 in a one-buffer motion-only asset), so
+             * LoadShapes bounds each entry to NULL and nothing dereferences
+             * them.  The slice that IS dereferenced is the PER-MESH one
+             * (HSF_MESH.shapeNum/.shape, mesh record +276/+280, i.e. object
+             * record +292/+296), which
+             * game/ShapeExec.c's SetShapeMain walks; it is a genuine
+             * vertex-buffer index list and hsf_load_native.c's BindMeshShape
+             * bounds-checks it there rather than here, so that a file with an
+             * unbindable shape mesh still loads and simply draws that mesh's
+             * static pose. */
         }
     }
 

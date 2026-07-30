@@ -9,10 +9,19 @@
  *                                   table order, compressed as ONE stream
  *
  * The payload is one continuous deflate stream rather than per-region
- * blobs because the arena is 256 MB of which the overwhelming majority is
- * untouched zeros -- a single stream lets those collapse across region
- * boundaries too, and keeps the writer a simple "feed everything through
- * once" loop instead of per-region bookkeeping.
+ * blobs because the arena is 256 MB (550 MB with Expanded heaps on) of
+ * which the overwhelming majority is untouched zeros -- a single stream
+ * lets those collapse across region boundaries too, and keeps the writer a
+ * simple "feed everything through once" loop instead of per-region
+ * bookkeeping.
+ *
+ * Every extent in the file is the ACTIVE one, read at capture time: the
+ * arena region's size comes from mp6_arena_size(), which reports the
+ * reservation this process actually made rather than a compile-time
+ * constant, because the Expanded-heaps setting changes it. The restore-side
+ * consequences of that -- an x1 state loads under x4, an x4 state is refused
+ * under x1 -- are spelled out at the arena-extent check in
+ * mp6_savestate_restore().
  *
  * FAIL-CLOSED DISCIPLINE. mp6_savestate_restore() validates the header,
  * every base address, and the build fingerprint, and fully decompresses
@@ -38,6 +47,7 @@
 #include "mp6_utf8_file.h"
 #include "zlib.h"
 #include "mp6_boot.h" /* mp6_max_ticks/mp6_ticks_unlimited -- latched across restore */
+#include "mp6_console.h" /* dev console sampler rings -- dropped on restore */
 
 /* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
@@ -614,7 +624,6 @@ int mp6_savestate_restore(const char *path)
      * false-positive rate and could corrupt state silently. Refusing is the
      * honest outcome. */
     if (hdr.arenaBase != (uint64_t)(uintptr_t)mp6_arena_base() ||
-        hdr.arenaSize != (uint64_t)mp6_arena_size() ||
         hdr.coroPoolBase != (uint64_t)(uintptr_t)mp6_coro_pool_base() ||
         hdr.coroPoolSize != (uint64_t)mp6_coro_pool_size() ||
         hdr.imageBase != mp6_ss_image_base_proxy()) {
@@ -624,6 +633,49 @@ int mp6_savestate_restore(const char *path)
                 (unsigned long long)hdr.arenaBase, (unsigned long long)(uintptr_t)mp6_arena_base(),
                 (unsigned long long)hdr.coroPoolBase, (unsigned long long)(uintptr_t)mp6_coro_pool_base(),
                 (unsigned long long)hdr.imageBase, (unsigned long long)mp6_ss_image_base_proxy());
+        rc = MP6_SAVESTATE_ERR_LAYOUT_MISMATCH;
+        goto done;
+    }
+    /* The arena EXTENT is the one dimension of the layout that legitimately
+     * differs between two runs of the SAME binary: the Enhancements
+     * "Expanded heaps" toggle scales the four fixed HuMem capacities and the
+     * reservation that has to hold them (platform/os/arena.c,
+     * shim/include/mp6_heap_scale.h), so the same exe reserves 256 MB at x1
+     * and 550 MB at x4. It is therefore a <= test, not an == test, and the
+     * asymmetry is the whole point:
+     *
+     *  - SMALLER file arena (x1 state, x4 process) is ACCEPTED. The captured
+     *    world is entirely inside the first hdr.arenaSize bytes -- every
+     *    HuMem heap base, every heap capacity, and the OS-level bump
+     *    allocator's own cur/end all travel in restored image memory and all
+     *    describe that prefix -- so the commit loop writes a prefix and the
+     *    restored process is a consistent x1 world running in a process that
+     *    merely reserved more address space than it now uses. The untouched
+     *    tail is this process's own pre-restore boot data, which nothing in
+     *    the restored world can reach.
+     *
+     *  - LARGER file arena (x4 state, x1 process) is REFUSED, here, before a
+     *    single live byte is written. The alternative is not "restore most of
+     *    it": the captured HeapTbl/HeapSizeTbl point past the end of this
+     *    process's reservation, so a truncating restore would produce a game
+     *    whose model heap claims megabytes that are not mapped. Refusing with
+     *    the reason and the remedy is the honest outcome -- the same
+     *    fail-closed discipline the build-stamp and address checks above
+     *    apply.
+     *
+     * mp6_arena_size() reads the live reservation through the host-owned
+     * scale latch (platform/os/heap_scale.c), never a captured static, so
+     * this comparison cannot be defeated by the very restore it guards. */
+    if (hdr.arenaSize > (uint64_t)mp6_arena_size()) {
+        fprintf(stderr,
+                "[SAVESTATE] refusing: state was captured with a LARGER game arena than this "
+                "run reserved (%llu MB captured vs %llu MB live) -- it was almost certainly "
+                "captured with Expanded heaps ON and this run has it OFF. Loading it would "
+                "leave the restored heaps pointing past the end of this process's arena, so "
+                "nothing is written. Re-launch with the same Expanded-heaps setting (or "
+                "MP6_ENH_HEAP_SCALE) and load it again.\n",
+                (unsigned long long)(hdr.arenaSize / (1024u * 1024u)),
+                (unsigned long long)(mp6_arena_size() / (1024u * 1024u)));
         rc = MP6_SAVESTATE_ERR_LAYOUT_MISMATCH;
         goto done;
     }
@@ -669,6 +721,26 @@ int mp6_savestate_restore(const char *path)
                 goto done;
             }
             sum += fr->size;
+            /* The header's arena extent and the arena region's own size are
+             * two independent fields describing one thing. They used to be
+             * transitively equal because BOTH were compared for equality
+             * against this process's live arena; now that the region may
+             * legitimately be smaller (see the extent check above), that
+             * implication is gone and the equality has to be stated. Without
+             * it a file could declare one extent in the header, pass the
+             * bounds check on it, and then carry a shorter region -- half a
+             * world restored over a live one. Not a wild write (the commit
+             * loop copies the region's own length to a pinned base), but a
+             * self-describing memory image must not be able to contradict
+             * itself. */
+            if (fr->kind == MP6_SS_REGION_ARENA && fr->size != hdr.arenaSize) {
+                fprintf(stderr,
+                        "[SAVESTATE] refusing: the arena region is %llu bytes but the header "
+                        "declares a %llu-byte arena -- the state contradicts itself\n",
+                        (unsigned long long)fr->size, (unsigned long long)hdr.arenaSize);
+                rc = MP6_SAVESTATE_ERR_FORMAT;
+                goto done;
+            }
             if (fr->kind == MP6_SS_REGION_CORO) {
                 void *slotAddr = mp6_coro_slot_addr((int)fr->index);
                 if (coroSeen && fr->index <= lastCoroIndex) {
@@ -700,9 +772,19 @@ int mp6_savestate_restore(const char *path)
             while (e < nExpect && expect[e].kind == MP6_SS_REGION_CORO) {
                 e++;
             }
+            /* ARENA is the one region whose extent may legitimately be
+             * SMALLER than this process's own -- see the arena-extent block
+             * above for the heap-scale asymmetry and why a larger one is
+             * already refused there. Every other region is exact. Keeping
+             * the relaxation to this single kind is deliberate: the commit
+             * loop memcpy's fr->size bytes to fr->addr, so any region whose
+             * size is allowed to float has to have a start that is pinned
+             * and a tail that no restored pointer can reach, and only the
+             * arena has both. */
             if (e >= nExpect ||
                 fr->kind != expect[e].kind ||
-                fr->size != expect[e].size ||
+                (fr->kind == MP6_SS_REGION_ARENA ? fr->size > expect[e].size
+                                                 : fr->size != expect[e].size) ||
                 (fr->kind != MP6_SS_REGION_ARAM && fr->addr != expect[e].addr)) {
                 fprintf(stderr,
                         "[SAVESTATE] refusing: region %d (%.*s) does not match this build's "
@@ -971,6 +1053,16 @@ int mp6_savestate_restore(const char *path)
 
     mp6_dvd_savestate_rehydrate();
     mp6_os_time_savestate_apply_rebase(rebasedRtcBase);
+
+    /* Dev console sampler (shim/include/mp6_console.h). Both console TUs are
+     * carved out of the image, so the commit loop above did NOT clobber them --
+     * but the sampler's rings hold monotonic timestamps from THIS process, and
+     * an interval measured across the load itself is not a frame time. Dropping
+     * them is the same reasoning as the Unlocked-FPS reset just below, one
+     * layer up. Called in BOTH builds (unlike that one): console_stats.c is in
+     * PLATFORM_SOURCES_COMMON, and the headless build is where the
+     * capture/restore regression gate actually runs. */
+    mp6_console_savestate_reset();
 
 #ifndef MP6_HEADLESS_BUILD
     /* FINDING #1 (savestate-x1): drop the Unlocked FPS interpolation state on

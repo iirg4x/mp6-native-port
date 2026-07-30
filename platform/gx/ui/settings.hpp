@@ -11,11 +11,16 @@ namespace mp6::ui {
  * Interface). The GAME index is exported so the prelaunch first-button can
  * jump straight to the content-root row. Save States sits between Mods and
  * About but only exists on the IN-GAME instance (inGame below), so About
- * has no stable index constant. */
+ * has no stable index constant.
+ *
+ * ENHANCEMENTS is inserted AFTER Game, so Video/Audio/Game keep the indices
+ * every existing caller already passes and only Mods -- which nothing outside
+ * this header names -- shifts. */
 inline constexpr int kSettingsTabVideo = 0;
 inline constexpr int kSettingsTabAudio = 1;
 inline constexpr int kSettingsTabGame = 2;
-inline constexpr int kSettingsTabMods = 3;
+inline constexpr int kSettingsTabEnhancements = 3;
+inline constexpr int kSettingsTabMods = 4;
 
 class SettingsWindow : public Window {
 public:

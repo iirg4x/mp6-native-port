@@ -386,6 +386,14 @@ void mp6_GXLoadPosMtxImm(const void *mtx, u32 id)
 static int g_hlAutoStartTicks[MP6_SS_AUTO_START_MAX];
 static int g_hlAutoStartCount = -1; /* -1 = not yet parsed */
 
+/* This tick's scripted PAD state (platform/os/input_script.c), latched by
+ * VIWaitForRetrace() below and consumed by PADRead above. Two statics rather
+ * than a direct call from PADRead because the engine must advance exactly
+ * once per tick and PADRead is not a once-per-tick function. */
+static u16 g_hlScriptButtons;
+static s8 g_hlScriptStickX;
+static s8 g_hlScriptStickY;
+
 u32 PADRead(PADStatus *status)
 {
     MP6_LOG_ONCE("PAD", "PADRead");
@@ -423,7 +431,7 @@ u32 PADRead(PADStatus *status)
             }
         }
     }
-    if (g_hlAutoStartCount > 0 && status != NULL) {
+    if ((g_hlAutoStartCount > 0 || mp6_input_script_armed()) && status != NULL) {
         int i, due = 0;
         for (i = 0; i < g_hlAutoStartCount; i++) {
             if ((long)g_hlAutoStartTicks[i] == mp6_tick_count) {
@@ -440,6 +448,18 @@ u32 PADRead(PADStatus *status)
             status[0].button = PAD_BUTTON_START;
             printf("[MP6-INPUT] auto-injecting PAD_BUTTON_START at tick %ld (headless)\n", mp6_tick_count);
             fflush(stdout);
+        }
+        /* The scripted half. VIWaitForRetrace() already advanced the engine
+         * for THIS tick (once, before firing the post-retrace callback that
+         * brought us here -- see the advance's own comment for why it is not
+         * called from inside PADRead: game/sreset.c also calls PADRead, off
+         * the retrace path, and would consume script steps out of band).
+         * OR-merged with the START schedule above so the two levers can be
+         * used together. */
+        status[0].button |= g_hlScriptButtons;
+        if (g_hlScriptStickX != 0 || g_hlScriptStickY != 0) {
+            status[0].stickX = g_hlScriptStickX;
+            status[0].stickY = g_hlScriptStickY;
         }
     }
     return 0;
@@ -472,6 +492,8 @@ int mp6_tick_advance(void)
     mp6_tick_count++;
     mp6_rss_watchdog_check();
     mp6_alloc_census_tick_check(); /* leak hunt -- see mp6_boot.h/malloc_direct.c */
+    mp6_motion_leaktest_tick(); /* motion-bank ownership probe -- see mp6_boot.h;
+                                 * no-op unless MP6_MOTION_LEAKTEST is set */
     /* The one per-tick hook BOTH build modes
      * already call, so the scripted MP6_SAVESTATE_*_AT_TICK levers behave
      * identically headless (where the regression gate runs -- it needs a
@@ -545,6 +567,15 @@ VIRetraceCallback VISetPostRetraceCallback(VIRetraceCallback callback)
 void VIWaitForRetrace(void)
 {
     MP6_LOG_ONCE("VI", "VIWaitForRetrace");
+    /* One advance per tick, BEFORE the post-retrace callback fires -- the
+     * same order platform/gx/aurora_bridge.c uses (refresh the virtual pad
+     * status, then let game/pad.c's PadReadVSync sample it). Costs one
+     * predicate when no --input-script is armed, and touches nothing, so the
+     * unscripted headless boot log stays byte-identical. */
+    if (mp6_input_script_armed()) {
+        g_hlScriptButtons = mp6_input_script_advance();
+        mp6_input_script_stick_get(&g_hlScriptStickX, &g_hlScriptStickY);
+    }
     if (g_hlPreRetraceCB) {
         g_hlPreRetraceCB((u32)mp6_tick_count);
     }

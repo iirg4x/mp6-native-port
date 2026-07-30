@@ -1,0 +1,61 @@
+--- a/src/board/config.c
++++ b/src/board/config.c
+@@ -15,0 +16,2 @@
++
++#include "mp6_widescreen.h" /* widescreen support -- PauseDispCopyDraw below */
+@@ -191 +208,20 @@
+-        GXSetTexCopySrc(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
++        /* The board pause screen's frozen-frame backdrop: photograph the
++         * live frame on the first hook call, then repaint that photograph
++         * every frame afterwards so the paused board stops animating. Both
++         * halves were pinned to the native 640 -- the second of the two
++         * board pause/overlay leftovers the widescreen work flagged as NOT FIXED --
++         * so at wide aspect the pause backdrop covered only the frame's
++         * left 640 and the sides kept showing the live, still-animating
++         * board through the gap.
++         *
++         * ALLOCATION POLICY, decided before touching anything (this is the
++         * site that lesson is named after): pauseDispCopyFb is a FIXED
++         * mbMallocFlush(GXGetTexBufferSize(HU_FB_WIDTH/2, HU_FB_HEIGHT/2))
++         * block sized at mbPauseDispCopyCreate time, so the copy
++         * DESTINATION deliberately stays 320x240 and only the SOURCE
++         * rectangle widens. That cannot overflow anything: the destination
++         * texel count is unchanged, the renderer rescales the wider source
++         * into it (aurora lib/gfx/common.cpp's resolve path scales
++         * whenever the resolve rect and the destination size differ), and
++         * the squish is undone exactly because the quad below is widened
++         * by the same factor. HU_FB_WIDTH (640) when disabled. */
++        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -201,3 +237,7 @@
+-        MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 100);
+-        GXSetProjection(proj, GX_ORTHOGRAPHIC);
+-        GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
+-        GXSetScissor(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
++        /* The repaint half: ortho/viewport/scissor and the quad's own two
++         * right-hand corners all carry the frame width. */
++        MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, mp6_widescreen_render_width(), 0, 100);
++        GXSetProjection(proj, GX_ORTHOGRAPHIC);
++        GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
++        GXSetScissor(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -233 +273 @@
+-        GXPosition3s16(HU_FB_WIDTH, 0, -50);
++        GXPosition3s16((s16)mp6_widescreen_render_width(), 0, -50);
+@@ -235 +275 @@
+-        GXPosition3s16(HU_FB_WIDTH, HU_FB_HEIGHT, -50);
++        GXPosition3s16((s16)mp6_widescreen_render_width(), HU_FB_HEIGHT, -50);
+@@ -117,0 +118,15 @@
++
++#ifdef MP6_NATIVE_PORT
++/* Native seam bridge -- declared in shim/include/mp6_board_compat.h and
++ * called by platform/os/board_placeholders.c's ConfigMain placeholder.
++ * mbConfigExec (config.c:143) leaves the pause Options menu ONLY when
++ * configDoneF goes TRUE, and the recovered source's single writer of that
++ * flag is the still-unrecovered ConfigMain.  configDoneF is file-static,
++ * so an out-of-line placeholder cannot reach it; this is the smallest
++ * possible port-side hole that lets it.  configResult is deliberately not
++ * touched: mbConfigExec itself sets it FALSE at config.c:133 and returns
++ * it as pause.c:278's cancelF, and FALSE is "the player did not ask to
++ * quit the board" -- the only answer a no-content menu can honestly give.
++ * Delete this hunk the moment ConfigMain lands on decomp main. */
++void mp6_board_config_seam_done(void) { configDoneF = TRUE; }
++#endif

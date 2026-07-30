@@ -10,6 +10,7 @@
  */
 #include "mp6_events.h"
 #include "mp6_boot.h" /* mp6_tick_count -- the shared VI tick */
+#include "mp6_diag_probe.h" /* the chronological tail ring -- see mp6_event_post */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +49,18 @@ typedef struct {
 static MP6EventSlot s_slots[MP6_EVENT_SLOT_MAX];
 static int s_slotCount;
 static unsigned long s_seq;
+
+/* CHRONOLOGICAL TAIL. The slot table above is keyed by event NAME and keeps
+ * only each key's latest value -- deliberately, because that is what
+ * automation waits on. It cannot answer "what just happened, in order", which
+ * is the first question anyone asks when a board stops responding. The ring
+ * below is filled from the same place the [EVENT] line is printed, formatted
+ * from the same fields, so the tail and the log can never disagree. Fixed
+ * storage, one snprintf per event, no allocation. */
+#define EV_TAIL_LINE 120
+static char s_tail[MP6_DIAG_EVENT_TAIL][EV_TAIL_LINE];
+static int  s_tailHead;
+static int  s_tailCount;
 
 unsigned long mp6_event_seq(void)
 {
@@ -114,6 +127,18 @@ void mp6_event_post(const char *key, long nval, const char *sval)
            s_seq);
     fflush(stdout);
 
+    /* Same fields, same order, into the chronological tail (see its
+     * declaration). Appended here rather than in a wrapper so no future call
+     * path can post an event that the tail misses. */
+    snprintf(s_tail[s_tailHead], EV_TAIL_LINE, "%s=%s num=%ld tick=%ld seq=%lu",
+             key,
+             (sval != NULL && sval[0] != '\0') ? sval : "-",
+             nval,
+             mp6_tick_count,
+             s_seq);
+    s_tailHead = (s_tailHead + 1) % MP6_DIAG_EVENT_TAIL;
+    if (s_tailCount < MP6_DIAG_EVENT_TAIL) s_tailCount++;
+
     /* MP6_FRAME_DUMP_TRIGGER (shim/include/mp6_frame_dump.h): let a frame
      * capture arm on an observed game state instead of a guessed tick --
      * the same "attach to what the game reported" rule this whole bus
@@ -153,6 +178,47 @@ int mp6_event_matches(const char *key, const char *want)
      * interchangeable for the same event (see the header). */
     snprintf(numBuf, sizeof(numBuf), "%ld", slot->nval);
     return strcmp(numBuf, want) == 0;
+}
+
+/* ---------------------------------------------------------------------
+ * Pull-side readers (shim/include/mp6_diag_probe.h).
+ *
+ * mp6_event_seq/_last_seq/_matches above answer "has THIS key fired yet",
+ * which is what a scripted wait needs. These answer the two questions a human
+ * looking at a stuck screen has instead: what happened most recently, and
+ * which keys have ever fired at all. Read-only; neither advances the sequence
+ * nor consumes anything.
+ * --------------------------------------------------------------------- */
+
+int mp6_diag_event_tail_count(void)
+{
+    return s_tailCount;
+}
+
+const char *mp6_diag_event_tail(int back)
+{
+    int idx;
+    if (back < 0 || back >= s_tailCount) return NULL;
+    idx = s_tailHead - 1 - back;
+    while (idx < 0) idx += MP6_DIAG_EVENT_TAIL;
+    return s_tail[idx];
+}
+
+int mp6_diag_event_slot_count(void)
+{
+    return s_slotCount;
+}
+
+int mp6_diag_event_slot(int index, const char **key, const char **sval,
+                        long *nval, unsigned long *count, unsigned long *seq)
+{
+    if (index < 0 || index >= s_slotCount) return 0;
+    if (key != NULL) *key = s_slots[index].key;
+    if (sval != NULL) *sval = s_slots[index].sval;
+    if (nval != NULL) *nval = s_slots[index].nval;
+    if (count != NULL) *count = s_slots[index].count;
+    if (seq != NULL) *seq = s_slots[index].seq;
+    return 1;
 }
 
 /* ---------------------------------------------------------------------

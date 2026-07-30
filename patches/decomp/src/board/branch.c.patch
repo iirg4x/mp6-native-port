@@ -1,0 +1,13 @@
+--- a/src/board/branch.c
++++ b/src/board/branch.c
+@@ -221 +221,9 @@
+-        u16 btnDown;
++        /* MP6_NATIVE_PORT: three paths through this loop body never assign
++         * btnDown before it is read -- the tutorial branch in both its
++         * choiceTime states and the COM branch's countdown state
++         * (-Werror=sometimes-uninitialized, branch.c:224/247/267). On hardware
++         * the slot held whatever the previous iteration left, so the branch
++         * cursor could act on a stale press. 0 is not a guess: the COM
++         * branch's own choiceTime<0 path already writes `btnDown = 0;` for
++         * exactly the frames where no button is meant to be down. */
++        u16 btnDown = 0;

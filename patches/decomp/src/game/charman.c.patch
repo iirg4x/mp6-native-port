@@ -133,3 +133,21 @@
 -            _CharFXPlay(charNo, seId, voiceFlag);
 -            return ret;
 +            return _CharFXPlay(charNo, seId, voiceFlag);
+@@ -273 +273,7 @@
+-    printf("Time %dmsec\n", OSTicksToMilliseconds(OSGetTick()-start));
++    /* MP6_NATIVE_PORT: OSTicksToMilliseconds yields a 64-bit value on this
++     * host (dolphin/os.h types OSTime as long long), so `%d` consumed the
++     * wrong half of the varargs slot -- on the 32-bit console the same
++     * expression really was an int. Cast the argument rather than change the
++     * format string: the printed text then matches the console's for every
++     * value this timing report can produce. */
++    printf("Time %dmsec\n", (int)OSTicksToMilliseconds(OSGetTick()-start));
+@@ -3015 +3015,7 @@
+-    s16 motNo;
++    /* MP6_NATIVE_PORT: the motId search below breaks on the first match and
++     * leaves motNo untouched when there is none, so the switch dispatched on
++     * an indeterminate stack slot (-Werror=sometimes-uninitialized). -1 is
++     * the fail-closed default: every case label is a CHAR_MOTNO(...) value
++     * and none is negative, so a no-match now plays no win/lose voice
++     * instead of jumping on whatever the slot happened to hold. */
++    s16 motNo = -1;

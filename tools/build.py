@@ -1347,7 +1347,16 @@ def game_sources():
 # link the complete recovered 40-TU closure instead of letting a partial list
 # appear viable only because a particular menu path has not called it yet.
 BOARD_NATIVE_ABI_FLAGS = {
-    "src/board/audio.c": ["-include", "msm.h"],
+    # mp6_hwcast.h: mbAudFXPosPanGet converts a projected screen x to int and
+    # clamps AFTERWARDS, so an inf/NaN projection (Hu3D3Dto2D divides by
+    # camera-space z) trapped instead of saturating the way Gekko's fctiwz
+    # did. The patch routes that one expression through MP6_FCTIWZ_S32; this
+    # is the force-include that makes the macro visible. Deliberately listed
+    # per-TU rather than pulled in by mp6_board_compat.h so that THIS TABLE is
+    # the audit surface: exactly the translation units carrying a
+    # hardware-cast patch appear here, and nothing else silently acquires the
+    # macro. Pairing is machine-checked by tools/test_decomp_runtime_defects.py.
+    "src/board/audio.c": ["-include", "msm.h", "-include", "mp6_hwcast.h"],
     "src/board/capsule.c": ["-include", "msm.h"],
     "src/board/roulette.c": ["-include", "msm.h"],
     "src/board/telop.c": ["-include", "msm.h"],
@@ -1360,10 +1369,49 @@ BOARD_NATIVE_ABI_FLAGS = {
     # GwSystem.turnPlayerNo is still -1. Scoped to this TU.
     "src/board/math.c": ["-fno-sanitize=float-cast-overflow"],
     "src/board/camera.c": ["-include", "string.h"],
-    "src/board/config.c": ["-include", "string.h"],
+    # `abi_warning_audit --all --target windows --deep` rows. Each of these
+    # three TUs called functions with no declaration in scope; the ones that
+    # DO have a decomp header get it force-included here, and the ones the
+    # decomp never gave a header get a cited prototype in
+    # shim/include/mp6_board_compat.h instead (already force-included for
+    # every board TU by board_sources()).
+    #
+    # config.c's is the load-bearing one: `flipScale = fabs(mbCosDeg(180.0f *
+    # weight))` (config.c:440) and `work->scale = ... = mbCosDeg(90.0f *
+    # weight)` (config.c:375) called a FLOAT-returning function through an
+    # implicit `int` declaration, so the returned cosine was read out of the
+    # integer return register and truncated. mbSinDeg/mbCosDeg get their
+    # prototypes from shim/include/mp6_board_compat.h rather than from
+    # game/board/guide.h, which DOES declare them (:80-81) but also carries
+    # `int mbObjMotionShiftIDGet(int)` where game/board/object.h:63 has
+    # `int mbObjMotionShiftIDGet(MBMODELID)` -- two incompatible declarations
+    # of one function that only stay apart because no decomp TU includes both.
+    "src/board/capevent.c": ["-include", "string.h", "-include", "stdio.h",
+                              "-include", "game/frand.h",
+                              "-include", "game/board/audio.h"],
+    "src/board/capselect.c": ["-include", "game/board/comchoice.h"],
+    # The second wave of audit rows, visible only after
+    # tools/abi_warning_audit.py stopped skipping unpatched decomp TUs.
+    # last5.c gets mbObjHookReset from shim/include/mp6_board_compat.h, not
+    # from game/board/object.h: it already includes game/board/guide.h, and
+    # guide.h:71 declares `void mbObjKill(int)` where object.h:12 declares
+    # `void mbObjKill(MBMODELID)` -- the same mutually-exclusive pair that
+    # keeps guide.h out of config.c.
+    "src/board/last5.c": ["-include", "game/board/audio.h"],
+    "src/board/scroll.c": ["-include", "string.h",
+                            "-include", "game/hsfex.h",
+                            "-include", "game/board/effect.h",
+                            "-include", "game/board/branch.h"],
+    "src/board/tutorial.c": ["-include", "string.h"],
+    "src/board/config.c": ["-include", "string.h",
+                            "-include", "game/board/audio.h"],
     "src/board/gate.c": ["-include", "string.h"],
     "src/board/opening.c": ["-include", "string.h"],
-    "src/board/star.c": ["-include", "string.h"],
+    # star.c's StarObjEffHook converts `255.0f * (1.0f - weight)` to a u8
+    # particle alpha, where weight divides by a possibly-zero activeF -- the
+    # sixth hardware-cast site, and the one an extended board drive reaches
+    # after the five projection sites. See audio.c's entry above.
+    "src/board/star.c": ["-include", "string.h", "-include", "mp6_hwcast.h"],
 }
 
 
@@ -1443,6 +1491,15 @@ REL_SOURCES = [
                                     "-Dlbl_1_data_154=mdsel_lbl_1_data_154",
                                     "-include", "game/hsfex.h",
                                     "-include", "mp6_mdsel_audio_compat.h",
+                                    # mp6_hwcast.h: three `s16 pan = 64.0f +
+                                    # (screenPos.x * ...)` sites (fn_1_5BF0,
+                                    # fn_1_FDF8, fn_1_FEC0) are the same
+                                    # project-then-convert-then-clamp shape as
+                                    # board/audio.c's mbAudFXPosPanGet, and
+                                    # fn_1_FDF8 is where a retail headless
+                                    # Party-Mode drive actually died. See the
+                                    # BOARD_NATIVE_ABI_FLAGS entry for audio.c.
+                                    "-include", "mp6_hwcast.h",
                                     "-include", "string.h"]),
     # mdpartydll (party-mode setup --
     # mode select's own "Party Mode" confirm proceeds to this overlay,
@@ -1469,6 +1526,11 @@ REL_SOURCES = [
                                         "-Dlbl_1_data_0=mdparty_lbl_1_data_0",
                                         "-include", "game/hsfex.h",
                                         "-include", "game/audio.h",
+                                        # mp6_hwcast.h: fn_1_9F50 casts a
+                                        # projected y to s16 for the
+                                        # character-select name plates. Same
+                                        # trap class; see audio.c's entry.
+                                        "-include", "mp6_hwcast.h",
                                         "-include", "game/saveload.h"]),
     ("src/REL/mdpartydll/stage.c", []),
     # w01Dll (Towering Treetop, board 1). world01.c is recovered/matching at
@@ -1526,6 +1588,14 @@ MAIN_C_FLAGS = ["-Dmain=GameMain"]
 # game-owned, never port vs decomp.
 HOST_STATE_SECTION_SOURCES = {
     "platform/os/savestate.c",
+    # The Expanded-heaps scale latch (shim/include/mp6_heap_scale.h). Same
+    # category as savestate.c's own statics: it must describe the RUNNING
+    # process, not the captured one. mp6_arena_size() reads through it, and
+    # that value is both the arena region's recorded extent in every capture
+    # and the live side of the restore-time extent check -- so a restored copy
+    # of a foreign scale would let a state misstate its own arena, which is
+    # the one thing a memory-image format may never do.
+    "platform/os/heap_scale.c",
     "platform/audio/msm_bridge.c",
     "platform/audio/audio_out_sdl.c",
     "platform/gx/aurora_bridge.c",
@@ -1589,10 +1659,22 @@ HOST_STATE_SECTION_SOURCES = {
     "platform/gx/ui/graphics_tuner.cpp",
     "platform/gx/ui/prelaunch.cpp",
     "platform/gx/ui/settings.cpp",
+    # The dev console's RmlUi view (shim/include/mp6_console.h). Same category
+    # as its ui/ neighbours -- an R"RML" document source in a namespace-scope
+    # std::string plus live element pointers -- and additionally holds the
+    # deferred-focus and history cursors of the RUNNING debug session.
+    "platform/gx/ui/console.cpp",
     # Freecam (shim/include/mp6_freecam.h): the enable flag + fly pose belong
     # to the RUNNING process's UI session -- a restored state must neither
     # re-enable freecam nor teleport the camera the user is flying.
     "platform/hsf/mp6_freecam.c",
+    # The Enhancements seam's published settings block
+    # (shim/include/mp6_enhancements.h). Same category as freecam right above:
+    # it describes the RUNNING process's user settings, never game state. A
+    # savestate captured with 32 voices must not silently re-point a 16-voice
+    # session's settings on restore -- the consumers version their own tables
+    # for a size change, and this block is not part of that.
+    "platform/enh/mp6_enhancements.c",
     # Unlocked FPS identity/camera metadata (shim/include/mp6_fi_model.h): the
     # model-generation/context and camera snapshot buffers are host-owned render state
     # of the RUNNING process, not captured game state -- a restore must not
@@ -1612,6 +1694,15 @@ HOST_STATE_SECTION_SOURCES = {
     # process's buffer pointer into the loading one is the exact heap-
     # corruption class this carve-out exists to prevent.
     "platform/gx/frame_dump.c",
+    # The developer console (shim/include/mp6_console.h). Same category as
+    # framescope.c/frame_dump.c right above: an availability/open latch, ring
+    # positions, and -- worse -- the command table's registered FUNCTION
+    # POINTERS. Restoring a capturing process's function pointers into a
+    # loading one is the same class of corruption the carve-out exists for.
+    # Both TUs are in PLATFORM_SOURCES_COMMON, so these entries are asserted
+    # against BOTH builds.
+    "platform/gx/console/console_core.c",
+    "platform/gx/console/console_stats.c",
     # Unlocked FPS presentation layer (shim/include/mp6_unlocked_fps.h): the
     # idle-window pacing statics are monotonic timestamps taken from the RUNNING
     # process's timer plus diagnostic counters -- host state, not captured game
@@ -1694,7 +1785,21 @@ def verify_host_section_sources():
 
 
 PLATFORM_SOURCES_COMMON = [
+    # The Enhancements seam (shim/include/mp6_enhancements.h): the pure preset
+    # table + derivation, and the published settings store every consumer
+    # reads. In COMMON -- not with the aurora-only launcher -- for the same
+    # reason console_core.c is: it must LINK HEADLESS (the heap-scale and
+    # voice-count consumers exist in both builds) and it must be compilable on
+    # its own by tools/enh_preset_selftest.c, which has no aurora/decomp
+    # universe available. Dependency-light by contract: stdlib + string only.
+    "platform/enh/mp6_enhancements.c",
     "platform/os/arena.c",
+    "platform/os/heap_scale.c",  # Enhancements "Expanded heaps" (shim/include/
+                                   # mp6_heap_scale.h): the process-wide scale latch
+                                   # both arena.c and malloc_direct.c read. Dependency-
+                                   # free (no decomp/Aurora headers), BOTH modes because
+                                   # both of its consumers are in both. Carved out --
+                                   # see HOST_STATE_SECTION_SOURCES.
     "platform/os/sdk_native.c",  # portable PS-matrix/quaternion SDK names;
                                   # headless-only C_QUAT/GX attribute sinks
     "platform/os/process_native.c",  # replaces jmp_native.c + hostjmp.c +
@@ -1716,6 +1821,21 @@ PLATFORM_SOURCES_COMMON = [
                                     # out of board_placeholders.c's no-op list (see
                                     # that file's own header for provenance)
     "platform/os/log.c",
+    "platform/os/hwcast.c",  # the rate-limited saturation report behind
+                               # shim/include/mp6_hwcast.h's inline fctiwz
+                               # conversion. BOTH modes: the patched decomp
+                               # expressions that call it are compiled in both.
+    "platform/os/input_script.c",  # the deterministic --input-script engine
+                                     # (spec parser + per-tick state machine +
+                                     # the event-bound waitev/pressuntil steps).
+                                     # Moved out of aurora_bridge.c: nothing in
+                                     # it is windowed, but living there made
+                                     # --input-script Aurora-ONLY, so a headless
+                                     # A-press route (file-select -> mode-select
+                                     # -> party setup -> board) was impossible
+                                     # and every board drive had to take the
+                                     # shared GPU lock. BOTH modes, and inert
+                                     # until an --input-script arms it.
     "platform/os/mp6_events.c",  # the game-event bus (shim/include/mp6_events.h):
                                    # typed [EVENT] lines for overlay/DLL/screen state
                                    # changes, so automation can bind input to observed
@@ -1765,6 +1885,15 @@ PLATFORM_SOURCES_COMMON = [
                                                  # game/hu3d.h (COMMON_FLAGS' decomp -I's), same as
                                                  # hsf_load_native.c above; links into BOTH modes since
                                                  # its REL callers are shared between them.
+    "platform/hsf/mp6_motion_leaktest.c",  # MP6_MOTION_LEAKTEST ownership probe
+                                             # (shim/include/mp6_boot.h): real
+                                             # Hu3DMotionCreate/Kill cycles + HEAP_MODEL
+                                             # accounting for tools/motion_census_gate.py.
+                                             # Needs game/hu3d.h (COMMON_FLAGS' decomp
+                                             # -I's) like its platform/hsf/ neighbors;
+                                             # BOTH modes (its caller is the shared
+                                             # mp6_tick_advance choke point) and a
+                                             # standing no-op unless the env var is set.
     "platform/hsf/mp6_shadow_quality.c",  # Mods-page Shadow Quality (shim/include/
                                              # mp6_shadow_quality.h): mp6_shadow_quality_scale(), the
                                              # Hu3DShadowMultiCreate/Hu3DShadowMultiSizeSet origin-site
@@ -1793,6 +1922,19 @@ PLATFORM_SOURCES_COMMON = [
                                     # into BOTH modes -- and split internally by #ifdef
                                     # MP6_HEADLESS_BUILD/__ANDROID__ (no renderer there, and the
                                     # Android aurora archive has no 0025 symbol to link against).
+    # The developer console (shim/include/mp6_console.h). console_core.c is
+    # the registry/ring/lever state and is deliberately dependency-light
+    # (stdio/string/stdarg + the header-only strict parser) exactly like
+    # mp6_events.c above -- it is in COMMON so it LINKS HEADLESS, which is what
+    # lets tools/console_selftest.c drive the real code with no window, no GPU
+    # and no aurora (tools/test_console_contract.py).
+    "platform/gx/console/console_core.c",
+    # console_stats.c is the sampler + every stat panel's text. In COMMON for
+    # the same reason frame_dump.c is, and split internally by #ifdef
+    # MP6_HEADLESS_BUILD the same way: the memory/audio/board panels read
+    # probes that exist in both builds, while fps/unit/scenerendering need
+    # aurora and the GX bridge and report that plainly when asked headless.
+    "platform/gx/console/console_stats.c",
     # platform/null/shims_generated{,_aurora}.c is NOT in this list -- see
     # collect_units() below, it's the one PLATFORM_SOURCES_COMMON entry
     # whose SOURCE FILE (not just its compile flags) differs per mode. See
@@ -1871,6 +2013,7 @@ PLATFORM_AURORA_ONLY = [
     "platform/gx/ui/graphics_tuner.cpp",
     "platform/gx/ui/prelaunch.cpp",
     "platform/gx/ui/settings.cpp",
+    "platform/gx/ui/console.cpp",
     # first-run content onboarding -- the
     # ContentSetup dialog (ripped-framework idiom, ours) + the nod-backed
     # import engine it drives. Aurora-flavor .cpp like the rest of ui/;

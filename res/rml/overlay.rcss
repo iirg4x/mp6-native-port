@@ -238,6 +238,351 @@ fps[corner=br] {
     right: 12dp;
 }
 
+/* [MP6] `stat unit` -- the reference's compact corner HUD, drawn INSTEAD of the
+ * FPS chip above (platform/gx/ui/overlay.cpp never opens both). It reuses the
+ * chip's four corners so it lands wherever the badge it replaces was.
+ *
+ * Right-aligned label/value pairs in the reference's own shape: the label is a
+ * flexible left cell and the value a fixed-width right-aligned one, so the
+ * numbers form a column under a proportional font without a monospace face.
+ * Budget colouring comes from the row kind the sampler emits -- green inside
+ * the frame budget, red over it -- never from anything measured here. */
+statunit {
+    display: none;
+    position: absolute;
+    z-index: 99;
+    min-width: 218dp;
+    padding: 8dp 10dp;
+    border: 1dp #009dda;
+    border-radius: 7dp;
+    background-color: rgba(6, 10, 26, 82%);
+    font-family: "Inter";
+    font-size: 14dp;
+    font-weight: bold;
+    color: #CFE4F2;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+statunit[open] {
+    display: block;
+}
+
+statunit[corner=tl] { top: 12dp; left: 12dp; }
+statunit[corner=tl-gear] { top: 15vh; left: 12dp; }
+statunit[corner=tr] { top: 12dp; right: 12dp; }
+statunit[corner=bl] { bottom: 12dp; left: 12dp; }
+statunit[corner=br] { bottom: 12dp; right: 12dp; }
+
+statunit ptable,
+statunit prow { display: block; }
+
+statunit pcells {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 10dp;
+    line-height: 19dp;
+}
+
+statunit pbar { display: none; } /* the HUD has no proportional bars */
+
+statunit pcell {
+    display: block;
+    flex: 0 0 auto;
+    text-align: right;
+    color: #7CFF7C;
+}
+
+statunit pcell.lbl {
+    flex: 1 1 auto;
+    text-align: left;
+    color: #9FB6C6;
+    font-weight: normal;
+}
+
+statunit prow.good pcell { color: #7CFF7C; }
+statunit prow.bad pcell  { color: #FF6B5E; }
+statunit prow.info pcell { color: #CFE4F2; }
+
+statunit ptitle,
+statunit pgroup,
+statunit phead,
+statunit pnote,
+statunit pmore {
+    display: none; /* the HUD is label:value rows only -- see the spec */
+}
+
+/* [MP6] ===================================================================
+ * STAT PANEL OVERLAYS -- every panel except `stat unit`, drawn over the live
+ * game and surviving the console bar closing.
+ *
+ * They live in THIS stylesheet, not console.rcss, because they live in this
+ * DOCUMENT: the console's own document is now just the bottom input bar and
+ * contains no panel at all. Everything below is scoped under <statpanel> so it
+ * cannot reach the <statunit> block above, whose rows are deliberately a
+ * different shape (label:value pairs, no title, no bars).
+ *
+ * Colours follow the reference: white title, orange group label, yellow column
+ * headers, green values. Column alignment is LAYOUT, not a font -- numeric
+ * cells are fixed-width and right-aligned so they form a column under the
+ * proportional UI face. res/fonts has no monospace family and adding one is a
+ * font-licensing decision reserved for the project owner.
+ * ===================================================================== */
+
+/* The tiling container. Absolute, so the panels sit over the game rather than
+ * displacing anything. It stops short of the bottom so it never fights the
+ * input bar for the same pixels.
+ *
+ * COLUMN-WRAP, AND THE REASON IS HOW MANY 620dp COLUMNS FIT. A `statpanel` is
+ * a fixed 620dp (below), so this box holds floor((W + 10) / 630) of them side
+ * by side -- ONE for every layout width under 1250dp. That is not an edge
+ * case: it is every window narrower than ~1274 physical px at dp-ratio 1, it
+ * is every scaled display (a 1280px window on a 125% monitor is 1024dp), and
+ * with the `stat unit` HUD at a top corner it is EVERY window, because the
+ * stack yields 238dp of width to it (statstack[hud=...] below).
+ *
+ * With one column's worth of width, row-wrap degenerates: each line holds a
+ * single panel, lines stack downwards, and the first panel whose line starts
+ * past `bottom: 48dp` is gone entirely -- no scrollbar, no ellipsis, no sign
+ * that a panel was missing. Measured at 1280x960, dp-ratio 1, HUD at tl, with
+ * `stat game` + `stat gpu` + `stat memory`: row-wrap put Memory on line 3 at
+ * y=876 and `overflow: hidden` left 36 of its 318dp -- its title bar and
+ * nothing else.
+ *
+ * Column-wrap packs that same single column identically, and sends what does
+ * not fit into a SECOND COLUMN beside it. In the case above Memory lands at
+ * x=880 and renders its full height; the stack's right edge cuts its last two
+ * numeric columns. Partly readable beats absent.
+ *
+ * IT IS A TRADE, NOT A DOMINATION, and the counter-case is on the record so
+ * nobody has to rediscover it: when the width DOES hold two columns (1256dp,
+ * HUD down) and the panel set is over-subscribed, row-wrap can show more.
+ * Same window with fps+game+gpu+memory+audio latched, row-wrap showed four
+ * panels whole plus a strip of the fifth; column-wrap showed three and pushed
+ * the other two into a third column that is off the right edge. That panel set
+ * needs 1.16M dp^2 in a 1.13M dp^2 box, so no layout fits it -- the choice
+ * there is only which panels lose, and column-wrap loses them whole instead of
+ * in slivers.
+ *
+ * Neither of the alternatives is available. Panels cannot shrink to fit more
+ * per line: the numeric cells are `flex: 0 0 96dp` and the label cell is what
+ * gives, so a narrower panel eats its own row labels (see the statpanel
+ * comment). The stack cannot scroll either -- it is `pointer-events: none` so
+ * the game keeps the mouse, and a scrollbar nobody can grab is not a fix.
+ *
+ * The `hud` attribute is set by overlay.cpp to the corner the `stat unit` HUD
+ * currently occupies (and removed when it is down). The stack yields that
+ * corner rather than drawing under it: RCSS cannot ask whether the HUD is up,
+ * but the view already knows, so one attribute is the whole mechanism. */
+statstack {
+    position: absolute;
+    top: 12dp;
+    left: 12dp;
+    right: 12dp;
+    bottom: 48dp;
+    display: flex;
+    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    align-content: flex-start;
+    gap: 10dp;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 98; /* under the HUD, over the game */
+}
+
+statstack[hud=tl],
+statstack[hud=tl-gear] { left: 250dp; }
+statstack[hud=tr] { right: 250dp; }
+statstack[hud=bl],
+statstack[hud=br] { bottom: 230dp; }
+
+/* WIDTH IS EXPLICIT, and it has to be. The tables inside are `width: 100%`
+ * blocks, so they contribute NO intrinsic width to the flex item -- a panel
+ * sized by its content collapsed to its minimum and the first windowed run
+ * showed every row label clipped to one character while the right-hand columns
+ * ran off the edge. 620dp is the label cell plus five 96dp numeric cells,
+ * which is the widest section any panel emits; two of them tile side by side
+ * at 1280 and one fills a phone. `max-width: 100%` still narrows it on a
+ * window too small for that, because BuildBox clamps a definite width by
+ * max-width before anything else sees it (LayoutDetails.cpp:89).
+ *
+ * `width`, NOT `min-width`, and the flex axis is why. Width is now the CROSS
+ * axis (the stack is column-wrap, see statstack above) and RmlUi does not
+ * clamp a non-stretch item's cross size by min-width at all -- it takes the
+ * hypothetical cross size verbatim (FlexFormattingContext.cpp:761). More
+ * importantly an AUTO cross size makes the height measurement lie: the
+ * column-axis base-size pass formats the item at the CONTAINER's full width
+ * (FlexFormattingContext.cpp:330-334, guarded on `initial_box_size.x < 0`)
+ * and then the final pass locks that height in while drawing the panel 620dp
+ * wide, so any block that wraps to more lines at 620dp than it did at ~1000dp
+ * -- every <pnote>, <pgroup> and <ptitle> here -- would be cut off by the
+ * `overflow: hidden` below. A definite width fails that guard, so the height
+ * is measured at the width the panel is actually painted at. It also skips
+ * GetShrinkToFitWidth's extra full formatting pass per panel per rebuild.
+ *
+ * The font is a step smaller than the console bar's for the same reason the
+ * reference's panels are dense: a whole section has to be readable at once
+ * over live gameplay, and a panel that needs scrolling is one nobody watches. */
+statpanel {
+    display: block;
+    flex: 0 1 auto;
+    width: 620dp;
+    max-width: 100%;
+    max-height: 100%;
+    overflow: hidden;
+    padding: 6dp 10dp 8dp 10dp;
+    border: 1dp #009dda;
+    border-radius: 7dp;
+    background-color: rgba(6, 10, 26, 82%);
+    font-family: "Inter";
+    font-size: 12dp;
+    color: #CFE4F2;
+    pointer-events: none;
+}
+
+statpanel ptitle {
+    display: block;
+    color: #FFFFFF;
+    font-weight: bold;
+    font-size: 15dp;
+    padding: 2dp 0 4dp 0;
+}
+
+statpanel pgroup {
+    display: block;
+    color: #FFB02E;
+    font-weight: bold;
+    padding: 6dp 0 2dp 0;
+}
+
+statpanel ptable {
+    display: block;
+    width: 100%;
+}
+
+/* A value row is a BLOCK that contains a flex line, not a flex box itself.
+ * That is load-bearing for the proportional bar, not a style choice: RmlUi
+ * hands an absolutely positioned child of a FLEX container to
+ * LayoutDetails::GetContainingBlock (FlexFormattingContext.cpp:258), which
+ * resolves past the flex container -- so the bar's `width: N%` would mean N%
+ * of the whole panel and every row's bar would collapse into the same corner.
+ * A block row is its own absolute containing block.
+ *
+ * z-index (any value, including 0) is separately load-bearing: RmlUi only
+ * makes an element a LOCAL STACKING CONTEXT when its computed z-index is not
+ * `auto` (Element.cpp:1841). Without it the bar, whose negative z-index puts
+ * it in RenderOrder::StackNegative, is hoisted into the PANEL's stacking
+ * context and drawn before the panel paints its own background -- i.e.
+ * invisibly. With it the bar sorts inside its own row: after the row, before
+ * the row's cells. */
+statpanel prow {
+    display: block;
+    position: relative;
+    z-index: 0;
+    width: 100%;
+}
+
+statpanel phead,
+statpanel pcells {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    width: 100%;
+    line-height: 16dp;
+}
+
+statpanel phead {
+    color: #F2E14C;
+    border-bottom: 1dp rgba(242, 225, 76, 30%);
+    margin-bottom: 2dp;
+}
+
+/* Fixed-width right-aligned numeric cells ARE the column alignment. The label
+ * cell takes whatever is left, so a long stage name never pushes the numbers
+ * out of their column -- it is truncated instead. `white-space: nowrap` means
+ * truncated, never wrapped: the old comment here said "wraps or clips", but a
+ * nowrap cell cannot wrap, so clipping is the only outcome and it is worth
+ * naming.
+ *
+ * `text-overflow: ellipsis` is what makes that truncation honest. Five 96dp
+ * numeric cells plus this rule's padding leave the label cell 118dp inside a
+ * 620dp panel, and `stat scenerendering`'s stage names are half again that
+ * long -- every windowed capture of that panel shows rows severed mid-word
+ * ("GX submit (aurora e", "FI replay build (port-"), which reads as a rendering
+ * fault rather than as a cell that ran out of room. RmlUi resolves the property
+ * only for a parent whose overflow is not `visible` (ElementText.cpp:47), which
+ * is why it belongs in THIS rule next to `overflow: hidden` and not on the row.
+ * Inter carries U+2026, so it is a real ellipsis and not the "..." fallback
+ * ElementText.cpp:72 substitutes for a face without one. Cells whose text fits
+ * -- every numeric cell -- are untouched. */
+statpanel pcell {
+    display: block;
+    flex: 0 0 96dp;
+    text-align: right;
+    padding: 0 4dp;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+statpanel pcell.lbl {
+    flex: 1 1 auto;
+    text-align: left;
+    padding-left: 2dp;
+}
+
+statpanel prow pcell {
+    color: #7CFF7C;
+}
+
+statpanel prow pcell.lbl {
+    color: #B8E6B8;
+}
+
+/* Row kinds (see the R record's <kind> field). */
+statpanel prow.pool pcell.lbl { color: #7FD2FF; }
+statpanel prow.cat  pcell     { color: #9FB6C6; }
+statpanel prow.cat  pcell.lbl { color: #9FB6C6; }
+statpanel prow.good pcell     { color: #7CFF7C; }
+statpanel prow.bad  pcell     { color: #FF6B5E; }
+statpanel prow.info pcell     { color: #CFE4F2; }
+
+/* The reference's red proportional bar: behind the row, length = this row's
+ * share of the hottest one. z-index below the cells so the numbers stay
+ * readable over it. */
+statpanel pbar {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 1dp;
+    /* An explicit height, not top+bottom: an absolutely positioned box with
+     * `height: auto` and both edges set is the one shape RmlUi resolves
+     * against the containing block rather than against the line it sits on. */
+    height: 14dp;
+    z-index: -1;
+    background-color: rgba(196, 42, 42, 34%);
+}
+
+/* Dimmer than the panel body (#CFE4F2) and that is the WHOLE differentiation.
+ * Same defect and same fix as console.rcss's `acmore`, which see: this row
+ * used to add `font-style: italic`, ui.cpp:78-79 loads Regular and Bold only,
+ * and FontFamily::GetFaceHandle's style match is exact -- so
+ * "[N more stats ...]" (console_stats.c:409) reserved its padding and drew no
+ * glyphs. Only the italic is gone; every box declaration here is untouched. */
+statpanel pmore {
+    display: block;
+    color: #9FB6C6;
+    padding: 2dp 0 0 2dp;
+}
+
+statpanel pnote {
+    display: block;
+    color: #8FA9BC;
+    padding: 1dp 0 0 2dp;
+}
+
 logo {
     position: absolute;
     width: 100dp;

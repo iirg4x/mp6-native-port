@@ -43,6 +43,7 @@
 #include "overlay.hpp"
 #include "prelaunch.hpp"
 #include "settings.hpp" /* the persistent in-game menu instance (section 9) */
+#include "console.hpp"  /* the persistent, hidden dev-console instance (section 9) */
 #include "ui.hpp"
 
 extern "C" {
@@ -51,6 +52,15 @@ extern "C" {
 #include "mp6_path.h" /* checked operational path copy/join */
 #include "mp6_utf8_file.h" /* Windows UTF-8 config/content files */
 #include "mp6_savestate.h" /* in-game menu: savestate result toasts (section 9) */
+#include "mp6_console.h"   /* dev console: the one availability grant (section 9) */
+#include "mp6_enhancements.h" /* the Enhancements seam: preset table + published store */
+
+/* The live-output seam (aurora_bridge.c section 2b): the VSync row's immediate
+ * apply, and the pre-boot menu loop's own cross-output follow hook. The event
+ * observer is SDL-typed so it is NOT in that header -- see the header's own
+ * note on why it stays declaration-only for the headless build. */
+#include "mp6_display.h"
+void mp6_display_note_sdl_event(const SDL_Event *ev);
 
 /* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
@@ -91,6 +101,58 @@ static int g_launcherMode; /* config loaded + settings apply (interactive-style 
 static char g_configPath[1024];
 static char g_saveDirAbs[1024];
 
+/* The Enhancements seam (shim/include/mp6_enhancements.h) names the same six
+ * settings this config carries, and names the AA modes with its own plain-C
+ * enum so non-C++ consumers never have to include launcher_state.hpp. There is
+ * exactly one set of numbers; assert it here rather than trusting a comment. */
+static_assert((int)MP6_ENH_AA_OFF == (int)MP6_AA_OFF, "AA enum drift");
+static_assert((int)MP6_ENH_AA_MSAA4X == (int)MP6_AA_MSAA4X, "AA enum drift");
+static_assert((int)MP6_ENH_AA_FXAA == (int)MP6_AA_FXAA, "AA enum drift");
+static_assert((int)MP6_ENH_AA_SSAA15 == (int)MP6_AA_SSAA15, "AA enum drift");
+static_assert((int)MP6_ENH_AA_SSAA2X == (int)MP6_AA_SSAA2X, "AA enum drift");
+
+/* The six enhancement fields of g_cfg, as the seam's own value struct. The
+ * config IS the source of truth in launcher mode; this is just the shape the
+ * preset table, the derivation and the published store all speak. */
+static Mp6EnhValues mp6_launcher_enh_values_of(const Mp6LauncherConfig &c)
+{
+    Mp6EnhValues v;
+    v.widescreen = c.widescreen;
+    v.unlockedFps = c.unlockedFps;
+    v.shadowQuality = c.shadowQuality;
+    v.aa = c.aa;
+    v.sfxVoices = c.sfxVoices;
+    v.heapScale = c.heapScale;
+    return v;
+}
+
+static Mp6EnhValues mp6_launcher_enh_values(void)
+{
+    return mp6_launcher_enh_values_of(g_cfg);
+}
+
+static void mp6_launcher_enh_store(const Mp6EnhValues *v)
+{
+    g_cfg.widescreen = v->widescreen;
+    g_cfg.unlockedFps = v->unlockedFps;
+    g_cfg.shadowQuality = v->shadowQuality;
+    g_cfg.aa = v->aa;
+    g_cfg.sfxVoices = v->sfxVoices;
+    g_cfg.heapScale = v->heapScale;
+}
+
+/* Publish the user's six settings to the seam every consumer reads. Called
+ * after a config load and after every settings change. NEVER called in
+ * automation mode -- that is what keeps mp6_enh_*() answering retail there,
+ * exactly like the mp6_launcher_cfg_* accessors' own "automation never sees a
+ * non-default value" contract (section 4). */
+static void mp6_launcher_publish_enh(void)
+{
+    if (!g_launcherMode) return;
+    const Mp6EnhValues v = mp6_launcher_enh_values();
+    mp6_enh_set_values(&v);
+}
+
 static void mp6_launcher_defaults(void)
 {
     g_cfg.skipLauncher = 0;
@@ -99,15 +161,34 @@ static void mp6_launcher_defaults(void)
     g_cfg.aspectLocked = 1;
     g_cfg.vsync = 1;
     snprintf(g_cfg.backend, sizeof(g_cfg.backend), "auto");
-    g_cfg.aa = MP6_AA_OFF; /* Anti-Aliasing: default off -- byte-identical, the sacred contract */
+    /* "auto" = the highest-refresh attached output. See launcher_state.hpp's
+     * field comment: this is the one default in this function that changes
+     * existing behaviour on purpose. */
+    snprintf(g_cfg.display, sizeof(g_cfg.display), "auto");
+    g_cfg.windowX = -1;
+    g_cfg.windowY = -1;
     g_cfg.showFps = 0;
     g_cfg.fpsCorner = 0;
     g_cfg.tickHz = 60.0;
     g_cfg.contentRoot[0] = '\0';
     g_cfg.masterVolume = 100;
-    g_cfg.widescreen = 0; /* default OFF -- existing 4:3 pillarboxed behavior, byte-unchanged */
-    g_cfg.shadowQuality = 1; /* Shadow Quality: default native -- byte-identical, the sacred contract */
-    g_cfg.unlockedFps = 0; /* Unlocked FPS: default OFF -- presentation stays 1:1 with the 60Hz tick */
+    /* THE ENHANCEMENTS DEFAULT. A fresh interactive install comes up on the
+     * Modern preset: the port ships enhanced, and every one of the six has a
+     * faithful-off switch (the Vanilla preset flips all six at once). This is
+     * a LAUNCHER default and reaches nothing else -- automation mode never
+     * runs this function, and mp6_enhancements.c's own store stays at retail
+     * until mp6_launcher_publish_enh() hands it these values. Each field's
+     * own accessor (section 4) still hard-codes retail off the launcher path.
+     *
+     * An EXISTING config keeps its own settings: the parser reads the legacy
+     * video.widescreen / video.unlocked_fps / video.shadow_quality / video.aa
+     * keys as well as the new enhancements.* block, so upgrading does not
+     * silently re-enable anything the user had turned off. Only the two
+     * settings that did not exist before (voices, heaps) take the Modern
+     * value in that case -- there is no older preference to honor. */
+    Mp6EnhValues defaults;
+    mp6_enh_defaults(&defaults);
+    mp6_launcher_enh_store(&defaults);
 }
 
 /* =======================================================================
@@ -132,6 +213,29 @@ enum Mp6ConfigKeyBit : uint32_t {
     MP6_CFG_UNLOCKED_FPS = 1u << 12,
     MP6_CFG_AA = 1u << 13,
     MP6_CFG_OLD_MSAA = 1u << 14,
+    /* The `enhancements` block. The config file is FLAT by construction (this
+     * file's section-2 header comment) -- a dotted prefix IS how this model
+     * spells a block, exactly like `video.` and `game.` already do, and it
+     * keeps the strict, transactional, duplicate-rejecting parser below
+     * unchanged. Where a key here overlaps a legacy `video.` one, the
+     * enhancements key WINS regardless of the order they appear in the file
+     * (resolved after the loop, not during it). */
+    MP6_CFG_ENH_PRESET = 1u << 15,
+    MP6_CFG_ENH_WIDESCREEN = 1u << 16,
+    MP6_CFG_ENH_UNLOCKED_FPS = 1u << 17,
+    MP6_CFG_ENH_SHADOW_QUALITY = 1u << 18,
+    MP6_CFG_ENH_AA = 1u << 19,
+    MP6_CFG_ENH_SFX_VOICES = 1u << 20,
+    MP6_CFG_ENH_HEAP_SCALE = 1u << 21,
+    /* Launch-output selection. Three keys rather than one because they answer
+     * different questions with different lifetimes: video.display is a
+     * PREFERENCE ("which output"), video.window_x/_y are a REMEMBERED FACT
+     * ("where it was last"), and the remembered fact wins when it is still
+     * valid. Folding them into one string key would have made "remember where
+     * I put it" and "always open on the fastest panel" mutually exclusive. */
+    MP6_CFG_DISPLAY = 1u << 22,
+    MP6_CFG_WINDOW_X = 1u << 23,
+    MP6_CFG_WINDOW_Y = 1u << 24,
 };
 
 static uint32_t js_known_key_bit(const char *key)
@@ -141,6 +245,9 @@ static uint32_t js_known_key_bit(const char *key)
     if (strcmp(key, "video.window_scale") == 0) return MP6_CFG_WINDOW_SCALE;
     if (strcmp(key, "video.vsync") == 0) return MP6_CFG_VSYNC;
     if (strcmp(key, "video.backend") == 0) return MP6_CFG_BACKEND;
+    if (strcmp(key, "video.display") == 0) return MP6_CFG_DISPLAY;
+    if (strcmp(key, "video.window_x") == 0) return MP6_CFG_WINDOW_X;
+    if (strcmp(key, "video.window_y") == 0) return MP6_CFG_WINDOW_Y;
     if (strcmp(key, "video.show_fps") == 0) return MP6_CFG_SHOW_FPS;
     if (strcmp(key, "video.fps_corner") == 0) return MP6_CFG_FPS_CORNER;
     if (strcmp(key, "game.tick_hz") == 0) return MP6_CFG_TICK_HZ;
@@ -151,13 +258,21 @@ static uint32_t js_known_key_bit(const char *key)
     if (strcmp(key, "video.unlocked_fps") == 0) return MP6_CFG_UNLOCKED_FPS;
     if (strcmp(key, "video.aa") == 0) return MP6_CFG_AA;
     if (strcmp(key, "video.msaa") == 0) return MP6_CFG_OLD_MSAA;
+    if (strcmp(key, "enhancements.preset") == 0) return MP6_CFG_ENH_PRESET;
+    if (strcmp(key, "enhancements.widescreen") == 0) return MP6_CFG_ENH_WIDESCREEN;
+    if (strcmp(key, "enhancements.unlocked_fps") == 0) return MP6_CFG_ENH_UNLOCKED_FPS;
+    if (strcmp(key, "enhancements.shadow_quality") == 0) return MP6_CFG_ENH_SHADOW_QUALITY;
+    if (strcmp(key, "enhancements.aa") == 0) return MP6_CFG_ENH_AA;
+    if (strcmp(key, "enhancements.sfx_voices") == 0) return MP6_CFG_ENH_SFX_VOICES;
+    if (strcmp(key, "enhancements.heap_scale") == 0) return MP6_CFG_ENH_HEAP_SCALE;
     return 0;
 }
 
 static bool js_known_string_key(uint32_t bit)
 {
     return bit == MP6_CFG_WINDOW_MODE || bit == MP6_CFG_BACKEND ||
-           bit == MP6_CFG_CONTENT_ROOT;
+           bit == MP6_CFG_CONTENT_ROOT || bit == MP6_CFG_ENH_PRESET ||
+           bit == MP6_CFG_DISPLAY;
 }
 
 static bool js_backend_valid(const char *value)
@@ -166,6 +281,17 @@ static bool js_backend_valid(const char *value)
            strcmp(value, "d3d11") == 0 || strcmp(value, "vulkan") == 0 ||
            strcmp(value, "metal") == 0 || strcmp(value, "opengl") == 0 ||
            strcmp(value, "opengles") == 0 || strcmp(value, "webgpu") == 0;
+}
+
+/* A JSON number destined for one of the six enhancement ladders. Anything that
+ * is not a small whole number cannot be ON a ladder, so it becomes -1 and
+ * mp6_enh_values_sanitize() degrades it to that field's retail value -- which
+ * also keeps a huge or non-finite double from ever being cast to int (that
+ * cast is undefined behavior, not a large int). */
+static int js_enh_int(double v)
+{
+    if (!(v >= -1024.0 && v <= 1024.0) || v != std::floor(v)) return -1;
+    return (int)v;
 }
 
 static int mp6_launcher_parse_config(const char *text)
@@ -177,6 +303,18 @@ static int mp6_launcher_parse_config(const char *text)
     const char *p = mp6_json_skip_ws(text);
     uint32_t seen = 0;
     bool first = true;
+    /* `enhancements` block staging. Written during the loop, resolved over the
+     * legacy `video.*` values AFTER it, so precedence is a property of the
+     * settings and not of the order somebody's editor happened to write them:
+     *
+     *   enhancements.<key>  >  enhancements.preset  >  video.<key>  >  default
+     *
+     * (Declared here, before the first `goto malformed`, because C++ forbids
+     * jumping over an initialization -- the same reason every other local in
+     * this function is hoisted.) */
+    Mp6EnhValues enh = {};
+    int enhPreset = MP6_ENH_PRESET_CUSTOM;
+    char enhPresetName[32] = "";
 
     if (p == nullptr || *p != '{') goto malformed;
     p = mp6_json_skip_ws(p + 1);
@@ -236,12 +374,32 @@ static int mp6_launcher_parse_config(const char *text)
             } else if (bit == MP6_CFG_BACKEND) {
                 snprintf(parsed.backend, sizeof(parsed.backend), "%s",
                          js_backend_valid(sval) ? sval : "auto");
+            } else if (bit == MP6_CFG_DISPLAY) {
+                /* No validity table on purpose: the set of valid values is
+                 * whatever is PLUGGED IN, which this parser cannot know (SDL's
+                 * video subsystem is not up yet, and will not be until
+                 * mp6_display_resolve_launch_pos runs). An unmatched name
+                 * degrades to "auto" there, with one printed line -- tolerant
+                 * by construction, the same discipline shadow_quality and aa
+                 * use below. An empty string is the only value normalized
+                 * here, because "" would otherwise read as a name that
+                 * matches every display's first character. */
+                snprintf(parsed.display, sizeof(parsed.display), "%s",
+                         (sval[0] != '\0') ? sval : "auto");
             } else if (bit == MP6_CFG_CONTENT_ROOT) {
                 if (mp6_path_copy_checked(parsed.contentRoot,
                                           sizeof(parsed.contentRoot), sval) != 0) {
                     printf("[LAUNCHER] config.json: game.content_root is too long -- keeping auto resolution\n");
                     parsed.contentRoot[0] = '\0';
                 }
+            } else if (bit == MP6_CFG_ENH_PRESET) {
+                /* The stored preset NAME. Never authoritative over the six
+                 * values -- it is a base for whichever of them a hand-edited
+                 * file leaves out, and the label the UI shows is always
+                 * re-derived from the values (mp6_enh_preset_derive). A name
+                 * that matches no tier resolves to Custom and changes
+                 * nothing. */
+                snprintf(enhPresetName, sizeof(enhPresetName), "%s", sval);
             }
         } else if (kind == VALUE_BOOL) {
             /* "video.aspect_locked" is deliberately NOT read anymore (the
@@ -254,6 +412,8 @@ static int mp6_launcher_parse_config(const char *text)
             else if (bit == MP6_CFG_SHOW_FPS)      parsed.showFps = boolValue;
             else if (bit == MP6_CFG_WIDESCREEN)    parsed.widescreen = boolValue;
             else if (bit == MP6_CFG_UNLOCKED_FPS)  parsed.unlockedFps = boolValue;
+            else if (bit == MP6_CFG_ENH_WIDESCREEN)   enh.widescreen = boolValue;
+            else if (bit == MP6_CFG_ENH_UNLOCKED_FPS) enh.unlockedFps = boolValue;
         } else if (kind == VALUE_NUMBER) {
             const double v = numberValue;
             if      (bit == MP6_CFG_WINDOW_SCALE) {
@@ -264,6 +424,22 @@ static int mp6_launcher_parse_config(const char *text)
             }
             else if (bit == MP6_CFG_TICK_HZ) {
                 parsed.tickHz = (v == 0.0 || (v >= 1.0 && v <= 1000.0)) ? v : 60.0;
+            }
+            else if (bit == MP6_CFG_WINDOW_X || bit == MP6_CFG_WINDOW_Y) {
+                /* Absolute desktop coordinates, so NEGATIVE IS LEGITIMATE: a
+                 * monitor left of the primary has a negative origin (this
+                 * workstation's spans -2560..1600). -1 is the "unset"
+                 * encoding, and anything outside a signed-16-bit desktop --
+                 * or non-integral -- degrades to unset rather than being
+                 * clamped, because a clamped position is a position on the
+                 * wrong output and would look like the feature misbehaving.
+                 * A position that no longer lands on any attached output is
+                 * refused separately, at launch, where the display list
+                 * exists. */
+                const int coord = (v >= -32768.0 && v <= 32767.0 && v == std::floor(v))
+                                      ? (int)v : -1;
+                if (bit == MP6_CFG_WINDOW_X) parsed.windowX = coord;
+                else                         parsed.windowY = coord;
             }
             else if (bit == MP6_CFG_MASTER_VOLUME) {
                 parsed.masterVolume = (v >= 0.0 && v <= 100.0 && v == std::floor(v))
@@ -308,12 +484,58 @@ static int mp6_launcher_parse_config(const char *text)
                     parsed.aa = MP6_AA_MSAA4X;
                 }
             }
+            /* The `enhancements` block's numeric members. No per-key range
+             * check here on purpose: mp6_enh_values_sanitize() below is the
+             * ONE ladder for all six (and for the environment levers, and for
+             * whatever the UI writes), so an off-ladder value degrades to
+             * retail in exactly one place instead of four. */
+            else if (bit == MP6_CFG_ENH_SHADOW_QUALITY) enh.shadowQuality = js_enh_int(v);
+            else if (bit == MP6_CFG_ENH_AA)             enh.aa = js_enh_int(v);
+            else if (bit == MP6_CFG_ENH_SFX_VOICES)     enh.sfxVoices = js_enh_int(v);
+            else if (bit == MP6_CFG_ENH_HEAP_SCALE)     enh.heapScale = js_enh_int(v);
         }
         p = mp6_json_skip_ws(valueEnd);
         if (*p != ',' && *p != '}') goto malformed;
     }
     p = mp6_json_skip_ws(p + 1);
     if (*p != '\0') goto malformed;
+
+    /* ---- resolve the `enhancements` block over the legacy `video.*` keys ----
+     *
+     * The migration promise, in one place: an old config that only carries
+     * video.widescreen / video.unlocked_fps / video.shadow_quality / video.aa
+     * still means exactly what it always meant (those landed in `parsed`
+     * during the loop). A config that also carries the new block has the new
+     * block win, whatever order the two appear in. The two settings with no
+     * legacy spelling (voices, heaps) simply keep the defaults until the block
+     * names them. */
+    {
+        Mp6EnhValues resolved = mp6_launcher_enh_values_of(parsed);
+        if ((seen & MP6_CFG_ENH_PRESET) != 0) {
+            enhPreset = mp6_enh_preset_from_name(enhPresetName);
+            if (enhPreset != MP6_ENH_PRESET_CUSTOM) {
+                /* A named tier is the base for every enhancement key the file
+                 * leaves out -- the affordance that makes
+                 * `"enhancements.preset": "vanilla"` alone a working
+                 * hand-edit. Individual keys below still win over it. */
+                mp6_enh_preset_values(enhPreset, &resolved);
+            }
+        }
+        if ((seen & MP6_CFG_ENH_WIDESCREEN) != 0)     resolved.widescreen = enh.widescreen;
+        if ((seen & MP6_CFG_ENH_UNLOCKED_FPS) != 0)   resolved.unlockedFps = enh.unlockedFps;
+        if ((seen & MP6_CFG_ENH_SHADOW_QUALITY) != 0) resolved.shadowQuality = enh.shadowQuality;
+        if ((seen & MP6_CFG_ENH_AA) != 0)             resolved.aa = enh.aa;
+        if ((seen & MP6_CFG_ENH_SFX_VOICES) != 0)     resolved.sfxVoices = enh.sfxVoices;
+        if ((seen & MP6_CFG_ENH_HEAP_SCALE) != 0)     resolved.heapScale = enh.heapScale;
+        mp6_enh_values_sanitize(&resolved);
+        parsed.widescreen = resolved.widescreen;
+        parsed.unlockedFps = resolved.unlockedFps;
+        parsed.shadowQuality = resolved.shadowQuality;
+        parsed.aa = resolved.aa;
+        parsed.sfxVoices = resolved.sfxVoices;
+        parsed.heapScale = resolved.heapScale;
+    }
+
     g_cfg = parsed;
     return 1;
 
@@ -325,6 +547,13 @@ malformed:
 static void mp6_launcher_config_save(void)
 {
     char rootEsc[sizeof(g_cfg.contentRoot) * 6u + 1u];
+    /* video.display holds an SDL_GetDisplayName string, which is vendor EDID
+     * text this code does not control -- it must be JSON-escaped for the same
+     * reason game.content_root is. An unencodable name degrades to "auto"
+     * rather than writing a broken file: the whole config is read
+     * transactionally, so one bad string would discard every other setting on
+     * the next launch. */
+    char displayEsc[sizeof(g_cfg.display) * 6u + 1u];
     char temporary[sizeof(g_configPath) + 32u];
     FILE *f = nullptr;
     unsigned int attempt;
@@ -333,6 +562,11 @@ static void mp6_launcher_config_save(void)
     if (!mp6_json_escape_string(g_cfg.contentRoot, rootEsc, sizeof(rootEsc))) {
         printf("[LAUNCHER] content path is too large to encode in config.json\n");
         return;
+    }
+    if (!mp6_json_escape_string(g_cfg.display, displayEsc, sizeof(displayEsc))) {
+        printf("[LAUNCHER] display name is too large to encode in config.json -- "
+               "saving video.display as \"auto\"\n");
+        snprintf(displayEsc, sizeof(displayEsc), "auto");
     }
     for (attempt = 0; attempt < 32u; ++attempt) {
         int written = snprintf(temporary, sizeof(temporary), "%s.tmp.%02u",
@@ -346,7 +580,20 @@ static void mp6_launcher_config_save(void)
         return;
     }
     /* "video.aspect_locked" is no longer written (row removed; the key in
-     * an existing file is ignored on read, so old configs stay valid). */
+     * an existing file is ignored on read, so old configs stay valid).
+     *
+     * The four legacy video.* enhancement keys ARE still written, mirroring
+     * the enhancements block exactly. They are not read when the block is
+     * present (the block wins), so this is purely so a config touched by this
+     * build stays fully meaningful to a build that predates the block --
+     * downgrade safety costs four lines here and nothing anywhere else.
+     *
+     * "enhancements.preset" is written for the human reading the file. It is
+     * derived, never authoritative: the loader re-derives the label from the
+     * six values, so hand-editing a value and leaving the name stale cannot
+     * make the two disagree. */
+    {
+    const Mp6EnhValues enh = mp6_launcher_enh_values();
     failed = fprintf(f,
             "{\n"
             "    \"launcher.skip\": %s,\n"
@@ -354,6 +601,9 @@ static void mp6_launcher_config_save(void)
             "    \"video.window_scale\": %g,\n"
             "    \"video.vsync\": %s,\n"
             "    \"video.backend\": \"%s\",\n"
+            "    \"video.display\": \"%s\",\n"
+            "    \"video.window_x\": %d,\n"
+            "    \"video.window_y\": %d,\n"
             "    \"video.show_fps\": %s,\n"
             "    \"video.fps_corner\": %d,\n"
             "    \"game.tick_hz\": %g,\n"
@@ -362,22 +612,40 @@ static void mp6_launcher_config_save(void)
             "    \"video.widescreen\": %s,\n"
             "    \"video.shadow_quality\": %d,\n"
             "    \"video.unlocked_fps\": %s,\n"
-            "    \"video.aa\": %d\n"
+            "    \"video.aa\": %d,\n"
+            "    \"enhancements.preset\": \"%s\",\n"
+            "    \"enhancements.widescreen\": %s,\n"
+            "    \"enhancements.unlocked_fps\": %s,\n"
+            "    \"enhancements.shadow_quality\": %d,\n"
+            "    \"enhancements.aa\": %d,\n"
+            "    \"enhancements.sfx_voices\": %d,\n"
+            "    \"enhancements.heap_scale\": %d\n"
             "}\n",
             g_cfg.skipLauncher ? "true" : "false",
             g_cfg.windowMode == MP6_WINMODE_FULLSCREEN ? "fullscreen" : "windowed",
             (double)g_cfg.windowScale,
             g_cfg.vsync ? "true" : "false",
             g_cfg.backend,
+            displayEsc,
+            g_cfg.windowX,
+            g_cfg.windowY,
             g_cfg.showFps ? "true" : "false",
             g_cfg.fpsCorner,
             g_cfg.tickHz,
             rootEsc,
             g_cfg.masterVolume,
-            g_cfg.widescreen ? "true" : "false", /* additive key */
-            g_cfg.shadowQuality, /* Shadow Quality: additive key */
-            g_cfg.unlockedFps ? "true" : "false", /* Unlocked FPS: additive key */
-            g_cfg.aa) < 0; /* Anti-Aliasing: unified video.aa enum, appended last so any external tooling scraping the first N keys positionally (none known) is unaffected */
+            g_cfg.widescreen ? "true" : "false", /* legacy mirror */
+            g_cfg.shadowQuality, /* legacy mirror */
+            g_cfg.unlockedFps ? "true" : "false", /* legacy mirror */
+            g_cfg.aa, /* legacy mirror */
+            mp6_enh_preset_name(mp6_enh_preset_derive(&enh)),
+            enh.widescreen ? "true" : "false",
+            enh.unlockedFps ? "true" : "false",
+            enh.shadowQuality,
+            enh.aa,
+            enh.sfxVoices,
+            enh.heapScale) < 0;
+    }
     if (fflush(f) != 0 || ferror(f)) failed = 1;
     if (fclose(f) != 0) failed = 1;
     if (failed || mp6_replace_utf8(temporary, g_configPath) != 0) {
@@ -503,6 +771,18 @@ extern "C" int mp6_launcher_decide_mode(int hasNumericArg, int hasInputScript, i
             printf("[LAUNCHER] no config at %s -- defaults (file is created on first settings change)\n",
                    g_configPath);
         }
+        /* Hand the six enhancement settings to the seam every consumer reads
+         * (shim/include/mp6_enhancements.h) as soon as they are known -- before
+         * aurora_initialize, before HuMem sizing, before the mixer comes up.
+         * The automation branch below deliberately does NOT do this: the
+         * seam's own store stays retail there, which is the automation
+         * contract stated in docs/TESTING.md. */
+        mp6_launcher_publish_enh();
+        /* STRICTLY AFTER the publish: capture_initials snapshots the two
+         * latched enhancements through the seam, and the seam answers retail
+         * until it has been published. Snapshotting first would record 16
+         * voices / x1 heaps for a Modern session and then report a phantom
+         * restart-pending state for settings the user never touched. */
         mp6_launcher_capture_initials();
         *outShowMenu = forceMenu ? 1 : !g_cfg.skipLauncher;
     } else {
@@ -523,11 +803,17 @@ extern "C" int mp6_launcher_is_automation(void)
     return g_launcherMode ? 0 : 1;
 }
 
-/* Launch-time values of the two next-launch settings, for the restart-
- * pending check (the ripped prelaunch shows its "Apply Options" modal when
- * these differ from the current config). */
+/* Launch-time values of the next-launch settings, for the restart-pending
+ * check (the ripped prelaunch shows its "Apply Options" modal when these
+ * differ from the current config).
+ *
+ * There is deliberately NO g_initialVsync any more. VSync became a live apply
+ * (the row calls mp6_display_set_vsync), so it is not restart-pending and its
+ * launch value is no longer a reason to relaunch. The boot present-sync state
+ * is still recorded, but in the display module -- which is the only place that
+ * knows the truth, because MP6_VSYNC overrides the config in automation and
+ * main_native.c resolves that before handing the value over. */
 static char g_initialBackend[24];
-static int g_initialVsync = 1;
 static int g_initialMsaa = 1;
 
 /* Anti-Aliasing: the aurora_initialize-time (restart-pending) projection of
@@ -553,6 +839,16 @@ static float mp6_aa_to_ssaa(int aa)
 }
 
 static float g_initialSsaa = 1.0f;
+
+/* The two Enhancements that their consumers LATCH at init and hold for the
+ * whole run (see shim/include/mp6_enhancements.h): the mixer reads the voice
+ * count once in msmSysInit because a voice's slot index is its identity, and
+ * platform/os/heap_scale.c resolves the heap scale once because the arena
+ * reservation and HuMemInitAll run thousands of instructions apart. Both are
+ * therefore restart-pending in exactly the sense MSAA/SSAA already were, and
+ * both are snapshotted here so restart_pending() can say so. */
+static int g_initialSfxVoices = 16;
+static int g_initialHeapScale = 1;
 
 /* Anti-Aliasing: what aurora was ACTUALLY initialized with this session, as
  * reported by main_native.c once it has resolved config + env levers. Not the
@@ -606,9 +902,14 @@ extern "C" int mp6_launcher_aa_apply_live(int aa)
 static void mp6_launcher_capture_initials(void)
 {
     snprintf(g_initialBackend, sizeof(g_initialBackend), "%s", g_cfg.backend);
-    g_initialVsync = g_cfg.vsync;
     g_initialMsaa = mp6_aa_to_msaa(g_cfg.aa);
     g_initialSsaa = mp6_aa_to_ssaa(g_cfg.aa);
+    /* Snapshotted from the RESOLVED seam, not from g_cfg: an MP6_ENH_* lever
+     * beats the config, so when one is set the session was latched at the
+     * lever's value and the config field is not what is running. Same reason
+     * g_sessionPostAa exists for FXAA. */
+    g_initialSfxVoices = mp6_enh_sfx_voices();
+    g_initialHeapScale = mp6_enh_heap_scale();
 }
 
 static AuroraBackend mp6_backend_from_id(const char *id)
@@ -633,6 +934,42 @@ extern "C" int mp6_launcher_cfg_vsync(void)
     return g_launcherMode ? g_cfg.vsync : 1;
 }
 
+/* Launch-output selection, same launcher-mode-vs-automation-default shape as
+ * the two accessors above. Automation answers "primary", which is the explicit
+ * name for "leave the placement exactly as it was" -- so an automation run
+ * that somehow reached the resolver still gets no change, and the resolver's
+ * own early return means it does not even get here. */
+extern "C" const char *mp6_launcher_cfg_display(void)
+{
+    return g_launcherMode ? g_cfg.display : "primary";
+}
+
+/* The remembered position, or 0 when there is none. Automation always answers
+ * 0: a harness run must never inherit an interactive session's window
+ * placement, or a scripted capture's geometry would depend on where the user
+ * last dragged the window. */
+extern "C" int mp6_launcher_cfg_window_pos(int *x, int *y)
+{
+    if (!g_launcherMode) return 0;
+    if (g_cfg.windowX == -1 && g_cfg.windowY == -1) return 0;
+    if (x != nullptr) *x = g_cfg.windowX;
+    if (y != nullptr) *y = g_cfg.windowY;
+    return 1;
+}
+
+/* Records where the window ended up, for the NEXT launch. Called once, from
+ * aurora_bridge.c's clean-shutdown path -- the launcher-mode guard lives here
+ * rather than at the call site, matching every other accessor in this section,
+ * so no caller can accidentally make an automation run write a config file. */
+extern "C" void mp6_launcher_note_window_position(int x, int y)
+{
+    if (!g_launcherMode) return;
+    if (g_cfg.windowX == x && g_cfg.windowY == y) return;
+    g_cfg.windowX = x;
+    g_cfg.windowY = y;
+    mp6_launcher_config_save();
+}
+
 /* A5: resolved "lock 4:3 aspect" preference for
  * mp6_bridge_apply_content_aspect_policy() (aurora_bridge.c), called once
  * right before GameMain() -- same launcher-mode-vs-automation-default
@@ -644,77 +981,84 @@ extern "C" int mp6_launcher_cfg_aspect_locked(void)
     return g_launcherMode ? g_cfg.aspectLocked : 1;
 }
 
-/* Resolved "dynamic true-widescreen"
- * preference for mp6_widescreen_set_enabled() (aurora_bridge.c), called
- * once right before GameMain() alongside mp6_bridge_apply_content_aspect_
- * policy() above -- same launcher-mode-vs-automation-default shape as
- * every other accessor in this section. Automation's fixed 0 matches this
- * config key's own default (mp6_launcher_defaults() above) and is what
- * every existing automated gate already assumes (a widescreen-ON gate is
- * a new, additional scenario -- not a
- * change to what automation mode has always done). */
-extern "C" int mp6_launcher_cfg_widescreen(void)
-{
-    return g_launcherMode ? g_cfg.widescreen : 0;
-}
+/* WIDESCREEN AND UNLOCKED FPS have no accessor in this section any more.
+ * They used to have mp6_launcher_cfg_widescreen() / _cfg_unlocked_fps(),
+ * shaped exactly like the ones above, and their consumers
+ * (platform/main_native.c's mp6_widescreen_set_enabled() latch and
+ * platform/gx/frame_interp.c's per-tick arming) read them directly. That
+ * bypassed the enhancements seam entirely: both switches are declared LIVE
+ * in shim/include/mp6_enhancements.h, yet neither MP6_ENH_WIDESCREEN /
+ * MP6_ENH_UNLOCKED_FPS nor MP6_ENH_PRESET could reach the engine, because a
+ * config-only accessor throws the resolved answer away. Both consumers now
+ * call mp6_enh_widescreen() / mp6_enh_unlocked_fps(), which resolve
+ * lever -> preset lever -> THIS config (published by
+ * mp6_launcher_publish_enh() above) -> retail. Keeping a second, config-only
+ * door open is what let the bypass happen, so it is closed rather than left
+ * unused: nothing here needs to be read to know what the user chose, because
+ * publishing already told the seam.
+ *
+ * The automation contract is untouched and now holds by construction rather
+ * than by a per-accessor `g_launcherMode ?`: automation never publishes, so
+ * the seam is still at its retail initializer there.
+ *
+ * The accessors that DO remain (backend, vsync, aspectLocked) are not
+ * enhancements: a graphics backend and a vsync preference are host display
+ * settings, and the 4:3 aspect lock is a window-policy setting. They have no
+ * MP6_ENH_* lever and no preset column, so a config-only read is exactly
+ * right for them. That is the line: an accessor here is legitimate when the
+ * config is genuinely the only source. */
 
-/* Shadow Quality (shim/include/mp6_shadow_quality.h): the configured
- * shadow-map linear scale in launcher mode, or a fixed 1 (native) in
- * automation/pre-launcher-init -- same "automation never sees a non-
- * default value" contract as mp6_launcher_cfg_widescreen() above.
- * mp6_shadow_quality_scale() (platform/hsf/mp6_shadow_quality.c) is the
- * actual origin-site helper hsfman.c's patched Hu3DShadow* functions call;
- * it reads this to get the user's own preference, then clamps for
- * HEAP_MODEL headroom before returning the EFFECTIVE scale. */
-extern "C" int mp6_launcher_cfg_shadow_quality(void)
-{
-    return g_launcherMode ? g_cfg.shadowQuality : 1;
-}
+/* SHADOW QUALITY has no accessor here any more either, for the same reason,
+ * and it is the clearest case of the three: it is a raw int with no
+ * projection to do, so a config-only accessor was pure bypass.
+ * mp6_shadow_quality_scale() (platform/hsf/mp6_shadow_quality.c) -- the
+ * origin-site helper hsfman.c's patched Hu3DShadow* functions actually call --
+ * now reads mp6_enh_shadow_quality() and clamps that for HEAP_MODEL headroom.
+ *
+ * THE THREE ANTI-ALIASING ACCESSORS BELOW STAY, because they are not doors on
+ * the config: they are the PROJECTION of one enum onto the three separate
+ * things aurora wants (an init-time sample count, an init-time supersample
+ * factor, a live post-process flag). What changed is what they project FROM.
+ * They used to read g_cfg.aa, so MP6_ENH_AA and MP6_ENH_PRESET could not reach
+ * aurora even though the Anti-Aliasing row greys itself out while either is
+ * set. They now project mp6_enh_aa_mode(), the resolved answer.
+ *
+ * Automation still gets AA off, by construction and not by a branch: it never
+ * publishes, so the seam sits at its retail initializer, mp6_enh_aa_mode()
+ * answers MP6_ENH_AA_OFF, and the three projections are 1 / 1.0f / 0 -- byte
+ * for byte the fixed values the `g_launcherMode ?` arms used to hard-code.
+ * The mapping helpers themselves are untouched, so the config-side users
+ * (capture_initials, restart_pending) keep describing what the USER chose,
+ * which is what the settings window has to show. */
 
 /* Anti-Aliasing P1 (aurora/include/aurora/aurora.h AuroraConfig.msaa): the
- * configured MSAA sample count in launcher mode, or a fixed 1 (off) in
- * automation/pre-launcher-init -- same "automation never sees a non-
- * default value" contract as every other accessor in this section. Read
- * once at aurora_initialize time (main_native.c), like backend/vsync --
- * it is a restart-pending setting for the same reason (the multisampled
- * targets are created at that call, not re-created live). */
+ * resolved MSAA sample count. Read once at aurora_initialize time
+ * (main_native.c), like backend/vsync -- it is a restart-pending setting for
+ * the same reason (the multisampled targets are created at that call, not
+ * re-created live). */
 extern "C" int mp6_launcher_cfg_msaa(void)
 {
-    return g_launcherMode ? mp6_aa_to_msaa(g_cfg.aa) : 1;
+    return mp6_aa_to_msaa(mp6_enh_aa_mode());
 }
 
-/* Anti-Aliasing P2 (FXAA): the live post-process AA mode for the current
- * config, as an AuroraPostAA value (aurora/include/aurora/aurora.h) --
- * AURORA_POST_AA_FXAA (1) when video.aa selects FXAA, else AURORA_POST_AA_NONE
- * (0). Applied via aurora_set_post_aa the moment it is selected AND once at
- * boot (main_native.c), so unlike msaa it is NOT restart-pending. Same
- * "automation never sees a non-default value" contract as cfg_msaa above. */
+/* Anti-Aliasing P2 (FXAA): the live post-process AA mode, as an AuroraPostAA
+ * value (aurora/include/aurora/aurora.h) -- AURORA_POST_AA_FXAA (1) when the
+ * resolved mode is FXAA, else AURORA_POST_AA_NONE (0). Applied via
+ * aurora_set_post_aa the moment it is selected AND once at boot
+ * (main_native.c), so unlike msaa it is NOT restart-pending. */
 extern "C" int mp6_launcher_cfg_post_aa(void)
 {
-    return (g_launcherMode && g_cfg.aa == MP6_AA_FXAA) ? 1 : 0;
+    return mp6_enh_aa_mode() == MP6_ENH_AA_FXAA ? 1 : 0;
 }
 
-/* Anti-Aliasing P3 (SSAA): the configured supersampling factor (AuroraConfig.
- * ssaa) in launcher mode, or 1.0 (native) in automation. Restart-pending like
- * msaa -- read once at aurora_initialize (main_native.c). Desktop-only: the
- * SSAA rows never appear on Android, so g_cfg.aa is never an SSAA value there,
- * and main_native.c only forwards this off __ANDROID__ anyway. */
+/* Anti-Aliasing P3 (SSAA): the resolved supersampling factor
+ * (AuroraConfig.ssaa). Restart-pending like msaa -- read once at
+ * aurora_initialize (main_native.c). Desktop-only: the SSAA rows never appear
+ * on Android, so the resolved mode is never an SSAA value there, and
+ * main_native.c only forwards this off __ANDROID__ anyway. */
 extern "C" float mp6_launcher_cfg_ssaa(void)
 {
-    return g_launcherMode ? mp6_aa_to_ssaa(g_cfg.aa) : 1.0f;
-}
-
-/* Unlocked FPS (shim/include/mp6_unlocked_fps.h): the configured
- * tick-decoupled-presentation preference in launcher mode, or a fixed 0
- * (off -- present-count == tick-count exactly) in automation/pre-
- * launcher-init -- the same "automation never sees a non-default value"
- * contract as mp6_launcher_cfg_shadow_quality() above. Read LIVE every
- * tick by frame_interp.c, so the Mods toggle applies immediately; the
- * MP6_UNLOCKED_FPS env lever is resolved (and wins) inside
- * mp6_unlocked_fps_enabled(), not here. */
-extern "C" int mp6_launcher_cfg_unlocked_fps(void)
-{
-    return g_launcherMode ? g_cfg.unlockedFps : 0;
+    return mp6_aa_to_ssaa(mp6_enh_aa_mode());
 }
 
 /* =======================================================================
@@ -773,7 +1117,24 @@ static void mp6_launcher_apply_display(void)
          * exactly as today. */
         const char *forceWide = getenv("MP6_WIDESCREEN");
         int envWide = (forceWide != NULL && forceWide[0] != '\0' && forceWide[0] != '0');
-        if (g_cfg.widescreen || envWide) {
+        /* The three terms are deliberately OR-ed in exactly the shape
+         * mp6_widescreen_enabled() (aurora_bridge.c) uses, so the window shape
+         * and the render/camera/HUD side can never disagree about who asked
+         * for widescreen:
+         *   - g_cfg.widescreen is read DIRECTLY, not through the seam, because
+         *     this function also runs from the live settings row, whose
+         *     setValue writes g_cfg BEFORE cfg_save() republishes to the seam.
+         *     Reading the seam alone here would apply the previous value and
+         *     the window would lag one toggle behind.
+         *   - mp6_enh_widescreen() is what lets MP6_ENH_WIDESCREEN and
+         *     MP6_ENH_PRESET reach the window shape at all. Without it a
+         *     scripted or lever-driven launch got the wide render path and a
+         *     4:3-locked window, which SDL then shrank (2200x720 -> 960x720).
+         *   - envWide is the pre-existing MP6_WIDESCREEN lever, unchanged.
+         * Default-off is byte-unchanged: with nothing published and no lever
+         * set the seam answers retail 0 and the 4:3 aspectLocked branch runs
+         * exactly as before. */
+        if (g_cfg.widescreen || mp6_enh_widescreen() || envWide) {
             SDL_SetWindowAspectRatio(g_window, 0.0f, 0.0f);
         } else if (g_cfg.aspectLocked) {
             SDL_SetWindowAspectRatio(g_window, 4.0f / 3.0f, 4.0f / 3.0f);
@@ -1231,12 +1592,39 @@ void format_document_source(const char *raw, char *out, size_t n)
 /* --- state accessors for the ripped UI --- */
 
 Mp6LauncherConfig &cfg() { return g_cfg; }
-void cfg_save() { mp6_launcher_config_save(); }
+/* Every settings row saves through here, so this is the one place a live
+ * change has to be republished to the Enhancements seam -- a consumer reading
+ * mp6_enh_*() mid-session sees the row the user just moved, not the value the
+ * config had at boot. */
+void cfg_save() { mp6_launcher_publish_enh(); mp6_launcher_config_save(); }
+int enh_preset_current() { const Mp6EnhValues v = mp6_launcher_enh_values(); return mp6_enh_preset_derive(&v); }
+void enh_preset_apply(int preset)
+{
+    Mp6EnhValues v;
+    mp6_enh_preset_values(preset, &v);
+    mp6_launcher_enh_store(&v);
+}
 /* The trailing post-AA term covers the case mp6_launcher_aa_apply_live() now
  * DEFERS: picking FXAA while MSAA/SSAA owns the session leaves the config
  * asking for FXAA that isn't live, which is a restart-pending state exactly
  * like a changed sample count. */
-bool restart_pending() { return strcmp(g_cfg.backend, g_initialBackend) != 0 || g_cfg.vsync != g_initialVsync || mp6_aa_to_msaa(g_cfg.aa) != g_initialMsaa || mp6_aa_to_ssaa(g_cfg.aa) != g_initialSsaa || (g_cfg.aa == MP6_AA_FXAA ? 1 : 0) != g_sessionPostAa; }
+/* The two trailing terms are the latched Enhancements. They compare the CONFIG
+ * against the value this session actually latched, so flipping Extended SFX
+ * Voices or Expanded Heaps offers the same relaunch a sample-count change does
+ * -- without them the settings row said "Takes effect next launch" and then
+ * nothing ever offered the launch. */
+/* VSync's term is GONE from this expression on purpose. aurora_enable_vsync()
+ * exists in the pinned aurora and the VSync row now calls it, so the setting
+ * takes effect the moment it is flipped -- leaving `g_cfg.vsync !=
+ * g_initialVsync` here would keep offering a relaunch for a change that has
+ * already happened. Same discipline the FXAA row follows: the moment a setting
+ * becomes live, its restart-pending term must go. Backend is still here, which
+ * is what proves the removal was surgical rather than a disabled check.
+ *
+ * video.display and video.window_x/_y are deliberately NOT terms either: they
+ * are consumed before aurora_initialize and are documented as next-launch, and
+ * a relaunch prompt for "I moved the window" would fire on every drag. */
+bool restart_pending() { return strcmp(g_cfg.backend, g_initialBackend) != 0 || mp6_aa_to_msaa(g_cfg.aa) != g_initialMsaa || mp6_aa_to_ssaa(g_cfg.aa) != g_initialSsaa || (g_cfg.aa == MP6_AA_FXAA ? 1 : 0) != g_sessionPostAa || g_cfg.sfxVoices != g_initialSfxVoices || g_cfg.heapScale != g_initialHeapScale; }
 void apply_display() { mp6_launcher_apply_display(); }
 void apply_volume() { mp6_launcher_apply_volume(); }
 int validate_root(const char *root, char *err, size_t errn) { return mp6_launcher_validate_root(root, err, errn); }
@@ -1304,6 +1692,7 @@ extern "C" void mp6_launcher_apply_display_settings(void *sdlWindowPtr)
  * input.cpp's sync_input_block PADBlockInput()s the game -- the world
  * keeps ticking, its input is paused so menu navigation never leaks. */
 static mp6::ui::SettingsWindow *g_gameMenu; /* owned by the ui document stack; never closed */
+static mp6::ui::Console *g_console;         /* likewise -- pushed HIDDEN, toggled by ` / F9 */
 
 extern "C" void mp6_launcher_frame_overlay(void)
 {
@@ -1312,6 +1701,23 @@ extern "C" void mp6_launcher_frame_overlay(void)
         g_gameMenu = static_cast<mp6::ui::SettingsWindow *>(&mp6::ui::push_document(
             std::make_unique<mp6::ui::SettingsWindow>(false, 0, /*inGame=*/true), /*show=*/false));
         mp6::ui::show_menu_notification(); /* "Press F10 ... to open menu" toast */
+    }
+    if (g_console == nullptr) {
+        /* THE DEV CONSOLE'S ONLY AVAILABILITY GRANT (shim/include/mp6_console.h).
+         * It sits behind this function's `!g_launcherMode || !g_uiReady` guard
+         * -- the same guard the whole automation contract rests on
+         * (docs/TESTING.md's mode truth table) -- so a tick-budget,
+         * --input-script or MP6_AUTO_START_TICKS run never reaches it. The
+         * console therefore stays unavailable in automation, which means it can
+         * never open and can never capture a key, by construction rather than
+         * by convention. tools/test_console_contract.py asserts there is
+         * exactly one call site and that it is inside this guard.
+         *
+         * Pushed HIDDEN, exactly like g_gameMenu above: a closed console is a
+         * visible()==false skip inside mp6::ui::update()'s existing walk. */
+        g_console = static_cast<mp6::ui::Console *>(&mp6::ui::push_document(
+            std::make_unique<mp6::ui::Console>(), /*show=*/false));
+        mp6_console_set_available(1);
     }
     /* Savestate feedback: a queued save/load was serviced at the frame
      * boundary -- surface the outcome as a toast (the Save States page's
@@ -1354,6 +1760,10 @@ extern "C" void mp6_launcher_ui_teardown(void)
 {
     if (!g_uiReady) return;
     g_gameMenu = nullptr; /* owned by the stack being cleared */
+    /* Withdraw availability BEFORE the document dies: the C core force-closes
+     * on losing it, so the keyboard capture can never outlive the view. */
+    mp6_console_set_available(0);
+    g_console = nullptr;
     mp6::ui::shutdown();
     g_uiReady = false;
 }
@@ -1414,9 +1824,25 @@ extern "C" int mp6_launcher_run_menu(void *sdlWindowPtr)
 
     while (!mp6::ui::play_requested() && !quit) {
         const AuroraEvent *event = aurora_update();
+        /* The cross-output flip's second half, at this loop's own drain
+         * boundary. Same reason this loop needs its own observer hook below:
+         * it never goes through mp6_dispatch_aurora_events, so without this a
+         * crossing detected while the pre-boot menu is up would issue the
+         * flip's first Configure and never its second -- leaving the session
+         * running at the other sync mode. */
+        mp6_display_pump_pending_reconfigure();
         while (event != NULL && event->type != AURORA_NONE) {
             if (event->type == AURORA_EXIT) quit = true;
-            if (event->type == AURORA_SDL_EVENT) mp6::ui::handle_event(event->sdl);
+            if (event->type == AURORA_SDL_EVENT) {
+                mp6::ui::handle_event(event->sdl);
+                /* The SECOND swapchain-follow hook site. This loop has its own
+                 * event walk and never goes through
+                 * mp6_dispatch_aurora_events, so without this a drag across
+                 * outputs while the pre-boot menu is up would not be followed
+                 * and the surface would stay pinned to the launch output for
+                 * the whole session. */
+                mp6_display_note_sdl_event(&event->sdl);
+            }
             ++event;
         }
         if (mp6::ui::quit_requested()) quit = true;

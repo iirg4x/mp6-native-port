@@ -59,6 +59,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "mp6_console.h" /* dev console: the on-screen toggle button below */
+
 /* SAVESTATE CARVE-OUT: layout and finger/latch state describe the live SDL
  * surface and input stream.  They must never be restored from a captured
  * process.  Keep this after all headers and at preprocessor top level;
@@ -93,12 +95,20 @@ typedef enum {
     TP_CTL_GEAR, /* in-game menu button: contributes NO pad bits; a tap
                   * (down+up inside the circle) toggles the RmlUi settings
                   * menu via mp6_launcher_toggle_menu() */
+    TP_CTL_CONSOLE, /* dev console button: same shape as the gear -- no pad
+                     * bits, a tap toggles the console. A sibling CONTROL here
+                     * rather than an extension of input.cpp's 3-finger tap
+                     * machinery: this file is self-contained, and a second
+                     * multi-finger gesture would compete with the menu's own. */
 } TPControl;
 
 /* In-game menu seam (platform/gx/ui/launcher_core.cpp). Both inert in
  * automation mode by the launcher TU's own mode guard. */
 extern "C" void mp6_launcher_toggle_menu(void);
 extern "C" int mp6_launcher_menu_visible(void);
+/* The dev console (shim/include/mp6_console.h, included above) is inert in
+ * automation for the same reason: availability is granted only from the
+ * launcher-mode path, so mp6_console_toggle() is a no-op in a scripted run. */
 
 typedef struct {
     bool active;
@@ -114,6 +124,7 @@ typedef struct {
     float bCx, bCy, bR;
     float stCx, stCy, stHw, stHh;
     float gearCx, gearCy, gearR; /* persistent in-game menu (gear) button */
+    float conCx, conCy, conR;    /* persistent dev-console button */
 } TPLayout;
 
 static TPLayout g_layout;   /* zero until the first drawn frame */
@@ -180,6 +191,13 @@ static void tp_layout_update(float w, float h)
     g_layout.gearR = 0.048f * h;
     g_layout.gearCx = m + g_layout.gearR;
     g_layout.gearCy = m + g_layout.gearR;
+    /* Console button: immediately right of the gear, same size, same top band.
+     * It shares that band deliberately -- the console is a BAR pinned to the
+     * bottom edge and the soft keyboard rises over that same edge, so anything
+     * placed low would be covered the moment the command line takes focus. */
+    g_layout.conR = g_layout.gearR;
+    g_layout.conCx = g_layout.gearCx + g_layout.gearR * 2.6f;
+    g_layout.conCy = g_layout.gearCy;
     if (!g_layoutLogged) {
         g_layoutLogged = true;
         printf("[TOUCH] overlay armed: window %.0fx%.0f -- dpad@(%.0f,%.0f r=%.0f) "
@@ -202,9 +220,10 @@ static TPControl tp_hit_test(float x, float y)
 {
     if (g_layout.w <= 0.0f) return TP_CTL_NONE;
     if (tp_dist(x, y, g_layout.gearCx, g_layout.gearCy) <= g_layout.gearR * 1.5f) return TP_CTL_GEAR;
+    if (tp_dist(x, y, g_layout.conCx, g_layout.conCy) <= g_layout.conR * 1.5f) return TP_CTL_CONSOLE;
     /* While the in-game menu is open the PAD controls are hidden (draw) and
      * inert (PADBlockInput neutralizes the virtual status anyway) -- only
-     * the gear keeps accepting taps, as the close button. */
+     * the gear and the console button keep accepting taps, as close buttons. */
     if (mp6_launcher_menu_visible()) return TP_CTL_NONE;
     if (tp_dist(x, y, g_layout.dpadCx, g_layout.dpadCy) <= g_layout.dpadHitR * 1.15f) return TP_CTL_DPAD;
     if (tp_dist(x, y, g_layout.aCx, g_layout.aCy) <= g_layout.aR * TP_BTN_HIT_SCALE) return TP_CTL_A;
@@ -353,6 +372,12 @@ extern "C" void mp6_touch_pad_event(const SDL_Event *ev)
                 fflush(stdout);
                 mp6_launcher_toggle_menu();
             }
+            if (f->ctl == TP_CTL_CONSOLE &&
+                tp_dist(f->x, f->y, g_layout.conCx, g_layout.conCy) <= g_layout.conR * 1.9f) {
+                printf("[TOUCH] console tap -- toggling the dev console\n");
+                fflush(stdout);
+                mp6_console_toggle();
+            }
         }
         break;
     }
@@ -489,6 +514,30 @@ extern "C" void mp6_touch_pad_draw(void)
          * PADBlockInput()ed; drawing them over the RmlUi menu would just
          * be clutter) -- the gear alone stays, as the close button. */
         if (menuOpen) {
+            return;
+        }
+    }
+
+    /* --- console button (dev console toggle), sibling of the gear -------- */
+    {
+        const bool conOpen = mp6_console_is_open() != 0;
+        float cx = g_layout.conCx, cy = g_layout.conCy, r = g_layout.conR;
+        float a = conOpen ? 0.85f : 0.45f * dim;
+        dl->AddCircleFilled(ImVec2(cx, cy), r, tp_col(30, 30, 30, 0.35f * (conOpen ? 1.0f : dim)), 32);
+        /* A ">_" prompt glyph: unmistakably "console" at thumbnail size, and it
+         * needs no icon font (this overlay draws with ImGui's own). */
+        tp_text_centered(dl, cx, cy, r * 1.25f, tp_col(255, 255, 255, a), ">_");
+        dl->AddCircle(ImVec2(cx, cy), r, tp_col(255, 255, 255, 0.30f * (conOpen ? 1.0f : dim)), 32, 2.0f);
+        /* Console bar open: hide the pad controls, for the same reason the menu
+         * does. Their input is already blocked (any visible ui document takes
+         * PADBlockInput), so drawing them would be clutter -- and the bar plus
+         * the soft keyboard it raises own the bottom edge, which is exactly
+         * where the d-pad lives. The gear and this button stay drawn.
+         *
+         * Note this tracks the BAR, not the stat overlays: an overlay left up
+         * with the bar closed must not hide the pad, because the point of a
+         * persistent overlay is playing while it is on screen. */
+        if (conOpen) {
             return;
         }
     }

@@ -29,6 +29,7 @@
 #include "mp6_parse.h"
 #include "mp6_path.h"
 #include "mp6_utf8_file.h"
+#include "mp6_console.h" /* the MP6_FRAMESCOPE runtime lever + two free counters */
 
 /* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
@@ -50,12 +51,32 @@ static int   fs_target_frame = -2; /* -2 = not parsed yet, -1 = disabled */
 static long  fs_frame_no = 0;      /* incremented by mp6_fs_frame_end() */
 static int   fs_armed = 0;
 
-static void fs_parse_env(void)
+/* The console's own framescope target, distinct from the env latch: `set
+ * framescope N` means "capture the frame N frames from now", not "capture
+ * absolute frame N". Absolute is what the env form needs (it is read before
+ * anything has rendered); relative is the only thing that is useful once the
+ * process is already running and nobody knows which absolute frame is next.
+ * A NEW value re-arms the one-shot, which the env form cannot do at all --
+ * MP6_FRAMESCOPE captures once per process. */
+static int fs_console_armed_at = -1; /* the console value already consumed */
+
+static void fs_sync_target(void)
 {
-    const char *e = getenv("MP6_FRAMESCOPE");
-    int parsed;
-    fs_target_frame = (e != NULL &&
-                       mp6_parse_i32_strict(e, 1, INT_MAX, &parsed)) ? parsed : -1;
+    int want;
+    if (fs_target_frame == -2) {
+        const char *e = getenv("MP6_FRAMESCOPE");
+        int parsed;
+        fs_target_frame = (e != NULL &&
+                           mp6_parse_i32_strict(e, 1, INT_MAX, &parsed)) ? parsed : -1;
+    }
+    want = mp6_console_cvar_get(MP6_CVAR_FRAMESCOPE, 0);
+    if (want > 0 && want != fs_console_armed_at) {
+        fs_console_armed_at = want;
+        fs_target_frame = (int)(fs_frame_no + want);
+        printf("[FRAMESCOPE] console armed for frame %d (%d frame(s) from now)\n",
+               fs_target_frame, want);
+        fflush(stdout);
+    }
 }
 
 static int fs_env_positive(const char *name)
@@ -67,14 +88,14 @@ static int fs_env_positive(const char *name)
 
 int mp6_fs_active(void)
 {
-    if (fs_target_frame == -2) fs_parse_env();
+    if (fs_target_frame == -2) fs_sync_target();
     return fs_armed;
 }
 
 /* called from the bridge once per aurora frame (end-of-frame) */
 void mp6_fs_frame_end(void)
 {
-    if (fs_target_frame == -2) fs_parse_env();
+    fs_sync_target();
     fs_frame_no++; /* count always: CopyTex announcements stamp frame numbers
                       even when no capture frame is armed */
     if (fs_target_frame < 0) return;
@@ -203,6 +224,11 @@ static void fs_texdump(const void *data, int w, int h, int fmt)
 
 void mp6_fs_GXLoadTexObj(GXTexObj *obj, GXTexMapID map)
 {
+    /* Texture-bind counter, hoisted ABOVE the fs_armed guard: these wrappers
+     * are already in decomp's call path via dolphin_compat.h's rename, so
+     * counting here is free and needs no new interception. One relaxed int
+     * load when the console is closed. */
+    if (mp6_console_stats_active) mp6_console_note_tex_bind();
     /* width/height/format via aurora's own accessors keeps this ABI-safe */
     fs_log("LoadTexObj  TEXMAP=%d  data=%p  %dx%d fmt=%d", map,
            GXGetTexObjData(obj), GXGetTexObjWidth(obj), GXGetTexObjHeight(obj), GXGetTexObjFmt(obj));
@@ -333,6 +359,10 @@ void mp6_fs_GXCopyTex(void *dest, GXBool clear)
     static const void *seen[16];
     static int seen_n = 0;
     int novel = 1, i;
+    /* EFB-copy counter, hoisted above the armed/announce logic for the same
+     * reason as the texture bind above: this wrapper already sits in decomp's
+     * call path, so a per-frame EFB-copy count costs one relaxed load. */
+    if (mp6_console_stats_active) mp6_console_note_efb_copy();
     for (i = 0; i < seen_n; i++) if (seen[i] == dest) { novel = 0; break; }
     if (novel && seen_n < 16) seen[seen_n++] = dest;
     if (announced < 32 || novel) {
