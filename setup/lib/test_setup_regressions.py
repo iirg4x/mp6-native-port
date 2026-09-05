@@ -30,7 +30,55 @@ import release_android  # noqa: E402
 from setup.lib import common, nod_ffi, step_android, step_aurora, step_build, step_decomp, step_toolchain  # noqa: E402
 
 
+class PortLocalAssetPathTests(unittest.TestCase):
+    def _paths(self, overrides):
+        env = dict(os.environ)
+        env.pop("MP6_DISC_ROOT", None)
+        env.pop("MP6_DECOMP_INC_DATA", None)
+        env.update(overrides)
+        script = (
+            "import json; from tools import build; "
+            "print(json.dumps([build.DECOMP, build.DECOMP_INC_DATA, "
+            "build.MP6_DVD_FILES_ROOT, build.MP6_DVD_FST_PATH, "
+            "build.COMMON_FLAGS, build.android_common_flags()]))"
+        )
+        # Import from a different cwd to prove overrides are Port-relative.
+        env["PYTHONPATH"] = NATIVE_ROOT
+        return json.loads(subprocess.check_output(
+            [sys.executable, "-c", script], cwd=TOOLS, env=env, text=True,
+        ))
+
+    def test_explicit_port_local_asset_paths(self):
+        decomp, includes, files, fst, windows_flags, android_flags = self._paths({
+            "MP6_DISC_ROOT": "build/disc cache/orig/GP6E01",
+            "MP6_DECOMP_INC_DATA": "build/disc cache/split/include",
+        })
+        local = pathlib.Path(NATIVE_ROOT, "build", "disc cache")
+        self.assertEqual(includes, str(local / "split" / "include"))
+        self.assertEqual(files, (local / "orig" / "GP6E01" / "files").as_posix())
+        self.assertEqual(fst, (local / "orig" / "GP6E01" / "sys" / "fst.bin").as_posix())
+        self.assertIn(includes, windows_flags)
+        self.assertIn(includes, android_flags)
+        self.assertIn("-DMP6_DVD_ROOT_EXPLICIT=1", windows_flags)
+        self.assertNotIn("-DMP6_DVD_ROOT_EXPLICIT=1", android_flags)
+        self.assertEqual(decomp, common.DECOMP_DIR)
+
+    def test_default_asset_paths_are_unchanged(self):
+        decomp, includes, files, fst, windows_flags, _ = self._paths({})
+        self.assertEqual(includes, str(pathlib.Path(decomp, "build", "GP6E01", "include")))
+        self.assertEqual(files, pathlib.Path(decomp, "orig", "GP6E01", "files").as_posix())
+        self.assertEqual(fst, pathlib.Path(decomp, "orig", "GP6E01", "sys", "fst.bin").as_posix())
+        self.assertIn("-DMP6_DVD_ROOT_EXPLICIT=0", windows_flags)
+
+
 class AuroraArtifactIntegrityTests(unittest.TestCase):
+    def test_zig_link_uses_real_system_com_support(self):
+        items = build._resolve_aurora_link_items()
+        self.assertNotIn("-lcomsuppw", items)
+        self.assertIn("-loleaut32", items)
+        self.assertIn("-lole32", items)
+        self.assertIn("-lwbemuuid", items)
+
     def test_checkout_commit_mismatch_is_rejected(self):
         results = [
             subprocess.CompletedProcess([], 0, stdout="a" * 40 + "\n", stderr=""),

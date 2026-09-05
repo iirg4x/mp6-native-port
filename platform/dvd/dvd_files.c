@@ -76,6 +76,9 @@
 #ifndef MP6_DVD_FST_PATH
 #error "MP6_DVD_FST_PATH must be defined by tools/build.py (absolute path to orig/GP6E01/sys/fst.bin)"
 #endif
+#ifndef MP6_DVD_ROOT_EXPLICIT
+#define MP6_DVD_ROOT_EXPLICIT 0
+#endif
 
 /* =======================================================================
  * Resolve the real disc tree relative to the RUNNING EXE'S OWN location,
@@ -315,7 +318,11 @@ static void mp6_resolve_dvd_paths(void)
      * WITH the fst.bin openability probe -- it returns 0 only for a
      * verified-existing disc root, so appending "/files" and
      * "/sys/fst.bin" here always yields usable paths. */
-    if (mp6_host_disc_root(discRoot, sizeof(discRoot)) == 0 &&
+    /* A build with MP6_DISC_ROOT explicitly selected must not silently use
+     * another checkout's assets merely because its exe-relative tree exists.
+     * The launcher's deliberate content-root override remains available. */
+    if (!MP6_DVD_ROOT_EXPLICIT &&
+        mp6_host_disc_root(discRoot, sizeof(discRoot)) == 0 &&
         mp6_path_join_checked(filesRoot, sizeof(filesRoot), discRoot, "files") == 0 &&
         mp6_path_join_checked(fstPath, sizeof(fstPath), discRoot, "sys/fst.bin") == 0 &&
         mp6_set_resolved_paths(filesRoot, fstPath) == 0) {

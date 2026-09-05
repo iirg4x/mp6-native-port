@@ -8,6 +8,26 @@ sibling decomp checkout (see `DECOMP_DEPENDENCY.md`) and the extracted
 disc tree (`external_refs/repos/marioparty6/orig/GP6E01/{sys,files}`,
 pulled from the user's own disc — never checked in).
 
+To keep generated assets outside the decomp checkout, the build accepts
+`MP6_DISC_ROOT` (the extracted directory containing `sys/` and `files/`) and
+`MP6_DECOMP_INC_DATA` (DTK's generated `include/` directory). Relative values
+are resolved from the Port repository root, independently of the shell's
+working directory. For a Port-local cache, in PowerShell:
+
+```powershell
+$env:MP6_DISC_ROOT = "build/disc-cache/orig/GP6E01"
+$env:MP6_DECOMP_INC_DATA = "build/disc-cache/split/include"
+python tools/build.py --headless
+```
+
+These paths must already contain real extracted/split data. Run DTK at the
+decomp's pinned version with `dol split --no-update`, redirecting the config's
+binary inputs and output directory to the local cache. An explicit disc root
+also takes precedence over Windows' automatic sibling-checkout discovery;
+Android retains its device-side runtime paths. Do not use `--clean` with an
+asset cache under `build/`: that option deletes the cache along with the other
+build outputs. The original ISO is never modified or checked in.
+
 ## Windows
 
 ```

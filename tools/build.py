@@ -144,8 +144,13 @@ HOST_INCLUDE = os.path.join(NATIVE_ROOT, "platform", "host")
 # binary) -- so the RUNNING exe needs these two absolute, forward-slash
 # paths (avoids C-string backslash-escaping entirely), baked in as -D's the
 # same way DECOMP_INCLUDE etc. are already absolute build-time paths.
-MP6_DVD_FILES_ROOT = os.path.join(DECOMP, "orig", "GP6E01", "files").replace("\\", "/")
-MP6_DVD_FST_PATH = os.path.join(DECOMP, "orig", "GP6E01", "sys", "fst.bin").replace("\\", "/")
+# An explicit Port-local extraction keeps the dependency checkout read-only.
+MP6_DISC_ROOT = setup_common._workspace_path_override(
+    "MP6_DISC_ROOT", os.path.join(DECOMP, "orig", "GP6E01")
+)
+MP6_DVD_ROOT_EXPLICIT = bool(os.environ.get("MP6_DISC_ROOT", "").strip())
+MP6_DVD_FILES_ROOT = os.path.join(MP6_DISC_ROOT, "files").replace("\\", "/")
+MP6_DVD_FST_PATH = os.path.join(MP6_DISC_ROOT, "sys", "fst.bin").replace("\\", "/")
 
 # The launcher's bottom-right version line (partyboard shows its git
 # describe there). Resolved once per build-driver run; "dev" when git is
@@ -247,7 +252,6 @@ AURORA_DEPS_RMLUI = os.path.join(AURORA_BUILD_RMLUI, "_deps")
 # first. Used by BOTH build modes' link step / DLL-copy step below.
 MP6_ZLIB_LIB_ITEM = os.path.join(AURORA_DEPS, "zlib-build", "libzlib.dll.a")
 MP6_ZLIB_DLL = os.path.join(AURORA_DEPS, "zlib-build", "libzlib1.dll")
-AURORA_STUB_LIBS = os.path.join(PORT_ROOT, "toolchain", "zig-cc-wrappers", "stub-libs")  # comsuppw stub
 
 # Mirrors examples/CMakeFiles/simple.dir/simple.c.obj's own `INCLUDES =` line
 # in aurora/build/build.ninja. fmt/sdl3/xxhash/imgui/dawn are all transitive
@@ -391,7 +395,10 @@ AURORA_LINK_ITEMS = [
     "-lsecur32",
     "_deps/zstd-build/lib/libzstd.a",
     "-lwbemuuid",
-    "-lcomsuppw",
+    # Aurora's CMake recipe includes MSVC's comsuppw library. Zig's MinGW
+    # comutil.h/comdef.h implement the used _bstr_t/COM error helpers inline;
+    # their real system calls resolve through oleaut32 below. No empty
+    # comsuppw stub archive is needed (or supplied) for this target.
     "-lntdll",
     "-lDXGI",
     "extern/libimgui.a",
@@ -650,10 +657,12 @@ def _require_aurora_artifact_stamp(profile, items):
 # Pre-generated .inc data blobs (font bitmaps, decode tables, splash-screen
 # packed sprites, ...) #include-d directly by several game/*.c and
 # REL/bootDll/data.c files. These are the decomp's OWN build-tool output
-# (asset conversion, not hand-written source) and already exist checked
-# into the repo -- the real bytes are sitting right there, so there's no
-# need to fake anything.
-DECOMP_INC_DATA = os.path.join(DECOMP, "build", "GP6E01", "include")
+# (asset conversion, not hand-written source), generated from the user's
+# disc rather than checked in. The override allows DTK output to live in
+# the Port build area without writing into the decomp checkout.
+DECOMP_INC_DATA = setup_common._workspace_path_override(
+    "MP6_DECOMP_INC_DATA", os.path.join(DECOMP, "build", "GP6E01", "include")
+)
 PATCHED_INCLUDE = os.path.join(BUILD_DIR, "patched_include")
 MSL_OVERRIDE = os.path.join(BUILD_DIR, "msl_override")
 
@@ -1192,6 +1201,7 @@ COMMON_FLAGS = [
     # per-file flags mechanism to PLATFORM_SOURCES_COMMON for 2 defines.
     f'-DMP6_DVD_FILES_ROOT="{MP6_DVD_FILES_ROOT}"',
     f'-DMP6_DVD_FST_PATH="{MP6_DVD_FST_PATH}"',
+    f"-DMP6_DVD_ROOT_EXPLICIT={int(MP6_DVD_ROOT_EXPLICIT)}",
 ]
 
 
@@ -3373,7 +3383,6 @@ def main():
             "-o", out_exe,
             f"-Wl,--image-base={IMAGE_BASE}",
             "-Wl,--no-dynamicbase",
-            f"-L{AURORA_STUB_LIBS}",  # comsuppw.lib/.a stub
         ] + _resolve_aurora_link_items() + [
             # nod import lib (disc-image import). An MSVC import lib is
             # ABI-neutral to consume -- the same class of prebuilt as
