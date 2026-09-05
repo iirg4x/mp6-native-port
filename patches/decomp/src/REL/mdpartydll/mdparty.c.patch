@@ -1,16 +1,8 @@
 --- a/src/REL/mdpartydll/mdparty.c
 +++ b/src/REL/mdpartydll/mdparty.c
-@@ -5549,2 +5549,3 @@
-     }
-+    return 0;
- }
-@@ -6202,2 +6203,3 @@
-     fn_1_D6B0(fn_1_23AC0);
-+    return 0;
- }
 @@ -21,0 +22 @@
 +#include "mp6_widescreen.h" /* widescreen support: camera + model extrusion helpers below */
-@@ -877,3 +878,25 @@
+@@ -877,3 +878,13 @@
 -    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f, 10000.0f, 1.2f);
 -    Hu3DCameraViewportSet(
 -        1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
@@ -27,7 +19,7 @@
 +     * and effect on this call; the live re-apply happens once per tick from
 +     * aurora_bridge.c. */
 +    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
-@@ -1838,0 +1862,13 @@
+@@ -1838,0 +1850,11 @@
 +/* The backdrop-extrude helper (scales a model about its own authored bbox
 + * center so its visual middle stays put while its extent grows to cover a
 + * wider aspect) used to be a static function defined locally in this file.
@@ -39,7 +31,7 @@
 + * patch -- this file's own two call sites below (fn_1_861C, fn_1_9218)
 + * just call it now, comments kept. */
 +
-@@ -1850,0 +1887,240 @@
+@@ -1850,0 +1873,57 @@
 +        /* Widescreen extrusion for this board's cloud/proscenium backdrop
 +         * ("pillar", mdlId[0]) and floor ("yuka", mdlId[1]); the foreground
 +         * prop set (mdlId[2]) stays untouched.
@@ -97,7 +89,7 @@
 +        } else if (i == 1) {
 +            mp6_widescreen_floor_border_fill_dup(DATA_mdparty + i, "yuka");
 +        }
-@@ -1864,0 +2141,8 @@
+@@ -1864,0 +1944,7 @@
 +        /* Tears down the floor's own border-fill duplicate instance
 +         * (created by mp6_widescreen_floor_border_fill_dup() above,
 +         * fn_1_861C) -- companion to the Hu3DModelKill loop just above,
@@ -105,7 +97,7 @@
 +         * every other model in this function already follows. A true no-op
 +         * when widescreen was never enabled (registry stays empty). */
 +        mp6_widescreen_floor_border_fill_dup_kill_all();
-@@ -2011,0 +2296,42 @@
+@@ -2011,0 +2098,31 @@
 +        /* The golden swirl-ring backdrop ("CP") used to get the same
 +         * whole-model isotropic extrude as the pillar/floor above, but that
 +         * scale also magnifies -- and visibly softens -- the native center
@@ -137,9 +129,13 @@
 +        if (i == 0) {
 +            mp6_widescreen_extend_ring(obj->mdlId[i], "CP");
 +        }
-@@ -2222 +2222,4 @@
+@@ -2222 +2339,4 @@
 -            pos2D.x - 18.0f, (s16)(pos2D.y - 23.0f));
 +            /* MP6_NATIVE_PORT: `fctiwz` saturation for this float->s16 cast
 +             * of a projected y; see shim/include/mp6_hwcast.h.
 +             */
 +            pos2D.x - 18.0f, (s16)MP6_FCTIWZ_S32(pos2D.y - 23.0f));
+@@ -5549,0 +5670 @@
++    return 0;
+@@ -6202,0 +6324 @@
++    return 0;

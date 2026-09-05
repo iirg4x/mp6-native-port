@@ -2,7 +2,7 @@
 +++ b/src/game/init.c
 @@ -7,0 +8 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -43,0 +45,48 @@
+@@ -43,0 +45,44 @@
 +/* The render-target-widening crux: this is what makes the game's GX
 + * render target genuinely wider than 640 (not a post-hoc stretch of a
 + * 640-wide image) when widescreen is on, generalizing what the reference
@@ -47,7 +47,7 @@
 +    VIConfigure(RenderMode);
 +}
 +
-@@ -54,0 +104,8 @@
+@@ -54,0 +100,7 @@
 +    /* Establishes the wide RenderMode as early as physically possible --
 +     * before InitGX() (a few lines below) ever reads RenderMode->fbWidth
 +     * for the boot-time GXSetViewport/GXSetScissor calls -- so there is no

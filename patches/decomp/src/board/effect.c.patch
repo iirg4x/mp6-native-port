@@ -1,9 +1,9 @@
 --- a/src/board/effect.c
 +++ b/src/board/effect.c
-@@ -11,0 +12,2 @@
-+
+@@ -12,0 +13,2 @@
 +#include "mp6_widescreen.h" /* widescreen support -- FadeDraw below */
-@@ -47,2 +49,21 @@
++
+@@ -47,2 +49,20 @@
 -    unsigned killF : 1;
 -    unsigned pauseF : 1;
 +    /* HOST ABI -- bit-field storage unit, not a behaviour change.
@@ -26,7 +26,7 @@
 +     * makes the constraint explicit instead of implicit. */
 +    u8 killF : 1;
 +    u8 pauseF : 1;
-@@ -55,0 +75,8 @@
+@@ -55,0 +76,7 @@
 +
 +/* omObjGetWork() aliases FADEEFFWORK onto OMOBJ::work[4] and OMOBJ::data
 + * sits immediately after it, so overflowing work[] silently turns a
@@ -34,7 +34,7 @@
 +_Static_assert(sizeof(FADEEFFWORK) <= sizeof(((OMOBJ *)0)->work),
 +               "FADEEFFWORK overflows OMOBJ::work[4] -- omObjGetWork aliases "
 +               "it there and the next member is the pointer omDelObjEx frees");
-@@ -175 +177,13 @@
+@@ -175 +202,13 @@
 -	x2 = HU_FB_WIDTH;
 +	/* FadeDraw is the board's own full-screen colour fade (the flash/
 +	 * blackout the board throws up over everything). x2 is the ONLY place
@@ -49,10 +49,7 @@
 +	 * mp6_widescreen_render_width() can return (it is clamped to the GPU's
 +	 * own max 2D texture dimension). */
 +	x2 = (float)mp6_widescreen_render_width();
-@@ -436,4 +436,68 @@
- static void ParticleDraw(HU3D_MODEL *modelP, Mtx *mtx);
- static void ParManFunc(HU3D_MODEL *modelP, MBPARTICLE *particleP, Mtx mtx);
-
+@@ -438,0 +478,66 @@
 +/* Tells the port's GXSetArray bridge the real byte sizes of the three
 + * indexed vertex arrays ParticleDraw() binds, exactly as
 + * game/hsfanim.c's own mp6ParticleArraysRegister() already does for the
@@ -119,8 +116,7 @@
 +    }
 +}
 +
- HU3D_MODELID mbParticleCreate(ANIMDATA *anim, s16 maxCnt)
-@@ -516,0 +583,20 @@
+@@ -516,0 +622,20 @@
 +    /* Closes mbParticleCreate's own GXBegin(GX_QUADS, maxCnt*4) fourteen
 +     * lines up; anchors to the closing brace of that GXBegin's quad-index
 +     * loop, the last statement inside the GXBeginDisplayList/
@@ -141,16 +137,11 @@
 +     * patches/decomp/src/game/hsfdraw.c.patch's explicit GXEnd() after
 +     * each of MDFaceDraw's three vertex loops. */
 +    GXEnd();
-@@ -517,2 +581,4 @@
-     particleP->dlSize = GXEndDisplayList();
+@@ -517,0 +643,3 @@
 +    /* See mp6ParticleArraysRegister above -- without this the display
 +     * list recorded just now fetches from zero-length uploads. */
 +    mp6ParticleArraysRegister(particleP);
-     return modelId;
-@@ -536,3 +602,5 @@
-     if (!particleP->color) {
-         particleP->color = HuMemDirectMallocNum(HEAP_MODEL, particleP->num * sizeof(GXColor), modelP->mallocNo);
-     }
+@@ -538,0 +667,3 @@
 +    /* The per-particle colour array only exists from here on, and it is
 +     * what ParticleDraw() binds for GX_VA_CLR0 once colorF is set. */
 +    mp6ParticleArraysRegister(particleP);

@@ -4,7 +4,7 @@
 +#include "mp6_widescreen.h" /* widescreen support */
 +#include <stdio.h>  /* object census (see HuSprTexLoad below) */
 +#include <stdlib.h>
-@@ -36 +39,25 @@
+@@ -36 +39,22 @@
 -    MTXOrtho(proj, 0, HU_DISP_HEIGHT, 0, HU_DISP_WIDTH, 0, 10);
 +    /* This is THE per-frame (called from hsfman.c's Hu3DExec every frame,
 +     * and from this file's own mode-transition points) entry point that
@@ -28,17 +28,17 @@
 +     * one shimmed setter. No-op (byte-identical native calls) when
 +     * disabled. */
 +    MTXOrtho(proj, 0, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0, 10);
-@@ -39 +66 @@
+@@ -39 +63 @@
 -        GXSetViewportJitter(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1, VIGetNextField());
 +        GXSetViewportJitter(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1, VIGetNextField());
-@@ -41,3 +68,3 @@
+@@ -41,3 +65,3 @@
 -        GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
 -    }
 -    GXSetScissor(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
 +        GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
 +    }
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
-@@ -63 +90,20 @@
+@@ -63 +87,18 @@
 -    GXSetScissor(sp->scissorX, sp->scissorY, sp->scissorW, sp->scissorH);
 +    /* Every HuSprCreate default-initializes scissorX/Y=0, scissorW/H=
 +     * 640/480 (game/sprman.c), and the setters that could override those
@@ -58,7 +58,7 @@
 +    } else {
 +        GXSetScissor(sp->scissorX, sp->scissorY, sp->scissorW, sp->scissorH);
 +    }
-@@ -252,0 +299,22 @@
+@@ -252,0 +294,22 @@
 +    /* Object census: the ANIM-sourced texture binds (sprites AND
 +     * hsfdraw's engine reflect/toon/hilite maps all funnel through here)
 +     * -- names which ANIMDATA/format each bind came from, the piece the
@@ -81,7 +81,7 @@
 +            fflush(stdout);
 +        }
 +    }
-@@ -412 +480,20 @@
+@@ -412 +475,15 @@
 -    MTXOrtho(proj, 0, HU_DISP_HEIGHT, 0, HU_DISP_WIDTH, 0, 100);
 +    /* A fourth, independent copy of the same native-only ortho class
 +     * already found and recentered twice (HuSprDispInit above in this
@@ -98,7 +98,7 @@
 +     * 16:9 screenshot, glaring at wider ones. Recentered identically;
 +     * no-op (byte-identical native call) when widescreen is disabled. */
 +    MTXOrtho(proj, 0, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0, 100);
-@@ -419 +506,31 @@
+@@ -419 +496,22 @@
 -    GXSetVtxAttrFmt(GX_VA_TEX0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
 +    /* Real, unpatched original decomp bug (not a decompilation error --
 +     * this exact typo shape, reusing the same GXAttr identifier for both
@@ -122,7 +122,8 @@
 +     * call configures, a completely different, correct use of the same
 +     * enumerator). */
 +    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-@@ -562,0 +680,30 @@
+@@ -563 +661,25 @@
+-}
 +    /* Real, unpatched original decomp gap (same class as game/hsfman.c's
 +     * Hu3DZClear): this function's own GXBegin(GX_QUADS, GX_VTXFMT0,
 +     * col*row*4) is followed by a loop that emits EXACTLY col*row*4
@@ -147,3 +148,4 @@
 +     * that gap at the source instead of relying on the bridge's
 +     * necessarily-coarser fallback. */
 +    GXEnd();
++}

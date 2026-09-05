@@ -8,7 +8,7 @@
 +                     * cluster->part NULL -- SetClusterMain (and the
 +                     * Vertextop fetch just below) would fault. */
 +                    if (obj->mesh.vertex == NULL || cluster->part == NULL) { continue; }
-@@ -165,2 +172,11 @@
+@@ -165,2 +172,10 @@
 -                        cluster = &hsf->cluster[track->cluster];
 -                        cluster->index = GetClusterCurve(track, t);
 +                        /* Same reasoning as the hsfmotion.c.patch guard on
@@ -21,7 +21,7 @@
 +                            cluster = &hsf->cluster[track->cluster];
 +                            cluster->index = GetClusterCurve(track, t);
 +                        }
-@@ -170,2 +186,7 @@
+@@ -170,2 +185,7 @@
 -                        cluster = &hsf->cluster[weightTrack->cluster];
 -                        cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, t);
 +                        /* Same guard as HSF_TRACK_CLUSTER immediately

@@ -4,7 +4,7 @@
 +#include "mp6_shadow_quality.h" /* shadow quality: effective map size */
 +#include "mp6_fi_model.h" /* deferred-draw matrix identity (Unlocked FPS) */
 +#include <stdint.h>
-@@ -25,0 +27,54 @@
+@@ -25,0 +29,53 @@
 +
 +/* Object-level draw census, the per-OBJECT companion to hsfman.c's
 + * per-MODEL one (that census explains what the Hu3DExec loop decided;
@@ -58,19 +58,17 @@
 +    const char *want = mp6DlDumpEnv();
 +    return want && objName && strcmp(want, objName) == 0;
 +}
-@@ -52,2 +109,2 @@
+@@ -52,2 +108,2 @@
 -static s32 MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
 -static s32 MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
 +static void MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
 +static void MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
-@@ -138 +140,6 @@
--    DrawObjIdx = 0;
-+    DrawObjIdx = 0;
+@@ -138,0 +195,4 @@
 +    /* Unlocked FPS (shim/include/mp6_fi_model.h): a new deferred batch starts
 +     * here, so drop the previous one's reserved identities. Diagnostic-free
 +     * bookkeeping; nothing about the draw itself changes. */
 +    mp6_fi_capture_defer_reset();
-@@ -149,0 +205,6 @@
+@@ -149,0 +210,26 @@
 +    if (mp6ObjCensusActive()) { /* object census -- see mp6ObjCensusActive above */
 +        /* modelP->hsf and modelP->hookFunc are the SAME union member
 +         * (include/game/hu3d.h): for a hook-func model -- every particle
@@ -97,14 +95,12 @@
 +        }
 +        fflush(stdout);
 +    }
-@@ -159 +221,6 @@
--        DrawObjIdx++;
+@@ -158,0 +245,4 @@
 +        /* Unlocked FPS: this hook-func (particle) model is being DEFERRED to
 +         * Hu3DDrawPost, which emits its matrices after the model bracket has
 +         * closed. Reserve its identity here, while the bracket is still open. */
 +        mp6_fi_capture_defer_push(DrawObjIdx);
-+        DrawObjIdx++;
-@@ -189,0 +251,7 @@
+@@ -189,0 +280,7 @@
 +    if (mp6ObjCensusActive()) { /* object census (rot/pos: the sky-wheel angle) */
 +        printf("[CENSUS-OBJ]  objCall type=%d name=%s childNum=%d baseRot=(%.1f,%.1f,%.1f) basePos=(%.1f,%.1f,%.1f) curRot=(%.1f,%.1f,%.1f)\n",
 +               objPtr->type, objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum,
@@ -112,12 +108,11 @@
 +               objPtr->mesh.base.pos.x, objPtr->mesh.base.pos.y, objPtr->mesh.base.pos.z,
 +               objPtr->mesh.curr.rot.x, objPtr->mesh.curr.rot.y, objPtr->mesh.curr.rot.z);
 +    }
-@@ -256,0 +325,3 @@
+@@ -256,0 +354,3 @@
 +    if (mp6ObjCensusActive() && (constData->attr & HU3D_CONST_LOCK)) { /* object census */
 +        printf("[CENSUS-OBJ]  mesh %s -> skip:LOCK\n", objPtr->name ? objPtr->name : "(null)");
 +    }
-@@ -338,0 +410,19 @@
-+            }
+@@ -339,0 +440,19 @@
 +            if (mp6ObjCensusActive()) { /* object census: predict the branch below, in its order */
 +                const char *mp6Br;
 +                if (!dispF) {
@@ -136,18 +131,15 @@
 +                       objPtr->name ? objPtr->name : "(null)", mp6Br, (unsigned)constData->attr,
 +                       (unsigned)objPtr->flags, transformP->scale.x, transformP->scale.y, transformP->scale.z);
 +                fflush(stdout);
-@@ -354 +445,3 @@
--                    DrawObjIdx++;
++            }
+@@ -353,0 +473,3 @@
 +                    /* Unlocked FPS: deferred translucent/NEAR object -- reserve
 +                     * its identity before Hu3DDrawPost emits it out of order. */
 +                    mp6_fi_capture_defer_push(DrawObjIdx);
-+                    DrawObjIdx++;
-@@ -361 +453,3 @@
--                    DrawObjIdx++;
+@@ -360,0 +483,2 @@
 +                    /* Unlocked FPS: deferred z-compare-off object, same. */
 +                    mp6_fi_capture_defer_push(DrawObjIdx);
-+                    DrawObjIdx++;
-@@ -684,2 +742,26 @@
+@@ -684,2 +808,25 @@
 -                    texAnimP = &Hu3DTexAnimData[animWorkP->animId];
 -                    if((animWorkP->attr & HU3D_ATTRANIM_ATTR_ANIM2D) && !(texAnimP->attr & HU3D_ANIM_ATTR_NOUSE)) {
 +                    /* native port: the original computed
@@ -175,13 +167,13 @@
 +                     * identical to retail. */
 +                    if((animWorkP->attr & HU3D_ATTRANIM_ATTR_ANIM2D)
 +                     && !((texAnimP = &Hu3DTexAnimData[animWorkP->animId])->attr & HU3D_ANIM_ATTR_NOUSE)) {
-@@ -1161 +1251 @@
+@@ -1161 +1308 @@
 -            GXSetTevOrder(tevStage, GX_TEXMAP_NULL, GX_TEXCOORD_NULL, GX_COLOR0A0);
 +            GXSetTevOrder(tevStage, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
-@@ -1432 +1522 @@
+@@ -1432 +1579 @@
 -            GXSetTevOrder(tevStage, GX_TEXMAP_NULL, GX_TEXCOORD_NULL, GX_COLOR0A0);
 +            GXSetTevOrder(tevStage, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
-@@ -1836 +1926,6 @@
+@@ -1836 +1983,6 @@
 -    GXInitTexObj(&texObj, Hu3DShadow->buf, Hu3DShadow->size, Hu3DShadow->size, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
 +    /* The texObj's claimed dims track the scaled copy DESTINATION
 +     * (mp6_shadow_effective_size()), matching what Hu3DShadowExec's
@@ -189,7 +181,7 @@
 +     * native setting. */
 +    s32 effSize = mp6_shadow_latched_size(Hu3DShadow->buf, Hu3DShadow->size); /* create-time size, not live config */
 +    GXInitTexObj(&texObj, Hu3DShadow->buf, (u16)effSize, (u16)effSize, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
-@@ -1995,0 +2091,7 @@
+@@ -1995,0 +2148,7 @@
 +    }
 +    if (mp6ObjCensusActive()) { /* object census: name the texture each draw binds */
 +        printf("[CENSUS-OBJ]    LoadTexture bmp=%s data=%p fmt=%d %dx%d texId=%d attr=%s tint=(%d,%d,%d,%d)\n",
@@ -197,27 +189,25 @@
 +               bmpPtr->sizeX, bmpPtr->sizeY, texId, attrP->name ? attrP->name : "(null)",
 +               bmpPtr->tint.r, bmpPtr->tint.g, bmpPtr->tint.b, bmpPtr->tint.a);
 +        fflush(stdout);
-@@ -2124,0 +2227,5 @@
+@@ -2124,0 +2284,5 @@
 +            if (mp6ObjCensusActive()) { /* object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
-@@ -2174,0 +2282,5 @@
+@@ -2174,0 +2339,5 @@
 +            if (mp6ObjCensusActive()) { /* object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
-@@ -2386 +2498,6 @@
--            drawObj = &DrawObjData[DrawObjNum[drawObjNo]];
-+            drawObj = &DrawObjData[DrawObjNum[drawObjNo]];
+@@ -2386,0 +2556,5 @@
 +            /* Unlocked FPS: re-install the identity reserved for this draw
 +             * object at PUSH time. DrawObjNum[] is the depth-sorted emission
 +             * order; DrawObjNum[drawObjNo] is the stable push slot, which is
 +             * what the reservation was keyed by. */
 +            mp6_fi_capture_defer_begin(DrawObjNum[drawObjNo]);
-@@ -2387,0 +2500,8 @@
+@@ -2387,0 +2562,8 @@
 +                if (mp6ObjCensusActive()) { /* object census: the hook-func (particle) draws -- the one class the object walk above can never enter, because a hook-func model has no scene graph to walk */
 +                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d HOOKFUNC hook=%p z=%.1f mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
 +                           drawObjNo, (int)(drawObj->model - Hu3DData), (void *)drawObj->model->hookFunc, drawObj->z,
@@ -226,19 +216,17 @@
 +                           drawObj->matrix[2][0], drawObj->matrix[2][1], drawObj->matrix[2][2], drawObj->matrix[2][3]);
 +                    fflush(stdout);
 +                }
-@@ -2399,0 +2512,6 @@
+@@ -2399,0 +2582,6 @@
 +                if (mp6ObjCensusActive()) { /* object census: deferred z-sorted draws */
 +                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d obj=%s z=%.1f\n",
 +                           drawObjNo, (int)(drawObj->model - Hu3DData),
 +                           drawObj->object->name ? drawObj->object->name : "(null)", drawObj->z);
 +                    fflush(stdout);
 +                }
-@@ -2488 +2606,3 @@
--            }
-+            }
+@@ -2488,0 +2677,2 @@
 +            /* Unlocked FPS: close this deferred draw object's bracket. */
 +            mp6_fi_capture_model_end();
-@@ -2507,0 +2626,10 @@
+@@ -2507,0 +2698,10 @@
 +    if (mp6ObjCensusActive()) { /* object census (matrix row: the applied wheel rotation) */
 +        printf("[CENSUS-OBJ]   ObjDraw model=%d obj=%s faceCount=%d mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
 +               (int)(drawObj->model - Hu3DData),
@@ -249,8 +237,7 @@
 +               drawObj->matrix[2][0], drawObj->matrix[2][1], drawObj->matrix[2][2], drawObj->matrix[2][3]);
 +        fflush(stdout);
 +    }
-@@ -2692,0 +2821,119 @@
-+    }
+@@ -2693,0 +2894,119 @@
 +    if (mp6DlDumpEnv() && mp6DlDumpEnv()[0] == '*') { /* sweep mode: one line per built object */
 +        HSF_FACE *fp = faceBuf->data;
 +        HuVecF *vtx = objPtr->mesh.vertex ? (HuVecF *)objPtr->mesh.vertex->data : NULL;
@@ -369,7 +356,8 @@
 +            printf("[DL-DUMP] wrote %s (faces=%d dlSize=%d)\n", path, faceBuf->count, (int)totalSize);
 +            fflush(stdout);
 +        }
-@@ -2730 +2976,8 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
++    }
+@@ -2730 +3049,9 @@
 -        DrawData[drawCnt].dlOfs = (u32) DLBufP - (u32) DLBufStartP;
 +        {
 +            uintptr_t current = (uintptr_t)DLBufP;
@@ -380,7 +368,7 @@
 +            }
 +            DrawData[drawCnt].dlOfs = (s32)(current - start);
 +        }
-@@ -2834,0 +3082,39 @@
+@@ -2834,0 +3162,36 @@
 +                /* Real, unpatched original decomp gap, same class as
 +                 * game/hsfman.c's Hu3DZClear and game/sprput.c's
 +                 * HuSpr3DDisp: this GXBegin(GX_TRIANGLES, ...,
@@ -417,29 +405,29 @@
 +                 * necessarily-coarser, wrong-buffer fallback to eventually
 +                 * mis-close. */
 +                GXEnd();
-@@ -2904,0 +3191,6 @@
+@@ -2904,0 +3268,5 @@
 +                /* Same class and same fix as the HSF_FACE_TRI case above
 +                 * (this function's own comment there has the full
 +                 * root-cause story) -- GXQUADS' own vertex loop always
 +                 * emits exactly faceNumBuf[drawCnt] vertices too. */
 +                GXEnd();
-@@ -2975,0 +3268,6 @@
+@@ -2975,0 +3344,6 @@
 +                /* Same class and same fix as the HSF_FACE_TRI case above
 +                 * (this function's own comment there has the full
 +                 * root-cause story) -- the initial 3 vertices plus this
 +                 * strip loop always emit exactly faceNumBuf[drawCnt]
 +                 * vertices in total too. */
 +                GXEnd();
-@@ -2993 +3292 @@
+@@ -2993 +3367 @@
 -static s32 MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
 +static void MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
-@@ -3028 +3327 @@
+@@ -3028 +3402 @@
 -static s32 MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
 +static void MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
-@@ -3059 +3358 @@ static void MDFaceCnt(HSF_OBJECT *objPtr, HSF_FACE *face) {
+@@ -3059 +3433 @@
 -    if(matP != materialBak || (polyTypeBak != face->type & 7) || (face->type & 7) == 4) {
 +    if(matP != materialBak || polyTypeBak != (face->type & 7) || (face->type & 7) == 4) {
-@@ -3438,0 +3738,24 @@
+@@ -3438,0 +3813,26 @@
 +static HSF_OBJECT *mp6_hsf_duplicate_remap(const HSF_DATA *hsf,
 +                                            HSF_OBJECT *objectCopy,
 +                                            const HSF_OBJECT *source)
@@ -466,7 +454,7 @@
 +    return (HSF_OBJECT *)((u8 *)objectCopy + delta);
 +}
 +
-@@ -3447,2 +3771,10 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+@@ -3447 +3847,11 @@
 -    objPtr = HuMemDirectMallocNum(HEAP_MODEL, hsf->objectNum * sizeof(HSF_OBJECT), mallocNo);
 +    if(hsf == NULL || hsf->object == NULL || hsf->objectNum <= 0
 +            || (size_t)hsf->objectNum > (size_t)INT32_MAX / sizeof(HSF_OBJECT)) {
@@ -479,15 +467,15 @@
 +        OSReport("[FATAL] HSF object duplicate allocation failed\n");
 +        _Exit(EXIT_FAILURE);
 +    }
-     objBuf = objPtr;
-@@ -3455 +3787 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+@@ -3455 +3865 @@
 -                objReplicaP->mesh.replica = (HSF_OBJECT*) ((u8 *) objBuf + ((u32)objReplicaP->mesh.replica - (u32)hsf->object));
 +                objReplicaP->mesh.replica = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.replica);
-@@ -3458 +3790 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+@@ -3458,3 +3868,12 @@
 -                objPtr->mesh.parent = (HSF_OBJECT*) ((u8 *)objBuf + ((u32)srcObj->mesh.parent - (u32)hsf->object));
-+                objPtr->mesh.parent = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.parent);
-@@ -3460 +3792,9 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-            }
 -            objPtr->mesh.child = HuMemDirectMallocNum(HEAP_MODEL, srcObj->mesh.childNum*sizeof(HSF_OBJECT *), mallocNo);
++                objPtr->mesh.parent = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.parent);
++            }
 +            if(srcObj->mesh.childNum != 0) {
 +                objPtr->mesh.child = HuMemDirectMallocNum(HEAP_MODEL,
 +                    srcObj->mesh.childNum*sizeof(HSF_OBJECT *), mallocNo);
@@ -498,15 +486,15 @@
 +            } else {
 +                objPtr->mesh.child = NULL;
 +            }
-@@ -3462,0 +3803,4 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+@@ -3462,0 +3882,4 @@
 +                if(objPtr->constData == NULL) {
 +                    OSReport("[FATAL] HSF duplicate const-data allocation failed\n");
 +                    _Exit(EXIT_FAILURE);
 +                }
-@@ -3466 +3810 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+@@ -3466 +3889 @@
 -                objPtr->mesh.child[j] = (HSF_OBJECT*) ((u8 *)objBuf + ((u32)srcObj->mesh.child[j] - (u32)hsf->object));
 +                objPtr->mesh.child[j] = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.child[j]);
-@@ -3495 +3793,23 @@
+@@ -3495 +3918,20 @@
 -            objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
 +            /* 64-bit/checked-build portability fix, NULL-in-pointer-rebase
 +             * class: a mesh with no attributes has mesh.attribute == NULL

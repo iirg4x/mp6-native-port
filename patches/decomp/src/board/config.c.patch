@@ -1,61 +1,209 @@
 --- a/src/board/config.c
 +++ b/src/board/config.c
-@@ -15,0 +16,2 @@
+@@ -5,4 +5,4 @@
+-extern inline float fabsf(float x)
+-{
+-    return fabs(x);
+-}
++#ifdef __MWERKS__
++extern inline float fabsf(float x)
++{ return fabs(x); }
++#endif
+@@ -25,0 +26,2 @@
 +
 +#include "mp6_widescreen.h" /* widescreen support -- PauseDispCopyDraw below */
-@@ -191 +208,20 @@
+@@ -68,0 +71 @@
++#ifdef __MWERKS__
+@@ -77,0 +81,5 @@
++#else
++    dstP->x = srcP->x;
++    dstP->y = srcP->y;
++    dstP->z = srcP->z;
++#endif
+@@ -391 +399 @@
+-    extern float lbl_802C4CCC;
++    extern const float lbl_802C4CCC;
+@@ -509,5 +517,5 @@
+-    extern float lbl_802C4CC8;
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4CD0;
+-    extern float lbl_802C4CD4;
+-    extern float lbl_802C4CD8;
++    extern const float lbl_802C4CC8;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4CD0;
++    extern const float lbl_802C4CD4;
++    extern const float lbl_802C4CD8;
+@@ -890,6 +898,6 @@
+-    extern float lbl_802C4CDC;
+-    extern float lbl_802C4CE0;
+-    extern float lbl_802C4CE4;
+-    extern float lbl_802C4CE8;
+-    extern float lbl_802C4CEC;
+-    extern float lbl_802C4CF0;
++    extern const float lbl_802C4CDC;
++    extern const float lbl_802C4CE0;
++    extern const float lbl_802C4CE4;
++    extern const float lbl_802C4CE8;
++    extern const float lbl_802C4CEC;
++    extern const float lbl_802C4CF0;
+@@ -1226,12 +1234,12 @@
+-    extern float lbl_802C4CC0;
+-    extern float lbl_802C4CC4;
+-    extern float lbl_802C4CC8;
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4CD4;
+-    extern float lbl_802C4CF4;
+-    extern float lbl_802C4CF8;
+-    extern float lbl_802C4CFC;
+-    extern float lbl_802C4D00;
+-    extern float lbl_802C4D04;
+-    extern float lbl_802C4D08;
+-    extern float lbl_802C4D0C;
++    extern const float lbl_802C4CC0;
++    extern const float lbl_802C4CC4;
++    extern const float lbl_802C4CC8;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4CD4;
++    extern const float lbl_802C4CF4;
++    extern const float lbl_802C4CF8;
++    extern const float lbl_802C4CFC;
++    extern const float lbl_802C4D00;
++    extern const float lbl_802C4D04;
++    extern const float lbl_802C4D08;
++    extern const float lbl_802C4D0C;
+@@ -1376,8 +1384,8 @@
+-    extern float lbl_802C4CC8;
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4CD0;
+-    extern float lbl_802C4CD4;
+-    extern float lbl_802C4CF4;
+-    extern float lbl_802C4CF8;
+-    extern float lbl_802C4D08;
+-    extern float lbl_802C4D0C;
++    extern const float lbl_802C4CC8;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4CD0;
++    extern const float lbl_802C4CD4;
++    extern const float lbl_802C4CF4;
++    extern const float lbl_802C4CF8;
++    extern const float lbl_802C4D08;
++    extern const float lbl_802C4D0C;
+@@ -1454,3 +1462,3 @@
+-    extern float lbl_802C4CC0;
+-    extern float lbl_802C4CC4;
+-    extern float lbl_802C4CC8;
++    extern const float lbl_802C4CC0;
++    extern const float lbl_802C4CC4;
++    extern const float lbl_802C4CC8;
+@@ -1661 +1669 @@
+-    extern float lbl_802C4CCC;
++    extern const float lbl_802C4CCC;
+@@ -1698,3 +1706,3 @@
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4D0C;
+-    extern float lbl_802C4D10;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4D0C;
++    extern const float lbl_802C4D10;
+@@ -1875,4 +1883,4 @@
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4CEC;
+-    extern float lbl_802C4D14;
+-    extern float lbl_802C4D18;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4CEC;
++    extern const float lbl_802C4D14;
++    extern const float lbl_802C4D18;
+@@ -1881 +1889,13 @@
 -        GXSetTexCopySrc(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
 +        /* The board pause screen's frozen-frame backdrop: photograph the
 +         * live frame on the first hook call, then repaint that photograph
 +         * every frame afterwards so the paused board stops animating. Both
-+         * halves were pinned to the native 640 -- the second of the two
-+         * board pause/overlay leftovers the widescreen work flagged as NOT FIXED --
-+         * so at wide aspect the pause backdrop covered only the frame's
-+         * left 640 and the sides kept showing the live, still-animating
-+         * board through the gap.
++         * halves were pinned to the native 640, so at wide aspect the pause
++         * backdrop covered only the frame's left 640 and the sides kept
++         * showing the live board through the gap.
 +         *
-+         * ALLOCATION POLICY, decided before touching anything (this is the
-+         * site that lesson is named after): pauseDispCopyFb is a FIXED
-+         * mbMallocFlush(GXGetTexBufferSize(HU_FB_WIDTH/2, HU_FB_HEIGHT/2))
-+         * block sized at mbPauseDispCopyCreate time, so the copy
-+         * DESTINATION deliberately stays 320x240 and only the SOURCE
-+         * rectangle widens. That cannot overflow anything: the destination
-+         * texel count is unchanged, the renderer rescales the wider source
-+         * into it (aurora lib/gfx/common.cpp's resolve path scales
-+         * whenever the resolve rect and the destination size differ), and
-+         * the squish is undone exactly because the quad below is widened
-+         * by the same factor. HU_FB_WIDTH (640) when disabled. */
++         * pauseDispCopyFb remains the fixed 320x240 destination allocated by
++         * mbPauseDispCopyCreate. Only the source rectangle widens; Aurora's
++         * resolve path scales that wider source into the unchanged texture,
++         * and the wider repaint quad below reverses the squash. This avoids
++         * changing the allocation size or ownership. */
 +        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
-@@ -201,3 +237,7 @@
--        MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 100);
--        GXSetProjection(proj, GX_ORTHOGRAPHIC);
--        GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
+@@ -1892 +1912 @@
+-            lbl_802C4D18, lbl_802C4CB4, lbl_802C4CEC);
++            mp6_widescreen_render_width(), lbl_802C4CB4, lbl_802C4CEC);
+@@ -1894 +1914 @@
+-        GXSetViewport(lbl_802C4CB4, lbl_802C4CB4, lbl_802C4D18,
++        GXSetViewport(lbl_802C4CB4, lbl_802C4CB4, mp6_widescreen_render_width(),
+@@ -1896 +1916 @@
 -        GXSetScissor(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
-+        /* The repaint half: ortho/viewport/scissor and the quad's own two
-+         * right-hand corners all carry the frame width. */
-+        MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, mp6_widescreen_render_width(), 0, 100);
-+        GXSetProjection(proj, GX_ORTHOGRAPHIC);
-+        GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
 +        GXSetScissor(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
-@@ -233 +273 @@
+@@ -1926 +1946 @@
 -        GXPosition3s16(HU_FB_WIDTH, 0, -50);
 +        GXPosition3s16((s16)mp6_widescreen_render_width(), 0, -50);
-@@ -235 +275 @@
+@@ -1928 +1948 @@
 -        GXPosition3s16(HU_FB_WIDTH, HU_FB_HEIGHT, -50);
 +        GXPosition3s16((s16)mp6_widescreen_render_width(), HU_FB_HEIGHT, -50);
-@@ -117,0 +118,15 @@
-+
-+#ifdef MP6_NATIVE_PORT
-+/* Native seam bridge -- declared in shim/include/mp6_board_compat.h and
-+ * called by platform/os/board_placeholders.c's ConfigMain placeholder.
-+ * mbConfigExec (config.c:143) leaves the pause Options menu ONLY when
-+ * configDoneF goes TRUE, and the recovered source's single writer of that
-+ * flag is the still-unrecovered ConfigMain.  configDoneF is file-static,
-+ * so an out-of-line placeholder cannot reach it; this is the smallest
-+ * possible port-side hole that lets it.  configResult is deliberately not
-+ * touched: mbConfigExec itself sets it FALSE at config.c:133 and returns
-+ * it as pause.c:278's cancelF, and FALSE is "the player did not ask to
-+ * quit the board" -- the only answer a no-content menu can honestly give.
-+ * Delete this hunk the moment ConfigMain lands on decomp main. */
-+void mp6_board_config_seam_done(void) { configDoneF = TRUE; }
-+#endif
+@@ -1970,11 +1990,11 @@
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4CD0;
+-    extern float lbl_802C4CEC;
+-    extern float lbl_802C4CF0;
+-    extern float lbl_802C4D0C;
+-    extern float lbl_802C4D1C;
+-    extern float lbl_802C4D20;
+-    extern float lbl_802C4D24;
+-    extern float lbl_802C4D28;
+-    extern float lbl_802C4D2C;
+-    extern float lbl_802C4D30;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4CD0;
++    extern const float lbl_802C4CEC;
++    extern const float lbl_802C4CF0;
++    extern const float lbl_802C4D0C;
++    extern const float lbl_802C4D1C;
++    extern const float lbl_802C4D20;
++    extern const float lbl_802C4D24;
++    extern const float lbl_802C4D28;
++    extern const float lbl_802C4D2C;
++    extern const float lbl_802C4D30;
+@@ -2174,2 +2194,2 @@
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4D1C;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4D1C;
+@@ -2346 +2366 @@
+-    extern float lbl_802C4D1C;
++    extern const float lbl_802C4D1C;
+@@ -2384,2 +2404,2 @@
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4D34;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4D34;
+@@ -2419,9 +2439,9 @@
+-    extern float lbl_802C4CCC;
+-    extern float lbl_802C4CD0;
+-    extern float lbl_802C4CDC;
+-    extern float lbl_802C4CE4;
+-    extern float lbl_802C4D0C;
+-    extern float lbl_802C4D38;
+-    extern double lbl_802C4D40;
+-    extern float lbl_802C4D48;
+-    extern float lbl_802C4D4C;
++    extern const float lbl_802C4CCC;
++    extern const float lbl_802C4CD0;
++    extern const float lbl_802C4CDC;
++    extern const float lbl_802C4CE4;
++    extern const float lbl_802C4D0C;
++    extern const float lbl_802C4D38;
++    extern const double lbl_802C4D40;
++    extern const float lbl_802C4D48;
++    extern const float lbl_802C4D4C;
+@@ -2485,3 +2505,3 @@
+-    extern float lbl_802C4CDC;
+-    extern float lbl_802C4D50;
+-    extern float lbl_802C4D54;
++    extern const float lbl_802C4CDC;
++    extern const float lbl_802C4D50;
++    extern const float lbl_802C4D54;

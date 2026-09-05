@@ -1,6 +1,7 @@
 --- a/src/REL/w01Dll/world01.c
 +++ b/src/REL/w01Dll/world01.c
-@@ -4,0 +5,176 @@
+@@ -3,0 +4,176 @@
++
 +/* PORT FIX -- float-argument ABI, implicit-declaration class (the class
 + * tools/abi_warning_audit.py exists for; this TU was simply not in its
 + * ABI_CRITICAL_SOURCES set, so it was never audited).
@@ -176,14 +177,13 @@
 +    fflush(stdout);
 +}
 +
-+
-@@ -998,0 +1175 @@ int _prolog(void)
+@@ -998,0 +1175 @@
 +    OSReport("[W01] prolog\n");
-@@ -1020,0 +1198 @@ void ObjectSetup(void)
+@@ -1020,0 +1198 @@
 +    OSReport("[W01] ObjectSetup board=%d\n", MBNO_WORLD_1);
-@@ -1092,0 +1271 @@ void MB1_Create(void)
+@@ -1092,0 +1271 @@
 +    OSReport("[W01] MB1_Create complete\n");
-@@ -1143,0 +1323,18 @@ int fn_1_760(int playerNo, s16 id)
+@@ -1143,0 +1323,18 @@
 +    /* MP6_W01_FORCE_FLOWER -- see the lever's note at the top of this file.
 +     * Deliberately routed through this dispatcher rather than around it: the
 +     * player is pointed at the real fling space and THIS function installs the
@@ -202,18 +202,18 @@
 +            return 0;
 +        }
 +    }
-@@ -1521,2 +1718,2 @@ void fn_1_13CC(void)
+@@ -1521,2 +1718,2 @@
 -    s32 playerMasuId;
 -    s32 masuId;
 +    s32 playerMasuId = -1; /* native fix -- see this hunk's note below */
 +    s32 masuId = -1;
-@@ -1589 +1786,4 @@ void fn_1_13CC(void)
+@@ -1589 +1786,4 @@
 -        work->lastMasuId = GwPlayer[playerNo].masuId;
 +        /* native fix: playerNo is GwSystem.turnPlayerNo, which is -1 for the
 +         * whole board opening; GwPlayer[-1] is an out-of-bounds read. */
 +        work->lastMasuId =
 +            (playerNo >= 0) ? GwPlayer[playerNo].masuId : -1;
-@@ -2178 +2378,8 @@ void fn_1_4F94(int playerNo)
+@@ -2178 +2378,8 @@
 -    HuVecF targetPos;
 +    /* MP6_NATIVE_PORT: the PSVECSubtract eleven lines below reads targetPos
 +     * before anything assigns it (-Werror=uninitialized-const-pointer). Its
@@ -223,15 +223,15 @@
 +     * initialiser removes the undefined read without changing one value the
 +     * function goes on to use. */
 +    HuVecF targetPos = { 0.0f, 0.0f, 0.0f };
-@@ -3294,0 +3502,3 @@ void fn_1_8860(int playerNo)
+@@ -3294,0 +3502,3 @@
 +            if (mp6W01FlowerTrace()) { /* flower trace -- see the top of file */
 +                mp6W01FlowerDump("swallow", i, modelId);
 +            }
-@@ -3327,0 +3538,3 @@ void fn_1_8860(int playerNo)
+@@ -3327,0 +3538,3 @@
 +            if (mp6W01FlowerTrace()) { /* flower trace -- see the top of file */
 +                mp6W01FlowerDump("flight", i, modelId);
 +            }
-@@ -4386,0 +4600,7 @@ void fn_1_C694(const s32 *displayData, u32 color)
+@@ -4386,0 +4600,7 @@
 +        /* Closes this iteration's GXBegin(displayData[0], GX_VTXFMT0, count)
 +         * -- the sub-primitive loop never ends any primitive, so each pass
 +         * was auto-closed by the NEXT GXBegin and the last stayed open inside
@@ -239,14 +239,14 @@
 +         * board/effect.c). Anchors to the for-loop close after GXColor1u32.
 +         * Empty inline on hardware (GXVert.h). */
 +        GXEnd();
-@@ -4436,0 +4657,6 @@ s32 fn_1_CAA4(void **displayList)
+@@ -4436,0 +4657,6 @@
 +    /* Closes the GXBegin(GX_QUADS, 4) eight lines up, whose fourth and
 +     * last position/texcoord pair is the line this anchors to, before
 +     * the GXEndDisplayList() just below. Empty inline on hardware
 +     * (GXVert.h); needed for Aurora's byte accounting inside a
 +     * display-list bracket -- see src/board/effect.c.patch. */
 +    GXEnd();
-@@ -6153,0 +6380,9 @@ void fn_1_12D58(HU3D_MODEL *modelP, Mtx *mtx)
+@@ -6153,0 +6380,9 @@
 +        if (mp6W01LeafTrace()) { /* leaf trace, DRAW side: the angle this frame's
 +                                  * matrix was actually built from, plus the
 +                                  * view-space transform the quad is drawn with. */
@@ -256,18 +256,18 @@
 +                   modelMtx[0][0], modelMtx[0][1], modelMtx[0][2],
 +                   modelMtx[1][0], modelMtx[1][1], modelMtx[1][2]);
 +        }
-@@ -6183,0 +6419,6 @@ u32 fn_1_130C4(void **displayList)
+@@ -6183,0 +6419,6 @@
 +    /* Closes the GXBegin(GX_QUADS, 4) eight lines up, whose fourth and
 +     * last position/texcoord pair is the line this anchors to, before
 +     * the GXEndDisplayList() just below. Empty inline on hardware
 +     * (GXVert.h); needed for Aurora's byte accounting inside a
 +     * display-list bracket -- see src/board/effect.c.patch. */
 +    GXEnd();
-@@ -6270,0 +6512,7 @@ void fn_1_1330C(void)
+@@ -6269,0 +6511,7 @@
++        }
 +        if (mp6W01LeafTrace()) { /* leaf trace -- see mp6W01LeafTrace above */
 +            printf("[W01-LEAF] tick=%ld i=%2d angle=%9.4f spd=%+9.5f pos=(%8.1f,%8.1f,%8.1f) vel=(%8.1f,%8.1f,%8.1f)\n",
 +                   mp6_tick_count, (int)i, particle->angle, particle->angleSpeed,
 +                   particle->pos.x, particle->pos.y, particle->pos.z,
 +                   particle->vel.x, particle->vel.y, particle->vel.z);
 +            fflush(stdout);
-+        }

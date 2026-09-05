@@ -676,7 +676,10 @@ MSL_OVERRIDE = os.path.join(BUILD_DIR, "msl_override")
 # searched first always wins outright for a given
 # filename, for every file in that directory, not just the ones we'd want
 # to override. The fix: generate tiny shadow files with an ABSOLUTE #include
-# straight to zig's bundled header, sidestepping search-order entirely.
+# straight to zig's bundled header, sidestepping search-order entirely. The
+# one exception is float.h: Zig's MinGW copy uses #include_next, which loops
+# back to this shadow when reached through an absolute path, so that wrapper
+# includes the compiler's target-aware header with its MinGW fallback disabled.
 MSL_OVERRIDE_NAMES = ["ctype.h", "float.h", "math.h", "stdarg.h", "stddef.h", "stdio.h", "stdlib.h", "string.h"]
 ZIG_ROOT = os.path.dirname(ZIG)
 
@@ -697,9 +700,10 @@ def _find_zig_libc_dir(name):
 def patch_msl_override(dst_dir=None, find_real=None, libc_desc="zig's bundled libc"):
     # Parameterized for the android target row (dst_dir=
     # ANDROID_MSL_OVERRIDE, find_real=_find_ndk_libc_dir) -- the shadow
-    # files' CONTENT is an absolute path into the toolchain's real libc, so
-    # each target needs its own generated set in its own build tree. The
-    # no-arg call is byte-for-byte the original Windows behavior.
+    # files' CONTENT is normally an absolute path into the toolchain's real
+    # libc, so each target needs its own generated set in its own build tree.
+    # float.h is the one exception: it includes the compiler's header with
+    # its MinGW fallback disabled to avoid the #include_next loop.
     if dst_dir is None:
         dst_dir = MSL_OVERRIDE
     if find_real is None:
@@ -712,13 +716,32 @@ def patch_msl_override(dst_dir=None, find_real=None, libc_desc="zig's bundled li
             print(f"[WARN] patch_msl_override: couldn't find the real {name} ({libc_desc}), "
                   f"leaving decomp's MSL stub active")
             continue
-        real_posix = real.replace("\\", "/")
-        content = (
-            f"/* MP6 native port: forces the REAL system {name} ({libc_desc}) instead "
-            f"of the decomp's own tiny vendored MSL-era include/{name} stub. See "
-            f"tools/build.py's patch_msl_override(). */\n"
-            f'#include "{real_posix}"\n'
-        )
+        if name == "float.h" and find_real is _find_zig_libc_dir:
+            compiler_float = os.path.join(ZIG_ROOT, "lib", "include", "float.h")
+            if not os.path.isfile(compiler_float):
+                print(f"[WARN] patch_msl_override: couldn't find Zig's compiler float.h "
+                      f"({compiler_float}), leaving decomp's MSL stub active")
+                continue
+            compiler_float_posix = compiler_float.replace("\\", "/")
+            content = (
+                "/* MP6 native port: use Zig's compiler float.h for the target. Its "
+                "MinGW libc float.h uses #include_next; when reached through an "
+                "absolute shadow path that loops back to this file. Suppress only "
+                "the MinGW branch while including the compiler header, then restore "
+                "the target macro for the rest of the translation unit. */\n"
+                "#pragma push_macro(\"__MINGW32__\")\n"
+                "#undef __MINGW32__\n"
+                f'#include "{compiler_float_posix}"\n'
+                "#pragma pop_macro(\"__MINGW32__\")\n"
+            )
+        else:
+            real_posix = real.replace("\\", "/")
+            content = (
+                f"/* MP6 native port: forces the REAL system {name} ({libc_desc}) instead "
+                f"of the decomp's own tiny vendored MSL-era include/{name} stub. See "
+                f"tools/build.py's patch_msl_override(). */\n"
+                f'#include "{real_posix}"\n'
+            )
         _write_if_changed(dst, content)
 
     # include/humath.h -- itself living in include/ (top-level), same as
@@ -1816,10 +1839,10 @@ PLATFORM_SOURCES_COMMON = [
                                   # it is the mode with a byte-identical log.
     "platform/os/dll_bridge.c",
     "platform/os/board_runtime.c",  # board lifecycle marker/state bridge used by W01
-    "platform/os/board_placeholders.c",  # logged native seams for board symbols absent on decomp main
-    "platform/os/board_telop.c",  # mbTelopCreate: board name/logo telop, upgraded
-                                    # out of board_placeholders.c's no-op list (see
-                                    # that file's own header for provenance)
+    "platform/os/board_constants.c",  # original .sdata2 values referenced by
+                                        # recovered board owners on decomp main
+    "platform/os/board_placeholders.c",  # stable empty board-seam diagnostic ABI;
+                                          # latest pinned decomp owns the routines
     "platform/os/log.c",
     "platform/os/hwcast.c",  # the rate-limited saturation report behind
                                # shim/include/mp6_hwcast.h's inline fctiwz

@@ -119,24 +119,15 @@ int mbCapSelectMasuBackNum(int masuId);
 void mbWipeSpecialFadeOutCreate(int type, int time);
 int mbSingleStepGet(void);
 
-/* mbObjHookReset IS declared, in include/game/board/object.h:53, but src/board/
- * last5.c cannot include that header: it already has game/board/guide.h, and
- * the two disagree about mbObjKill (guide.h:71 `int` vs object.h:12
- * `MBMODELID`). Spelled with the underlying ABI type -- MBMODELID is `s16` in
- * all three of its definitions (game/board/{camera,model,object_data}.h) -- so
- * this stays compatible with object.h for every TU that does include it, the
- * same technique Hu3DModelShadowMapReset above already uses. */
+/* mbObjHookReset IS declared in include/game/board/object.h:53, but
+ * src/board/last5.c cannot include that header: it already has
+ * game/board/guide.h, and the two disagree about mbObjKill (guide.h:71 `int`
+ * vs object.h:12 `MBMODELID`). Spelled with the underlying ABI type --
+ * MBMODELID is `s16` in all three of its definitions
+ * (game/board/{camera,model,object_data}.h). The last5 decomp patch uses this
+ * same spelling for its private forward declaration, preventing Clang from
+ * seeing incompatible declarations while preserving the engine ABI. */
 void mbObjHookReset(s16 modelId);
-
-/* Seam bridge, NOT decomp surface.  Defined by
- * patches/decomp/src/board/config.c.patch inside src/board/config.c (the
- * only scope where the file-static configDoneF exists) and called by
- * platform/os/board_placeholders.c's ConfigMain placeholder, which cannot
- * otherwise satisfy mbConfigExec's `while (!configDoneF)` at config.c:143.
- * Declared here so the patched definition and the placeholder's call are
- * checked against one prototype.  Both sides go away together when
- * ConfigMain lands on decomp main. */
-void mp6_board_config_seam_done(void);
 
 #ifdef __cplusplus
 }

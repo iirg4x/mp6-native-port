@@ -325,22 +325,19 @@ int mp6_host_disc_root(char *buf, size_t n)
      * layout, not a guess. Forward slashes work fine mixed with the
      * backslash-separated exeDir prefix on Windows.
      *
-     * BOTH checkout names are tried, pinned worktree FIRST, for the same
-     * reason tools/apply_patches.py::_default_decomp() prefers it: the
-     * pinned worktree is the tree the build actually consumes and the one
-     * that carries orig/GP6E01 now, while the legacy sibling belongs to
-     * another workflow and drifts. Naming only the legacy one silently
-     * disabled this whole fallback the day the disc tree moved -- the
-     * probe below failed, the build-time -D paths carried the boot anyway,
-     * and the only visible trace was one diagnostic line going missing
-     * from the headless boot log (which is exactly where it was caught).
+     * BOTH historical checkout names are tried, with the canonical
+     * marioparty6 path used by setup/lib/common.py and tools/build.py first.
+     * This keeps runtime asset lookup on the exact source tree whose commit
+     * the build validated even if an older marioparty6-pin worktree is also
+     * present. Naming only one path previously made this fallback disappear
+     * when a workspace used the other layout.
      * Each candidate is verified independently by its own fst.bin probe,
      * so an empty leftover directory under either name is skipped rather
      * than accepted. */
     {
         static const char *const candidates[] = {
-            "../../../external_refs/repos/marioparty6-pin/orig/GP6E01",
             "../../../external_refs/repos/marioparty6/orig/GP6E01",
+            "../../../external_refs/repos/marioparty6-pin/orig/GP6E01",
         };
         size_t i;
         for (i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {

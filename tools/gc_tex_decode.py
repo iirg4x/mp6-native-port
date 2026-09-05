@@ -80,7 +80,7 @@ def tlut_load(path, fmt_override=None):
 # `ExpandTo8<4>(n)` is `(n << 4) | n`, i.e. exactly this file's `expand4`.
 #
 # THAT ALPHA IS LOAD-BEARING IN MP6, not an incidental channel.  In the decomp
-# (external_refs/repos/marioparty6-pin/src/game/hsfdraw.c):
+# (external_refs/repos/marioparty6/src/game/hsfdraw.c):
 #
 #   * hsfdraw.c:2039-2055  Hu3DTexSet uploads HSF_BMPFMT_I4/I8 as GX_TF_I4 /
 #     GX_TF_I8, so the fetch is the intensity fetch above.

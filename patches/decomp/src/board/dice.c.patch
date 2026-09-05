@@ -1,6 +1,6 @@
 --- a/src/board/dice.c
 +++ b/src/board/dice.c
-@@ -2312 +2312,8 @@
+@@ -2322 +2322,8 @@
 -    DICE_NUM_VTX *vtxBuf;
 +    /* MP6_NATIVE_PORT: vtxBuf is assigned only inside the HSF_OBJ_MESH branch
 +     * of the object loop, so a model with no mesh returned an indeterminate

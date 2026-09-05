@@ -1,9 +1,9 @@
 --- a/src/REL/fileseldll/filesel.c
 +++ b/src/REL/fileseldll/filesel.c
-@@ -18,0 +19,2 @@
+@@ -23,0 +24,2 @@
 +#include "mp6_widescreen.h" /* widescreen support */
 +#include "mp6_anim_native.h" /* ANM ownership-aware teardown (see the exit-path free below) */
-@@ -276,6 +278,16 @@
+@@ -238,6 +240,16 @@
 -    Hu3DCameraPerspectiveSet(1, 5.0f, 20.0f, 15000.0f, 1.2f);
 -    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f,
 -                          480.0f, 0.0f, 1.0f);
@@ -26,12 +26,12 @@
 +    mp6_widescreen_camera_widen(1, 5.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
 +    /* Same fix as the sibling camera above. */
 +    mp6_widescreen_camera_widen(2, 10.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
-@@ -369 +381,21 @@
--        HuMemDirectFree(lbl_1_bss_D8[i].unk_58);
-+        /* Each unk_58 is a HuSprAnimMake() result, and under this port that
-+         * function REGISTERS the graph with the native ANM ownership table
-+         * (platform/sprite/anim_native.c). A raw HuMemDirectFree here trips
-+         * the table's direct-free guard and aborts the run:
+@@ -331 +343,21 @@
+-        HuMemDirectFree(lbl_1_bss_D8[i].cardTextureAnim);
++        /* Each cardTextureAnim is a HuSprAnimMake() result, and under this
++         * port that function REGISTERS the graph with the native ANM ownership
++         * table (platform/sprite/anim_native.c). A raw HuMemDirectFree here
++         * trips the table's direct-free guard and aborts the run:
 +         *   [FATAL] ANM native loader: direct free bypassed ANM ownership
 +         *           teardown
 +         * Caught directly, not guessed: this fired on file-select's own
@@ -42,14 +42,14 @@
 +         * registered graph is released): unregister first (which hands back
 +         * a distinct owned packed backing, or NULL for a made-native graph
 +         * like these), free that backing if any, then free the graph. */
-+        if (lbl_1_bss_D8[i].unk_58 != NULL) {
-+            void *mp6PackedBacking = mp6_anim_unregister_for_free(lbl_1_bss_D8[i].unk_58);
++        if (lbl_1_bss_D8[i].cardTextureAnim != NULL) {
++            void *mp6PackedBacking = mp6_anim_unregister_for_free(lbl_1_bss_D8[i].cardTextureAnim);
 +            if (mp6PackedBacking != NULL) {
 +                HuMemDirectFree(mp6PackedBacking);
 +            }
-+            HuMemDirectFree(lbl_1_bss_D8[i].unk_58);
++            HuMemDirectFree(lbl_1_bss_D8[i].cardTextureAnim);
 +        }
-@@ -429,0 +462,50 @@
+@@ -391,0 +424,50 @@
 +    /* This is the file-select storybook's own distant backdrop --
 +     * positioned far behind the book itself (z=-9000 vs the book's
 +     * z=-2000), drawn under camera bit 2 (already aspect-widened above).
@@ -100,37 +100,7 @@
 +     * still goes through the plain, fully-isotropic
 +     * mp6_widescreen_extrude_model(), byte-unchanged. */
 +    mp6_widescreen_extrude_model_xy(lbl_1_bss_2D8[1]);
-@@ -458,0 +541,26 @@
-+
-+    /* MP6 native port: lbl_1_data_E8 is the raw big-endian BYTE IMAGE of a
-+     * HU3D_PARMAN_PARAM (dtk renders unnameable initialized data as u32
-+     * words; on GameCube those word initializers reproduce the original
-+     * bytes exactly, but compiled little-endian every field word-swaps --
-+     * colorNum read as garbage and ParManFunc's colorStart[frandmod(
-+     * colorNum)] indexed with -22183, crashing the save-create flow;
-+     * every float in the blob was equally scrambled). Hand-decoded from
-+     * the BE stream into a typed native initializer -- values are
-+     * semantically coherent (a 50-frame golden save-sparkle: 2 colors,
-+     * gold F0E020 / bright yellow fading to transparent amber, gravity
-+     * -0.02, size 20 decaying 0.98/frame). The blob itself stays for the
-+     * decomp's data-section identity; only this port build reads the
-+     * typed twin. Same porting class as any (SomeType*)lbl_N_data_X cast
-+     * of compiled word data -- grep for that shape when a first-contact
-+     * scene misbehaves. */
-+    static HU3D_PARMAN_PARAM fileselSparkleParam = {
-+        50, 0,                    /* maxTime, unk2 */
-+        1.0f, 10.0f, 0.0f,        /* accelRange, scaleRange, angleRange */
-+        { 0.0f, -0.02f, 0.0f },   /* gravity */
-+        2.0f, 1.0f,               /* speedBase, speedDecay */
-+        20.0f, 0.98f,             /* scaleBase, scaleDecay */
-+        2,                        /* colorNum */
-+        { {240,224,32,255}, {255,255,64,255}, {0,0,0,0}, {0,0,0,0} },
-+        { {192,128,16,0},   {192,64,16,0},   {0,0,0,0}, {0,0,0,0} },
-+    };
-@@ -461 +569 @@
--        lbl_1_bss_98[i] = Hu3DParManCreate(parAnim, 0x64, (HU3D_PARMAN_PARAM *)lbl_1_data_E8);
-+        lbl_1_bss_98[i] = Hu3DParManCreate(parAnim, 0x64, &fileselSparkleParam);
-@@ -1058 +1166,15 @@
+@@ -1014 +1096,15 @@
 -        strcpy(obj->name, lbl_1_data_190[i]);
 +        /* Under this port's HSF loader stub, every loaded model has
 +         * objectNum==0, so the by-name lookup above can never succeed --
@@ -147,7 +117,7 @@
 +        if (obj != NULL) {
 +            strcpy(obj->name, lbl_1_data_190[i]);
 +        }
-@@ -1092,0 +1215,18 @@
+@@ -1048,0 +1145,18 @@
 +    /* fn_1_35AC runs every frame and grabs a screen-space snapshot of each
 +     * save slot's own star/date/count sprite group into a texture pasted
 +     * onto the "page label" 3D quad -- the same photograph-a-live-frame
@@ -166,34 +136,12 @@
 +     * widen by the same factor, so it cancels out of the ratio; only the
 +     * additive recenter survives) -- a no-op (byte-identical float ops)
 +     * when disabled. */
-@@ -1095 +1235 @@
+@@ -1051 +1165 @@
 -        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1)),
 +        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1) + mp6_widescreen_half_width_delta()),
-@@ -1871,0 +2012,5 @@
+@@ -1827,0 +1942,5 @@
 +    /* Closes the GXBegin(GX_QUADS, 0, 4) camera Z-clear above -- anchors to
 +     * its fourth and last GXPosition3f32. Shaped exactly like hsfman.c's
 +     * Hu3DZClear, closed the same way. Empty inline on hardware (GXVert.h);
 +     * was the last 'vertex data not evenly divisible' source. */
 +    GXEnd();
-@@ -2110 +2255,14 @@
--    q = arg->unk_00->unk_120;
-+    /* This file's own hand-reconstructed "arg-chain" views hardcode BYTE
-+     * OFFSETS reverse-engineered from the original 32-bit binary, where
-+     * every pointer field is 4 bytes. This port compiles the same structs
-+     * natively at 64-bit pointer width, so any field declared after an
-+     * earlier pointer field sits at a different real offset than these
-+     * hardcoded constants assume -- confirmed by direct evidence (a
-+     * temporary diagnostic, since removed): the model pointer was sane and
-+     * live, but the hardcoded offset read back an unrelated float field's
-+     * bit pattern instead of the intended one, reliably reached via a
-+     * single realistically-paced press dismissing file-select's no-card
-+     * warning. Fixed by going through the real typed fields instead of the
-+     * hardcoded offsets, so the compiler computes the correct offset for
-+     * this build automatically. */
-+    q = (F7E58_Q *)((HU3D_DRAW_OBJ *)arg)->model->hookData;
-@@ -2124 +2282,4 @@
--    PSMTXConcat(invMtx, arg->unk_0c, tmpMtx);
-+    /* Same 32-bit-offset issue as above; this field sits after 2 pointer
-+     * fields, so it shifts too. Same fix: go through the real,
-+     * compiler-computed field. */
-+    PSMTXConcat(invMtx, ((HU3D_DRAW_OBJ *)arg)->matrix, tmpMtx);

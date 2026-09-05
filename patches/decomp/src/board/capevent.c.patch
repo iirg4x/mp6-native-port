@@ -1,54 +1,6 @@
 --- a/src/board/capevent.c
 +++ b/src/board/capevent.c
-@@ -84,0 +85 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -88,0 +90 @@
-+#endif
-@@ -149,0 +152 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -153,0 +157 @@
-+#endif
-@@ -167,0 +172 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -171,0 +177 @@
-+#endif
-@@ -377,0 +384 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -383,0 +391 @@
-+#endif
-@@ -385,0 +394 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -387,0 +397 @@
-+#endif
-@@ -395,0 +406 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -397,0 +409 @@
-+#endif
-@@ -517,0 +530 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -521,0 +535 @@
-+#endif
-@@ -620,0 +635 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -626,0 +642 @@
-+#endif
-@@ -636,0 +653 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -638,0 +656 @@
-+#endif
-@@ -754,0 +773 @@
-+#ifndef MP6_NATIVE_PORT
-@@ -768,0 +788 @@
-+#endif
-@@ -3289,0 +3310,7 @@
-+    /* Closes the GXBegin(GX_QUADS, max*4) seven lines up; anchors to the
-+     * closing brace of its quad-index loop, before the
-+     * GXEndDisplayList() just below. Empty inline on hardware
-+     * (GXVert.h); needed for Aurora's byte accounting inside a
-+     * display-list bracket -- see src/board/effect.c.patch's GXEnd hunk
-+     * for the full mechanism. */
-+    GXEnd();
-@@ -2598 +2598,13 @@
+@@ -5162 +5162,13 @@
 -    i >= 8;
 +    /* MP6_NATIVE_PORT: `i >= 8;` is a relational expression used as a
 +     * statement -- no code on MWCC, no code here, but clang's
@@ -63,7 +15,7 @@
 +     * so it belongs to its own investigation, not to a warning sweep.
 +     */
 +    (void)(i >= 8);
-@@ -2612 +2612,4 @@
+@@ -5176 +5188,4 @@
 -    i >= 8;
 +    /* MP6_NATIVE_PORT: same value-less comparison as
 +     * mbev_CapEffElectricKill above, same void cast, same reason. This one

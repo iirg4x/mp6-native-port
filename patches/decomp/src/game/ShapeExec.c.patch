@@ -1,6 +1,6 @@
 --- a/src/game/ShapeExec.c
 +++ b/src/game/ShapeExec.c
-@@ -41 +41,25 @@
+@@ -41 +41,29 @@
 -        shapeIdx = obj->mesh.mesh.baseMorph;
 +        /* PORT FIX -- bound the pose index BEFORE the float->int cast.
 +         *
@@ -31,6 +31,6 @@
 +            morph = (float)(obj->mesh.shapeNum - 1);
 +        }
 +        shapeIdx = morph;
-@@ -46 +70 @@
+@@ -46 +74 @@
 -        t = obj->mesh.mesh.baseMorph - shapeIdx;
 +        t = morph - shapeIdx;

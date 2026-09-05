@@ -4,7 +4,7 @@
 +#include "be.h"
 @@ -16,0 +18 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -536,0 +539,16 @@
+@@ -536,0 +539,15 @@
 +/* messDataPtr (game/window.c's HuWinMesRead()) is a plain memcpy() of a
 + * real DVD file's raw bytes (mess/messdata*.bin), never byte-swapped on
 + * the way in -- the exact same "directory count, then a per-entry offset
@@ -20,29 +20,29 @@
 + * corrupted messData pointer it produced is the direct cause of the
 + * first-ever "GXBegin: called without matching GXEnd" Aurora FATAL this
 + * port hit, a few lines later, once real frame drawing tried to use it. */
-@@ -540 +558 @@
+@@ -540 +557 @@
 -    return *dirNum;
 +    return be32(dirNum);
-@@ -547 +565 @@
+@@ -547 +564 @@
 -    if(dir >= *messData) {
 +    if(dir >= be32(messData)) {
-@@ -551,2 +569,2 @@
+@@ -551,2 +568,2 @@
 -    messData += messData[dir]/sizeof(u32);
 -    return *messData;
 +    messData += be32(&messData[dir])/sizeof(u32);
 +    return be32(messData);
-@@ -560 +578 @@
+@@ -560 +577 @@
 -    if(dir >= *messData) {
 +    if(dir >= be32(messData)) {
-@@ -564,2 +582,2 @@
+@@ -564,2 +581,2 @@
 -    messData += messData[dir]/sizeof(u32);
 -    if(num >= *messData) {
 +    messData += be32(&messData[dir])/sizeof(u32);
 +    if(num >= be32(messData)) {
-@@ -569 +587 @@
+@@ -569 +586 @@
 -    messData += messData[num]/sizeof(u32);
 +    messData += be32(&messData[num])/sizeof(u32);
-@@ -596 +614,21 @@
+@@ -596 +613,19 @@
 -        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, 0.0f, HU_DISP_WIDTH, 0.0f, 10.0f);
 +        /* This is a THIRD, independent copy of the exact ortho
 +         * HuSprDispInit sets up (game/sprput.c) -- MesDispFunc is a "func
@@ -63,7 +63,7 @@
 +         * same accessor, same formula, no-op (byte-identical native call)
 +         * when widescreen is disabled. */
 +        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0.0f, 10.0f);
-@@ -1524,0 +1563,32 @@
+@@ -1524,0 +1560,26 @@
 +/* "Message Dir Over" crash fix. HuWinMesSet/HuWinInsertMesSet's "is
 + * messNum a real pointer, or a packed dir<<16|num value?" check was
 + * `messNum & 0x80000000` -- reliable on real hardware, where EVERY live
@@ -90,13 +90,13 @@
 + * this port's. */
 +#define MP6_MESSNUM_ENCODED_MAX 0x01000000u
 +
-@@ -1530 +1600 @@
+@@ -1530 +1591 @@
 -    if(!(messNum & 0x80000000)) {
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-@@ -1563 +1633 @@
+@@ -1563 +1624 @@
 -    if(!(messNum & 0x80000000)) {
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-@@ -2033 +2103,13 @@
+@@ -2033 +2094,9 @@
 -    if(messNum > 0x80000000) {
 +    /* Same fix as HuWinMesSet/HuWinInsertMesSet above (this file's own
 +     * section-comment there has the full story): a SECOND, independent
@@ -107,7 +107,7 @@
 +     * from the original -- only the condition itself changes, same as the
 +     * other two instances. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
-@@ -2224 +2306,2 @@
+@@ -2224 +2293,2 @@
 -    if(messNum > 0x80000000) {
 +    /* Same fix, third instance in this file. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {

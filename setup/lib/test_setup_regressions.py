@@ -1,8 +1,11 @@
 """Focused regressions for setup/build integrity and transactional staging."""
+import contextlib
 import hashlib
+import io
 import json
 import os
 import pathlib
+import shlex
 import shutil
 import struct
 import subprocess
@@ -48,6 +51,126 @@ class AuroraArtifactIntegrityTests(unittest.TestCase):
             os.utime(archive, ns=(old.st_atime_ns, old.st_mtime_ns))
             problem = step_aurora._artifact_profile_problem([archive], recorded)
             self.assertIn("identity mismatch", problem)
+
+    def test_windows_cmake_tool_paths_are_normalized_and_explicit(self):
+        commands = []
+        with (
+            mock.patch.object(step_aurora.common, "AURORA_DIR", r"C:\work with spaces\aurora"),
+            mock.patch.object(step_aurora.common, "NATIVE_ROOT", r"C:\work with spaces\port"),
+            mock.patch.object(
+                step_aurora.common,
+                "run",
+                side_effect=lambda command, **_kwargs: commands.append(command),
+            ),
+        ):
+            step_aurora._configure_and_build_tree(
+                r"C:\Program Files\CMake\bin\cmake.exe",
+                r"C:\work with spaces\aurora\build",
+                r"C:\work with spaces\tools\zig-cc-wrappers",
+                False,
+                mock.Mock(),
+                [],
+            )
+
+        configure, build_command = commands
+        self.assertEqual(configure[0], "C:/Program Files/CMake/bin/cmake.exe")
+        self.assertIn(
+            "-DCMAKE_RC_COMPILER=C:/work with spaces/tools/zig-cc-wrappers/zigrc.bat",
+            configure,
+        )
+        self.assertIn(
+            "-DCMAKE_AR=C:/work with spaces/tools/zig-cc-wrappers/zigar.bat",
+            configure,
+        )
+        self.assertIn(
+            "-DCMAKE_RANLIB=C:/work with spaces/tools/zig-cc-wrappers/zigranlib.bat",
+            configure,
+        )
+        self.assertFalse(any("\\" in arg for arg in configure))
+        flags = dict(arg[2:].split("=", 1) for arg in configure if arg.startswith("-D"))
+        self.assertEqual(
+            shlex.split(flags["CMAKE_C_FLAGS"]),
+            ["-include", "C:/work with spaces/port/shim/include/mp6_host_section.h"],
+        )
+        self.assertEqual(flags["CMAKE_C_FLAGS"], flags["CMAKE_CXX_FLAGS"])
+        self.assertEqual(
+            shlex.split(flags["CMAKE_EXE_LINKER_FLAGS"]),
+            ["-LC:/work with spaces/tools/zig-cc-wrappers/stub-libs"],
+        )
+        self.assertEqual(
+            build_command[:3],
+            [
+                "C:/Program Files/CMake/bin/cmake.exe",
+                "--build",
+                "C:/work with spaces/aurora/build",
+            ],
+        )
+
+    def test_zig_archive_tool_wrappers_are_generated(self):
+        with tempfile.TemporaryDirectory() as root:
+            with mock.patch.object(step_aurora.common, "TOOLCHAIN_DIR", root):
+                wrappers = pathlib.Path(
+                    step_aurora._write_wrapper_scripts(r"C:\zig tools\zig.exe")
+                )
+            self.assertIn(
+                r'"C:\zig tools\zig.exe" ar %*',
+                (wrappers / "zigar.bat").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                r'"C:\zig tools\zig.exe" ranlib %*',
+                (wrappers / "zigranlib.bat").read_text(encoding="utf-8"),
+            )
+
+    def test_manual_aurora_recipe_quotes_paths_with_spaces(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                step_aurora.common,
+                "AURORA_DIR",
+                r"C:\workspace with spaces\aurora",
+            ),
+            mock.patch.object(
+                step_aurora.common,
+                "TOOLCHAIN_DIR",
+                r"C:\workspace with spaces\toolchain",
+            ),
+            mock.patch.object(
+                step_aurora.common,
+                "NATIVE_ROOT",
+                r"C:\workspace with spaces\port",
+            ),
+            mock.patch.object(step_aurora, "read_aurora_pin", return_value="abc123"),
+            contextlib.redirect_stdout(output),
+        ):
+            step_aurora._print_manual_recipe(["test problem"])
+            expected = step_aurora._configure_args(
+                "cmake",
+                "C:/workspace with spaces/aurora/build",
+                "C:/workspace with spaces/toolchain/zig-cc-wrappers",
+                False,
+            )
+
+        recipe = output.getvalue()
+        self.assertIn('-S "C:/workspace with spaces/aurora"', recipe)
+        self.assertIn(
+            '"-DCMAKE_C_COMPILER=C:/workspace with spaces/toolchain'
+            '/zig-cc-wrappers/zigcc.bat"',
+            recipe,
+        )
+        self.assertIn(
+            subprocess.list2cmdline([next(arg for arg in expected if arg.startswith("-DCMAKE_C_FLAGS="))]),
+            recipe,
+        )
+        if os.name == "nt":
+            # Exercise cmd.exe and the real Windows argv parser, not only the
+            # printed spelling: the nested quotes must reach CMake intact.
+            printed = recipe.split("       cmake -S", 1)[1].split("\n       cmake --build", 1)[0]
+            printed = "-S" + printed.replace(" ^\n         ", " ")
+            probe = subprocess.list2cmdline([
+                sys.executable, "-c", "import json, sys; print(json.dumps(sys.argv[1:]))",
+            ]) + " " + printed
+            result = subprocess.run(probe, shell=True, check=True, capture_output=True, text=True)
+            self.assertEqual(json.loads(result.stdout), expected[1:])
 
 
 class AndroidNativeBuildProfileTests(unittest.TestCase):
@@ -577,6 +700,37 @@ class ZigInstallTests(unittest.TestCase):
                 )
                 self.assertFalse(valid)
                 self.assertIn("full-tree", problem)
+
+
+class BuildHeaderOverrideTests(unittest.TestCase):
+    def test_windows_float_shadow_avoids_mingw_include_next_recursion(self):
+        if not os.path.isfile(build.ZIG):
+            self.skipTest("pinned Zig toolchain is not installed")
+
+        with tempfile.TemporaryDirectory() as root:
+            build.patch_msl_override(dst_dir=root)
+            wrapper = pathlib.Path(root, "float.h").read_text(encoding="utf-8")
+            self.assertIn('#pragma push_macro("__MINGW32__")', wrapper)
+            self.assertIn("#undef __MINGW32__", wrapper)
+            self.assertIn('/lib/include/float.h"', wrapper.replace("\\", "/"))
+            self.assertIn('#pragma pop_macro("__MINGW32__")', wrapper)
+            self.assertNotIn("any-windows-any/float.h", wrapper.replace("\\", "/"))
+
+            probe = pathlib.Path(root, "float_probe.c")
+            probe.write_text("#include <float.h>\n", encoding="utf-8")
+            result = subprocess.run(
+                [build.ZIG, "cc", "-target", build.TARGET, "-I", root,
+                 "-E", "-H", "-dM", str(probe)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("#define FLT_EPSILON __FLT_EPSILON__", result.stdout)
+            trace = result.stderr.replace("\\", "/")
+            self.assertIn("/lib/include/float.h", trace)
+            self.assertNotIn("any-windows-any/float.h", trace)
+            self.assertNotIn("include depth", result.stderr.lower())
 
 
 class ReleaseIntegrityTests(unittest.TestCase):

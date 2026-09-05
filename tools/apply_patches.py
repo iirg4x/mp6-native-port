@@ -95,15 +95,12 @@ def _default_decomp():
     points can never select different trees.
     """
     repos = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos"))
-    pinned = os.path.join(repos, "marioparty6-pin")
-    legacy = os.path.join(repos, "marioparty6")
+    canonical = os.path.join(repos, "marioparty6")
     value = os.environ.get("MP6_DECOMP_DIR", "").strip()
     if not value:
-        # Prefer the pinned worktree: it is the tree the build actually uses
-        # and the one docs/DECOMP_DEPENDENCY.md's SHA governs. The legacy
-        # sibling checkout drifts (it belongs to another workflow) and made
-        # decomp-reading tests fail on content that was simply out of date.
-        value = pinned if os.path.isdir(pinned) else legacy
+        # Match setup/lib/common.py exactly: standalone patch application and
+        # tools/build.py must consume the same canonical checkout.
+        value = canonical
     elif not os.path.isabs(value):
         value = os.path.join(NATIVE_ROOT, value)
     return os.path.normpath(os.path.abspath(os.path.expanduser(value)))
@@ -136,7 +133,23 @@ def require_pinned_decomp(root=None):
         ) from error
     if head != pin:
         raise RuntimeError(
-            f"decomp tree at {root} is stale/mismatched (HEAD {head[:12]}, pin {pin[:12]}) -- set MP6_DECOMP_DIR to the pinned worktree"
+            f"decomp tree at {root} is stale/mismatched (HEAD {head[:12]}, "
+            f"pin {pin[:12]}) -- set MP6_DECOMP_DIR to the clean pinned checkout"
+        )
+    status = subprocess.run(
+        ["git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if status.returncode != 0:
+        raise RuntimeError(f"could not inspect decomp tree cleanliness at {root}")
+    if status.stdout.strip():
+        raise RuntimeError(
+            f"decomp tree at {root} has modified/untracked build inputs -- "
+            "standalone patch application requires the clean pinned checkout"
         )
     return root
 DEFAULT_PATCHES_DIR = os.path.join(NATIVE_ROOT, "patches", "decomp")
@@ -368,7 +381,12 @@ def apply_all(decomp_root=DEFAULT_DECOMP, patches_dir=DEFAULT_PATCHES_DIR, out_d
 
 
 def main():
-    results = apply_all()
+    try:
+        decomp_root = require_pinned_decomp()
+    except RuntimeError as error:
+        print(f"[FATAL] apply_patches: {error}", file=sys.stderr)
+        return 1
+    results = apply_all(decomp_root=decomp_root)
     if not results:
         print("[WARN] apply_patches: no *.patch files found under patches/decomp/")
         return 1

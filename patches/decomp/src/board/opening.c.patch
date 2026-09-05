@@ -4,7 +4,9 @@
 +
 +#include "mp6_events.h" /* board.diceseat / board.turnorder observability */
 +#include <stdio.h>
-@@ -192,0 +196,46 @@
+@@ -190,0 +194,46 @@
++}
++
 +/* Turn-order observability (port-only; no behavioural effect).
 + *
 + * The board opening's turn-order dice decide the whole game's turn
@@ -49,9 +51,7 @@
 +    buf[sizeof(buf) - 1] = '\0';
 +    mp6_event_post((diceTbl != NULL) ? "board.diceseat" : "board.turnorder",
 +        GwSystem.boardNo, buf);
-+}
-+
-@@ -341,0 +391 @@
+@@ -357,0 +407 @@
 +    OpeningTurnOrderReport("dice", orderTbl);
-@@ -342,0 +393 @@
+@@ -358,0 +409 @@
 +    OpeningTurnOrderReport("seated", NULL);

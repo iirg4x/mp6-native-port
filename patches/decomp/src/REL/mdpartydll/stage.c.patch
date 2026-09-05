@@ -1,13 +1,11 @@
 --- a/src/REL/mdpartydll/stage.c
 +++ b/src/REL/mdpartydll/stage.c
-@@ -17,0 +18 @@
+@@ -14,0 +15 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -108 +109 @@
+@@ -116 +117 @@
 -        GXSetTexCopySrc(0, 0, 640, 480);
 +        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
-@@ -140,2 +141,25 @@
--    C_MTXLightPerspective(
--        lightMtx, camera->fov, 1.2f, 0.5f, -0.5f, 0.5f, 0.5f);
+@@ -147,0 +149,22 @@
 +    /* This is the OTHER half of the board-confirm transition: fn_1_3F580
 +     * (widened just above) photographs the frame, and this material hook
 +     * re-projects that photograph back onto the warp plane the confirm
@@ -30,10 +28,11 @@
 +     *
 +     * scale_factor() is exactly 1.0f when widescreen is disabled, so this
 +     * is the byte-identical 1.2f in that case. */
-+    C_MTXLightPerspective(
+@@ -149 +172,2 @@
+-        lightMtx, camera->fov, 1.2f, 0.5f, -0.5f, 0.5f, 0.5f);
 +        lightMtx, camera->fov, 1.2f * mp6_widescreen_scale_factor(),
 +        0.5f, -0.5f, 0.5f, 0.5f);
-@@ -314 +315,27 @@
+@@ -323 +347,23 @@
 -    MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f, 10.0f);
 +    /* fn_1_400E0 is a full-screen fade/dissolve overlay (a low-res,
 +     * previous-frame screenshot cross-faded in over ~90 frames, the
@@ -58,13 +57,15 @@
 +     * source into the same fixed-width destination is exactly undone when
 +     * that texture is stretched back across the (equally wider) quad. */
 +    MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f, 10.0f);
-@@ -372 +399 @@
+@@ -381 +427 @@
 -        GXPosition3f32(640 + i, i * -1, 0.0f);
 +        GXPosition3f32(mp6_widescreen_render_width() + i, i * -1, 0.0f);
-@@ -378 +405 @@
+@@ -387 +433 @@
 -        GXPosition3f32(640 + i, 480 + i, 0.0f);
 +        GXPosition3f32(mp6_widescreen_render_width() + i, 480 + i, 0.0f);
-@@ -389,0 +413,8 @@
+@@ -399,2 +445,10 @@
+-
+-    GXSetTexCopySrc(0, 0, 640, 480);
 +    /* Closes the GXBegin(GX_QUADS, 16) twenty-five lines up; anchors to
 +     * the closing brace of the 4-iteration loop that emits all sixteen
 +     * of its vertices. Immediate mode, not a display list, so Aurora's
@@ -73,6 +74,5 @@
 +     * which is what produced this site's chronic "609 bytes for 16
 +     * vertices" warning. Empty inline on hardware (GXVert.h). */
 +    GXEnd();
-@@ -391 +418 @@
--    GXSetTexCopySrc(0, 0, 640, 480);
++
 +    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);

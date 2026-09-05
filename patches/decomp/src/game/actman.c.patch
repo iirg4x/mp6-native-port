@@ -3,35 +3,26 @@
 @@ -81 +81 @@
 -    MGPLAYER *playerP = (MGPLAYER *)obj->work[0];
 +    MGPLAYER *playerP = (MGPLAYER *)obj->data;
-@@ -183,3 +183,5 @@
- {
-     OMOBJ *obj = omAddObj(actmanWork.objman, 3000, 0, 0, ExecVibrate);
+@@ -185 +185,3 @@
 -    obj->work[0] = (u32)playerP;
 +    if(obj != NULL) {
 +        obj->data = playerP;
 +    }
- }
-@@ -962,3 +964,3 @@
+@@ -962,2 +964,2 @@
 -                if(((playerP->actor->colGroundAttr & 0x7F)
 -                    && playerP->actor->colNorm.y > 0
--                    || (playerP->actor->colGroundAttr & 0x4000))
 +                if((((playerP->actor->colGroundAttr & 0x7F)
 +                    && playerP->actor->colNorm.y > 0)
-+                    || (playerP->actor->colGroundAttr & 0x4000))
-@@ -991,3 +993,3 @@
+@@ -991,2 +993,2 @@
 -            if(((playerP->actor->colGroundAttr & 0x7F)
 -                && playerP->actor->colNorm.y > 0
--                || (playerP->actor->colGroundAttr & 0x4000))
 +            if((((playerP->actor->colGroundAttr & 0x7F)
 +                && playerP->actor->colNorm.y > 0)
-+                || (playerP->actor->colGroundAttr & 0x4000))
-@@ -1608,3 +1610,3 @@
+@@ -1608,2 +1610,2 @@
 -            if(((playerP->actor->colGroundAttr & 0x7F)
 -                    && playerP->actor->colNorm.y > 0
--                    || (playerP->actor->colGroundAttr & 0x4000))
 +            if((((playerP->actor->colGroundAttr & 0x7F)
 +                    && playerP->actor->colNorm.y > 0)
-+                    || (playerP->actor->colGroundAttr & 0x4000))
 @@ -1623 +1625 @@
 -                        playerP->motNo == MGPLAYER_MOT_JUMP;
 +                        playerP->motNo = MGPLAYER_MOT_JUMP;

@@ -1,8 +1,6 @@
 --- a/src/game/gamemes.c
 +++ b/src/game/gamemes.c
-@@ -5,2 +5,3 @@
- double sin(double);
- double cos(double);
+@@ -6,0 +7 @@
 +double __fabs(double);
 @@ -25,0 +27 @@
 +#include "string.h"

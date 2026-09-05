@@ -1,18 +1,32 @@
 --- a/src/REL/fileseldll/filename.c
 +++ b/src/REL/fileseldll/filename.c
-@@ -20,0 +21 @@
+@@ -8,0 +9 @@
 +#include "game/frand.h"
-@@ -27,2 +27,3 @@
- #pragma cplusplus on
+@@ -14,0 +16,18 @@
++#pragma cplusplus on
 +double __frsqrte(double);
--extern inline float sqrtf(float x)
 +extern inline float mp6_fileseldll_sqrtf(float x)
-@@ -580 +580 @@
++{
++    volatile float y;
++    if (x > 0.0f)
++    {
++        double guess = __frsqrte((double)x);
++        guess = 0.5 * guess * (3.0 - guess * guess * x);
++        guess = 0.5 * guess * (3.0 - guess * guess * x);
++        guess = 0.5 * guess * (3.0 - guess * guess * x);
++        y = (float)(x * guess);
++        return y;
++    }
++    return x;
++}
++#pragma cplusplus reset
++
+@@ -607 +626 @@ s16 fn_1_ABF8(s16 id, f32 refX, f32 refY, f32 dirX, f32 dirY)
 -    len = sqrtf(dirX * dirX + dirY * dirY);
 +    len = mp6_fileseldll_sqrtf(dirX * dirX + dirY * dirY);
-@@ -589 +589 @@
+@@ -616 +635 @@ s16 fn_1_ABF8(s16 id, f32 refX, f32 refY, f32 dirX, f32 dirY)
 -            dist = sqrtf(px * px + py * py);
 +            dist = mp6_fileseldll_sqrtf(px * px + py * py);
-@@ -592 +592 @@
+@@ -619 +638 @@ s16 fn_1_ABF8(s16 id, f32 refX, f32 refY, f32 dirX, f32 dirY)
 -            angDist = sqrtf((px - ndx) * (px - ndx) + (py - ndy) * (py - ndy));
 +            angDist = mp6_fileseldll_sqrtf((px - ndx) * (px - ndx) + (py - ndy) * (py - ndy));

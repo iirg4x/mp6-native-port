@@ -2,7 +2,7 @@
 +++ b/src/game/wipe.c
 @@ -13,0 +14 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -204,2 +205,17 @@
+@@ -204,2 +205,13 @@
 -    GXPosition2u16(HU_FB_WIDTH, 0);
 -    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
 +    /* This plain full-frame fade quad's own corners are hardcoded to
@@ -18,16 +18,16 @@
 +     * (640, byte-identical) when widescreen is disabled. */
 +    GXPosition2u16(mp6_widescreen_render_width(), 0);
 +    GXPosition2u16(mp6_widescreen_render_width(), HU_FB_HEIGHT);
-@@ -268 +284,5 @@
+@@ -268 +280,4 @@
 -    GXPosition2u16(HU_FB_WIDTH, 0);
 +    /* Same full-frame-quad widen as WipeNormalFade below -- see that
 +     * comment. Deliberately NOT widening the screenshot capture/backing-
 +     * texture size a few lines above (see inline note there). */
 +    GXPosition2u16(mp6_widescreen_render_width(), 0);
-@@ -270 +290 @@
+@@ -270 +285 @@
 -    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
 +    GXPosition2u16(mp6_widescreen_render_width(), HU_FB_HEIGHT);
-@@ -297,0 +318,35 @@
+@@ -297,0 +313,28 @@
 +        /* WipeDissolve is WIPE_TYPE_DISSOLVE_IN/_OUT/_IN_BLUR's own draw
 +         * (mdseldll/mdsel.c's fn_1_A310 uses WIPE_TYPE_DISSOLVE_IN_BLUR for
 +         * confirming a chosen game mode, so this path is live, not merely
@@ -56,41 +56,40 @@
 +         * when that texture is stretched back across the (equally wider)
 +         * quad. Byte-identical calls throughout when widescreen is
 +         * disabled. */
-@@ -299,3 +354,3 @@
+@@ -299,3 +342,3 @@
 -            Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
 -        }
 -        
 +            Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
 +        }
 +
-@@ -320 +375 @@
+@@ -320 +363 @@
 -        MTXTrans(trans, -(HU_FB_WIDTH/2), -(HU_FB_HEIGHT/2), 0);
 +        MTXTrans(trans, -(mp6_widescreen_render_width()/2.0f), -(HU_FB_HEIGHT/2), 0);
-@@ -323 +378 @@
+@@ -323 +366 @@
 -        mtxTransCat(modelview, (HU_FB_WIDTH/2), (HU_FB_HEIGHT/2), 0);
 +        mtxTransCat(modelview, (mp6_widescreen_render_width()/2.0f), (HU_FB_HEIGHT/2), 0);
-@@ -329 +384 @@
+@@ -329 +372 @@
 -            GXPosition2s16(HU_FB_WIDTH+19, -14);
 +            GXPosition2s16(mp6_widescreen_render_width()+19, -14);
-@@ -331 +386 @@
+@@ -331 +374 @@
 -            GXPosition2s16(HU_FB_WIDTH+19, HU_FB_HEIGHT+14);
 +            GXPosition2s16(mp6_widescreen_render_width()+19, HU_FB_HEIGHT+14);
-@@ -338 +393 @@
+@@ -338 +381 @@
 -            GXPosition2s16(HU_FB_WIDTH-10, 10);
 +            GXPosition2s16(mp6_widescreen_render_width()-10, 10);
-@@ -340 +395 @@
+@@ -340 +383 @@
 -            GXPosition2s16(HU_FB_WIDTH-10, HU_FB_HEIGHT-10);
 +            GXPosition2s16(mp6_widescreen_render_width()-10, HU_FB_HEIGHT-10);
-@@ -344,0 +388,5 @@
+@@ -345 +388,6 @@
+-        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
 +        /* Closes the GXBegin(GX_QUADS, 4) nineteen lines up; anchors to the
 +         * closing brace of the if/else that emits all four of its vertices,
 +         * before Hu3DFbCopyExec just below. Empty inline on hardware
 +         * (GXVert.h). */
 +        GXEnd();
-@@ -345 +400 @@
--        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
 +        Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
-@@ -405,2 +460,8 @@
+@@ -405,2 +453,8 @@
 -        GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
 -        GXSetScissor(0, 0, 640, 480);
 +    /* The 6x6 grid-shatter wipe's own viewport/scissor + per-cell grid
@@ -101,7 +100,7 @@
 +     * disabled. */
 +        GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
 +        GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -448 +509 @@
+@@ -448 +502 @@
 -                GXSetViewport((HU_FB_WIDTH/6.0)*i, (HU_FB_HEIGHT/6.0)*j, HU_FB_WIDTH/6.0, HU_FB_HEIGHT/6.0, 0, 1);
 +                GXSetViewport((mp6_widescreen_render_width()/6.0)*i, (HU_FB_HEIGHT/6.0)*j, mp6_widescreen_render_width()/6.0, HU_FB_HEIGHT/6.0, 0, 1);
 @@ -463,0 +518,4 @@
@@ -109,7 +108,7 @@
 +                 * last of its four position/texcoord pairs, still inside the cell
 +                 * loop, so each cell closes its own primitive. */
 +                GXEnd();
-@@ -708 +769,11 @@
+@@ -708 +766,10 @@
 -    MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 10);
 +    /* WipeGXInit is the SHARED ortho/viewport/scissor setup for several
 +     * wipe styles (WipeNormalFade/WipeCrossFade/WipeDissolve/WipeImage/
@@ -121,7 +120,7 @@
 +     * (not confirmed exercised by testing) -- flagged, not assumed fine.
 +     * HU_FB_WIDTH (640, byte-identical) when widescreen is disabled. */
 +    MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, mp6_widescreen_render_width(), 0, 10);
-@@ -713,2 +784,2 @@
+@@ -713,2 +780,2 @@
 -    GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
 -    GXSetScissor(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
 +    GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);

@@ -1,8 +1,10 @@
 --- a/src/game/memory.c
 +++ b/src/game/memory.c
-@@ -4,2 +4,16 @@
+@@ -4,4 +4,18 @@
 -#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-32))
 -#define BLOCK_GET_DATA(block) (((char *)(block))+32)
+-
+-#define MEM_ALLOC_SIZE(size) (((size)+63) & 0xFFFFFFE0)
 +/* MEMORY_BLOCK's own prev/next fields are real pointers: 8 bytes each on
 + * this native 64-bit build vs 4 bytes on the original 32-bit target, so
 + * the true native header is 40 bytes, not the 32 these three macros
@@ -19,8 +21,7 @@
 +#define MP6_MEMBLOCK_HDR ((s32)sizeof(MEMORY_BLOCK))
 +#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-MP6_MEMBLOCK_HDR))
 +#define BLOCK_GET_DATA(block) (((char *)(block))+MP6_MEMBLOCK_HDR)
-@@ -7 +21 @@
--#define MEM_ALLOC_SIZE(size) (((size)+63) & 0xFFFFFFE0)
++
 +#define MEM_ALLOC_SIZE(size) (((size)+MP6_MEMBLOCK_HDR+31) & 0xFFFFFFE0)
 @@ -57 +71 @@
 -            if(block->size-blockSize > 32u) {

@@ -28,7 +28,8 @@
 +                 mp6DiagB[0], mp6DiagB[1], mp6DiagB[2], mp6DiagB[3],
 +                 mp6DiagB[4], mp6DiagB[5], mp6DiagB[6], mp6DiagB[7], 10);
 +    }
-@@ -236,0 +248,11 @@
+@@ -235,0 +247,11 @@
++    }
 +    {
 +        int mp6DiagI;
 +        for (mp6DiagI = 1; mp6DiagI <= masuNum[masuLayer] && mp6DiagI <= 6; mp6DiagI++) {
@@ -39,4 +40,3 @@
 +                     masuData[masuLayer][mp6DiagI].pos.y, masuData[masuLayer][mp6DiagI].pos.z, 10);
 +        }
 +        OSReport("[MASU-DIAG] star-tile (mAttr&0x80) count=%d%c", mbMasuMAttrListGet(0x80, NULL), 10);
-+    }

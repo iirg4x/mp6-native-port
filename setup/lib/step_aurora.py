@@ -62,12 +62,32 @@ BUILD_TARGETS = ["aurora_pad", "aurora_si", "aurora_card", "aurora_mtx",
 STAMP_NAME = ".mp6-aurora-build.json"
 # 5: the carve-out flags enter the fingerprint by repo-RELATIVE header path, so
 #    a worktree and its main checkout agree. See _fingerprint_carveout_args().
-BUILD_CONTRACT_VERSION = 5
+# 6: the Zig archive tools are explicit; CMake cannot infer them through the
+#    compiler batch wrappers on Windows.
+BUILD_CONTRACT_VERSION = 6
 ARTIFACT_STAMP_VERSION = 4
 
 
 def _host_section_header():
     return os.path.join(common.NATIVE_ROOT, "shim", "include", "mp6_host_section.h")
+
+
+def _cmake_path(path):
+    """Format a filesystem path for a CMake command-line argument.
+
+    CMake treats backslashes in ``-D`` values as escape characters while
+    parsing its cache entries.  That turns a normal Windows path such as
+    ``C:\\Users\\...`` into an invalid compiler path (notably for
+    ``CMAKE_RC_COMPILER``).  Forward slashes are accepted by Windows tools
+    and keep the same argument unambiguous on every host.
+    """
+    return os.fspath(path).replace("\\", "/")
+
+
+def _cmake_flag_path(path):
+    """Quote one path inside a CMake compiler/linker flag string."""
+    path = _cmake_path(path)
+    return f'"{path}"' if any(c.isspace() for c in path) else path
 
 
 def _carveout_args_for(header):
@@ -76,7 +96,7 @@ def _carveout_args_for(header):
     Single source of truth for the flag SHAPE, so the real cmake arguments and
     their fingerprint form cannot drift apart.
     """
-    forced = f"-include {header}"
+    forced = f"-include {_cmake_flag_path(header)}"
     return [
         f"-DCMAKE_C_FLAGS={forced}",
         f"-DCMAKE_CXX_FLAGS={forced}",
@@ -515,7 +535,21 @@ def is_ready():
 
 
 def _print_manual_recipe(missing):
-    wrappers = os.path.join(common.TOOLCHAIN_DIR, "zig-cc-wrappers")
+    wrappers = _cmake_path(os.path.join(common.TOOLCHAIN_DIR, "zig-cc-wrappers"))
+    aurora = _cmake_path(common.AURORA_DIR)
+    patches = _cmake_path(os.path.join(common.NATIVE_ROOT, "platform", "gx", "aurora-patches"))
+
+    def configure_recipe(build_dir, rmlui):
+        args = _configure_args("cmake", build_dir, wrappers, rmlui)
+        # CMake flag values contain their own quotes when a path has spaces.
+        # Escape those for Windows argv parsing as well as quoting the -D arg.
+        return " ^\n         ".join(
+            [subprocess.list2cmdline(args[:7])]
+            + [subprocess.list2cmdline([arg]) for arg in args[7:]]
+        )
+
+    plain_configure = configure_recipe(f"{aurora}/build", False)
+    rmlui_configure = configure_recipe(f"{aurora}/build-rmlui", True)
     common.banner("Aurora is not built/current -- manual recipe (docs/BUILDING.md)")
     print(f"  Problems (showing up to 10 of {len(missing)}):")
     for m in missing[:10]:
@@ -524,41 +558,32 @@ def _print_manual_recipe(missing):
     print("  One-time setup (also see docs/BUILDING.md's \"Aurora build trees\" section):")
     print(f"""
   1. Clone Aurora at the pinned commit:
-       git clone {DEFAULT_AURORA_URL} {common.AURORA_DIR}
-       git -C {common.AURORA_DIR} checkout {read_aurora_pin()}
+       git clone "{DEFAULT_AURORA_URL}" "{aurora}"
+       git -C "{aurora}" checkout "{read_aurora_pin()}"
 
   2. Apply this port's patch series (in numeric order):
-       {os.path.join(common.NATIVE_ROOT, 'platform', 'gx', 'aurora-patches')}\\000N-*.patch
+       "{patches}/000N-*.patch"
      (patches against the Aurora tree itself apply directly; the abseil-cpp
      patch (0001) applies to _deps/abseil-cpp-src AFTER the first configure
      below has fetched it -- see that patch file's own header comment.)
 
   3. Generate the zig compiler wrapper scripts CMake needs (a bare "zig cc"
      doesn't survive CMake's compiler-detection bootstrap). --build-aurora
-     writes all three itself; by hand they are:
-       {wrappers}\\zigcc.bat      -> zig.exe cc  -target x86_64-windows-gnu
-       {wrappers}\\zigcxx.bat     -> zig.exe c++ -target x86_64-windows-gnu
-       {wrappers}\\zigrc.bat      -> powershell -File zigrc_impl.ps1
-       {wrappers}\\zigrc_impl.ps1 -> zig.exe rc, with valued -D defines
+     writes all five itself; by hand they are:
+       "{wrappers}/zigcc.bat"      -> zig.exe cc  -target x86_64-windows-gnu
+       "{wrappers}/zigcxx.bat"     -> zig.exe c++ -target x86_64-windows-gnu
+       "{wrappers}/zigar.bat"      -> zig.exe ar
+       "{wrappers}/zigranlib.bat"  -> zig.exe ranlib
+       "{wrappers}/zigrc.bat"      -> powershell -File zigrc_impl.ps1
+       "{wrappers}/zigrc_impl.ps1" -> zig.exe rc, with valued -D defines
                                      pre-expanded into the .rc source
 
   4. Configure + build BOTH trees (plain, then RmlUi-enabled):
-       cmake -S {common.AURORA_DIR} -B {common.AURORA_DIR}\\build -G Ninja ^
-         -DCMAKE_BUILD_TYPE=Debug ^
-         -DCMAKE_C_COMPILER={wrappers}\\zigcc.bat ^
-         -DCMAKE_CXX_COMPILER={wrappers}\\zigcxx.bat ^
-         -DCMAKE_RC_COMPILER={wrappers}\\zigrc.bat ^
-         -DCMAKE_EXE_LINKER_FLAGS=-L{wrappers}\\stub-libs ^
-         -DCMAKE_C_FLAGS="-include {_host_section_header()}" ^
-         -DCMAKE_CXX_FLAGS="-include {_host_section_header()}" ^
-         -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON ^
-         -DAURORA_DAWN_PROVIDER=package -DAURORA_SDL3_PROVIDER=package ^
-         -DAURORA_ENABLE_RMLUI=OFF
-       cmake --build {common.AURORA_DIR}\\build --target {' '.join(BUILD_TARGETS)}
+       {plain_configure}
+       cmake --build "{aurora}/build" --target {' '.join(BUILD_TARGETS)}
 
-       cmake -S {common.AURORA_DIR} -B {common.AURORA_DIR}\\build-rmlui -G Ninja ^
-         (same flags as above, but -DAURORA_ENABLE_RMLUI=ON)
-       cmake --build {common.AURORA_DIR}\\build-rmlui --target {' '.join(BUILD_TARGETS)}
+       {rmlui_configure}
+       cmake --build "{aurora}/build-rmlui" --target {' '.join(BUILD_TARGETS)}
 
   Or re-run this tool with --build-aurora to attempt this automatically
   (best-effort; see docs/SETUP_TOOL.md for its exact scope/limits).
@@ -630,10 +655,12 @@ exit $LASTEXITCODE
 
 
 def _write_wrapper_scripts(zig_exe):
-    """Generates every compiler wrapper CMake's compiler-detection bootstrap
-    needs (a bare "zig cc" doesn't survive it). All three are GENERATED here --
-    nothing has to be copied in from another checkout for a fresh machine to
-    get through the Aurora build."""
+    """Generate every Zig tool wrapper needed by CMake's Windows bootstrap.
+
+    A bare "zig cc" does not survive compiler detection, and CMake cannot
+    infer an archiver from the compiler batch wrappers. Nothing has to be
+    copied from another checkout for a fresh machine to build Aurora.
+    """
     wrappers = common.ensure_dir(os.path.join(common.TOOLCHAIN_DIR, "zig-cc-wrappers"))
     common.ensure_dir(os.path.join(wrappers, "stub-libs"))
     # A per-project zig cache keeps the wrappers self-contained (CMake probes
@@ -647,6 +674,11 @@ def _write_wrapper_scripts(zig_exe):
                     f"set ZIG_GLOBAL_CACHE_DIR={cache}\r\n"
                     f"set ZIG_LOCAL_CACHE_DIR={cache}\r\n"
                     f'"{zig_exe}" {verb} -target x86_64-windows-gnu %*\r\n')
+    for name, verb in (("zigar.bat", "ar"), ("zigranlib.bat", "ranlib")):
+        with open(os.path.join(wrappers, name), "w", newline="\r\n") as f:
+            f.write("@echo off\r\n"
+                    f'"{zig_exe}" {verb} %*\r\n'
+                    "exit /b %ERRORLEVEL%\r\n")
     zigrc_impl = os.path.join(wrappers, "zigrc_impl.ps1")
     # These files embed absolute workspace/toolchain paths. Refresh them on
     # every provisioning attempt so moving the checkout or changing Zig never
@@ -796,6 +828,31 @@ def _apply_patch(apply_patches_mod, patch_path, roots):
     return True
 
 
+def _configure_args(cmake, build_dir, wrappers, rmlui):
+    """Shared argv for the automatic build and the copyable manual recipe."""
+    cmake = _cmake_path(cmake)
+    source_dir = _cmake_path(common.AURORA_DIR)
+    build_dir_arg = _cmake_path(build_dir)
+    compiler = _cmake_path(os.path.join(wrappers, "zigcc.bat"))
+    cxx_compiler = _cmake_path(os.path.join(wrappers, "zigcxx.bat"))
+    archiver = _cmake_path(os.path.join(wrappers, "zigar.bat"))
+    ranlib = _cmake_path(os.path.join(wrappers, "zigranlib.bat"))
+    rc_compiler = _cmake_path(os.path.join(wrappers, "zigrc.bat"))
+    stub_libs = _cmake_path(os.path.join(wrappers, "stub-libs"))
+    return [
+        cmake, "-S", source_dir, "-B", build_dir_arg, "-G", "Ninja",
+        "-DCMAKE_BUILD_TYPE=Debug",
+        f"-DCMAKE_C_COMPILER={compiler}",
+        f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
+        f"-DCMAKE_AR={archiver}",
+        f"-DCMAKE_RANLIB={ranlib}",
+        f"-DCMAKE_RC_COMPILER={rc_compiler}",
+        f"-DCMAKE_EXE_LINKER_FLAGS=-L{_cmake_flag_path(stub_libs)}",
+        "-DAURORA_DAWN_PROVIDER=package", "-DAURORA_SDL3_PROVIDER=package",
+        f"-DAURORA_ENABLE_RMLUI={'ON' if rmlui else 'OFF'}",
+    ] + _carveout_cmake_args()
+
+
 def _configure_and_build_tree(cmake, build_dir, wrappers, rmlui, apply_patches_mod, pending):
     """`pending` is the list of patch paths that did NOT apply to the Aurora
     tree itself -- i.e. the ones targeting a FetchContent dep. It is retried
@@ -804,16 +861,7 @@ def _configure_and_build_tree(cmake, build_dir, wrappers, rmlui, apply_patches_m
     shared Aurora tree are deliberately NOT retried here -- re-running them
     would either double-apply or (with this applier's content check) hard-fail
     on the second tree."""
-    args = [
-        cmake, "-S", common.AURORA_DIR, "-B", build_dir, "-G", "Ninja",
-        "-DCMAKE_BUILD_TYPE=Debug",
-        f"-DCMAKE_C_COMPILER={os.path.join(wrappers, 'zigcc.bat')}",
-        f"-DCMAKE_CXX_COMPILER={os.path.join(wrappers, 'zigcxx.bat')}",
-        f"-DCMAKE_RC_COMPILER={os.path.join(wrappers, 'zigrc.bat')}",
-        f"-DCMAKE_EXE_LINKER_FLAGS=-L{os.path.join(wrappers, 'stub-libs')}",
-        "-DAURORA_DAWN_PROVIDER=package", "-DAURORA_SDL3_PROVIDER=package",
-        f"-DAURORA_ENABLE_RMLUI={'ON' if rmlui else 'OFF'}",
-    ] + _carveout_cmake_args()
+    args = _configure_args(cmake, build_dir, wrappers, rmlui)
     env = {"MSYS2_ARG_CONV_EXCL": "*"}
     common.run(args, env=env)
 
@@ -829,7 +877,7 @@ def _configure_and_build_tree(cmake, build_dir, wrappers, rmlui, apply_patches_m
             hint="apply those by hand per docs/BUILDING.md, or check the patch's own header comment "
                  "for which dependency tree it belongs to")
 
-    common.run([cmake, "--build", build_dir, "--target"] + BUILD_TARGETS)
+    common.run([_cmake_path(cmake), "--build", _cmake_path(build_dir), "--target"] + BUILD_TARGETS)
 
 
 def _auto_build(url, assume_yes):

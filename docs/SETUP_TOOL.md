@@ -119,7 +119,7 @@ core.longpaths=true` -- found necessary the hard way (section 4) once a
 deeply-nested destination path pushed a real clone past Win32's classic
 `MAX_PATH`.
 
-## 4. A real bug this project's own docs had, found while building this
+## 4. A prior dependency-pin bug found while building this
 
 While implementing step 3 (decomp source), reading `docs/DECOMP_DEPENDENCY.md`
 literally would have pinned a stale commit. The doc said
@@ -135,10 +135,12 @@ bumped to say so. Building against the stale pin would have fed the port a
 content it now assumes -- a real, reproducible break, not a hypothetical
 one.
 
-Fixed as part of this change (`docs/DECOMP_DEPENDENCY.md` now reads
-`4a6761094935be3588ca2b1eda0a71a0988f8efb`, with a note explaining why),
-since `setup/lib/step_decomp.py` reads that file at run time -- keeping it
-accurate is load-bearing for this tool, not just informational.
+That historical setup-tool change corrected the pin from `b05ede1...` to
+`4a676109...`. The port was subsequently rebased again on 2026-09-02 and
+`docs/DECOMP_DEPENDENCY.md` now pins decomp `main` commit
+`8f9c3c010da32352908b637e7d6c46e8d99989e7`. Since
+`setup/lib/step_decomp.py` reads that file at run time, keeping its current
+value accurate is load-bearing for this tool, not just informational.
 
 ## 5. Aurora-from-scratch: what's real, what's unexercised
 
@@ -292,9 +294,11 @@ short of re-downloading ~97MB this machine already has.
 Both found by actually running the pipeline, not by inspection:
 
 1. **Stale decomp pin** (`docs/DECOMP_DEPENDENCY.md`, section 4) -- the
-   documented pin was one commit behind what the port's own tip commit
-   already required. A literal reading would have produced a real,
-   reproducible build break.
+   original setup-tool work found a documented pin one commit behind what
+   that port revision required. A literal reading would have produced a real,
+   reproducible build break. The same runtime-read pin is now maintained at
+   `8f9c3c010da32352908b637e7d6c46e8d99989e7` for the 2026-09-02 `main`
+   synchronization.
 2. **Windows path length** (`git clone`/`checkout`, section 3) -- a
    deeply-nested destination directory pushed a real `git clone` past
    Win32's classic `MAX_PATH` ("Filename too long"). Fixed with `-c

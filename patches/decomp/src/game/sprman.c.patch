@@ -1,15 +1,11 @@
 --- a/src/game/sprman.c
 +++ b/src/game/sprman.c
-@@ -4,9 +4,38 @@ double sin(double x);
- #include "game/sprite.h"
- #include "game/memory.h"
- #include "game/init.h"
+@@ -6,0 +7,3 @@
 +#include "mp6_anim_native.h"
 +#include "mp6_shim_log.h"
 +#include <stdio.h>
- 
- #include "dolphin/mtx.h"
- 
+@@ -8,0 +12,26 @@
++
 +/* This TU calls mtxTransCat (HuSprBegin, below) with no prototype anywhere
 + * in its own #include chain (game/hu3d.h, the one header in the decomp
 + * tree that declares it, is never pulled in here). Calling a function that
@@ -35,17 +31,10 @@
 + * divide-by-zero) -- not a decompilation error, nothing that changes
 + * observable behavior on real hardware. */
 +void mtxTransCat(Mtx dst, float x, float y, float z);
-+
- #define HUSPR_ORDER_MAX 768
- 
- #define SPRITE_DIRTY_ATTR 0x1
-@@ -77 +106 @@ void HuSprExec(s16 drawNo)
+@@ -77 +106 @@
 -    while(sp = HuSprCall()) {
 +    while((sp = HuSprCall()) != NULL) {
-@@ -142,7 +171,23 @@ HUSPRITE *HuSprCall(void)
-         if(sp->attr & HUSPR_ATTR_FUNC) {
-             return sp;
-         }
+@@ -144,0 +174,10 @@
 +        /* The native ANM loader validates these indices before publishing
 +         * the graph. Keep a last-line runtime guard for mutable game state. */
 +        if (!sp->data || sp->bank < 0 || sp->bank >= sp->data->bankNum ||
@@ -56,20 +45,14 @@
 +            sp->patP = NULL;
 +            return sp;
 +        }
-         sp->frameP = &sp->data->bank[sp->bank].frame[sp->animNo];
+@@ -145,0 +185,6 @@
 +        if (sp->frameP->pat < 0 || sp->frameP->pat >= sp->data->patNum) {
 +            MP6_LOG_ONCE("SPR", "HuSprCall-invalid-pattern-lookup");
 +            sp->frameP = NULL;
 +            sp->patP = NULL;
 +            return sp;
 +        }
-         sp->patP = &sp->data->pat[sp->frameP->pat];
-         return sp;
-     } else {
-@@ -217,34 +262,7 @@ void HuSprPauseSet(BOOL value)
- 
- ANIMDATA *HuSprAnimRead(void *data)
- {
+@@ -220,28 +265 @@
 -    s16 i;
 -    ANIMBMP *bmp;
 -    ANIMBANK *bank;
@@ -99,34 +82,16 @@
 -    anim->useNum = 0;
 -    return anim;
 +    return mp6_anim_read(data);
- }
- 
- void HuSprAnimLock(ANIMDATA *anim)
-@@ -410,6 +428,7 @@ void HuSprKill(HUSPRID sprId)
- void HuSprAnimKill(ANIMDATA *anim)
- {
-     if(--anim->useNum <= 0) {
+@@ -412,0 +431 @@
 +        void *packedBacking = mp6_anim_unregister_for_free(anim);
-         if(anim->bmpNum & ANIM_BMP_ALLOC) {
-             if(anim->bmp->data) {
-                 HuMemDirectFree(anim->bmp->data);
-@@ -418,6 +437,9 @@ void HuSprAnimKill(ANIMDATA *anim)
-                 HuMemDirectFree(anim->bmp->palData);
-             }
-         }
+@@ -420,0 +440,3 @@
 +        if(packedBacking) {
 +            HuMemDirectFree(packedBacking);
 +        }
-         HuMemDirectFree(anim);
-     }
- }
-@@ -470,10 +492,15 @@ void HuSprGrpAttrReset(HUSPR_GROUPID grpId, s32 attr)
- 
- u16 HuSprAttrGet(HUSPR_GROUPID grpId, s16 memberNo)
- {
+@@ -473 +495 @@
 -    HUSPR_GROUP *gp = &HuSprGrpData[grpId];
 +    HUSPR_GROUP *gp;
-     HUSPRITE *sp;
+@@ -475,2 +497,7 @@
 -    if(gp->sprNum == 0 || gp->sprNum <= memberNo || gp->sprId[memberNo] == HUSPR_NONE) {
 -        return;
 +    if(grpId < 0 || grpId >= HUSPR_GROUP_MAX) {
@@ -136,24 +101,18 @@
 +
 +    if(memberNo < 0 || gp->sprNum == 0 || gp->sprNum <= memberNo || gp->sprId[memberNo] == HUSPR_NONE) {
 +        return 0;
-     }
-     sp = &HuSprData[gp->sprId[memberNo]];
-     return sp->attr;
-@@ -680,19 +707,42 @@ ANIMDATA *HuSprAnimMake(s16 sizeX, s16 sizeY, s16 dataFmt)
-     ANIMBANK *bank;
-     ANIMDATA *newAnim;
- 
+@@ -682,0 +710,5 @@
 +    if(sizeX <= 0 || sizeY <= 0 || dataFmt < 0 || dataFmt >= 11) {
 +        OSReport("HuSprAnimMake: invalid dimensions/format (%d, %d, %d)\n",
 +                 sizeX, sizeY, dataFmt);
 +        return NULL;
 +    }
-     anim = newAnim = HuMemDirectMalloc(HEAP_MODEL, sizeof(ANIMDATA)+sizeof(ANIMBANK)+sizeof(ANIMFRAME)
-                                             +sizeof(ANIMPAT)+sizeof(ANIMLAYER)+sizeof(ANIMBMP));
+@@ -685 +717,19 @@
+-
 +    if(newAnim == NULL) {
 +        return NULL;
 +    }
- 
++
 +    /* ANIMBANK/ANIMPAT/ANIMBMP each embed a real pointer field, so their
 +     * native sizeof() is guaranteed a multiple of 8 (an 8-byte pointer
 +     * member forces 8-byte alignment) -- laying all three of them out
@@ -169,42 +128,31 @@
 +     * frame-buffer-copy sprite downstream of the HSF stub called this
 +     * function. Total allocation size is unchanged -- same 6 sizeof()s
 +     * summed, just carved out in a different order. */
-     bank = temp = &newAnim[1];
-     anim->bank = bank;
+@@ -688 +738,5 @@
 -    frame = temp = ((char *)temp+sizeof(ANIMBANK));
--    bank->frame = frame;
--    pat = temp = ((char *)temp+sizeof(ANIMFRAME));
 +    pat = temp = ((char *)temp+sizeof(ANIMBANK));
-     anim->pat = pat;
--    layer = temp = ((char *)temp+sizeof(ANIMPAT));
--    pat->layer = layer;
--    bmp = temp = ((char *)temp+sizeof(ANIMLAYER));
++    anim->pat = pat;
 +    bmp = temp = ((char *)temp+sizeof(ANIMPAT));
-     anim->bmp = bmp;
++    anim->bmp = bmp;
 +    frame = temp = ((char *)temp+sizeof(ANIMBMP));
-+    bank->frame = frame;
+@@ -690,3 +744 @@
+-    pat = temp = ((char *)temp+sizeof(ANIMFRAME));
+-    anim->pat = pat;
+-    layer = temp = ((char *)temp+sizeof(ANIMPAT));
 +    layer = temp = ((char *)temp+sizeof(ANIMFRAME));
-+    pat->layer = layer;
-     anim->useNum = 0;
-     anim->bankNum = 1;
-     anim->patNum = 1;
-@@ -699 +749 @@ ANIMDATA *HuSprAnimMake(s16 sizeX, s16 sizeY, s16 dataFmt)
+@@ -694,2 +745,0 @@
+-    bmp = temp = ((char *)temp+sizeof(ANIMLAYER));
+-    anim->bmp = bmp;
+@@ -699 +749 @@
 -    anim->bmpNum = (1|ANIM_BMP_ALLOC);
 +    anim->bmpNum = (s16)(1|ANIM_BMP_ALLOC);
-@@ -726,9 +776,12 @@ ANIMDATA *HuSprAnimMake(s16 sizeX, s16 sizeY, s16 dataFmt)
-     bmp->palNum = 0;
-     bmp->sizeX = sizeX;
-     bmp->sizeY = sizeY;
+@@ -729 +779,2 @@
 -    bmp->dataSize = sizeX*sizeY*bitSizeTbl[dataFmt]/8;
 +    bmp->dataSize = (u32)((u64)(u16)sizeX*(u16)sizeY
 +                        *(u32)bitSizeTbl[dataFmt]/8u);
-     bmp->palData = NULL;
-     bmp->data = NULL;
+@@ -731,0 +783,2 @@
 +
 +    mp6_anim_register_native(anim);
-     return anim;
- }
- 
-@@ -887 +940 @@ void HuSprAnimRelocate(ANIMDATA *anim, s16 ofsx, s16 ofsy)
+@@ -887 +940 @@
 -    for(i=0; i<anim->bmpNum & ANIM_BMP_NUM_MASK; i++) {
 +    for(i=0; i<(anim->bmpNum & ANIM_BMP_NUM_MASK); i++) {

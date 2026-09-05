@@ -1,0 +1,18 @@
+--- a/src/board/player.c
++++ b/src/board/player.c
+@@ -174,0 +175 @@ static inline void HuVecMul(
++#ifdef __MWERKS__
+@@ -189,0 +191,5 @@ static inline void HuVecMul(
++#else
++    dstP->x = srcP->x * scaleP->x;
++    dstP->y = srcP->y * scaleP->y;
++    dstP->z = srcP->z * scaleP->z;
++#endif
+@@ -194,0 +201 @@ static inline void HuVecCopy(
++#ifdef __MWERKS__
+@@ -203,0 +211,5 @@ static inline void HuVecCopy(
++#else
++    dstP->x = srcP->x;
++    dstP->y = srcP->y;
++    dstP->z = srcP->z;
++#endif

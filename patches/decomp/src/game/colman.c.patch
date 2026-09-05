@@ -1,5 +1,8 @@
 --- a/src/game/colman.c
 +++ b/src/game/colman.c
+@@ -4 +4 @@
+-extern inline float fabsf(float x)
++static inline float fabsf(float x)
 @@ -997 +997 @@
 -        } else if(vtxDeltaZero) {
 +        } else {
@@ -21,8 +24,6 @@
 @@ -1335 +1335 @@
 -            if(fabsf(temp_f26) < 0.0001f) {
 +            if(fabs(temp_f26) < 0.0001) {
-@@ -3241,2 +3241,2 @@
--    if(!ColMapInitCheck()) {
+@@ -3242 +3242 @@
 -        return;
-+    if(!ColMapInitCheck()) {
 +        return 0;

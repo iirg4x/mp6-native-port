@@ -2,7 +2,7 @@
 +++ b/src/game/printfunc.c
 @@ -4,0 +5 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -297 +298,6 @@
+@@ -297 +298,5 @@
 -                            if(x > HU_FB_WIDTH) {
 +                            /* The reference widescreen hack widens this
 +                             * same check to a fixed value; generalized to

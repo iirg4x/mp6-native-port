@@ -2,7 +2,7 @@
 +++ b/src/REL/actmanDLL/actman.c
 @@ -5,0 +6 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -73,2 +74,10 @@
+@@ -73,2 +74,8 @@
 -    Hu3DCameraPerspectiveSet(HU3D_CAM0, 45, 20, 15000, 1.2f);
 -    Hu3DCameraViewportSet(HU3D_CAM0, 0, 0, 640, 480, 0, 1);
 +    /* This overlay's own 3D camera has the same native-640, left-anchored

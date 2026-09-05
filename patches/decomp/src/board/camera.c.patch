@@ -1,35 +1,17 @@
 --- a/src/board/camera.c
 +++ b/src/board/camera.c
-@@ -3,10 +3,7 @@
- double sin(double);
- double cos(double);
- #pragma cplusplus on
+@@ -6,4 +6 @@
 -extern inline double fabs(double x)
 -{
 -    return __fabs(x);
 -}
 +double fabs(double x); /* Host CRT owner; avoid a second external C99 body. */
- #pragma cplusplus reset
- 
- #include "game/board/main.h"
-@@ -20,6 +20,8 @@ extern inline double fabs(double x)
- #include "game/process.h"
-
- #include "humath.h"
+@@ -22,0 +20,2 @@
 +#include "mp6_board_runtime.h"
 +#include "mp6_widescreen.h" /* WS: the shared live aspect / render-width source */
-
- #define FLAG_BOARD_CAMERAMOT FLAGNUM(FLAG_GROUP_COMMON, 26)
- 
-@@ -97,6 +98,7 @@ void mbCameraInit(void)
-     HuVecF pos;
-     HuVecF dir;
-     int i;
+@@ -99,0 +99 @@
 +    mp6_board_runtime_reset(BoardNoGet());
-     memset(&cameraStack[0], 0, sizeof(cameraStack));
-     memset(&cameraCur, 0, sizeof(cameraCur));
-     cameraP->attr = 0;
-@@ -135,1 +138,10 @@ void mbCameraInit(void)
+@@ -135 +135,11 @@
 -    Hu3DCameraScissorSet(cameraP->bit, cameraP->viewportX, cameraP->viewportY, cameraP->viewportW, cameraP->viewportH);
 +    /* WS -- the board camera's ONE scissor write (mp6WsBoardCameraApply
 +     * below carries the full mechanism note). The native literal here is
@@ -42,15 +24,9 @@
 +     * runs. Exactly 640 -- unchanged -- when widescreen is disabled. */
 +    Hu3DCameraScissorSet(cameraP->bit, cameraP->viewportX, cameraP->viewportY,
 +        (unsigned int)mp6_widescreen_render_width(), cameraP->viewportH);
-@@ -161,6 +163,7 @@ void mbCameraInit(void)
- 
- static void Camera0LayerHook(s16 layerNo)
- {
+@@ -163,0 +174 @@
 +    mp6_board_runtime_draw();
-     HU3D_LIGHT *light = &Hu3DGlobalLight[0];
-     if(lightTypeBackup[0] != -1) {
-         light->type = lightTypeBackup[0];
-@@ -193,0 +196,105 @@ static void CameraOMExec(OMOBJ *obj)
+@@ -193,0 +205,105 @@
 +/* WS -- the board's 3D camera aspect/viewport/scissor, re-derived LIVE.
 + *
 + * Every OTHER 3D scene in this project (Party's fn_1_33A0, mode-select's
@@ -156,16 +132,9 @@
 +    }
 +}
 +
-@@ -195,6 +198,7 @@ static void CameraOMExec(OMOBJ *obj)
- {
-     MBCAMERA *cameraP = mbCameraGet();
-     HuVecF dir;
+@@ -197,0 +314 @@
 +    mp6_board_runtime_tick();
-     if(mbExitCheck()) {
-         omDelObjEx(HuPrcCurrentGet(), obj);
-         return;
-@@ -203,1 +260,10 @@ static void CameraOMExec(OMOBJ *obj)
--        return;
+@@ -202,0 +320,9 @@
 +        /* WS: a window resize while the pause menu is up must still
 +         * converge -- this early return is the ONE per-frame path that
 +         * would otherwise skip the camera re-derivation below. Gated on the
@@ -175,12 +144,11 @@
 +        if(mp6_widescreen_enabled()) {
 +            mp6WsBoardCameraApply(cameraP);
 +        }
-+        return;
-@@ -205,2 +271,1 @@ static void CameraOMExec(OMOBJ *obj)
+@@ -205,2 +331 @@
 -    Hu3DCameraPerspectiveSet(cameraP->bit, cameraP->fov, cameraP->near, cameraP->far, cameraP->aspect);
 -    Hu3DCameraViewportSet(cameraP->bit, cameraP->viewportX, cameraP->viewportY, cameraP->viewportW, cameraP->viewportH, cameraP->viewportNear, cameraP->viewportFar);
 +    mp6WsBoardCameraApply(cameraP);
-@@ -692,1 +757,15 @@ BOOL mbCameraCullCheck(HuVecF *pos, float radius)
+@@ -692 +817,14 @@
 -    boundX = 1.2f*(tanHalfFov*-viewPos.z);
 +    /* WS -- the board's own coarse visibility test, and the ONE place in
 +     * the board that hardcodes the 4:3 aspect as a literal instead of

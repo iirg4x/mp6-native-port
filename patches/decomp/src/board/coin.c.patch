@@ -1,6 +1,6 @@
 --- a/src/board/coin.c
 +++ b/src/board/coin.c
-@@ -170,0 +171,23 @@
+@@ -199,0 +200,23 @@
 +
 +/* MP6_NATIVE_PORT retail-overread shim (board-opening coin-shower crash):
 + * mbCoinEffCreate indexes coinEffBankTbl[] (u8[16]) with mbRandMod(32).

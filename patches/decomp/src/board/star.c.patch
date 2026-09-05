@@ -1,6 +1,6 @@
 --- a/src/board/star.c
 +++ b/src/board/star.c
-@@ -1008 +1008,13 @@
+@@ -1032 +1032,13 @@
 -            dataP->color.a = 255.0f * (1.0f - weight);
 +            /* MP6_NATIVE_PORT: the SIXTH site of the trap class in
 +             * shim/include/mp6_hwcast.h, and the one the extended board drive

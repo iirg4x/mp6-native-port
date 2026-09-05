@@ -5,8 +5,8 @@
  * unconditionally, by the subsystem that owns it: the five HuMem heaps'
  * used/block totals, the OS arena's bump cursors, the coroutine pool's slot
  * occupancy, the 16 SFX voices and 8 stream channels, the W01 board's tick and
- * draw counters, the event bus's per-key latest values, and the board
- * placeholder seams' call counts. What did NOT exist was a way to READ them
+ * draw counters, the event bus's per-key latest values, and (when present)
+ * board integration-seam call counts. What did NOT exist was a way to READ them
  * without also printing them -- every one of these was reachable only through
  * an env-gated printf, so a live view had to either turn a log stream on or
  * duplicate the counting.
@@ -128,11 +128,10 @@ unsigned mp6_diag_board_draws(void);
 /* ---------------------------------------------------------------------
  * Board placeholder seams -- platform/os/board_placeholders.c.
  *
- * The per-seam counters live in function statics created by the
- * BOARD_PLACEHOLDER_ONCE macro, so nothing could enumerate them. The shared
- * helper every macro site already calls now also records the seam in one
- * table, which makes the seams RANKABLE by gameplay impact instead of merely
- * listable. The [BOARD-PLACEHOLDER-COUNT] output is unchanged, byte for byte.
+ * The pinned decomp revision currently implements every former board seam,
+ * so this registry is empty. Keep the stable probe ABI: diagnostics consumers
+ * can report zero seams without conditional compilation, and a future
+ * deliberately logged seam can restore entries without changing that ABI.
  * ------------------------------------------------------------------- */
 #define MP6_DIAG_SEAM_MAX 128
 

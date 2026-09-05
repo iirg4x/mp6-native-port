@@ -1,8 +1,9 @@
 # Decomp Dependency
 
 The Mario Party 6 decompilation checked out at
-`../../external_refs/repos/marioparty6` (tracking the `fork/main` branch —
-the `iirg4x` fork — not upstream) is the source of truth for all recovered
+`../../external_refs/repos/marioparty6` (tracking `main` in
+[`iirg4x/marioparty6`](https://github.com/iirg4x/marioparty6), not the original
+upstream repository) is the source of truth for all recovered
 game code. This port does not vendor, fork, or modify that source; it
 consumes it read-only.
 
@@ -20,10 +21,11 @@ clones it.
 ## Currently tracking
 
 ```
-4a6761094935be3588ca2b1eda0a71a0988f8efb
+8f9c3c010da32352908b637e7d6c46e8d99989e7
 ```
 
-This is the output of, run from this file's location:
+This must match the output of the following command, run from the Port
+repository root with the dependency checked out at the pinned revision:
 
 ```sh
 git -C ../../external_refs/repos/marioparty6 rev-parse HEAD
@@ -34,12 +36,17 @@ i.e. the commit `HEAD` was pointing at in
 Update this value whenever the port is resynced against a newer decomp
 commit.
 
-(Corrected during the setup/ tool's build: the previous value here,
-`b05ede1d53f5763539a4a33ab0505b4d7749b96d`, was one decomp commit stale --
-commit `0b9dbb4` on this branch already dropped the port's local
-`decomp-overrides` shield for mdparty.c/stage.c "now that decomp settled at
-4a67610", but this file was never bumped to match. Building against the
-old pin would have fed the port the pre-4a67610 mdparty.c/stage.c with no
-shield and no override, i.e. a real, reproducible break -- setup/'s decomp
-step reads this file at run time, so keeping it accurate is load-bearing,
-not just informational.)
+The port patch queue was rebased onto this exact `main` revision on
+2026-09-02. The prior documented pin was
+`4a6761094935be3588ca2b1eda0a71a0988f8efb`; it predates later recovered
+board and REL source that the current port build consumes. The setup tool
+reads this value at run time, so keeping the pin and patch queue synchronized
+is a build-integrity requirement rather than informational bookkeeping.
+
+Several board owners recovered at this revision still declare address-named
+`.sdata2` constants whose storage comes from the original DOL in the matching
+decomp build. The native link has no such binary input, so
+`platform/os/board_constants.c` supplies bit-exact C definitions verified
+against the GP6E01 `main.dol` hash recorded by the decomp project. This is a
+data-ownership bridge, not a placeholder implementation; it should shrink as
+upstream moves those constants into recovered C.

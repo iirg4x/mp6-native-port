@@ -2,7 +2,7 @@
 +++ b/src/game/hsfmotion.c
 @@ -9,0 +10 @@
 +#include "mp6_boot.h" /* mp6_heap_pointer_tag -- standalone motion teardown fix below */
-@@ -75 +76,12 @@
+@@ -75 +76,11 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
 +    /* mdsel's teardown calls this with the "no motion" sentinel (-1) when
 +     * a mode is confirmed (reproduced as a panic at &Hu3DMotion[-1]). On
@@ -15,7 +15,7 @@
 +        return FALSE;
 +    }
 +    motP = &Hu3DMotion[motId];
-@@ -100 +112,25 @@
+@@ -100 +111,25 @@
 -        HuMemDirectFree(motP->hsf);
 +        /* Port ownership fix (docs/research/hsf_stub_audit.md D4). On
 +         * hardware this single free was complete: LoadHSF parsed the file
@@ -42,7 +42,7 @@
 +            HuMemDirectFree(motP->hsf);
 +            HuMemDirectFreeNum(HEAP_MODEL, mp6GraphTag);
 +        }
-@@ -191 +227,21 @@
+@@ -191 +226,19 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
 +    /* 64-bit/checked-build portability fix, negative-sentinel-index class:
 +     * motId == HU3D_MOTIONID_NONE (-1) reaches this function ORGANICALLY.
@@ -63,16 +63,16 @@
 +     * observable: the pointer stays dead either way, and every modelP
 +     * field write below is identical. */
 +    HU3D_MOTION *motP = (motId != HU3D_MOTIONID_NONE) ? &Hu3DMotion[motId] : NULL;
-@@ -826 +857 @@ void Hu3DMotionExec(HU3D_MODELID modelId, HU3D_MOTIONID motId, float time, BOOL copyXFormF)
+@@ -826 +879 @@
 -                if(trackP->target < hsf->objectNum && trackP->target != -1) {
 +                if(trackP->target != (u16)-1 && trackP->target < hsf->objectNum) {
-@@ -871 +902 @@
+@@ -871 +924 @@
 -                if(track->target < hsf->objectNum) {
 +                if(track->target < hsf->objectNum && track->morphWeight >= 0 && track->morphWeight < 33) {
-@@ -880 +911 @@
+@@ -880 +933 @@
 -                if(!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF) && trackP->attrIdx < hsf->materialNum) {
 +                if(!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF) && trackP->attrIdx >= 0 && trackP->attrIdx < hsf->materialNum) {
-@@ -887,2 +918,20 @@
+@@ -887,2 +940,19 @@
 -                    clusterP = &hsf->cluster[trackP->cluster];
 -                    clusterP->index = GetClusterCurve(trackP, time);
 +                    /* hsf->cluster is still stub-tolerated (forced NULL/0
@@ -94,7 +94,7 @@
 +                        clusterP = &hsf->cluster[trackP->cluster];
 +                        clusterP->index = GetClusterCurve(trackP, time);
 +                    }
-@@ -895,2 +944,8 @@
+@@ -895,2 +965,7 @@
 -                    clusterP = &hsf->cluster[track->cluster];
 -                    clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
 +                    /* Same reasoning as HSF_TRACK_CLUSTER immediately
@@ -104,64 +104,13 @@
 +                        clusterP = &hsf->cluster[track->cluster];
 +                        clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
 +                    }
-@@ -904 +959 @@
+@@ -904 +979 @@
 -                    if(track->attrIdx != -1 && track->attrIdx < hsf->attributeNum) {
 +                    if(track->attrIdx >= 0 && track->attrIdx < hsf->attributeNum) {
-@@ -992 +1041 @@ void Hu3DMotionShiftSet(HU3D_MODELID modelId, HU3D_MOTIONID motId, float startTime, float shiftTime, u32 attr)
+@@ -992 +1067 @@
 -                if (trackP->target < hsf->objectNum && trackP->target != -1) {
 +                if (trackP->target != (u16)-1 && trackP->target < hsf->objectNum) {
-@@ -1467 +1522 @@
--    HSF_CONSTANT_KEY *data = key;
-+    HSF_CONSTANT_KEY *data;
-@@ -1469 +1524,4 @@
--    if(0.0f == time || keyNum == 1) {
-+    if(keyNum <= 0 || key == NULL) {
-+        return 0.0f;
-+    }
-+    if(time <= key[0][0] || keyNum == 1) {
-@@ -1472 +1530,2 @@
--    for(i=0; i<keyNum; i++, data++) {
-+    data = &key[1];
-+    for(i=1; i<keyNum; i++, data++) {
-@@ -1474 +1533 @@ float GetConstant(s32 keyNum, HSF_CONSTANT_KEY *key, float time)
--            return data[0][-1];
-+            return data[-1][1];
-@@ -1477 +1536 @@
--    return data[0][-1];
-+    return key[keyNum-1][1];
-@@ -1485 +1544,4 @@
--    if(0.0f == time || keyNum == 1) {
-+    if(keyNum <= 0 || key == NULL) {
-+        return 0.0f;
-+    }
-+    if(time <= key[0][0] || keyNum == 1) {
-@@ -1488 +1550 @@
--    for(i=0; i<keyNum; i++) {
-+    for(i=1; i<keyNum; i++) {
-@@ -1517,3 +1579,10 @@
--    if (time == 0.0f || keyNum == 1) {
--        return key[0][1];
--    }
-+    if (keyNum <= 0 || key == NULL) {
-+        return 0.0f;
-+    }
-+    if (time <= key[0][0] || keyNum == 1) {
-+        return key[0][1];
-+    }
-+    if (trackP->start == 0 || trackP->start >= keyNum) {
-+        trackP->start = 1;
-+    }
-@@ -1564 +1633,4 @@
--    if(0.0f == time || keyNum == 1) {
-+    if(keyNum <= 0 || key == NULL) {
-+        return NULL;
-+    }
-+    if(time <= key->time*60.0f || keyNum == 1) {
-@@ -1567 +1639,2 @@
--    for(i=0; i<keyNum; i++, key++) {
-+    key++;
-+    for(i=1; i<keyNum; i++, key++) {
-@@ -1190,0 +1265,11 @@
+@@ -1190,0 +1266,12 @@
 +                /* native port: the original left animId/texScrId/bitMapPtr
 +                 * (and the 2D scale/trans pair) of this freshly allocated
 +                 * work uninitialized -- never read without their flags on
@@ -174,3 +123,54 @@
 +                attrAnimP->animId = HU3D_ANIMID_NONE;
 +                attrAnimP->texScrId = HU3D_TEXSCRID_NONE;
 +                attrAnimP->bitMapPtr = NULL;
+@@ -1467 +1554 @@
+-    HSF_CONSTANT_KEY *data = key;
++    HSF_CONSTANT_KEY *data;
+@@ -1469 +1556,4 @@
+-    if(0.0f == time || keyNum == 1) {
++    if(keyNum <= 0 || key == NULL) {
++        return 0.0f;
++    }
++    if(time <= key[0][0] || keyNum == 1) {
+@@ -1472 +1562,2 @@
+-    for(i=0; i<keyNum; i++, data++) {
++    data = &key[1];
++    for(i=1; i<keyNum; i++, data++) {
+@@ -1474,4 +1565,4 @@
+-            return data[0][-1];
+-        }
+-    }
+-    return data[0][-1];
++            return data[-1][1];
++        }
++    }
++    return key[keyNum-1][1];
+@@ -1485 +1576,4 @@
+-    if(0.0f == time || keyNum == 1) {
++    if(keyNum <= 0 || key == NULL) {
++        return 0.0f;
++    }
++    if(time <= key[0][0] || keyNum == 1) {
+@@ -1488 +1582 @@
+-    for(i=0; i<keyNum; i++) {
++    for(i=1; i<keyNum; i++) {
+@@ -1517 +1611,4 @@
+-    if (time == 0.0f || keyNum == 1) {
++    if (keyNum <= 0 || key == NULL) {
++        return 0.0f;
++    }
++    if (time <= key[0][0] || keyNum == 1) {
+@@ -1518,0 +1616,3 @@
++    }
++    if (trackP->start == 0 || trackP->start >= keyNum) {
++        trackP->start = 1;
+@@ -1564 +1664,4 @@
+-    if(0.0f == time || keyNum == 1) {
++    if(keyNum <= 0 || key == NULL) {
++        return NULL;
++    }
++    if(time <= key->time*60.0f || keyNum == 1) {
+@@ -1567 +1670,2 @@
+-    for(i=0; i<keyNum; i++, key++) {
++    key++;
++    for(i=1; i<keyNum; i++, key++) {
