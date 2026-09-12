@@ -30,7 +30,7 @@ Passing auto_build=True (--build-aurora) additionally attempts to DO that
 build: clone Aurora at its pinned commit (only if the directory doesn't
 exist yet -- this step refuses to touch an aurora checkout that's already
 there, exactly like the "aurora stays read-only" rule), apply the patch
-series (platform/gx/aurora-patches/), and drive the two CMake configure+
+series (compat/aurora/base/), and drive the two CMake configure+
 build invocations. Patch application is per-TARGET-FILE: six of the
 patches touch 2-11 files each, so the diff is split into one section per
 file and applied all-or-nothing under whichever root holds them (the
@@ -38,6 +38,7 @@ Aurora tree, or a FetchContent dependency under a tree's _deps/). See
 docs/SETUP_TOOL.md for exactly which parts of this path this project's own
 verification did and didn't exercise.
 """
+import glob
 import hashlib
 import json
 import os
@@ -69,7 +70,7 @@ ARTIFACT_STAMP_VERSION = 4
 
 
 def _host_section_header():
-    return os.path.join(common.NATIVE_ROOT, "shim", "include", "mp6_host_section.h")
+    return os.path.join(common.NATIVE_ROOT, "include", "mp6_host_section.h")
 
 
 def _cmake_path(path):
@@ -126,8 +127,10 @@ def _fingerprint_carveout_args():
     the carve-out still moves the fingerprint -- only relocating the tree no
     longer does.
     """
-    rel = os.path.relpath(_host_section_header(), common.NATIVE_ROOT)
-    return _carveout_args_for(rel.replace("\\", "/"))
+    # Contract v6's stable logical input ID, not a filesystem lookup. Keep it
+    # across layout migrations so identical verified artifacts remain usable.
+    # _host_section_header() supplies the actual location AND content hash.
+    return _carveout_args_for("shim/include/mp6_host_section.h")
 
 
 def _load_build_module():
@@ -153,7 +156,7 @@ def read_aurora_pin():
 
 
 def patches_dir():
-    return os.path.join(common.NATIVE_ROOT, "platform", "gx", "aurora-patches")
+    return os.path.join(common.NATIVE_ROOT, "compat", "aurora", "base")
 
 
 def _patch_files():
@@ -231,9 +234,22 @@ def _stamp_path():
     return os.path.join(common.AURORA_DIR, STAMP_NAME)
 
 
-def read_stamp():
+def windows_release_fingerprint():
+    """Bind the Port-local optimized recipe/patches without staling Debug."""
+    paths = [os.path.join(common.NATIVE_ROOT, "tools", "build_windows_release.py")]
+    patch_dir = os.path.join(common.NATIVE_ROOT, "compat", "aurora", "windows")
+    paths += sorted(glob.glob(os.path.join(patch_dir, "*.patch")))
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(os.path.basename(path).encode("utf-8"))
+        with open(path, "rb") as source:
+            digest.update(source.read())
+    return digest.hexdigest()
+
+
+def read_stamp(path=None):
     try:
-        with open(_stamp_path(), "r", encoding="utf-8") as f:
+        with open(path or _stamp_path(), "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:  # noqa: BLE001 -- absent/corrupt both mean "no stamp"
         return None
@@ -306,9 +322,16 @@ def _artifact_profile_problem(paths, recorded):
 
 def verify_link_inputs(profile, build_module=None, items=None, check_fingerprint=True):
     build = build_module or _load_build_module()
-    stamp = read_stamp()
+    stamp_path = getattr(build, "AURORA_ARTIFACT_STAMP", None)
+    stamp = read_stamp(stamp_path) if stamp_path else read_stamp()
     if not isinstance(stamp, dict) or stamp.get("artifact_stamp_version") != ARTIFACT_STAMP_VERSION:
-        return [f"Aurora artifact stamp is absent/obsolete: {_stamp_path()}"]
+        return [f"Aurora artifact stamp is absent/obsolete: {stamp_path or _stamp_path()}"]
+    if profile == "windows" and stamp.get("windows_configuration", "debug") != getattr(
+            build, "WINDOWS_CONFIGURATION", "debug"):
+        return ["Aurora artifact stamp has the wrong Windows optimization configuration"]
+    if profile == "windows" and getattr(build, "WINDOWS_CONFIGURATION", "debug") == "release":
+        if stamp.get("windows_release_fingerprint") != windows_release_fingerprint():
+            return ["Port-local Aurora release recipe/patch fingerprint mismatch; rebuild the release backend"]
     if check_fingerprint:
         try:
             current_fingerprint = build_fingerprint(
@@ -329,8 +352,8 @@ def verify_link_inputs(profile, build_module=None, items=None, check_fingerprint
     return [problem] if problem else []
 
 
-def write_stamp(pin, trees):
-    build = _load_build_module()
+def write_stamp(pin, trees, build_module=None, path=None):
+    build = build_module or _load_build_module()
     checkout_commit = verified_checkout_commit(pin)
     profiles = {}
     for profile in ("windows", "android"):
@@ -347,8 +370,11 @@ def write_stamp(pin, trees):
         "patches": [os.path.basename(p) for p in _patch_files()],
         "profiles": profiles,
         "trees": list(trees),
+        "windows_configuration": getattr(build, "WINDOWS_CONFIGURATION", "debug"),
     }
-    path = _stamp_path()
+    path = path or _stamp_path()
+    if getattr(build, "WINDOWS_CONFIGURATION", "debug") == "release":
+        data["windows_release_fingerprint"] = windows_release_fingerprint()
     tmp = f"{path}.part-{os.getpid()}"
     try:
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
@@ -514,7 +540,7 @@ def is_ready():
                 f"aurora build fingerprint mismatch: {_stamp_path()} records "
                 f"{str(stamp.get('fingerprint'))[:12]}... (pin {stamp.get('pin')}, "
                 f"{len(stamp.get('patches') or [])} patch(es)) but the current pin + "
-                f"platform/gx/aurora-patches/ hash to {want[:12]}... -- the archives are "
+                f"compat/aurora/base/ hash to {want[:12]}... -- the archives are "
                 f"stale and must be rebuilt"
             ]
         structural = (verify_link_inputs("windows", build_module=build, items=items,
@@ -537,7 +563,7 @@ def is_ready():
 def _print_manual_recipe(missing):
     wrappers = _cmake_path(os.path.join(common.TOOLCHAIN_DIR, "zig-cc-wrappers"))
     aurora = _cmake_path(common.AURORA_DIR)
-    patches = _cmake_path(os.path.join(common.NATIVE_ROOT, "platform", "gx", "aurora-patches"))
+    patches = _cmake_path(os.path.join(common.NATIVE_ROOT, "compat", "aurora", "base"))
 
     def configure_recipe(build_dir, rmlui):
         args = _configure_args("cmake", build_dir, wrappers, rmlui)
@@ -726,7 +752,7 @@ def split_patch_sections(patch_text):
 
     A patch touching N files has N sections -- applying the whole diff to just
     the first one (as this helper used to) silently misapplies every multi-file
-    patch in platform/gx/aurora-patches/ (0012/0013/0014/0016/0017/0018 all
+    patch in compat/aurora/base/ (0012/0013/0014/0016/0017/0018 all
     touch 2-11 files). The per-section body starts at the first `@@` so the
     `diff --git`/`index`/`new file mode` preamble never reaches the hunk
     parser, which would otherwise take those lines for context."""
@@ -763,7 +789,7 @@ def split_patch_sections(patch_text):
         if first_hunk is None:
             continue  # mode-only/rename-only stanza: nothing to apply
         body = chunk[first_hunk:]
-        # Every patch in platform/gx/aurora-patches/ is a prose-wrapped diff:
+        # Every patch in compat/aurora/base/ is a prose-wrapped diff:
         # a "Why/Verified:" narrative surrounds the hunks. The leading prose is
         # already excluded (the body starts at the first `@@`); trim the
         # TRAILING prose too -- a hunk body line can only start with ' ', '-',

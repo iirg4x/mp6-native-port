@@ -1,0 +1,99 @@
+Render public offscreen color directly into its frame-owned snapshot; discard unconsumed depth.
+
+--- a/include/aurora/gfx.hpp
++++ b/include/aurora/gfx.hpp
+@@ -146,6 +146,8 @@
+ /// viewport/scissor. Subsequent draws target it until resolve_pass restores the
+ /// EFB. Nesting is unsupported: returns false (with a warning) outside an
+ /// active render pass or while any offscreen pass is already open.
++/// Color is frame-owned and exported without a copy when this pass is resolved
++/// directly. GXCreateFrameBuffer retains its separate reusable-target behavior.
+ bool create_pass(uint32_t width, uint32_t height);
+ 
+ /// True while an offscreen pass (create_pass or GXCreateFrameBuffer) is open.
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -236,6 +236,10 @@
+   // Full-target snapshots for the public resolve_pass API
+   wgpu::Texture snapshotColorDst;
+   wgpu::TextureView snapshotDepthDst;
++  // Public offscreen passes own a unique color destination for this frame.
++  // Export it directly instead of copying the completed attachment again.
++  bool colorSnapshotTarget = false;
++  bool colorSnapshotExported = false;
+   // Immutable snapshot inherited only by a loading continuation. Any draw or
+   // clear invalidates reuse; offscreen suspension preserves the EFB identity.
+   wgpu::TextureView unchangedDepthSnapshot;
+@@ -270,8 +274,8 @@
+   bool skipRenderPass = false;
+   std::vector<tex_palette_conv::ConvRequest> paletteConvs;
+ 
+-  // Something copies this pass's output after it ends: a GX resolve or resolve_pass snapshots.
+-  bool has_consumer() const { return resolveTarget || snapshotColorDst || snapshotDepthDst; }
++  // Something reads this pass's output: a GX copy, snapshot, or direct export.
++  bool has_consumer() const { return resolveTarget || snapshotColorDst || snapshotDepthDst || colorSnapshotExported; }
+   // The pass mutates its attachments: draws or pending clears.
+   bool has_content() const { return hasDraws || clearColor || clearDepth; }
+ };
+@@ -546,7 +550,8 @@
+     const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+     const wgpu::TextureDescriptor desc{
+         .label = "Pass Snapshot Color",
+-        .usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::TextureBinding,
++        .usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::CopySrc |
++                 wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::RenderAttachment,
+         .dimension = wgpu::TextureDimension::e2D,
+         .size = size,
+         .format = format,
+@@ -1272,6 +1277,14 @@
+   auto& offscreenPass = current_render_passes()[g_currentRenderPass];
+   offscreenPass.discardable = !offscreenPass.has_consumer();
+ 
++  // Offscreen depth is cleared on every reuse. Only a depth consumer needs a
++  // store; AO's color-only coverage export and ordinary shadow color copies do
++  // not. Never discard depth before a requested snapshot/peek/GX depth copy.
++  if (!offscreenPass.snapshotDepthDst && !offscreenPass.captureDepthSnapshot &&
++      (!offscreenPass.resolveTarget || !gx::is_depth_format(offscreenPass.resolveFormat))) {
++    offscreenPass.depthStoreOp = wgpu::StoreOp::Discard;
++  }
++
+   enqueue_pass(current_frame_packet(), g_recordingFrameSlot, g_currentRenderPass);
+ 
+   g_inOffscreen = false;
+@@ -1315,6 +1328,15 @@
+   }
+ 
+   begin_offscreen(width, height);
++  // Unlike GXCreateFrameBuffer's reusable target, a public pass exports an
++  // immutable frame-local image. Render into that image from the outset. Pool
++  // slots are unique within a frame and recycle only after ordered submission.
++  g_offscreenColor = acquire_pass_snapshot(width, height, true, false).color;
++  auto& pass = current_render_passes()[g_currentRenderPass];
++  pass.colorView = g_offscreenColor.view;
++  pass.copySourceTexture = g_offscreenColor.texture;
++  pass.copySourceView = g_offscreenColor.view;
++  pass.colorSnapshotTarget = true;
+   return true;
+ }
+ 
+@@ -1355,10 +1377,17 @@
+                           prevPass.unchangedDepthSnapshot;
+   if (reuseDepth) out.depth = prevPass.unchangedDepthSnapshot;
+   const bool copyDepth = wantDepth && !reuseDepth;
++  const bool directColor = desc.color && g_inOffscreen && prevPass.colorSnapshotTarget;
++  if (directColor) {
++    out.color = prevPass.copySourceView;
++    out.colorFormat = g_offscreenColor.format;
++    prevPass.colorSnapshotExported = true;
++  }
+   // Requesting no snapshots is a plain pass break (or offscreen close, discarding its output).
+-  if (desc.color || copyDepth) {
+-    auto& entry = acquire_pass_snapshot(width, height, desc.color, copyDepth);
+-    if (desc.color) {
++  const bool copyColor = desc.color && !directColor;
++  if (copyColor || copyDepth) {
++    auto& entry = acquire_pass_snapshot(width, height, copyColor, copyDepth);
++    if (copyColor) {
+       prevPass.snapshotColorDst = entry.color.texture;
+       out.color = entry.color.view;
+       out.colorFormat = entry.color.format;

@@ -13,7 +13,7 @@ always agree on where the read-only decomp checkout lives):
     <root>/port/mp6-native[-setup]/                       NATIVE_ROOT
     <root>/port/                                          PORT_ROOT
     <root>/port/toolchain/                                TOOLCHAIN_DIR
-    <root>/external_refs/repos/marioparty6/                DEFAULT_DECOMP_DIR
+    <root>/port/mp6-native[-setup]/build/deps/marioparty6/  DEFAULT_DECOMP_DIR
     <root>/external_refs/repos/aurora/                     AURORA_DIR
 """
 import ctypes
@@ -35,7 +35,7 @@ WORKSPACE_ROOT = os.path.dirname(PORT_ROOT)                    # the outer proje
 
 TOOLCHAIN_DIR = os.path.join(PORT_ROOT, "toolchain")
 DEFAULT_DECOMP_DIR = os.path.normpath(
-    os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6")
+    os.path.join(NATIVE_ROOT, "build", "deps", "marioparty6")
 )
 
 
@@ -45,7 +45,7 @@ def _workspace_path_override(name, default):
     Absolute values are used as-is. Relative values are deliberately rooted at
     NATIVE_ROOT rather than the caller's current directory, so setup.py,
     tools/build.py, and imported tests cannot silently select different trees.
-    Empty values retain the documented sibling checkout.
+    Empty values retain the documented port-owned dependency checkout.
     """
     value = os.environ.get(name, "").strip()
     if not value:

@@ -1,120 +1,59 @@
-# MP6 Native Port
+# Mario Party 6 Native Port
 
-A native PC (Windows) and Android port of the Mario Party 6 decompilation,
-running boot-to-menu as real host-native code -- no emulator involved.
-`game/` plus the `bootDll`, `selmenuDll`, `fileseldll`, and `mdseldll`
-overlays are compiled directly from the decompiled source (see
-[docs/DECOMP_DEPENDENCY.md](docs/DECOMP_DEPENDENCY.md)); the Dolphin SDK
-layer they call into (GX/OS/VI/PAD/DVD/CARD/MSM) is reimplemented on top of
-[Aurora](https://github.com/encounter/aurora), SDL3, and a small host-OS
-seam. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
-breakdown, or [docs/CODE_MAP.md](docs/CODE_MAP.md) for where everything
-lives in this repo.
+A native Windows and Android port using recovered Mario Party 6 code,
+Aurora, SDL3 and Dawn/WebGPU. No emulator is involved.
 
-## Get it
+Menus, audio, memory-card saves and Towering Treetop board gameplay run natively.
+Minigames are not available yet: the board skips their transition and continues
+to the next turn. Other incomplete overlays are not playable.
 
-The easiest way to play doesn't require building anything yourself. This
-repo's **web packager** (`web/`, served from GitHub Pages) runs entirely in
-your browser: point it at your own Mario Party 6 (USA) disc image, or a
-folder [Dolphin](https://dolphin-emu.org/) already extracted, and it
-combines your disc's game content with this project's prebuilt engine build
-into a folder (or, on browsers without the File System Access API, a single
-zip) you can run right away. Nothing about your disc leaves your machine —
-there's no upload, no server involved, just the File API reading your disc
-locally in the tab. On Android, skip the packager entirely — install the APK
-and import your disc's content on-device on first launch.
+## Build and play
 
-**Policy, stated plainly** (the same posture as other decompilation-based
-native ports, e.g. Ship of Harkinian): this project's GitHub Releases carry
-**content-free engine binaries only** — on Windows that's `mp6native.exe`
-plus its handful of DLLs and a small resource folder (fonts, UI
-stylesheets); on Android, a clean APK. Neither one contains any game
-asset -- not a byte of models, textures, audio, or text from the disc. The
-engine code itself is compiled from this project's decompiled/reimplemented
-source; that recompiled-code posture is exactly the Ship of Harkinian model
-named above, stated here plainly rather than papered over. **Game data is never distributed here, by
-this project, in any form, anywhere** — you need your own legally owned
-Mario Party 6 (USA) disc, and every install this project helps you produce
-(the web packager, the setup tool below, or the Android app's own import) is
-assembled locally, on your own machine, from that disc. Please don't rehost
-or redistribute the folder/zip/APK-content this produces — it contains
-copyrighted assets pulled from your disc, not this project's own work; see
-[docs/RELEASING.md](docs/RELEASING.md) for how release assets themselves are
-built and what they do and don't contain.
+You need your own Mario Party 6 (USA) disc image or extracted disc folder.
+This repository and its engine packages contain no game assets.
 
-## Quick start — build from your own disc
+For a configured Windows checkout, use the optimized gameplay build:
 
-**You supply your own Mario Party 6 (USA) disc. No game data is distributed
-here, ever, in any form.** (Prebuilt, content-free engine binaries are also
-available via [Get it](#get-it) above -- both paths converge on the same
-runnable-build-from-your-own-disc result; this section builds it from
-source instead.)
-
-**Recommended: the setup tool.** It checks prerequisites, fetches the
-toolchain and the decompilation, extracts the assets it needs from your disc
-locally, and builds a playable `dist/`:
-
-```
-setup.bat --disc "path\to\Mario Party 6 (USA).iso"
+```powershell
+python tools/build_windows_release.py
+python tools/build.py --configuration release
+build\release\mp6native.exe
 ```
 
-(or double-click `setup.bat` / run `python setup/setup.py`; add `--android` to
-also build the APK). Accepts `.iso` / `.rvz` / `.gcm` or an already-extracted
-folder. See [`setup/README.md`](setup/README.md) and
-[`docs/SETUP_TOOL.md`](docs/SETUP_TOOL.md).
+VSync off + Unlocked FPS uncaps rendering while keeping game logic at 60 Hz.
+**F10:** settings. **F9:** console. **F5/F8:** quick save/load.
+Save states require the same linked build; memory-card GCIs are durable saves.
 
-**Manual build**, if you already have the toolchain and decompilation set up
-yourself -- **Windows**, from this directory:
+Android includes a full GameCube touch controller. Open the gear > Touch Controls
+to resize, fade, hide or move controls. See [Touch controls](docs/SETTINGS.md#android-touch-controller).
 
-```
-python tools/build.py                    # windowed build -> build/mp6native.exe
-build\mp6native.exe                       # run it (opens the launcher menu)
-```
+First-time setup: `setup.bat --disc "path\to\Mario Party 6 (USA).iso"`.
+See [Building](docs/BUILDING.md) for prerequisites, Port-local asset overrides,
+Debug/headless builds and Android. Setup can provision dependencies; ordinary
+builds consume the pinned decomp checkout read-only. Read
+[Setup](docs/SETUP_TOOL.md) before running it in a shared workspace.
 
-**Android** (needs the NDK and a device or emulator):
+## Repository map
 
-```
-python tools/build.py --target aarch64-android --windowed
-cd platforms/android && gradlew.bat assembleDebug
-```
+| Directory | Purpose |
+| --- | --- |
+| `src/` | Native runtime, graphics/UI, audio, host OS and board support |
+| `include/` | Port APIs and game compatibility headers |
+| `compat/` | Active dependency adaptations, not historical patch proposals |
+| `packaging/` | Android app and browser-based local disc packager |
+| `res/` | Launcher stylesheets and licensed fonts |
+| `tools/`, `setup/` | Build, validation, release and setup commands |
+| `tests/` | Runtime and repository-contract regressions |
+| `docs/` | Current instructions and subsystem references |
+| `build/` | Ignored binaries, generated files, local assets and diagnostics |
 
-Install the resulting APK and launch it; first run walks through picking the
-game's disc files on-device. Either path: see
-[docs/BUILDING.md](docs/BUILDING.md) for prerequisites, the headless/CI
-build rows, and troubleshooting.
+Start with [Code map](docs/CODE_MAP.md), [Architecture](docs/ARCHITECTURE.md),
+[Testing](docs/TESTING.md), or [Settings](docs/SETTINGS.md).
+Git history holds retired scaffolding; it does not belong beside active source.
 
-## Status
-
-Boots to a fully navigable title screen, file-select, and mode-select, with
-real audio (streamed music and sound effects) and working save/load against
-Dolphin-compatible memory card images. Windows ships a pre-boot settings
-launcher; Android runs the same game logic touch-driven on device. Gameplay
-past the menu (the board and minigames) is out of scope for now -- see
-"Non-goals" below.
-
-## Launcher and settings
-
-Interactive Windows launches open a pre-boot menu (window mode/size/aspect,
-volume, tick rate, content-root override) before handing off to the game;
-settings persist to a portable `mp6_config.json` next to the executable.
-Any invocation that looks like an automated run (a tick-budget argument, an
-input script, or `MP6_AUTO_START_TICKS`) skips the launcher entirely and
-boots straight to the game -- see docs/TESTING.md's automation contract.
-
-## Save compatibility
-
-Saves are ordinary Dolphin memory-card images under `saves/USA/Card A/`,
-byte-compatible with real hardware and with Dolphin itself -- a card written
-by this port loads in Dolphin and vice versa. See docs/ARCHITECTURE.md's
-"Save system" section for how the endian marshal keeps that true.
-
-## Non-goals (for now)
-
-Gameplay past the menu is explicitly out of scope. Board gameplay depends on
-`board/` and the minigame RELs, and native porting of that code is gated on
-those parts of the decompilation reaching the same "100% recovered" standard
-already met by game/bootDll/selmenuDll/fileseldll/mdseldll. Until that
-dependency is satisfied, this repository's scope stops at the menu.
+The [browser packager](packaging/web/) combines engine binaries with files read
+locally from your disc. Android can import content on-device. Do not redistribute
+extracted game files or the resulting content folder. See [Releasing](docs/RELEASING.md).
 
 ## Legal
 
@@ -126,13 +65,14 @@ sibling matching (decompilation) repository -- see
 [docs/DECOMP_DEPENDENCY.md](docs/DECOMP_DEPENDENCY.md) -- and is not
 vendored, copied, or redistributed here.
 
-The pre-boot launcher UI (`platform/gx/ui/`, `res/rml/`) is adapted from the
+The pre-boot launcher UI (`src/gx/ui/`, `res/rml/`) is adapted from the
 unlicensed `mariopartyrd/partyboard` project; see
 [docs/PARTYBOARD_PROVENANCE.md](docs/PARTYBOARD_PROVENANCE.md) for the full
 provenance ledger, including exactly which files were copied, from which
-commit, and their licensing status. **That project has no license**, which
-is the one open licensing question hanging over this repository -- read the
-provenance doc before republishing or redistributing.
+commit, and their licensing status. On 2026-09-12, the maintainer confirmed
+permission to redistribute both the adapted launcher UI and N64 Party font
+with this port. This confirmation does not constitute a public upstream
+license; the original credits and provenance notice are retained.
 
 ## Credits
 

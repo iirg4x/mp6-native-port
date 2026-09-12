@@ -1,0 +1,9 @@
+{
+  "name": "mp6-web-packager-internal",
+  "private": true,
+  "type": "module",
+  "description": "Marker only -- lets Node load packaging/web/**/*.js as ES modules for `node packaging/web/test/run.js`. Not a build step: the site itself is served as plain static files and browsers never read this.",
+  "scripts": {
+    "test": "node test/run.js"
+  }
+}

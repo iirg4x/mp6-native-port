@@ -1,0 +1,241 @@
+--- a/src/REL/mdseldll/mdsel.c
++++ b/src/REL/mdseldll/mdsel.c
+@@ -16,0 +17 @@
++#include "mp6_widescreen.h" /* widescreen support */
+@@ -521,2 +522,14 @@
+-    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f, 10000.0f, 1.2f);
+-    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
++    /* Mode-select's own 3D camera has the same native-640, left-anchored
++     * framing as the other overlay screens, left native to match the
++     * reference widescreen hack's own scope (it never edits a .rel file),
++     * which leaves a black band on the right. Widened the same way as
++     * hsfman.c's defCamera/opening.c's camera: FOV aspect x scale_factor(),
++     * viewport width -> live render width. No-op when widescreen is
++     * disabled. */
++    /* Replaces the two calls above with one that also registers this
++     * camera so it re-derives live on a later window resize -- fn_1_1734
++     * only runs once per scene entry; its own per-frame companion
++     * (fn_1_1370, the camera-position updater below) never touches
++     * Perspective/ViewportSet, so this camera stayed frozen at scene-load
++     * size without this. Same literals, same effect on this call. */
++    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
+@@ -773,0 +787,10 @@
++    /* fn_1_2A78 is the board-preview transition: layer-15 hook (installed
++     * by fn_1_30FC) that re-photographs the whole frame into lbl_1_bss_28
++     * every tick and redraws it a touch larger and a touch more rotated,
++     * so picking a board dissolves the rotating sky into the board preview
++     * as a slowly turning, fading stack of frames. Every coordinate in it
++     * is hardcoded to the native 640-wide frame -- the ortho, the pivot,
++     * the quad and the capture -- so the whole effect was pinned to the
++     * left 640 of a wider one. These two carry the live frame's width. */
++    float mp6MdselW;
++    float mp6MdselMargin;
+@@ -776 +799,11 @@
+-        MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f, 10.0f);
++        /* MTXOrtho(m, top, bottom, left, right, near, far): the right edge
++         * is the frame width, so this hook's own 2D space has to span the
++         * live render width or everything below is laid out in a 640-wide
++         * box drawn into a wider viewport. mp6MdselMargin keeps the quad's
++         * own overscan (the native +-50) at the SAME proportion of frame
++         * width it had at 640, so the effect's slight zoom and its rotation
++         * headroom both stay exactly what retail authored. Byte-identical
++         * (640.0f / 50.0f) when widescreen is disabled. */
++        mp6MdselW = (float)mp6_widescreen_render_width();
++        mp6MdselMargin = 50.0f * (mp6MdselW / 640.0f);
++        MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6MdselW, 0.0f, 10.0f);
+@@ -779 +812,6 @@
+-            &texObj, lbl_1_bss_28, 640, 480, GX_TF_RGBA8, GX_CLAMP,
++            /* The declared size of a copy-destination texture is only a
++             * lookup key under this port (aurora resolves GXCopyTex
++             * GPU-side and binds it by destination POINTER), but it is kept
++             * truthful here so the two sides of this effect never disagree
++             * about how wide the photograph is. */
++            &texObj, lbl_1_bss_28, (u16)mp6_widescreen_render_width(), 480, GX_TF_RGBA8, GX_CLAMP,
+@@ -819 +857 @@
+-        MTXTrans(trans, -320.0f, -240.0f, 0.0f);
++        MTXTrans(trans, -0.5f * mp6MdselW, -240.0f, 0.0f);
+@@ -822 +860,4 @@
+-        mtxTransCat(model, 320.0f, 240.0f, 0.0f);
++        /* Translate-to-origin / rotate / translate-back: the pivot is the
++         * frame's centre, so it moves with the frame. Left at 320 the whole
++         * stack would spin about a point left of centre. */
++        mtxTransCat(model, 0.5f * mp6MdselW, 240.0f, 0.0f);
+@@ -827 +868 @@
+-        GXPosition3f32(-50.0f, -50.0f, 0.0f);
++        GXPosition3f32(-mp6MdselMargin, -50.0f, 0.0f);
+@@ -830 +871 @@
+-        GXPosition3f32(690.0f, -50.0f, 0.0f);
++        GXPosition3f32(mp6MdselW + mp6MdselMargin, -50.0f, 0.0f);
+@@ -833 +874 @@
+-        GXPosition3f32(690.0f, 530.0f, 0.0f);
++        GXPosition3f32(mp6MdselW + mp6MdselMargin, 530.0f, 0.0f);
+@@ -836 +877 @@
+-        GXPosition3f32(-50.0f, 530.0f, 0.0f);
++        GXPosition3f32(-mp6MdselMargin, 530.0f, 0.0f);
+@@ -838,0 +880,4 @@
++        /* Closes the GXBegin(GX_QUADS, 4) twelve lines up; anchors to the
++         * last of its four position/colour/texcoord triples, before the
++         * Hu3DFbCopyExec below. Empty inline on hardware (GXVert.h). */
++        GXEnd();
+@@ -842 +887,7 @@
+-                0, 0, 640, 480, GX_TF_RGBA8, GX_FALSE, lbl_1_bss_28);
++                /* The photograph this effect feeds back on itself next tick.
++                 * Captured at the native 640 it held only the frame's left
++                 * 640 while the quad above spans the whole width, so the
++                 * feedback stack pumped a stretched copy of the left portion
++                 * across the frame and never showed the right of the board
++                 * preview at all. 640 (byte-identical) when disabled. */
++                0, 0, mp6_widescreen_render_width(), 480, GX_TF_RGBA8, GX_FALSE, lbl_1_bss_28);
+@@ -1352 +1403,7 @@
+-        pan = 64.0f + (screenPos.x * panRange);
++        /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
++         * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
++         * clamp too late. `fctiwz` saturation via the shared helper; see
++         * include/mp6_hwcast.h. The (s16) that follows it is the
++         * ordinary, well-defined narrowing hardware also performed.
++         */
++        pan = (s16)MP6_FCTIWZ_S32(64.0f + (screenPos.x * panRange));
+@@ -1378 +1434,0 @@
+-            i == 0;
+@@ -1540,0 +1597,19 @@
++/* Matches every decoration sub-object that must REPOSITION (never resize)
++ * alongside "sora"'s own widening -- all 6 "cloud*" and 7 "star*" objects
++ * (name-prefix match; confirmed against the model's full per-object
++ * census that no other names share either prefix). Split into two
++ * predicates (clouds vs. stars) so the call site can bias each
++ * independently: an on-device report found day-side clouds still sitting
++ * too far right of the stretched checkered split, not spread evenly
++ * across the widened day region, while the night-side stars looked
++ * correct -- one shared predicate could only apply one amount to both. */
++static int mp6_mdsel_sky_is_cloud(const char *name)
++{
++    return strncmp(name, "cloud", 5) == 0;
++}
++
++static int mp6_mdsel_sky_is_star(const char *name)
++{
++    return strncmp(name, "star", 4) == 0;
++}
++
+@@ -1550,0 +1626,103 @@
++    }
++    /* Mode-select's plaza scene is 3 models from one data block, the same
++     * shape as mdpartydll's own terrain/floor/props trio but different
++     * roles: mdlId[0] (ground, mountains, islands, bridges, hedges/rope,
++     * flowers) is the real 3D island terrain the plaza sits on and stays
++     * untouched, same as mdpartydll's own floor precedent. mdlId[2]
++     * ("sora" sky panel + 6 "cloud*" + 7 "star*" decorations) is the
++     * checkered day/night sky backdrop, confirmed GX_CLAMP, so it gets the
++     * scale-about-center mechanism.
++     *
++     * mdlId[1] ("sea"/"sea1", 2 geometrically-identical overlapping wave
++     * layers) is attribute-flagged GX_REPEAT, which first read as calling
++     * for the mesh+UV edge-extrude mechanism. Re-investigated after an
++     * on-device report that the water looked wrong at wide aspect (a raw
++     * vertex+ST dump, not just the wrap-mode flag): every one of this
++     * mesh's own authored UV coordinates stays inside plain [0,1] -- the
++     * texture is unwrapped once across the surface and never actually
++     * re-tiled, so the REPEAT flag is set but not functionally exercised
++     * by this asset's own UV data. Scaling ST coordinates that were meant
++     * to stay fixed would shift which part of the texture lands on which
++     * vertex, so switched to a whole-piece XZ scale-about-center (the same
++     * function used for mdpartydll's own flat, near-zero-Y-extent floor)
++     * that never touches vertex or ST data at all -- both wave layers
++     * share identical geometry/transform, so growing the model's shared
++     * top-level transform keeps them perfectly overlapping, exactly as
++     * natively. This directly fixed the reported corner-clipping.
++     *
++     * Foam is NOT restored by this change -- investigated, not guessed: a
++     * fully native capture (widescreen disabled entirely) of this same
++     * scene also shows no foam decal at the shoreline, compared against an
++     * older port-native reference screenshot that shows it clearly. Since
++     * the absence reproduces with widescreen fully off, it is a
++     * pre-existing rendering gap independent of which extrude mechanism
++     * this call site uses (a plausible lead for whoever picks it up next:
++     * the two wave layers are exactly coincident geometry, so a Z-test/
++     * draw-order occlusion or an unbound animated texture swap are both
++     * plausible causes) -- not root-caused further here.
++     */
++    mp6_widescreen_extrude_model_xz(obj->mdlId[1]);
++    /* mdlId[2] mixes the checkered sky plane ("sora") with 6 "cloud*" and 7
++     * "star*" decoration sub-objects in one model. Per-face material
++     * lookup confirmed "sora" has its own dedicated texture while the
++     * clouds/stars share a different, unrelated decoration atlas -- they
++     * are genuinely separate sub-objects layered in front of the sky
++     * plane, not baked into it. Grows only "sora"'s own raw vertex data
++     * horizontally about the model's shared bbox center (selective
++     * stretch); every cloud/star sub-object, and the model's own top-level
++     * pos/scale, are left untouched. The earlier whole-model isotropic
++     * scale also scaled Y (and Z), shifting the sky's own bottom edge
++     * (where it meets the water/terrain horizon) vertically -- a plausible
++     * contributor to a previously reported water-line seam; the selective
++     * mechanism touches only local X, so Y/Z framing is now byte-identical
++     * to native at every window shape.
++     *
++     * Leaving clouds/stars at a fixed native position (the first cut of
++     * this fix) left them visibly mismatched once "sora"'s own checkered
++     * boundary widened out from center without them -- a day-side cloud
++     * could end up over the now-wider night half, and vice versa for a
++     * night-side star. Fixed with a position-only reposition: each matched
++     * decoration's position (never its vertex data) scales outward from
++     * the same shared bbox center by the same factor "sora" itself grows
++     * by, so a decoration that started on one side of the boundary stays
++     * on that side as the boundary widens -- every cloud/star stays
++     * byte-identical in size/shape to native, only relocated. Clouds and
++     * stars use different bias factors (stars keep the original 1:1
++     * formula; clouds move twice as far) because clouds still looked
++     * bunched up near the day/night boundary at the 1:1 rate.
++     *
++     * A repositioning bug was caught and fixed before landing: an early
++     * version let each of the two reposition calls compute its own shared
++     * center independently, but that center reads every matched-or-not
++     * object's current position, so the star call's own writes were
++     * visible to the cloud call's later, separate recomputation -- the two
++     * calls silently used different centers (measured ~550 units apart),
++     * enough to flip the sign of the correction for the cloud sitting
++     * closest to center. Fixed by snapshotting the center once, right
++     * after "sora"'s own widen, and passing that same frozen value to both
++     * calls.
++     *
++     * The selective horizontal STRETCH of "sora"'s own vertices was later
++     * replaced by a periodic-tile extension instead: stretching visibly
++     * widened the hand-painted checker pattern, so now "sora"'s own
++     * vertices stay pixel-native and border strips are appended into its
++     * buffers that continue the checker outward at native scale, sampling
++     * period-aligned windows of the same texture (measured empirically:
++     * day 93px / night 95px of the 512-wide texture) so the tile seam is
++     * invisible. Reach matches the old stretch's own extent exactly, so
++     * this is a visual swap, not a size change.
++     *
++     * Since "sora" no longer widens, the shared center the star/cloud
++     * repositions consume can no longer be read directly off its live
++     * bbox after the (now nonexistent) stretch -- it's reproduced in
++     * closed form instead (mp6_widescreen_model_center_x_widened()),
++     * verified bit-equal against the old stretch-then-read computation at
++     * several k values, so clouds and stars still land pixel-identically
++     * to the original shipped build. That snapshot is taken FIRST, before
++     * the tile registration extends sora's own live bbox, since a later
++     * bbox read would see the extended (not the original) extent. */
++    {
++        float skyCenterX = mp6_widescreen_model_center_x_widened(obj->mdlId[2], "sora");
++        mp6_widescreen_extrude_model_selective_reposition_x(obj->mdlId[2], mp6_mdsel_sky_is_star, 1.0f, skyCenterX);
++        mp6_widescreen_extrude_model_reposition_x_clamped(obj->mdlId[2], mp6_mdsel_sky_is_cloud, 2.0f, skyCenterX, skyCenterX + 350.0f);
++        mp6_widescreen_extend_tiles(obj->mdlId[2], "sora", 3000.0f, 512, 93, 95, 4.0f);
+@@ -2724 +2902,7 @@
+-    pan = 64.0f + (16.0f * screenPos.x);
++    /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
++     * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
++     * clamp too late. `fctiwz` saturation via the shared helper; see
++     * include/mp6_hwcast.h. The (s16) that follows it is the
++     * ordinary, well-defined narrowing hardware also performed.
++     */
++    pan = (s16)MP6_FCTIWZ_S32(64.0f + (16.0f * screenPos.x));
+@@ -2745 +2929,7 @@
+-        pan = 64.0f + (screenPos.x * panRange);
++        /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
++         * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
++         * clamp too late. `fctiwz` saturation via the shared helper; see
++         * include/mp6_hwcast.h. The (s16) that follows it is the
++         * ordinary, well-defined narrowing hardware also performed.
++         */
++        pan = (s16)MP6_FCTIWZ_S32(64.0f + (screenPos.x * panRange));

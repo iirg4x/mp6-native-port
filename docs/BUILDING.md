@@ -4,8 +4,8 @@ Everything is driven by `tools/build.py` (no CMake for the game itself;
 the top-level `CMakeLists.txt` is a thin historical shim). The compiler
 is the workspace's own zig toolchain (`port/toolchain/`) for Windows and
 the Android NDK's clang for Android. Prerequisites in all cases: the
-sibling decomp checkout (see `DECOMP_DEPENDENCY.md`) and the extracted
-disc tree (`external_refs/repos/marioparty6/orig/GP6E01/{sys,files}`,
+port-owned decomp checkout (`build/deps/marioparty6`; see
+`DECOMP_DEPENDENCY.md`) and the extracted disc tree (`sys/` and `files/`,
 pulled from the user's own disc — never checked in).
 
 To keep generated assets outside the decomp checkout, the build accepts
@@ -30,6 +30,37 @@ build outputs. The original ISO is never modified or checked in.
 
 ## Windows
 
+For normal play, use the optimized profile. The historical default below is
+an unoptimized debug build, including its graphics backend.
+
+```
+# Snapshot the verified patched Aurora setup and build it entirely inside Port.
+python tools/build_windows_release.py -j 6
+python tools/build.py --configuration release -j 6
+build\release\mp6native.exe
+```
+
+Release uses `-O2 -fno-strict-aliasing` (no fast-math), retains PDB debug
+information, and selects Immediate presentation when VSync is off and the
+surface supports it. It has separate `build/obj-release` objects and
+`build/aurora-release` artifacts, with a release-specific provenance stamp.
+The optimized headless executable goes into `build/release-headless/` so its
+Debug-setup zlib runtime cannot overwrite the windowed release's optimized DLL.
+The decomp checkout and shared Aurora checkout are only read. The release
+backend command requires an already verified Debug Aurora setup and reuses
+its fetched source dependencies; it does not download or modify the disc.
+The Port-local asset overrides above also apply to this profile. Release
+`--clean` clears only `build/obj-release`, preserving the prepared backend,
+disc cache, settings, and saves; the legacy Debug `--clean` still deletes
+the entire `build/` tree.
+
+Settings and memory-card saves may be copied to `build/release/` for portable
+play. Save **states** cannot cross builds; retain the original executable
+with its state instead of bypassing the compatibility check. With Unlocked
+FPS enabled and VSync off, presentation is uncapped while gameplay remains
+60 Hz. Transient render-queue pressure is retried against the same absolute
+tick deadline, without changing game speed.
+
 ```
 # windowed (the deliverable) -> build/mp6native.exe
 python tools/build.py
@@ -48,7 +79,7 @@ lever: win32-fiber coroutine backend instead of the default arena-backed
 minicoro; separate `_corofib`-suffixed outputs).
 
 The build pipeline stages everything under `build/`: `patched-src/` (the
-decomp sources with `patches/decomp/` applied — the decomp checkout is
+decomp sources with `compat/decomp/` applied — the decomp checkout is
 read-only), `patched-include/` (shadow ABI headers: `GXTlutObj`,
 `PADStatus`, the 3-arg `GXSetArray` pin), and `msl_override/` (below).
 The link is fixed at image base `0x10000000` with ASLR off — several
@@ -69,7 +100,7 @@ the generated files embed absolute toolchain paths, which is why each
 target builds its own set.)
 
 **SDK shim generation (occasional, not part of every build):**
-`platform/null/shims_generated.c` / `shims_generated_aurora.c` (one
+`src/null/shims_generated.c` / `shims_generated_aurora.c` (one
 logging no-op per SDK symbol nothing else provides) are checked-in
 generated output, not produced by `build.py` itself. Re-run
 `python tools/gen_shims.py` after adding a new SDK call site or updating
@@ -79,14 +110,14 @@ prototype (copying the parameter list verbatim so the shim's signature
 always matches), skips symbols a macro resolves away or that expand to
 pure preprocessor arithmetic with no call at all, and excludes any
 symbol in its curated manual-implementation list (those get real
-behavior in `platform/null/shims_manual.c`, `platform/os/arena.c`, etc.
+behavior in `src/null/shims_manual.c`, `src/os/arena.c`, etc.
 instead of a stub).
 
 ## Aurora build trees (one-time per Aurora update)
 
 The windowed build links prebuilt Aurora archives from
 `external_refs/repos/aurora`, with this port's patch series
-(`platform/gx/aurora-patches/`) applied on top. Two trees:
+(`compat/aurora/base/`) applied on top. Two trees:
 
 - `aurora/build/` — plain Aurora (gx/vi/pad/mtx/si/card + Dawn/SDL3).
 - `aurora/build-rmlui/` — the same, built with RmlUi enabled; the
@@ -110,10 +141,10 @@ python tools/build.py --target aarch64-android
 python tools/build.py --target aarch64-android --windowed
 
 # APK
-cd platforms/android && gradlew.bat assembleDebug
+cd packaging/android && gradlew.bat assembleDebug
 ```
 
-Needs an NDK (path resolved via `platforms/android/local.properties` —
+Needs an NDK (path resolved via `packaging/android/local.properties` —
 create it with `sdk.dir=...` if gradle can't find your SDK). Asset
 staging on device: the headless smoke layout lives at
 `/data/local/tmp/mp6/GP6E01/...` (build.py prints the exact `adb push`
@@ -126,7 +157,7 @@ android gate is `tools/gate_android.py` (see TESTING.md).
 ## Troubleshooting
 
 - **`local.properties` missing / gradle can't find SDK** — create
-  `platforms/android/local.properties` with `sdk.dir=C:\\...\\Android\\Sdk`.
+  `packaging/android/local.properties` with `sdk.dir=C:\\...\\Android\\Sdk`.
 - **CMake/configure mangles `-D` paths under MSYS2** — export
   `MSYS2_ARG_CONV_EXCL="*"` for the configure step.
 - **"couldn't find the real <header>" warnings** — the MSL override

@@ -1,0 +1,62 @@
+Expose a distinct temporary output to the vectorizer; retain arithmetic and partial-overlap behavior.
+
+--- a/lib/dolphin/mtx/mtx.c
++++ b/lib/dolphin/mtx/mtx.c
+@@ -2,6 +2,8 @@
+ 
+ #include <assert.h>
+ #include <math.h>
++#include <stdint.h>
++#include <string.h>
+ 
+ void C_MTXIdentity(Mtx m) {
+   assert(m && "MtxIdentity():  NULL Mtx 'm' ");
+@@ -38,7 +40,7 @@
+   }
+ }
+ 
+-void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
++static inline void mtx_concat_scalar(const Mtx a, const Mtx b, Mtx ab) {
+   Mtx mTmp;
+   MtxPtr m;
+ 
+@@ -70,6 +72,39 @@
+   if (m == mTmp) {
+     C_MTXCopy(mTmp, ab);
+   }
++}
++
++void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
++#if defined(MP6_EXPERIMENT_VECTOR_CONCAT) && (defined(__GNUC__) || defined(__clang__))
++  const uintptr_t out = (uintptr_t)ab;
++  const uintptr_t left = (uintptr_t)a;
++  const uintptr_t right = (uintptr_t)b;
++  // Preserve the old sequential writes for unusual partially overlapping
++  // matrices. Exact in-place aliases use the distinct temporary below.
++  if ((out != left && (out - left < sizeof(Mtx) || left - out < sizeof(Mtx))) ||
++      (out != right && (out - right < sizeof(Mtx) || right - out < sizeof(Mtx)))) {
++    mtx_concat_scalar(a, b, ab);
++    return;
++  }
++  // Evaluate independent columns in parallel, with unaligned-safe loads.
++  // Translation retains its different expression (no leading zero addition).
++  typedef float Columns __attribute__((vector_size(16)));
++  Columns b0, b1, b2;
++  memcpy(&b0, b[0], sizeof(b0));
++  memcpy(&b1, b[1], sizeof(b1));
++  memcpy(&b2, b[2], sizeof(b2));
++  Mtx result;
++  for (unsigned row = 0; row < 3; ++row) {
++    Columns value = (Columns){0, 0, 0, 0} + a[row][2] * b2 +
++                    (a[row][0] * b0 + a[row][1] * b1);
++    value[3] = a[row][3] + (a[row][2] * b[2][3] +
++                            (a[row][0] * b[0][3] + a[row][1] * b[1][3]));
++    memcpy(result[row], &value, sizeof(value));
++  }
++  C_MTXCopy(result, ab);
++#else
++  mtx_concat_scalar(a, b, ab);
++#endif
+ }
+ 
+ void C_MTXConcatArray(const Mtx a, const Mtx* srcBase, Mtx* dstBase, u32 count) {

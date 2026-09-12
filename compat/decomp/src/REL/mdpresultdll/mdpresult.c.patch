@@ -1,0 +1,22 @@
+--- a/src/REL/mdpresultdll/mdpresult.c
++++ b/src/REL/mdpresultdll/mdpresult.c
+@@ -0,0 +1 @@
++#include "mp6_widescreen.h"
+@@ -597,5 +598,3 @@
+-    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f,
+-        10000.0f, 1.2f);
+-    Hu3DCameraViewportSet(1, 0.0f, 0.0f,
+-        640.0f, 480.0f, 0.0f,
+-        1.0f);
++    /* Same live Hor+ camera registration as Party Mode. */
++    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f,
++        1.2f, 480.0f);
+@@ -1485,0 +1486,5 @@
++    /* Extend only the outer ring of the authored 5x5 floor grid.
++     * Continue the theater border separately; center props stay native. */
++    mp6_widescreen_extrude_model_border_xz(obj->mdlId[0], "yuka");
++    mp6_widescreen_extend_results_set(obj->mdlId[0]);
++
+@@ -6184,0 +6185,2 @@
++                /* Native GX submission closes explicitly; hardware GXEnd is empty. */
++                GXEnd();

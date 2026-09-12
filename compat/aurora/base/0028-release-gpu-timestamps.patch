@@ -1,0 +1,396 @@
+Release GPU pass timestamps and a single mobile presentation pass.
+
+--- a/lib/webgpu/gpu_prof.cpp
++++ b/lib/webgpu/gpu_prof.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "../internal.hpp"
+ #include "gpu.hpp"
++#include <aurora/aurora.h>
+ 
+ #include <tracy/Tracy.hpp>
+ 
+@@ -460,15 +461,269 @@
+ 
+ #else
+ 
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <cstring>
++#include <memory>
++#include <mutex>
++#include <aurora/aurora.h>
++
+ namespace aurora::webgpu::gpu_prof {
+-void initialize() {}
+-void shutdown() {}
+-void frame_begin(const wgpu::CommandEncoder&) {}
+-void frame_end(const wgpu::CommandEncoder&) {}
+-void after_submit() {}
+-const wgpu::PassTimestampWrites* pass_writes(std::string_view) { return nullptr; }
+-Zone::Zone(const wgpu::CommandEncoder&, std::string_view) {}
+-Zone::~Zone() = default;
++namespace {
++// All GPU objects/recording state belong to the render worker. Only requests
++// and the published value snapshot cross threads. Never wait for readback.
++constexpr uint32_t MaxPasses = 256, QueryCount = MaxPasses * 2;
++constexpr uint64_t BufferSize = QueryCount * sizeof(uint64_t);
++constexpr size_t RingDepth = 4, HistorySize = 120;
++enum State { Pending, Mapped, Failed };
++struct Completion { std::atomic<int> state{Pending}; };
++struct Slot {
++  wgpu::QuerySet queries;
++  wgpu::Buffer resolve, readback;
++  std::shared_ptr<Completion> completion;
++  std::array<std::array<char, 64>, MaxPasses> names{};
++  uint32_t count = 0;
++  uint64_t generation = 0;
++  bool overflow = false;
++};
++struct Sample {
++  double span = 0, between = 0;
++  std::array<double, AURORA_GPU_STAT_ROWS> rows{};
++};
++std::array<Slot, RingDepth> slots;
++Slot* recording = nullptr;
++Slot* submitted = nullptr;
++std::atomic<uint64_t> request{0}; // bit 0 = enabled, upper bits = generation
++uint64_t generation = 0;
++std::atomic<bool> supported{false};
++std::atomic<bool> diagnostic{false};
++uint32_t diagnosticFrames = 0;
++std::mutex publishMutex;
++AuroraGpuStats published{};
++uint64_t publishedGeneration = 0;
++std::array<Sample, HistorySize> history{};
++std::array<std::array<char,64>, AURORA_GPU_STAT_ROWS> names{};
++uint32_t samples = 0, cursor = 0, nameCount = 0, dropped = 0;
++bool mapFailed = false;
++
++void reset_history(uint64_t current) {
++  generation = current;
++  samples = cursor = nameCount = dropped = 0;
++  mapFailed = false;
++  history = {};
++  names = {};
++}
++uint32_t row_for(const char* name) {
++  for (uint32_t i=0;i<nameCount;++i)
++    if (std::strcmp(names[i].data(),name)==0) return i;
++  if (nameCount < AURORA_GPU_STAT_ROWS-1) {
++    std::strncpy(names[nameCount].data(),name,63);
++    return nameCount++;
++  }
++  std::strcpy(names[AURORA_GPU_STAT_ROWS-1].data(),"Other passes");
++  nameCount = AURORA_GPU_STAT_ROWS;
++  return AURORA_GPU_STAT_ROWS-1;
++}
++void publish() {
++  AuroraGpuStats out{};
++  out.status = mapFailed ? 3 : (samples ? 2 : 1);
++  out.sampleCount = samples;
++  out.rowCount = nameCount;
++  out.droppedFrames = dropped;
++  for (uint32_t i=0;i<nameCount;++i) std::memcpy(out.rows[i].name,names[i].data(),64);
++  for (uint32_t j=0;j<samples;++j) {
++    const auto& s=history[j];
++    out.spanAverageMs += s.span;
++    out.spanMaxMs = std::max(out.spanMaxMs,s.span);
++    out.betweenAverageMs += s.between;
++    out.betweenMaxMs = std::max(out.betweenMaxMs,s.between);
++    for (uint32_t i=0;i<nameCount;++i) {
++      out.rows[i].averageMs += s.rows[i];
++      out.rows[i].maxMs = std::max(out.rows[i].maxMs,s.rows[i]);
++    }
++  }
++  if (samples) {
++    out.spanAverageMs /= samples;
++    out.betweenAverageMs /= samples;
++    for (uint32_t i=0;i<nameCount;++i) out.rows[i].averageMs /= samples;
++  }
++  std::sort(out.rows,out.rows+nameCount,[](const auto& a,const auto& b) {
++    return a.averageMs > b.averageMs;
++  });
++  std::lock_guard lock(publishMutex);
++  published=out;
++  publishedGeneration=generation;
++}
++void consume(Slot& slot) {
++  const auto* timestamps=static_cast<const uint64_t*>(slot.readback.GetConstMappedRange(0,BufferSize));
++  if (!timestamps || !slot.count || slot.overflow) { ++dropped; return; }
++  struct Interval { uint64_t begin,end; };
++  std::array<Interval,MaxPasses> intervals{};
++  // Reject incomplete/reset/invalid query results as a frame, never as zero ms.
++  for (uint32_t i=0;i<slot.count;++i) {
++    uint64_t a=timestamps[2*i], b=timestamps[2*i+1];
++    if (!a || b<a || b-a>5'000'000'000ULL) { ++dropped; return; }
++    intervals[i]={a,b};
++  }
++  Sample sample;
++  for (uint32_t i=0;i<slot.count;++i)
++    sample.rows[row_for(slot.names[i].data())] += (intervals[i].end-intervals[i].begin)*1e-6;
++  std::sort(intervals.begin(),intervals.begin()+slot.count,[](auto a,auto b){return a.begin<b.begin;});
++  uint64_t first=intervals[0].begin, end=first, covered=0;
++  for (uint32_t i=0;i<slot.count;++i) {
++    auto interval=intervals[i];
++    if (interval.end>end) {
++      covered += interval.end-std::max(end,interval.begin);
++      end=interval.end;
++    }
++  }
++  if (end-first>5'000'000'000ULL) { ++dropped; return; }
++  sample.span=(end-first)*1e-6;
++  sample.between=(end-first-covered)*1e-6;
++  history[cursor]=sample;
++  cursor=(cursor+1)%HistorySize;
++  samples=std::min<uint32_t>(samples+1,HistorySize);
++  mapFailed=false;
++  if (diagnostic.load() && ++diagnosticFrames % HistorySize == 0) {
++    std::printf("[MP6-GPU] span=%.3f between=%.3f ms passes=%u dropped=%u\n",
++                sample.span,sample.between,slot.count,dropped);
++    for (uint32_t i=0;i<nameCount;++i)
++      std::printf("[MP6-GPU] %s=%.3f ms\n",names[i].data(),sample.rows[i]);
++    std::fflush(stdout);
++  }
++}
++void drain() {
++  for (auto& slot:slots) {
++    if (!slot.completion) continue;
++    const int state=slot.completion->state.load(std::memory_order_acquire);
++    if (state==Pending) continue;
++    if (state==Mapped) {
++      if (slot.generation==generation && (generation&1)) consume(slot);
++      slot.readback.Unmap();
++    } else if (slot.generation==generation) { ++dropped; mapFailed=true; }
++    slot.completion.reset();
++  }
++}
++void allocate(Slot& slot) {
++  if (slot.queries) return;
++  const wgpu::QuerySetDescriptor q{.label="Live GPU timestamps",.type=wgpu::QueryType::Timestamp,.count=QueryCount};
++  slot.queries=g_device.CreateQuerySet(&q);
++  const wgpu::BufferDescriptor resolve{.label="GPU timestamp resolve",
++      .usage=wgpu::BufferUsage::QueryResolve|wgpu::BufferUsage::CopySrc,.size=BufferSize};
++  slot.resolve=g_device.CreateBuffer(&resolve);
++  const wgpu::BufferDescriptor read{.label="GPU timestamp readback",
++      .usage=wgpu::BufferUsage::MapRead|wgpu::BufferUsage::CopyDst,.size=BufferSize};
++  slot.readback=g_device.CreateBuffer(&read);
++}
++} // namespace
++
++void initialize() {
++  supported.store(g_device.HasFeature(wgpu::FeatureName::TimestampQuery));
++  const char* env=std::getenv("MP6_GPU_TIMINGS");
++  diagnostic.store(env && env[0]=='1');
++  if (diagnostic.load()) {
++    request.store(3);
++    std::printf("[MP6-GPU] timestamps=%s\n",supported.load() ? "supported" : "unsupported");
++    std::fflush(stdout);
++  }
++  reset_history(request.load());
++}
++void shutdown() {
++  supported.store(false);
++  recording=submitted=nullptr;
++  for (auto& slot:slots) {
++    // Callbacks retain only Completion, never a recycled Slot or GPU handle.
++    if (slot.readback) slot.readback.Destroy();
++    slot=Slot{};
++  }
++  reset_history(0);
++  std::lock_guard lock(publishMutex);
++  published={};
++  publishedGeneration=0;
++}
++void frame_begin(const wgpu::CommandEncoder&) {
++  recording=nullptr;
++  const uint64_t current=request.load(std::memory_order_acquire);
++  if (current!=generation) reset_history(current);
++  drain();
++  if (!(current&1) || !supported.load()) return;
++  for (auto& slot:slots) {
++    if (slot.completion) continue;
++    allocate(slot);
++    slot.count=0;
++    slot.overflow=false;
++    slot.generation=current;
++    recording=&slot;
++    break;
++  }
++  if (!recording) ++dropped;
++  publish();
++}
++void frame_end(const wgpu::CommandEncoder& encoder) {
++  if (!recording) return;
++  auto& slot=*recording;
++  recording=nullptr;
++  if (!slot.count) return;
++  encoder.ResolveQuerySet(slot.queries,0,slot.count*2,slot.resolve,0);
++  encoder.CopyBufferToBuffer(slot.resolve,0,slot.readback,0,BufferSize);
++  submitted=&slot;
++}
++void after_submit() {
++  if (submitted) {
++    auto& slot=*submitted;
++    submitted=nullptr;
++    slot.completion=std::make_shared<Completion>();
++    slot.readback.MapAsync(wgpu::MapMode::Read,0,BufferSize,wgpu::CallbackMode::AllowSpontaneous,
++      [completion=slot.completion](wgpu::MapAsyncStatus status,wgpu::StringView) {
++        completion->state.store(status==wgpu::MapAsyncStatus::Success ? Mapped : Failed,std::memory_order_release);
++      });
++  }
++  drain();
++}
++const wgpu::PassTimestampWrites* pass_writes(std::string_view name) {
++  if (!recording) return nullptr;
++  auto& slot=*recording;
++  if (slot.count==MaxPasses) { slot.overflow=true; return nullptr; }
++  const uint32_t i=slot.count++;
++  auto& label=slot.names[i];
++  label.fill(0);
++  std::memcpy(label.data(),name.data(),std::min(name.size(),label.size()-1));
++  static wgpu::PassTimestampWrites writes;
++  writes={.querySet=slot.queries,.beginningOfPassWriteIndex=i*2,.endOfPassWriteIndex=i*2+1};
++  return &writes;
++}
++// Encoder-level timestamps are not portable to every mobile backend.
++// Copies and barriers between passes remain in the measured span's residual.
++Zone::Zone(const wgpu::CommandEncoder&,std::string_view) {}
++Zone::~Zone()=default;
+ } // namespace aurora::webgpu::gpu_prof
+ 
++extern "C" void aurora_gpu_stats_set_enabled(bool enabled) {
++  using namespace aurora::webgpu::gpu_prof;
++  enabled=enabled || diagnostic.load();
++  auto old=request.load();
++  while (bool(old&1)!=enabled && !request.compare_exchange_weak(old,((old+2)&~1ULL)|uint64_t(enabled))) {}
++}
++extern "C" void aurora_gpu_stats_read(AuroraGpuStats* out) {
++  if (!out) return;
++  using namespace aurora::webgpu::gpu_prof;
++  std::lock_guard lock(publishMutex);
++  *out={};
++  if (!supported.load()) return;
++  out->status=1;
++  if (publishedGeneration==request.load()) *out=published;
++}
++
+ #endif
++
++namespace aurora::gfx {
++const wgpu::PassTimestampWrites* gpu_pass_timestamps(const char* label) noexcept {
++  return webgpu::gpu_prof::pass_writes(label);
++}
++}
++
++#ifdef TRACY_ENABLE
++extern "C" void aurora_gpu_stats_set_enabled(bool) {}
++extern "C" void aurora_gpu_stats_read(AuroraGpuStats* out) { if (out) *out={}; }
++#endif
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -1077,11 +1077,9 @@
+         }
+         requiredFeatures.push_back(feature);
+       }
+-#ifdef TRACY_ENABLE
+       if (feature == wgpu::FeatureName::TimestampQuery) {
+         requiredFeatures.push_back(feature);
+       }
+-#endif
+     }
+     std::string featureList;
+     for (auto featureName : requiredFeatures) {
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -2115,7 +2115,7 @@
+         .colorAttachmentCount = attachments.size(),
+         .colorAttachments = attachments.data(),
+         .depthStencilAttachment = depthStencilAttachmentPtr,
+-        .timestampWrites = webgpu::gpu_prof::pass_writes(label),
++        .timestampWrites = webgpu::gpu_prof::pass_writes(passInfo.label.empty() ? "Scene" : passInfo.label),
+     };
+ 
+     auto pass = cmd.BeginRenderPass(&renderPassDescriptor);
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -150,6 +150,29 @@
+ void aurora_end_frame();
+ 
+ void aurora_set_log_level(AuroraLogLevel level);
++// Live, asynchronous GPU timestamps. Unsupported backends return status 0;
++// status 1 is collecting, 2 is ready, 3 indicates a failed readback.
++// Times are milliseconds over the last sampleCount completed frames.
++// gpuSpan covers the first-to-last timed pass, not CPU/swapchain waits.
++#define AURORA_GPU_STAT_ROWS 32
++typedef struct {
++  char name[64];
++  double averageMs;
++  double maxMs;
++} AuroraGpuStatRow;
++typedef struct {
++  uint32_t status;
++  uint32_t sampleCount;
++  uint32_t rowCount;
++  uint32_t droppedFrames;
++  double spanAverageMs;
++  double spanMaxMs;
++  double betweenAverageMs;
++  double betweenMaxMs;
++  AuroraGpuStatRow rows[AURORA_GPU_STAT_ROWS];
++} AuroraGpuStats;
++void aurora_gpu_stats_set_enabled(bool enabled);
++void aurora_gpu_stats_read(AuroraGpuStats* out);
+ void aurora_set_pause_on_focus_lost(bool value);
+ void aurora_set_background_input(bool value);
+ void aurora_set_resampler(AuroraSampler sampler);
+--- a/include/aurora/gfx.hpp
++++ b/include/aurora/gfx.hpp
+@@ -6,6 +6,9 @@
+ #include <webgpu/webgpu_cpp.h>
+ 
+ namespace aurora::gfx {
++
++/// Optional timestamps for a custom pass; call only on the render worker.
++const wgpu::PassTimestampWrites* gpu_pass_timestamps(const char* label) noexcept;
+ 
+ inline constexpr size_t InlineDrawPayloadSize = 128;
+ 
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -344,7 +344,7 @@
+             .label = "EFB copy render pass",
+             .colorAttachmentCount = attachments.size(),
+             .colorAttachments = attachments.data(),
+-            .timestampWrites = webgpu::gpu_prof::pass_writes("Present blit"),
++            .timestampWrites = webgpu::gpu_prof::pass_writes("Present + touch UI"),
+         };
+         const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
+         // Copy EFB -> XFB (swapchain)
+@@ -359,23 +359,8 @@
+           pass.SetBindGroup(0, rmlBindGroup, 0, nullptr);
+           pass.Draw(3);
+         }
+-        pass.End();
+-      }
+-      {
+-        const std::array attachments{
+-            wgpu::RenderPassColorAttachment{
+-                .view = currentView,
+-                .loadOp = wgpu::LoadOp::Load,
+-                .storeOp = wgpu::StoreOp::Store,
+-            },
+-        };
+-        const wgpu::RenderPassDescriptor renderPassDescriptor{
+-            .label = "ImGui render pass",
+-            .colorAttachmentCount = attachments.size(),
+-            .colorAttachments = attachments.data(),
+-            .timestampWrites = webgpu::gpu_prof::pass_writes("ImGui"),
+-        };
+-        const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
++        // Same target and ordering: draw touch UI before storing the surface.
++        // A separate load/store pass needlessly spills mobile tile memory.
+         pass.SetViewport(0.f, 0.f, static_cast<float>(webgpu::g_graphicsConfig.surfaceConfiguration.width),
+                          static_cast<float>(webgpu::g_graphicsConfig.surfaceConfiguration.height), 0.f, 1.f);
+         imgui::render(pass, imguiDrawData);

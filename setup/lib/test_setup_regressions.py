@@ -138,7 +138,7 @@ class AuroraArtifactIntegrityTests(unittest.TestCase):
         flags = dict(arg[2:].split("=", 1) for arg in configure if arg.startswith("-D"))
         self.assertEqual(
             shlex.split(flags["CMAKE_C_FLAGS"]),
-            ["-include", "C:/work with spaces/port/shim/include/mp6_host_section.h"],
+            ["-include", "C:/work with spaces/port/include/mp6_host_section.h"],
         )
         self.assertEqual(flags["CMAKE_C_FLAGS"], flags["CMAKE_CXX_FLAGS"])
         self.assertEqual(
@@ -266,7 +266,7 @@ class AndroidNativeBuildProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             native_dir = pathlib.Path(root, "build", "android", "aurora")
             staged_dir = pathlib.Path(
-                root, "platforms", "android", "app", "src", "main", "jniLibs", "arm64-v8a"
+                root, "packaging", "android", "app", "src", "main", "jniLibs", "arm64-v8a"
             )
             native_dir.mkdir(parents=True)
             staged_dir.mkdir(parents=True)
@@ -340,7 +340,7 @@ class AndroidNativeBuildProfileTests(unittest.TestCase):
 class AndroidVersionMetadataTests(unittest.TestCase):
     def test_explicit_version_code_is_git_history_independent_and_bounded(self):
         gradle = pathlib.Path(
-            NATIVE_ROOT, "platforms", "android", "app", "build.gradle"
+            NATIVE_ROOT, "packaging", "android", "app", "build.gradle"
         ).read_text(encoding="utf-8")
         self.assertNotIn("['git', 'rev-list'", gradle)
         self.assertIn("VERSION_CODE", gradle)
@@ -371,8 +371,8 @@ class AndroidVersionMetadataTests(unittest.TestCase):
 
 class GradleWrapperIntegrityTests(unittest.TestCase):
     def _copy_wrapper(self, root):
-        source = pathlib.Path(NATIVE_ROOT, "platforms", "android")
-        destination = pathlib.Path(root, "platforms", "android")
+        source = pathlib.Path(NATIVE_ROOT, "packaging", "android")
+        destination = pathlib.Path(root, "packaging", "android")
         relative_paths = [
             "gradle/wrapper/gradle-wrapper.properties",
             *step_android._GRADLE_WRAPPER_FILES,
@@ -410,10 +410,10 @@ class GradleWrapperIntegrityTests(unittest.TestCase):
     def test_dependency_metadata_requires_sha256_for_every_artifact(self):
         with tempfile.TemporaryDirectory() as root:
             source = pathlib.Path(
-                NATIVE_ROOT, "platforms", "android", "gradle", "verification-metadata.xml"
+                NATIVE_ROOT, "packaging", "android", "gradle", "verification-metadata.xml"
             )
             target = pathlib.Path(
-                root, "platforms", "android", "gradle", "verification-metadata.xml"
+                root, "packaging", "android", "gradle", "verification-metadata.xml"
             )
             target.parent.mkdir(parents=True)
             text = source.read_text(encoding="utf-8").replace("<sha256 ", "<sha1 ", 1)
@@ -426,7 +426,7 @@ class GradleWrapperIntegrityTests(unittest.TestCase):
     def test_tampered_cached_gradle_artifact_is_rejected_before_execution(self):
         with tempfile.TemporaryDirectory() as root:
             metadata = pathlib.Path(
-                root, "platforms", "android", "gradle", "verification-metadata.xml"
+                root, "packaging", "android", "gradle", "verification-metadata.xml"
             )
             metadata.parent.mkdir(parents=True)
             cache = pathlib.Path(
@@ -925,7 +925,7 @@ class IncrementalBuildTests(unittest.TestCase):
             self.assertNotEqual(before["fingerprint"], after["fingerprint"])
 
     def test_real_savestate_objects_record_the_source_and_reject_old_content(self):
-        source = os.path.realpath(os.path.join(NATIVE_ROOT, "platform", "os", "savestate.c"))
+        source = os.path.realpath(os.path.join(NATIVE_ROOT, "src", "os", "savestate.c"))
         current = build._sha256_file(source)
         stamps = list(pathlib.Path(os.path.join(NATIVE_ROOT, "build")).rglob(
             "plat_savestate*.o.cmd.json"
@@ -937,6 +937,17 @@ class IncrementalBuildTests(unittest.TestCase):
                 record = json.load(f)
             matches = [dep for dep in record.get("dependencies", [])
                        if os.path.normcase(dep["path"]) == os.path.normcase(source)]
+            if not matches:
+                # A command stamp from before the src/ move must invalidate,
+                # not be mistaken for a corrupt newly-produced command stamp.
+                legacy = os.path.realpath(os.path.join(NATIVE_ROOT, "platform", "os", "savestate.c"))
+                migrated = [dep for dep in record.get("dependencies", [])
+                            if os.path.normcase(dep["path"]) == os.path.normcase(legacy)]
+                if len(migrated) == 1:
+                    obj = str(stamp_path)[:-len(".cmd.json")]
+                    build._reset_fingerprint_caches()
+                    self.assertTrue(build.needs_rebuild(source, obj, record["command"]))
+                    continue
             self.assertEqual(len(matches), 1, f"{stamp_path} must hash savestate.c itself")
             if matches[0]["sha256"] != current:
                 obj = str(stamp_path)[:-len(".cmd.json")]
@@ -969,7 +980,7 @@ class ArtifactStagingTests(unittest.TestCase):
     def test_apk_inspection_requires_exact_staged_and_resource_bytes(self):
         with tempfile.TemporaryDirectory() as root:
             native = pathlib.Path(root)
-            staged = native / "platforms/android/app/src/main/jniLibs/arm64-v8a"
+            staged = native / "packaging/android/app/src/main/jniLibs/arm64-v8a"
             resource = native / "res/rml/test.rcss"
             staged.mkdir(parents=True)
             resource.parent.mkdir(parents=True)

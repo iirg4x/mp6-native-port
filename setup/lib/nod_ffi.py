@@ -1,6 +1,6 @@
 """setup/lib/nod_ffi.py -- minimal ctypes binding against nod's C FFI
 (encounter/nod, MIT OR Apache-2.0), the same GC/Wii disc-image library the
-port's own on-device importer uses (platform/content/content_import.cpp).
+port's own on-device importer uses (src/content/content_import.cpp).
 
 Why a fresh ctypes binding instead of reusing content_import.cpp directly:
 that code is compiled INTO mp6native.exe/.so -- it doesn't exist yet the
@@ -231,7 +231,7 @@ def blob_bytes(blob):
 
 # ---------------------------------------------------------------------------
 # Game-ID validation -- same two error messages as
-# platform/content/content_import.cpp's validate_game_id(), on purpose (this
+# src/content/content_import.cpp's validate_game_id(), on purpose (this
 # is the same product-facing check, just running before the game binary
 # exists).
 # ---------------------------------------------------------------------------
@@ -275,7 +275,7 @@ def validate_boot_bytes(data):
 # ---------------------------------------------------------------------------
 
 def is_safe_rel(rel):
-    """SECURITY: mirror of platform/content/content_path_safe.h's
+    """SECURITY: mirror of src/content/content_path_safe.h's
     mp6_content_path_is_safe_rel(). An FST entry name is attacker-controlled
     (raw bytes from the disc's string table), and extract_disc_image() joins
     it onto dest_root to form a write path -- so a crafted name like

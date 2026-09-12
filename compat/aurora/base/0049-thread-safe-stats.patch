@@ -1,0 +1,137 @@
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -214,7 +214,25 @@
+ wgpu::BindGroup g_uniformBindGroup;
+ 
+ // for imgui debug
+-AuroraStats g_stats{};
++// One worker publishes complete frames; API callers receive thread-local
++// snapshots. Do not expose worker-owned storage or mix atomic/plain accesses.
++static AuroraStats s_completedStats{};
++static std::mutex s_statsMutex;
++
++static void publish_completed_stats(const AuroraStats& stats) {
++  std::lock_guard lock{s_statsMutex};
++  s_completedStats = stats;
++}
++
++static AuroraStats read_completed_stats() {
++  AuroraStats snapshot;
++  {
++    std::lock_guard lock{s_statsMutex};
++    snapshot = s_completedStats;
++  }
++  read_pipeline_stats(snapshot);
++  return snapshot;
++}
+ uint32_t g_drawCallCount = 0;
+ uint32_t g_mergedDrawCallCount = 0;
+ 
+@@ -2073,13 +2091,7 @@
+     auto encoder = std::move(packet.encoder);
+     const auto stats = packet.stats;
+     recycle_frame_packet(packet);
+-    g_stats.drawCallCount = stats.drawCallCount;
+-    g_stats.mergedDrawCallCount = stats.mergedDrawCallCount;
+-    g_stats.lastVertSize = stats.lastVertSize;
+-    g_stats.lastUniformSize = stats.lastUniformSize;
+-    g_stats.lastIndexSize = stats.lastIndexSize;
+-    g_stats.lastStorageSize = stats.lastStorageSize;
+-    g_stats.lastTextureUploadSize = stats.lastTextureUploadSize;
++    publish_completed_stats(stats);
+     if (callback) {
+       callback(encoder);
+     }
+@@ -2742,5 +2754,9 @@
+ #endif
+ }
+ 
+-const AuroraStats* aurora_get_stats() { return &aurora::gfx::g_stats; }
++const AuroraStats* aurora_get_stats() {
++  thread_local AuroraStats snapshot{};
++  snapshot = aurora::gfx::read_completed_stats();
++  return &snapshot;
++}
+ float aurora_get_fps() { return aurora::gfx::calculate_fps(); }
+--- a/lib/gfx/common.hpp
++++ b/lib/gfx/common.hpp
+@@ -193,7 +193,7 @@
+ inline constexpr uint64_t StorageBufferSize = 8388608;   // 8mb
+ inline constexpr uint64_t TextureUploadSize = 25165824;  // 24mb
+ 
+-extern AuroraStats g_stats;
++void read_pipeline_stats(AuroraStats& stats) noexcept;
+ extern uint32_t g_drawCallCount;
+ extern uint32_t g_mergedDrawCallCount;
+ extern wgpu::Buffer g_vertexBuffer;
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -316,25 +316,14 @@
+   return g_sdlVfsRegisterResult == SQLITE_OK;
+ }
+ 
+-#if defined(__cpp_lib_atomic_ref)
+-static std::atomic_ref queuedPipelines{g_stats.queuedPipelines};
+-static std::atomic_ref createdPipelines{g_stats.createdPipelines};
+-#else
+-struct AtomicStatRef {
+-  uint32_t& ref;
+-  uint32_t operator++() { return __atomic_add_fetch(&ref, 1, __ATOMIC_RELAXED); }
+-  uint32_t operator--() { return __atomic_sub_fetch(&ref, 1, __ATOMIC_RELAXED); }
+-  uint32_t operator++(int) { return __atomic_fetch_add(&ref, 1, __ATOMIC_RELAXED); }
+-  uint32_t operator--(int) { return __atomic_fetch_sub(&ref, 1, __ATOMIC_RELAXED); }
+-  uint32_t operator=(uint32_t val) {
+-    __atomic_store_n(&ref, val, __ATOMIC_RELAXED);
+-    return val;
+-  }
+-};
+-static AtomicStatRef queuedPipelines{g_stats.queuedPipelines};
+-static AtomicStatRef createdPipelines{g_stats.createdPipelines};
+-#endif
++static std::atomic<uint32_t> queuedPipelines{};
++static std::atomic<uint32_t> createdPipelines{};
+ 
++void read_pipeline_stats(AuroraStats& stats) noexcept {
++  stats.queuedPipelines = queuedPipelines.load(std::memory_order_relaxed);
++  stats.createdPipelines = createdPipelines.load(std::memory_order_relaxed);
++}
++
+ template <typename PipelineConfig>
+ static PipelineCacheWrite make_pipeline_cache_write(ShaderType type, PipelineRef hash, const PipelineConfig& config,
+                                                     uint32_t firstFrameUsed) {
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -432,21 +432,24 @@
+     }
+     gfx::after_submit();
+ 
++#ifdef TRACY_ENABLE
++    const AuroraStats* frameStats = aurora_get_stats();
+     TracyPlotConfig("aurora: lastVertSize", tracy::PlotFormatType::Memory, false, true, 0);
+     TracyPlotConfig("aurora: lastUniformSize", tracy::PlotFormatType::Memory, false, true, 0);
+     TracyPlotConfig("aurora: lastIndexSize", tracy::PlotFormatType::Memory, false, true, 0);
+     TracyPlotConfig("aurora: lastStorageSize", tracy::PlotFormatType::Memory, false, true, 0);
+     TracyPlotConfig("aurora: lastTextureUploadSize", tracy::PlotFormatType::Memory, false, true, 0);
+ 
+-    TracyPlot("aurora: queuedPipelines", static_cast<int64_t>(gfx::g_stats.queuedPipelines));
+-    TracyPlot("aurora: createdPipelines", static_cast<int64_t>(gfx::g_stats.createdPipelines));
+-    TracyPlot("aurora: drawCallCount", static_cast<int64_t>(gfx::g_stats.drawCallCount));
+-    TracyPlot("aurora: mergedDrawCallCount", static_cast<int64_t>(gfx::g_stats.mergedDrawCallCount));
+-    TracyPlot("aurora: lastVertSize", static_cast<int64_t>(gfx::g_stats.lastVertSize));
+-    TracyPlot("aurora: lastUniformSize", static_cast<int64_t>(gfx::g_stats.lastUniformSize));
+-    TracyPlot("aurora: lastIndexSize", static_cast<int64_t>(gfx::g_stats.lastIndexSize));
+-    TracyPlot("aurora: lastStorageSize", static_cast<int64_t>(gfx::g_stats.lastStorageSize));
+-    TracyPlot("aurora: lastTextureUploadSize", static_cast<int64_t>(gfx::g_stats.lastTextureUploadSize));
++    TracyPlot("aurora: queuedPipelines", static_cast<int64_t>(frameStats->queuedPipelines));
++    TracyPlot("aurora: createdPipelines", static_cast<int64_t>(frameStats->createdPipelines));
++    TracyPlot("aurora: drawCallCount", static_cast<int64_t>(frameStats->drawCallCount));
++    TracyPlot("aurora: mergedDrawCallCount", static_cast<int64_t>(frameStats->mergedDrawCallCount));
++    TracyPlot("aurora: lastVertSize", static_cast<int64_t>(frameStats->lastVertSize));
++    TracyPlot("aurora: lastUniformSize", static_cast<int64_t>(frameStats->lastUniformSize));
++    TracyPlot("aurora: lastIndexSize", static_cast<int64_t>(frameStats->lastIndexSize));
++    TracyPlot("aurora: lastStorageSize", static_cast<int64_t>(frameStats->lastStorageSize));
++    TracyPlot("aurora: lastTextureUploadSize", static_cast<int64_t>(frameStats->lastTextureUploadSize));
++#endif
+   });
+ 
+ #endif

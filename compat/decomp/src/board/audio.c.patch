@@ -1,0 +1,14 @@
+--- a/src/board/audio.c
++++ b/src/board/audio.c
+@@ -1058 +1058,10 @@
+-    pan = (int)((pos2D.x * (1.0f / HU_DISP_WIDTH)) * MSM_PAN_WIDTH) + MSM_PAN_LEFT;
++    /* MP6_NATIVE_PORT: on Gekko this cast is `fctiwz`, which SATURATES; on
++     * the host it is undefined behaviour and this build's
++     * float-cast-overflow check aborts the process outright. Hu3D3Dto2D
++     * (src/game/hsfex.c) divides by tan(fov/2) * camera-space z, so a
++     * subject on the camera plane projects to +-inf/NaN -- and the clamp on
++     * the next four lines runs AFTER the conversion, never before it. The
++     * helper reproduces fctiwz exactly and cannot alter an in-range
++     * conversion; see include/mp6_hwcast.h.
++     */
++    pan = MP6_FCTIWZ_S32((pos2D.x * (1.0f / HU_DISP_WIDTH)) * MSM_PAN_WIDTH) + MSM_PAN_LEFT;

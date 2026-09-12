@@ -1,0 +1,18 @@
+--- a/src/board/player.c
++++ b/src/board/player.c
+@@ -174,0 +176 @@
++#ifdef __MWERKS__
+@@ -189,0 +192,5 @@
++#else
++    dstP->x = srcP->x * scaleP->x;
++    dstP->y = srcP->y * scaleP->y;
++    dstP->z = srcP->z * scaleP->z;
++#endif
+@@ -194,0 +202 @@
++#ifdef __MWERKS__
+@@ -203,0 +212,5 @@
++#else
++    dstP->x = srcP->x;
++    dstP->y = srcP->y;
++    dstP->z = srcP->z;
++#endif

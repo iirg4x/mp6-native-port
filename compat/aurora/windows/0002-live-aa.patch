@@ -1,0 +1,33 @@
+Apply an exclusive AA transaction at the Port's between-frame settings drain.
+Synchronize the worker before replacing attachments or their sample count.
+Pipeline keys include sample count; cached bind groups and offscreen targets
+are retired, while the graphics device, window and game state stay alive.
+
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -1334,0 +1335,25 @@
++
++extern "C" void mp6_aurora_set_aa(unsigned samples, float ssaa, int fxaa) {
++  using namespace aurora;
++  using namespace aurora::webgpu;
++  samples = samples == 4 ? 4 : 1;
++  ssaa = ssaa == 1.5f || ssaa == 2.f ? ssaa : 1.f;
++  if (samples > 1) ssaa = 1.f;
++  if (samples > 1 || ssaa > 1.f) fxaa = 0;
++  const auto post = fxaa ? AURORA_POST_AA_FXAA : AURORA_POST_AA_NONE;
++  if (g_graphicsConfig.msaaSamples == samples && g_ssaaFactor == ssaa) {
++    set_post_aa(post);
++    return;
++  }
++  gfx::gpu_synchronize();
++  g_graphicsConfig.msaaSamples = samples;
++  g_ssaaFactor = ssaa;
++  g_config.msaa = samples;
++  g_config.ssaa = ssaa;
++  gx::clear_copy_texture_cache();
++  gfx::clear_caches();
++  g_resampledFrameBuffer = {};
++  set_post_aa(post);
++  refresh_surface(false);
++  aurora::webgpu::Log.info("Live AA: MSAA {}, SSAA {}, FXAA {}", samples, ssaa, fxaa);
++}

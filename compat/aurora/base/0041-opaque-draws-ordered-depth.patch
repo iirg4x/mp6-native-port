@@ -1,0 +1,123 @@
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -721,9 +721,18 @@
+   };
+   const auto blendState =
+       to_blend_state(config.blendMode, config.blendFacSrc, config.blendFacDst, config.blendOp, config.dstAlpha);
++  // An enabled ONE/ZERO blend is mathematically a replacement, but still
++  // advertises a framebuffer dependency to mobile tile/hidden-surface paths.
++  // Only written channels matter; retain destination-alpha and real blending.
++  const auto replaces = [](const wgpu::BlendComponent& c) {
++    return c.operation == wgpu::BlendOperation::Add &&
++           c.srcFactor == wgpu::BlendFactor::One && c.dstFactor == wgpu::BlendFactor::Zero;
++  };
++  const bool opaque = (!config.colorUpdate || replaces(blendState.color)) &&
++                      (!config.alphaUpdate || replaces(blendState.alpha));
+   const std::array colorTargets{wgpu::ColorTargetState{
+       .format = g_graphicsConfig.surfaceConfiguration.format,
+-      .blend = &blendState,
++      .blend = opaque ? nullptr : &blendState,
+       .writeMask = to_write_mask(config.colorUpdate, config.alphaUpdate),
+   }};
+   const wgpu::FragmentState fragmentState{
+--- a/include/aurora/gfx.hpp
++++ b/include/aurora/gfx.hpp
+@@ -82,6 +82,12 @@
+   wgpu::Buffer indexBuffer;
+   wgpu::Buffer uniformBuffer;
+   wgpu::Buffer storageBuffer;
++  // Requested by readsDepth; valid only while encoding this task. Never retain
++  // it for a later draw: the loading continuation will write the attachment.
++  wgpu::TextureView depth;
++  uint32_t targetWidth = 0;
++  uint32_t targetHeight = 0;
++  uint32_t sampleCount = 1;
+ };
+ 
+ /// Invoked on the render worker thread with the frame's command encoder,
+@@ -97,6 +103,9 @@
+   const char* label = nullptr;
+   EncoderTaskCallback callback = nullptr;
+   void* userdata = nullptr;
++  // Seal/store EFB depth and expose it to this ordered task, without a copy.
++  // The task must consume depth before returning; this is not a snapshot API.
++  bool readsDepth = false;
+ };
+ 
+ EncoderTaskId register_encoder_task_type(const EncoderTaskDescriptor& desc);
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -144,6 +144,7 @@
+   std::string label;
+   EncoderTaskCallback callback = nullptr;
+   void* userdata = nullptr;
++  bool readsDepth = false;
+   uint32_t generation = 1;
+ };
+ 
+@@ -287,6 +288,9 @@
+ };
+ 
+ struct EncoderTask {
++  wgpu::TextureView depth;
++  wgpu::Extent3D targetSize{};
++  uint32_t sampleCount = 1;
+   EncoderTaskId type = InvalidEncoderTask;
+   std::array<uint8_t, InlineDrawPayloadSize> payload{};
+   uint32_t payloadSize = 0;
+@@ -1489,6 +1493,7 @@
+   slot.label = desc.label != nullptr ? desc.label : "";
+   slot.callback = desc.callback;
+   slot.userdata = desc.userdata;
++  slot.readsDepth = desc.readsDepth;
+   return make_draw_type_id(idx, slot.generation);
+ }
+ 
+@@ -1519,12 +1524,15 @@
+     Log.warn("push_encoder_task: non-zero payload size with null payload");
+     return false;
+   }
++  bool readsDepth = false;
+   {
+     std::lock_guard lock{g_runtimeDrawTypeMutex};
+-    if (find_runtime_encoder_task_type(type) == nullptr) {
++    const auto* slot = find_runtime_encoder_task_type(type);
++    if (slot == nullptr) {
+       Log.warn("push_encoder_task: unregistered encoder task type {:#x}", type);
+       return false;
+     }
++    readsDepth = slot->readsDepth;
+   }
+ 
+   gx::fifo::drain();
+@@ -1543,11 +1551,18 @@
+   // content keeps the sealed pass alive even without a consumer.
+   auto& frame = current_frame_packet();
+   auto& prevPass = current_render_passes()[g_currentRenderPass];
+-  prevPass.discardable = !prevPass.has_consumer() && !prevPass.has_content();
++  if (readsDepth && (!prevPass.hasDepth || !prevPass.copySourceDepthView)) return false;
++  prevPass.discardable = !readsDepth && !prevPass.has_consumer() && !prevPass.has_content();
++  if (readsDepth) prevPass.depthStoreOp = wgpu::StoreOp::Store;
+   enqueue_pass(frame, g_recordingFrameSlot, g_currentRenderPass);
+ 
+   const auto taskIndex = static_cast<uint32_t>(frame.encoderTasks.size());
+   auto& task = frame.encoderTasks.emplace_back(EncoderTask{.type = type});
++  if (readsDepth) {
++    task.depth = prevPass.copySourceDepthView;
++    task.targetSize = prevPass.targetSize;
++    task.sampleCount = prevPass.msaaSamples;
++  }
+   task.payloadSize = static_cast<uint32_t>(payloadSize);
+   if (payloadSize > 0) {
+     std::memcpy(task.payload.data(), payload, payloadSize);
+@@ -2405,6 +2420,10 @@
+       .indexBuffer = g_indexBuffer,
+       .uniformBuffer = g_uniformBuffer,
+       .storageBuffer = g_storageBuffer,
++      .depth = task.depth,
++      .targetWidth = task.targetSize.width,
++      .targetHeight = task.targetSize.height,
++      .sampleCount = task.sampleCount,
+   };
+   callback(context, cmd, task.payload.data(), task.payloadSize, userdata);
+ }

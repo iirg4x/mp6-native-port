@@ -1,0 +1,30 @@
+--- a/src/board/shopevent.c
++++ b/src/board/shopevent.c
+@@ -24,0 +25 @@
++#include "mp6_widescreen.h"
+@@ -94,0 +96,13 @@
++/* Keep the description carousel's parked panels beyond the visible canvas.
++ * The base positions and movement retain their native 576-unit coordinates;
++ * only their displacement from the selected panel grows with the live aspect.
++ * Re-evaluating at draw-position updates also handles an open-shop resize. */
++static void ev_ShopDescPosSet(int winId, const HuVecF *basePos, float moveX, int slot)
++{
++    float offset = SHOP_SELECT_WINDOW_SPACING * slot + moveX;
++    float x = basePos->x + moveX;
++    x += offset * (mp6_widescreen_scale_factor() - 1.0f);
++    mbWinPosSet(winId, x, basePos->y);
++}
++
++
+@@ -1210,2 +1224 @@
+-        PSVECAdd(&winPos[i], &movePos, &position);
+-        mbWinPosSet(descWinId[i], position.x, position.y);
++        ev_ShopDescPosSet(descWinId[i], &winPos[i], movePos.x, i);
+@@ -1217,0 +1231,3 @@
++        for (i = 0; i < offerNum; i++) {
++            ev_ShopDescPosSet(descWinId[i], &winPos[i], movePos.x, i);
++        }
+@@ -1262,2 +1278 @@
+-                    PSVECAdd(&winPos[j], &movePos, &position);
+-                    mbWinPosSet(descWinId[j], position.x, position.y);
++                    ev_ShopDescPosSet(descWinId[j], &winPos[j], movePos.x, j);

@@ -1,0 +1,25 @@
+Prefer Immediate when VSync is off in the optimized Windows backend.
+Mailbox can retain compositor pacing/backpressure despite the user's uncapped
+setting. Use the advertised Immediate capability; retain Mailbox and FIFO as
+fallbacks for surfaces that do not support it. VSync-on is unchanged.
+
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -283,13 +283,13 @@
+       return wgpu::PresentMode::FifoRelaxed;
+     }
+   } else {
+-    // Dawn only disables CAMetalLayer displaySyncEnabled for Immediate on Metal
++    if (supports(wgpu::PresentMode::Immediate)) {
++      return wgpu::PresentMode::Immediate;
++    }
++    // Fall back only when the surface cannot present immediately.
+     if (g_backendType != wgpu::BackendType::Metal && supports(wgpu::PresentMode::Mailbox)) {
+       return wgpu::PresentMode::Mailbox;
+     }
+-    if (supports(wgpu::PresentMode::Immediate)) {
+-      return wgpu::PresentMode::Immediate;
+-    }
+   }
+   return wgpu::PresentMode::Fifo;
+ }

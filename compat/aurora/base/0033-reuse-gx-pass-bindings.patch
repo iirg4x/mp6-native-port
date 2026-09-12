@@ -1,0 +1,90 @@
+Reuse texture bindings and a whole Uint16 index buffer within GX render-pass spans.
+Non-GX/custom draws invalidate state; indexed draws retain their exact byte ranges via firstIndex.
+
+--- a/lib/gx/pipeline.hpp
++++ b/lib/gx/pipeline.hpp
+@@ -35,7 +35,12 @@
+ static_assert(std::has_unique_object_representations_v<PipelineConfig>);
+ 
+ wgpu::RenderPipeline create_pipeline([[maybe_unused]] const PipelineConfig& config);
+-void render(const DrawData& data, const wgpu::RenderPassEncoder& pass);
++// Owned by one render pass, and reset whenever a non-GX draw changes bindings.
++struct RenderState {
++  gfx::BindGroupRef textureBindGroup = 0;
++  bool indexBufferBound = false;
++};
++void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, RenderState& state);
+ 
+ void queue_surface(const u8* dlStart, uint32_t dlSize, bool bigEndian) noexcept;
+ } // namespace aurora::gx
+--- a/lib/gx/pipeline.cpp
++++ b/lib/gx/pipeline.cpp
+@@ -17,17 +17,17 @@
+   return build_pipeline(config, {}, shader, label.c_str());
+ }
+ 
+-void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
++void render(const DrawData& data, const wgpu::RenderPassEncoder& pass, RenderState& state) {
+   if (!gfx::bind_pipeline(data.pipeline, pass)) {
+     return;
+   }
+ 
+   const std::array offsets{data.uniformRange.offset};
+   pass.SetBindGroup(1, gfx::g_uniformBindGroup, offsets.size(), offsets.data());
+-  if (data.bindGroups.textureBindGroup) {
++  if (data.bindGroups.textureBindGroup && data.bindGroups.textureBindGroup != state.textureBindGroup) {
+     pass.SetBindGroup(2, gfx::find_bind_group(data.bindGroups.textureBindGroup));
++    state.textureBindGroup = data.bindGroups.textureBindGroup;
+   }
+-  pass.SetIndexBuffer(gfx::g_indexBuffer, wgpu::IndexFormat::Uint16, data.idxRange.offset, data.idxRange.size);
+   if (data.dstAlpha != UINT32_MAX) {
+     const wgpu::Color color{0.f, 0.f, 0.f, data.dstAlpha / 255.f};
+     pass.SetBlendConstant(&color);
+@@ -35,7 +35,11 @@
+   if (data.indexCount == 0) {
+     pass.Draw(data.vtxCount, data.instanceCount);
+   } else {
+-    pass.DrawIndexed(data.indexCount, data.instanceCount);
++    if (!state.indexBufferBound) {
++      pass.SetIndexBuffer(gfx::g_indexBuffer, wgpu::IndexFormat::Uint16, 0, gfx::IndexBufferSize);
++      state.indexBufferBound = true;
++    }
++    pass.DrawIndexed(data.indexCount, data.instanceCount, data.idxRange.offset / sizeof(uint16_t));
+   }
+ }
+ } // namespace aurora::gx
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -2335,6 +2335,7 @@
+   ClipRect currentScissor{};
+   bool hasViewport = false;
+   bool hasScissor = false;
++  gx::RenderState gxState{};
+ 
+   // Bind static bind group for the whole pass
+   pass.SetBindGroup(0, g_staticBindGroup);
+@@ -2376,13 +2377,15 @@
+       const auto& draw = cmd.data.draw;
+       switch (draw.type) {
+       case ShaderType::Clear:
++        gxState = {};
+         clear::render(draw.clear, pass, passInfo.targetSize);
+         break;
+       case ShaderType::GX:
+-        gx::render(draw.gx, pass);
++        gx::render(draw.gx, pass, gxState);
+         break;
+ #ifdef AURORA_ENABLE_RMLUI
+       case ShaderType::Rml:
++        gxState = {};
+         rmlui::render(draw.rml, pass);
+         break;
+ #endif
+@@ -2391,6 +2394,7 @@
+     case CommandType::CustomDraw: {
+       render_custom_draw(cmd.data.customDraw, pass, passInfo);
+       g_currentPipeline = UINTPTR_MAX;
++      gxState = {};
+       pass.SetBindGroup(0, g_staticBindGroup);
+       pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
+       if (hasViewport) {

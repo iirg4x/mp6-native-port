@@ -1,0 +1,13 @@
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -1102 +1102,4 @@
+-  return find_pipeline_impl(type, config, std::move(cb));
++  // A missing clear is visible corruption, not an optional background draw.
++  // Cache prewarming remains asynchronous; an actually used pipeline must be
++  // ready before this frame is submitted, including on threadless backends.
++  return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking);
+@@ -1107 +1110,3 @@
+-  return find_pipeline_impl(type, config, std::move(cb));
++  // Do not omit first-use meshes, materials or UI while compiling their shader.
++  // Reuse the existing blocking path (also used by RmlUi), not a fallback shader.
++  return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking);

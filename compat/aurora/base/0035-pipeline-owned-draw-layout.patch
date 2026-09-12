@@ -1,0 +1,154 @@
+Reuse immutable GX draw-layout analysis in the existing ready-pipeline cache entry.
+No second hash/map lookup; live matrices and texture resources remain uncached.
+
+--- a/lib/gfx/pipeline_cache.hpp
++++ b/lib/gfx/pipeline_cache.hpp
+@@ -10,6 +10,7 @@
+ 
+ namespace aurora::gx {
+ struct PipelineConfig;
++struct ShaderInfo;
+ } // namespace aurora::gx
+ 
+ namespace aurora::rmlui {
+@@ -29,6 +30,8 @@
+ PipelineRef find_pipeline(ShaderType type, const Config& config,
+                           wgpu::RenderPipeline (*create)(const Config&));
+ 
++PipelineRef find_gx_pipeline(const gx::PipelineConfig& config, gx::ShaderInfo& info);
++
+ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline);
+ 
+ } // namespace aurora::gfx
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -3,6 +3,7 @@
+ #include "clear.hpp"
+ #include "../fs_helper.hpp"
+ #include "../gx/pipeline.hpp"
++#include "../gx/shader_info.hpp"
+ #ifdef AURORA_ENABLE_RMLUI
+ #include "../rmlui/pipeline.hpp"
+ #endif
+@@ -35,6 +36,8 @@
+ struct CachedPipeline {
+   wgpu::RenderPipeline pipeline;
+   uint32_t firstFrameUsed = UINT32_MAX;
++  std::optional<gx::ShaderInfo> shaderInfo;
++  uint32_t shaderInfoAlignment = 0;
+ };
+ 
+ struct PendingPipeline {
+@@ -428,10 +431,25 @@
+ static PipelineRef g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
+ 
+ template <typename PipelineConfig>
++static void publish_shader_info(const PipelineConfig& config, CachedPipeline& cached, gx::ShaderInfo* output) {
++  if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
++    if (output != nullptr) {
++      const auto alignment = align_uniform(1);
++      if (!cached.shaderInfo || cached.shaderInfoAlignment != alignment) {
++        cached.shaderInfo = gx::build_shader_info(config.shaderConfig);
++        cached.shaderInfoAlignment = alignment;
++      }
++      *output = *cached.shaderInfo;
++    }
++  }
++}
++
++template <typename PipelineConfig>
+ static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& config,
+                                       wgpu::RenderPipeline (*create)(const PipelineConfig&),
+                                       PipelinePriority priority = PipelinePriority::Normal,
+-                                      std::optional<uint32_t> firstFrameUsedOverride = std::nullopt) {
++                                      std::optional<uint32_t> firstFrameUsedOverride = std::nullopt,
++                                      gx::ShaderInfo* shaderInfo = nullptr) {
+   ZoneScoped;
+ 
+   const PipelineRef hash = xxh3_hash(config, static_cast<HashType>(type));
+@@ -452,6 +470,7 @@
+     auto pipelineIt = g_pipelines.find(hash);
+     if (pipelineIt != g_pipelines.end()) {
+       pipelineReady = true;
++      publish_shader_info(config, pipelineIt->second, shaderInfo);
+       if (persist && firstFrameUsed < pipelineIt->second.firstFrameUsed) {
+         pipelineIt->second.firstFrameUsed = firstFrameUsed;
+         cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
+@@ -466,10 +485,11 @@
+               cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
+             }
+           }
+-          g_pipelines.try_emplace(hash, CachedPipeline{
++          auto ready = g_pipelines.try_emplace(hash, CachedPipeline{
+                                             .pipeline = pending->create(),
+                                             .firstFrameUsed = pending->firstFrameUsed,
+-                                        });
++                                        }).first;
++          publish_shader_info(config, ready->second, shaderInfo);
+           pipelineReady = true;
+           ++g_pipelinesPerFrame;
+           createdPipeline = true;
+@@ -488,10 +508,11 @@
+         notifyWorker = priority != PipelinePriority::Background;
+       }
+     } else if (!g_hasPipelineThread && (blocking || g_pipelinesPerFrame < BuildPipelinesPerFrame)) {
+-      g_pipelines.try_emplace(hash, CachedPipeline{
++      auto ready = g_pipelines.try_emplace(hash, CachedPipeline{
+                                         .pipeline = create(config),
+                                         .firstFrameUsed = firstFrameUsed,
+-                                    });
++                                    }).first;
++      publish_shader_info(config, ready->second, shaderInfo);
+       pipelineReady = true;
+       if (persist) {
+         cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
+@@ -542,6 +563,14 @@
+     std::unique_lock lock{g_pipelineMutex};
+     g_pipelineReadyCv.wait(lock, [=] { return g_pipelines.contains(hash) || g_pipelineThreadEnd; });
+     auto pipelineIt = g_pipelines.find(hash);
++    if (pipelineIt != g_pipelines.end()) {
++      publish_shader_info(config, pipelineIt->second, shaderInfo);
++    } else if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
++      // Shutdown can wake a required-pipeline wait before compilation completes.
++      if (shaderInfo != nullptr) {
++        *shaderInfo = gx::build_shader_info(config.shaderConfig);
++      }
++    }
+     if (pipelineIt != g_pipelines.end() && persist && firstFrameUsed < pipelineIt->second.firstFrameUsed) {
+       pipelineIt->second.firstFrameUsed = firstFrameUsed;
+       cacheWrite = make_pipeline_cache_write(type, hash, config, firstFrameUsed);
+@@ -1124,6 +1153,11 @@
+ }
+ #endif
+ 
++PipelineRef find_gx_pipeline(const gx::PipelineConfig& config, gx::ShaderInfo& info) {
++  return find_pipeline_impl(ShaderType::GX, config, gx::create_pipeline,
++                            PipelinePriority::Blocking, std::nullopt, &info);
++}
++
+ void initialize_pipeline_cache() {
+   g_pipelineCacheBroken = false;
+   g_pipelineCacheWriterStop = false;
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "../gfx/common.hpp"
+ #include "../gfx/depth_peek.hpp"
++#include "../gfx/pipeline_cache.hpp"
+ #include "dolphin/gx/GXAurora.h"
+ #include "gx.hpp"
+ #include "gx_fmt.hpp"
+@@ -1677,10 +1678,10 @@
+ 
+   PipelineConfig config{};
+   populate_pipeline_config(config, prim, fmt);
+-  const auto info = build_shader_info(config.shaderConfig);
++  ShaderInfo info{};
++  const auto pipeline = gfx::find_gx_pipeline(config, info);
+   resolve_sampled_textures(info);
+   const auto bindGroups = build_bind_groups(info);
+-  const auto pipeline = gfx::pipeline_ref(config);
+ 
+   uint32_t instanceCount = 1;
+   if (prim == GX_LINES) {

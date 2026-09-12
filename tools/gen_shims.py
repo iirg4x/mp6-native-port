@@ -4,8 +4,8 @@ gen_shims.py -- null-platform SDK shim generator.
 
 Reads port/planning/sdk_surface.json (the SDK call inventory) and the
 decomp's own include/dolphin + include/msm headers, and emits
-platform/null/shims_generated.c (--headless build) and
-platform/null/shims_generated_aurora.c (default aurora build; tools/
+src/null/shims_generated.c (--headless build) and
+src/null/shims_generated_aurora.c (default aurora build; tools/
 build.py picks exactly one, per PLATFORM_SOURCES_COMMON -- see
 OUT_FILE_AURORA below for why there must be two files at all): one
 logging no-op function per SDK symbol that isn't hand-written or
@@ -23,7 +23,7 @@ Design notes:
     go looking for a nonexistent function.
   - A curated MANUAL_SYMBOLS set is excluded from generation entirely,
     because those symbols get real (non-stub) behavior hand-written in
-    platform/null/shims_manual.c, platform/os/arena.c, etc. -- see that
+    src/null/shims_manual.c, src/os/arena.c, etc. -- see that
     list for the reasoning per symbol.
   - Every remaining symbol's prototype is located in the header tree by a
     best-effort regex scan (handles multi-line prototypes and function-
@@ -48,8 +48,10 @@ NATIVE_ROOT = os.path.dirname(SCRIPT_DIR)                      # .../port/mp6-na
 PORT_ROOT = os.path.dirname(NATIVE_ROOT)                       # .../port
 SDK_SURFACE_JSON = os.path.join(PORT_ROOT, "planning", "sdk_surface.json")
 AURORA_SURFACE_JSON = os.path.join(PORT_ROOT, "planning", "aurora_surface.json")
-DECOMP_INCLUDE = os.path.join(PORT_ROOT, "..", "external_refs", "repos", "marioparty6", "include")
-OUT_FILE = os.path.join(NATIVE_ROOT, "platform", "null", "shims_generated.c")
+sys.path.insert(0, NATIVE_ROOT)
+from setup.lib import common as setup_common
+DECOMP_INCLUDE = os.path.join(setup_common.DECOMP_DIR, "include")
+OUT_FILE = os.path.join(NATIVE_ROOT, "src", "null", "shims_generated.c")
 # A SECOND generated file, used by the default (aurora) build INSTEAD of
 # OUT_FILE (tools/build.py picks exactly one, per PLATFORM_SOURCES_COMMON).
 # Why a second file rather than just marking every stub in OUT_FILE
@@ -70,7 +72,7 @@ OUT_FILE = os.path.join(NATIVE_ROOT, "platform", "null", "shims_generated.c")
 # generate NO shim at all in the aurora variant -- decomp's own plain
 # reference is then the ONLY one in the whole link, which correctly
 # forces the real archive member's extraction.
-OUT_FILE_AURORA = os.path.join(NATIVE_ROOT, "platform", "null", "shims_generated_aurora.c")
+OUT_FILE_AURORA = os.path.join(NATIVE_ROOT, "src", "null", "shims_generated_aurora.c")
 
 sys.path.insert(0, SCRIPT_DIR)
 import build as B  # noqa: E402 -- reuses ZIG/COMMON_FLAGS/header patching so the probe
@@ -126,7 +128,7 @@ MACRO_RESOLUTION = {
     "VECDotProduct": "PSVECDotProduct",
     "VECNormalize": "PSVECNormalize",
     "VECCrossProduct": "PSVECCrossProduct",
-    # shim/include/dolphin_compat.h's own `#define GXSetArray
+    # include/dolphin_compat.h's own `#define GXSetArray
     # mp6_GXSetArray3` (see its comment there for the full story -- short
     # version: decomp's real 3-arg GXSetArray usage can't share a
     # compiled name with Aurora's real, differently-shaped 5-arg
@@ -135,9 +137,9 @@ MACRO_RESOLUTION = {
     # build's own null shim needs to be generated under the RESOLVED name
     # too, matching what decomp's renamed call sites actually link against.
     "GXSetArray": "mp6_GXSetArray3",
-    # shim/include/dolphin_compat.h's own `#define GXBegin mp6_GXBegin` /
+    # include/dolphin_compat.h's own `#define GXBegin mp6_GXBegin` /
     # `#define GXEnd mp6_GXEnd` -- a PURE rename (unlike GXSetArray3's
-    # arity bridge above) that lets platform/gx/aurora_bridge.c track
+    # arity bridge above) that lets src/gx/aurora_bridge.c track
     # GXBegin/GXEnd open/close balance and log the call site the moment an
     # imbalance is detected. The --headless build's own null shim needs to
     # be generated under the RESOLVED name too, matching what decomp's
@@ -148,13 +150,13 @@ MACRO_RESOLUTION = {
     # records Hu3D draw context then forwards to Aurora; headless receives the
     # ordinary generated no-op under the same resolved link name.
     "GXLoadPosMtxImm": "mp6_GXLoadPosMtxImm",
-    # shim/include/dolphin_compat.h's own `#define GXCallDisplayList
+    # include/dolphin_compat.h's own `#define GXCallDisplayList
     # mp6_GXCallDisplayList` -- same PURE-rename shape as GXBegin/GXEnd
     # above, so the draw-call bisect harness (MP6_SKIP_DRAWS) can
     # count/hide display-list-execute draws too, not just immediate-mode
     # GXBegin/GXEnd ones.
     "GXCallDisplayList": "mp6_GXCallDisplayList",
-    # shim/include/dolphin_compat.h's own
+    # include/dolphin_compat.h's own
     # `#define GXBeginDisplayList mp6_GXBeginDisplayList` /
     # `#define GXEndDisplayList mp6_GXEndDisplayList` -- same PURE-rename
     # shape as GXCallDisplayList above, so aurora_bridge.c can track when
@@ -166,8 +168,8 @@ MACRO_RESOLUTION = {
 
 # Symbols hand-written elsewhere with REAL (non-stub) behavior -- excluded
 # from generation so there's no duplicate-symbol link error. See
-# platform/null/shims_manual.c, platform/os/arena.c, platform/os/jmp_native.c,
-# platform/os/dll_bridge.c, platform/os/malloc_direct.c for the definitions;
+# src/null/shims_manual.c, src/os/arena.c, src/os/jmp_native.c,
+# src/os/dll_bridge.c, src/os/malloc_direct.c for the definitions;
 # each group's comment below explains why it must be manual.
 MANUAL_SYMBOLS = {
     # varargs passthrough -- this IS the game's own diagnostic channel
@@ -188,7 +190,7 @@ MANUAL_SYMBOLS = {
     # render calendar dates from it
     "OSGetTick", "OSGetTime", "OSGetTick64", "OSGetTime64",
     "OSTicksToCalendarTime",
-    # heap/arena family -- backed by platform/os/arena.c's real bump allocator
+    # heap/arena family -- backed by src/os/arena.c's real bump allocator
     "OSGetArenaLo", "OSGetArenaHi", "OSSetArenaLo", "OSSetArenaHi",
     "OSInitAlloc", "OSCreateHeap", "OSSetCurrentHeap", "OSAllocFromHeap",
     "OSAllocFixed", "OSCheckHeap", "OSFreeToHeap", "OSFree",
@@ -208,7 +210,7 @@ MANUAL_SYMBOLS = {
     "DVDOpen", "DVDReadAsyncPrio", "DVDReadPrio", "DVDClose", "DVDGetDriveStatus",
     "DVDFastOpen", "DVDCancel", "DVDCancelAsync", "DVDGetCommandBlockStatus",
     "DVDConvertPathToEntrynum",
-    # ARAM: synchronous fake-DMA-completion (platform/os/arena.c's ARAM buffer)
+    # ARAM: synchronous fake-DMA-completion (src/os/arena.c's ARAM buffer)
     "ARQPostRequest", "ARInit", "ARCheckInit", "ARGetSize", "ARQInit",
     # Real hardware never returns from this; src/game/fault.c's own
     # OSPanic (see above) calls it as its actual termination step, so it
@@ -224,12 +226,12 @@ MANUAL_SYMBOLS = {
     # own umbrella chain), whose `return 0`/FALSE happens to gate
     # correctly only by accident. Hand-written instead (with the real
     # `BOOL THPInit(void)` signature) so the intent -- and the residual
-    # risk it does NOT cover -- is explicit; see platform/null/
+    # risk it does NOT cover -- is explicit; see src/null/
     # shims_manual.c's own comment.
     "THPInit",
     # Real streamed-music playback, hand-written in
-    # platform/audio/msm_bridge.c (its own file rather than growing
-    # platform/null/shims_manual.c) -- excluded from generation here so
+    # src/audio/msm_bridge.c (its own file rather than growing
+    # src/null/shims_manual.c) -- excluded from generation here so
     # there's no duplicate-symbol clash. msmSysInit brings up the real
     # .pdt parser + audio backend; msmSysRegularProc is the per-frame
     # mixer pump (--headless only, see msm_bridge.c); the 8
@@ -280,7 +282,7 @@ MANUAL_SYMBOLS = {
     # negative result without touching any output parameter, so this both
     # avoids the uninitialized-read hazard AND routes fileseldll down its
     # own already-correct, already-tested "no save card" UI instead of a
-    # data-dependent wrong one. See platform/null/shims_manual.c's own
+    # data-dependent wrong one. See src/null/shims_manual.c's own
     # comment for the full call-chain trace.
     "CARDProbeEx", "CARDCheck", "CARDMount", "CARDGetSectorSize",
     # The same "stub dishonestly claims success" shape as the CARD gate
@@ -307,7 +309,7 @@ MANUAL_SYMBOLS = {
     "MICProbeEx", "MICMount",
 }
 
-# Symbols whose RESOLVED (post-MACRO_RESOLUTION) name platform/gx/
+# Symbols whose RESOLVED (post-MACRO_RESOLUTION) name src/gx/
 # aurora_bridge.c defines directly and unconditionally for the aurora
 # build (real logic, not a plain passthrough to an Aurora symbol of the
 # exact same name -- see that file's own comment for mp6_GXSetArray3's
@@ -321,7 +323,7 @@ MANUAL_SYMBOLS = {
 # decomp's own header resolves MTXFoo/PSMTXFoo calls to a `PSMTX*`/
 # `PSVEC*` symbol name Aurora's real (linked, see tools/build.py's
 # AURORA_LINK_ITEMS) MTX library never defines under that literal name
-# (only the generic `C_MTXFoo`/`C_VECFoo` equivalent) -- see platform/gx/
+# (only the generic `C_MTXFoo`/`C_VECFoo` equivalent) -- see src/gx/
 # aurora_bridge.c's header comment for the full story and how this
 # differs from the names recorded in aurora_surface.json's
 # implemented.MTX list instead (those ARE exported under the exact name
@@ -436,8 +438,8 @@ def get_preprocessed_text():
     # force game/msm.h to ALSO fully expand despite sharing that guard:
     # the two headers declare ~30 of the same functions with incompatibly
     # different types (see dolphin_compat.h's comment), and
-    # platform/null/shims_generated.c's OWN preamble (plain "#include
-    # dolphin.h"+"msm.h", from platform/null/ -- not include/game/, so its
+    # src/null/shims_generated.c's OWN preamble (plain "#include
+    # dolphin.h"+"msm.h", from src/null/ -- not include/game/, so its
     # own "msm.h" always resolves to the TOP-LEVEL one) is what the
     # generated shims actually get compiled against -- generating
     # signatures from whichever header duplicate wins the probe's OWN
@@ -695,7 +697,7 @@ def main():
  * Regenerate with: python tools/gen_shims.py
  *
  * One logging no-op per SDK symbol not hand-written in
- * platform/null/shims_manual.c / platform/os/*.c -- see this script's own
+ * src/null/shims_manual.c / src/os/*.c -- see this script's own
  * MANUAL_SYMBOLS set for the full list and the per-group reasoning.
  *
  * Used by the --headless build ONLY (tools/build.py) -- every needed

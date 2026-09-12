@@ -1,0 +1,46 @@
+--- a/src/board/capthrow.c
++++ b/src/board/capthrow.c
+@@ -105,6 +105,7 @@
+-extern void mbev_CapEffRingHitAdd(OMOBJ *obj, HuVecF pos, HuVecF rot,
+-    HuVecF scale);
+-extern int mbev_CapEffExplodeAdd(OMOBJ *obj, HuVecF pos, HuVecF vel,
+-    float active, float angleStep, float fadeStep, GXColor color);
++/* MP6_NATIVE_PORT: use the pointer signatures defined by capevent.c. */
++extern void mbev_CapEffRingHitAdd(OMOBJ *obj, HuVecF *pos, HuVecF *rot,
++    HuVecF *scale);
++extern int mbev_CapEffExplodeAdd(OMOBJ *obj, HuVecF *pos, HuVecF *vel,
++    float active, float angleStep, float fadeStep, GXColor *color);
+ extern int mbev_CapEffSnowAdd(OMOBJ *obj, HuVecF *pos, int time);
+-extern void mbev_CapEffDustHeavyAdd(OMOBJ *obj, HuVecF pos);
++extern void mbev_CapEffDustHeavyAdd(OMOBJ *obj, HuVecF *pos);
+@@ -124 +125 @@
+-    HuVecF moveDir);
++    HuVecF *moveDir);
+@@ -357,2 +358,2 @@
+-        mbev_CapEffRingHitAdd(work->ringObj, playerPosNext, playerRot,
+-            ringScale);
++        mbev_CapEffRingHitAdd(work->ringObj, &playerPosNext, &playerRot,
++            &ringScale);
+@@ -833,4 +834,4 @@
+-            mbev_CapEffExplodeAdd(work->explodeObj, tempVec, effectVel,
++            mbev_CapEffExplodeAdd(work->explodeObj, &tempVec, &effectVel,
+                 ((MBCapsuleEffRandF() * 0.5f) + 1.0f) * 100.0f,
+                 -0.5f + MBCapsuleEffRandF(),
+-                (MBCapsuleEffRandF() * 0.2f) + 0.33f, color);
++                (MBCapsuleEffRandF() * 0.2f) + 0.33f, &color);
+@@ -890,4 +891,4 @@
+-            mbev_CapEffExplodeAdd(work->explodeObj, tempVec, effectVel,
++            mbev_CapEffExplodeAdd(work->explodeObj, &tempVec, &effectVel,
+                 (MBCapsuleEffRandF() + 2.0f) * 100.0f,
+                 (-0.5f + MBCapsuleEffRandF()) * 2.0f,
+-                (MBCapsuleEffRandF() * 0.2f) + 0.33f, color);
++                (MBCapsuleEffRandF() * 0.2f) + 0.33f, &color);
+@@ -928 +929 @@
+-    mbev_CapPlayerMoveVelSet(work->playerNo, 3.266667f, tempVec);
++    mbev_CapPlayerMoveVelSet(work->playerNo, 3.266667f, &tempVec);
+@@ -1431 +1432 @@
+-            mbev_CapEffDustHeavyAdd(work->explodeObj, tempPos);
++            mbev_CapEffDustHeavyAdd(work->explodeObj, &tempPos);
+@@ -2687 +2688 @@
+-    mbev_CapEffDustHeavyAdd(work->explodeObj, playerPos);
++    mbev_CapEffDustHeavyAdd(work->explodeObj, &playerPos);

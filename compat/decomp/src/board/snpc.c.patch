@@ -1,0 +1,9 @@
+--- a/src/board/snpc.c
++++ b/src/board/snpc.c
+@@ -2,0 +3 @@
++#include "game/board/branch.h"
+@@ -405 +406,3 @@
+-    float zoom, float fov, int maxTime);
++    /* Native ABI: match game/board/camera.h and the camera.c definition.
++     * Keep the recovered SNPC behavior; only the caller prototype changes. */
++    float zoom, float fov, s16 maxTime);

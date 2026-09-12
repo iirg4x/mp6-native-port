@@ -1,0 +1,115 @@
+Build owning pipeline-creation closures only for newly queued pipelines.
+Cache hits do not copy the pipeline configuration or allocate a std::function.
+
+--- a/lib/gfx/pipeline_cache.hpp
++++ b/lib/gfx/pipeline_cache.hpp
+@@ -26,7 +26,8 @@
+ void end_pipeline_frame();
+ 
+ template <typename Config>
+-PipelineRef find_pipeline(ShaderType type, const Config& config, NewPipelineCallback&& cb);
++PipelineRef find_pipeline(ShaderType type, const Config& config,
++                          wgpu::RenderPipeline (*create)(const Config&));
+ 
+ bool get_pipeline(PipelineRef ref, wgpu::RenderPipeline& pipeline);
+ 
+--- a/lib/gfx/pipeline_cache.cpp
++++ b/lib/gfx/pipeline_cache.cpp
+@@ -428,7 +428,8 @@
+ static PipelineRef g_lastPipelineRef = std::numeric_limits<PipelineRef>::max();
+ 
+ template <typename PipelineConfig>
+-static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& config, NewPipelineCallback&& cb,
++static PipelineRef find_pipeline_impl(ShaderType type, const PipelineConfig& config,
++                                      wgpu::RenderPipeline (*create)(const PipelineConfig&),
+                                       PipelinePriority priority = PipelinePriority::Normal,
+                                       std::optional<uint32_t> firstFrameUsedOverride = std::nullopt) {
+   ZoneScoped;
+@@ -488,7 +489,7 @@
+       }
+     } else if (!g_hasPipelineThread && (blocking || g_pipelinesPerFrame < BuildPipelinesPerFrame)) {
+       g_pipelines.try_emplace(hash, CachedPipeline{
+-                                        .pipeline = cb(),
++                                        .pipeline = create(config),
+                                         .firstFrameUsed = firstFrameUsed,
+                                     });
+       pipelineReady = true;
+@@ -501,7 +502,8 @@
+       PendingPipeline pending{
+           .hash = hash,
+           .firstFrameUsed = firstFrameUsed,
+-          .create = std::move(cb),
++          // Only a queued miss needs an owning copy. Cache hits do not allocate.
++          .create = [config, create] { return create(config); },
+       };
+       switch (priority) {
+       case PipelinePriority::Background:
+@@ -1038,7 +1040,7 @@
+       continue;
+     }
+ 
+-    find_pipeline_impl(type, config, [=] { return create(config); }, PipelinePriority::Background, firstFrameUsed);
++    find_pipeline_impl(type, config, create, PipelinePriority::Background, firstFrameUsed);
+     ++acceptedRows;
+   }
+ 
+@@ -1098,24 +1100,27 @@
+ }
+ 
+ template <>
+-PipelineRef find_pipeline(ShaderType type, const clear::PipelineConfig& config, NewPipelineCallback&& cb) {
++PipelineRef find_pipeline(ShaderType type, const clear::PipelineConfig& config,
++                          wgpu::RenderPipeline (*create)(const clear::PipelineConfig&)) {
+   // A missing clear is visible corruption, not an optional background draw.
+   // Cache prewarming remains asynchronous; an actually used pipeline must be
+   // ready before this frame is submitted, including on threadless backends.
+-  return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking);
++  return find_pipeline_impl(type, config, create, PipelinePriority::Blocking);
+ }
+ 
+ template <>
+-PipelineRef find_pipeline(ShaderType type, const gx::PipelineConfig& config, NewPipelineCallback&& cb) {
++PipelineRef find_pipeline(ShaderType type, const gx::PipelineConfig& config,
++                          wgpu::RenderPipeline (*create)(const gx::PipelineConfig&)) {
+   // Do not omit first-use meshes, materials or UI while compiling their shader.
+   // Reuse the existing blocking path (also used by RmlUi), not a fallback shader.
+-  return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking);
++  return find_pipeline_impl(type, config, create, PipelinePriority::Blocking);
+ }
+ 
+ #ifdef AURORA_ENABLE_RMLUI
+ template <>
+-PipelineRef find_pipeline(ShaderType type, const rmlui::PipelineConfig& config, NewPipelineCallback&& cb) {
+-  return find_pipeline_impl(type, config, std::move(cb), PipelinePriority::Blocking, 0);
++PipelineRef find_pipeline(ShaderType type, const rmlui::PipelineConfig& config,
++                          wgpu::RenderPipeline (*create)(const rmlui::PipelineConfig&)) {
++  return find_pipeline_impl(type, config, create, PipelinePriority::Blocking, 0);
+ }
+ #endif
+ 
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -851,7 +851,7 @@
+ 
+ template <>
+ PipelineRef pipeline_ref(const clear::PipelineConfig& config) {
+-  return find_pipeline(ShaderType::Clear, config, [=] { return create_pipeline(config); });
++  return find_pipeline(ShaderType::Clear, config, clear::create_pipeline);
+ }
+ 
+ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bool clearAlpha, bool clearDepth,
+@@ -1514,13 +1514,13 @@
+ 
+ template <>
+ PipelineRef pipeline_ref(const gx::PipelineConfig& config) {
+-  return find_pipeline(ShaderType::GX, config, [=] { return create_pipeline(config); });
++  return find_pipeline(ShaderType::GX, config, gx::create_pipeline);
+ }
+ 
+ #ifdef AURORA_ENABLE_RMLUI
+ template <>
+ PipelineRef pipeline_ref(const rmlui::PipelineConfig& config) {
+-  return find_pipeline(ShaderType::Rml, config, [=] { return rmlui::create_pipeline(config); });
++  return find_pipeline(ShaderType::Rml, config, rmlui::create_pipeline);
+ }
+ #endif

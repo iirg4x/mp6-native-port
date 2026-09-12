@@ -1,0 +1,28 @@
+--- a/src/board/coin.c
++++ b/src/board/coin.c
+@@ -0,0 +1 @@
++#include <stdlib.h>
+@@ -199,0 +201,23 @@
++
++/* MP6_NATIVE_PORT retail-overread shim (board-opening coin-shower crash):
++ * mbCoinEffCreate indexes coinEffBankTbl[] (u8[16]) with mbRandMod(32).
++ * On the retail DOL that overread is benign because coinEffBankTbl2[]
++ * sits immediately after coinEffBankTbl[] in .data, so indices 16..31
++ * read coinEffBankTbl2[0..15].  The native build's runtime bounds
++ * checking (correctly) panics on the same read ("index 17 out of bounds
++ * for type 'u8[16]'", coin.c:785).  Reproduce the exact retail memory
++ * layout by serving that read from a 32-byte join of the two tables;
++ * the join is copied from the originals at first use so its values can
++ * never drift from the pinned decomp data. */
++static u8 mp6CoinEffBankJoined[32];
++static int mp6CoinEffBankJoinedInit;
++static u8 *mp6CoinEffBankRetailTbl(void)
++{
++    if (!mp6CoinEffBankJoinedInit) {
++        memcpy(mp6CoinEffBankJoined, coinEffBankTbl, sizeof(coinEffBankTbl));
++        memcpy(mp6CoinEffBankJoined + sizeof(coinEffBankTbl), coinEffBankTbl2, sizeof(coinEffBankTbl2));
++        mp6CoinEffBankJoinedInit = 1;
++    }
++    return mp6CoinEffBankJoined;
++}
++#define coinEffBankTbl (mp6CoinEffBankRetailTbl())

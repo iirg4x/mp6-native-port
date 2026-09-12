@@ -12,6 +12,66 @@ Windows build relies on the fixed image base + the PDB next to the exe;
 addresses in any log can also be resolved after the fact with
 `mp6_symbolize_addr`'s recipe. `[MP6-CRASH]` lines are the marker.
 
+Windows **release** builds are GUI applications: double-clicking the game does
+not create a console. Ordinary launches write diagnostics, including crash
+stderr, to `logs/mp6.log` under the working directory; the preceding session is
+kept as `logs/mp6.previous.log`. The local `build/Play MP6.lnk` uses `build` as
+its working directory, so its log is `build/logs/mp6.log` and the existing
+`build/saves` card stays in use. Explicitly redirected stdout/stderr remain
+owned by the caller, so scripted tests still capture their normal output.
+Debug and headless builds remain console applications.
+
+### Title replay regression
+
+`tests/integration/build_title_qa.py` builds an isolated, observation-only test
+binary from the port-patched sources. `run_title_qa.py --name NAME` lets the
+intro replay twice, presses Start at the third title, and requires file select
+to run for another 600 ticks. `--visits 20` checks a longer headless soak; add
+`--windowed` to both commands for real rendering (`--capture` on the runner
+records the file-select transition). Runs have separate saves/config/cache in
+`build/title-qa-runs/NAME`; the probes never enter production builds.
+
+The September 6 repair removes the replay-time `HuMemDirectFreeNum` calls from
+the port's boot patch. `HU_MEMNUM_OVL` resources such as window fonts, icons and
+card sprites are still live during the attract loop. Their lifetime ends at
+the real overlay teardown, not at a title timeout. See `BOARD_QA.md` for the
+before/after evidence and the separate results-overlay limitation.
+
+## Stat commands
+
+The console supports `stat unit`, `stat fps`, `stat scenerendering`, `stat game`,
+`stat gpu`, `stat memory`, `stat audio`, and `stat board`. Each command toggles its
+panel; `stat none` hides them all. Type `stat ` to browse the full suggestion list.
+Scroll it and tap a name to complete the command, then press Enter to run it.
+Up/Down and Tab also work; matches are no longer cut off after the eighth entry.
+
+Console input must accept IME text without a preceding keydown. Only the printable
+backtick toggle suppresses its following text event; Enter, F9, Tab and navigation
+keys must not discard the next soft-keyboard text commit.
+
+## GPU timing overlay
+
+`stat gpu` shows hardware timestamps in Release builds when the graphics driver
+supports timestamp queries. It lists average/maximum milliseconds over the last
+120 completed samples, including GTAO, its blur passes, depth snapshots and the
+combined presentation/touch-overlay pass. `stat unit` uses the same GPU span.
+
+`GPU span` runs from the first timed render pass to the last. `Between passes`
+is the time within that span not covered by a timed pass; neither row measures
+CPU work, the full display interval or time waiting for presentation. Unsupported
+drivers report unavailable instead of substituting CPU timings.
+
+Sampling is enabled only while `stat gpu` or `stat unit` is active. Readback is
+asynchronous with a bounded queue: a busy queue drops a sample instead of waiting
+for the GPU. `MP6_GPU_TIMINGS=1` also enables sampling and periodically logs real
+pass timings for automated runs; `run_board_qa.py --gpu-timings` sets it.
+
+On touch screens, tap the console's Close button or the upper-left X to return
+to play. Closing the console preserves enabled stat panels. `clear` removes
+both console output and all stat panels; `clear log` clears only the text, and
+`clear stats` (or `stat none`) hides only the panels. These commands leave the
+console input open and do not reset game settings.
+
 ## Frame/GX inspection
 
 - **framescope** — `MP6_FRAMESCOPE=N` captures the N-th frame's complete
@@ -36,7 +96,7 @@ addresses in any log can also be resolved after the fact with
   display-list recording brackets; flags any bind injected INTO a DL
   (`<-- INJECTED-INTO-DL`), which poisons every replay of that list.
 - **DL/face validation** — `MP6_DL_DUMP` is dual-purpose: any value
-  arms the HSF face-index sweep at parse time (`platform/hsf/`,
+  arms the HSF face-index sweep at parse time (`src/hsf/`,
   out-of-range vertex/index detection); `MP6_DL_DUMP=<object-name>`
   additionally dumps that one named object's parsed faces, vertex/st
   arrays, and material vertex-descriptor flags to

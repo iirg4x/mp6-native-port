@@ -1,0 +1,15 @@
+--- a/src/board/board.c
++++ b/src/board/board.c
+@@ -503,0 +504,13 @@
++    /* The native minigame stub continues in place, without the overlay
++     * reload that normally reaches mbMain's end-of-match check. Preserve
++     * that check at the continuation boundary too: never play turnMax+1
++     * or wait for another day/night reload to finish the board. */
++    if (GWPartyGet() != FALSE && GwSystem.turnNo > GwSystem.turnMax
++        && !_CheckFlag(FLAG_BOARD_TUTORIAL)) {
++        _ClearFlag(FLAG_BOARD_MOVE_DONE);
++        mbExitReq();
++        HuPrcSleep(-1);
++        return;
++    }
++

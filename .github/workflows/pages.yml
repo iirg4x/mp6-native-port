@@ -1,10 +1,10 @@
 # MP6 native port -- deploys web/ (the static packager site) to GitHub
 # Pages on push to the default branch.
 #
-# Scope, on purpose: this workflow only ever reads the `web/` directory --
+# Scope, on purpose: this workflow only ever reads the `packaging/web/` directory --
 # it uploads exactly that folder as the Pages artifact and touches nothing
 # else in the repo. There is no disc image, no game data, and no build step
-# anywhere in this job; `web/` is already plain static files (vanilla
+# anywhere in this job; `packaging/web/` is already plain static files (vanilla
 # JS/HTML/CSS, no bundler). See web/README-equivalent docs (the site's own
 # `index.html` "Legal / policy" section) and docs/RELEASING.md for what
 # does and doesn't get published for this project.
@@ -20,7 +20,7 @@ on:
   push:
     branches: [main, master]
     paths:
-      - "web/**"
+      - "packaging/web/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch: {}
 
@@ -49,7 +49,7 @@ jobs:
       - name: Upload web/ as the Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web
+          path: packaging/web
 
       - name: Deploy to GitHub Pages
         id: deployment

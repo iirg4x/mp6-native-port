@@ -1,0 +1,112 @@
+--- a/src/board/capspecial.c
++++ b/src/board/capspecial.c
+@@ -1,0 +2,3 @@
++#include "mp6_widescreen.h"
++#include <stdio.h>
++#include <string.h>
+@@ -194,3 +197,4 @@
+-    u8 _unkB84[40];
+-    OMOBJ *guideObj;
+-    u8 _unkBB0[28];
++    /* Keep the shared event payload at 96 bytes on native hosts, matching
++     * capevent/capmove/cap*. The duel coroutine retains its guide locally;
++     * embedding an eight-byte pointer here would shift every trailing field. */
++    u8 _unkB84[72];
+@@ -412 +416 @@
+-extern s16 mbev_CapCoinDisp(int playerNo, int coinNum, BOOL winMotF,
++extern int mbev_CapCoinDisp(int playerNo, int coinNum, BOOL winMotF,
+@@ -418 +422 @@
+-extern int mbev_CapPlayerSquishSet(int *out, int masuId);
++extern void mbev_CapPlayerSquishSet(int *out, int masuId);
+@@ -424 +428 @@
+-extern MBMODELID mbGuideModelGet(OMOBJ *obj);
++extern int mbGuideModelGet(OMOBJ *obj);
+@@ -509 +513 @@
+-static int ev_CapKettouStart(CAPWORK *work);
++static int ev_CapKettouStart(CAPWORK *work, OMOBJ **guideObj);
+@@ -511 +515 @@
+-static void ev_CapKettouReturn(CAPWORK *work);
++static void ev_CapKettouReturn(CAPWORK *work, OMOBJ **guideObj);
+@@ -515 +519 @@
+-static u16 ev_CapKoopaDicePadBtnHook(void);
++static u16 ev_CapKoopaDicePadBtnHook(int playerNo);
+@@ -1496,0 +1501,3 @@
++        /* Capture the live frame; keep the original fixed-size destination
++         * and resample instead of enlarging its CPU allocation. */
++        work->screenWidth = mp6_widescreen_render_width();
+@@ -1506 +1513,10 @@
+-    if (material->attrNum == 1) {
++    if (material->attrNum != 1) {
++        /* Non-fading parts must not inherit a textured part's fade state. */
++        if (material->attrNum == 0) {
++            Hu3DTevStageNoTexSet(drawObj, material);
++        } else {
++            Hu3DTevStageTexSet(drawObj, material);
++        }
++        return;
++    }
++
+@@ -1523 +1539,3 @@
+-    C_MTXLightPerspective(perspective, fov, lbl_802C4368,
++    /* Match the live board camera that produced the captured background. */
++    C_MTXLightPerspective(perspective, fov,
++        camera->aspect > 0.0f ? camera->aspect : lbl_802C4368,
+@@ -1549,3 +1566,0 @@
+-    } else {
+-        return;
+-    }
+@@ -3092,0 +3108,8 @@
++    /* Undecompiled duel minigames are stubbed before stakes or selection;
++     * skipping one must not fabricate a winner or consume a wager. */
++    if (mbMgRouletteNumGet(6) == 0) {
++        mbev_MgCallKettou();
++        HuPrcEnd();
++        return;
++    }
++
+@@ -3108 +3130,0 @@
+-    work->guideObj = guideObj;
+@@ -3110 +3132 @@
+-        if (ev_CapKettouStart(work)) {
++        if (ev_CapKettouStart(work, &guideObj)) {
+@@ -3174 +3196 @@
+-            ev_CapKettouReturn(work);
++            ev_CapKettouReturn(work, &guideObj);
+@@ -3187,3 +3209,3 @@
+-        ev_CapKettouReturn(work);
+-    }
+-    if (work->guideObj != NULL) {
++        ev_CapKettouReturn(work, &guideObj);
++    }
++    if (guideObj != NULL) {
+@@ -3199 +3221 @@
+-static int ev_CapKettouStart(CAPWORK *work)
++static int ev_CapKettouStart(CAPWORK *work, OMOBJ **guideObj)
+@@ -3507,2 +3529,2 @@
+-        mbGuideEnd(work->guideObj, TRUE);
+-        work->guideObj = NULL;
++        mbGuideEnd(*guideObj, TRUE);
++        *guideObj = NULL;
+@@ -3801 +3823 @@
+-static void ev_CapKettouReturn(CAPWORK *work)
++static void ev_CapKettouReturn(CAPWORK *work, OMOBJ **guideObj)
+@@ -4060,2 +4082,2 @@
+-    mbGuideEnd(work->guideObj, TRUE);
+-    work->guideObj = NULL;
++    mbGuideEnd(*guideObj, TRUE);
++    *guideObj = NULL;
+@@ -4698 +4720 @@
+-    extern void CharEffectHipDropCreate();
++    extern void CharEffectHipDropCreate(s16 charNo, HuVecF *pos);
+@@ -4946 +4968,4 @@
+-    squishCount = mbev_CapPlayerSquishSet(ids, masuId);
++    /* The legacy void forwarder discards this return value in native C.
++     * Call its exact implementation with the same voice flag, retaining
++     * the real player count instead of reading an undefined return register. */
++    squishCount = mbev_CapPlayerSquishVoiceSet(ids, masuId, FALSE);
+@@ -5046 +5071 @@
+-            (u16 (*)(int))ev_CapKoopaDicePadBtnHook);
++            ev_CapKoopaDicePadBtnHook);
+@@ -5418 +5443 @@
+-static u16 ev_CapKoopaDicePadBtnHook(void)
++static u16 ev_CapKoopaDicePadBtnHook(int playerNo)

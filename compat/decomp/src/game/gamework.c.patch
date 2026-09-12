@@ -1,0 +1,6 @@
+--- a/src/game/gamework.c
++++ b/src/game/gamework.c
+@@ -283 +283,2 @@
+-    
++    (void)mgNo;
++    return FALSE;

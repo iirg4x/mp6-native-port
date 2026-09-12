@@ -1,4 +1,4 @@
-/* Developer console (platform/gx/ui/console.cpp) -- THE BOTTOM INPUT BAR.
+/* Developer console (src/gx/ui/console.cpp) -- THE BOTTOM INPUT BAR.
  *
  * Deliberately NOT modelled on window.rcss: this is an instrument, not a menu.
  * It is one translucent line pinned to the bottom edge of the game window, a
@@ -113,11 +113,7 @@ scrollbarhorizontal {
 
 /* --- the autocomplete popup ------------------------------------------- */
 
-/* Left-aligned with the prompt and only as wide as it needs to be: a popup
- * spanning the window would cover the game to advertise nine command names.
- * The "[N more matches]" row is the FIRST child (console.cpp appends it
- * first), which is the top of a list rising off the bottom edge -- exactly
- * where the reference puts it. */
+/* All matches remain reachable with a wheel, touch drag, or arrow keys. */
 acpopup {
     display: none;
 }
@@ -128,6 +124,9 @@ acpopup[open] {
     align-self: flex-start;
     min-width: 260dp;
     max-width: 70%;
+    max-height: 36vh;
+    overflow-y: auto;
+    overflow-x: hidden;
     margin: 0 0 2dp 14dp;
     padding: 4dp 0;
     border: 1dp rgba(0, 157, 218, 55%);
@@ -138,32 +137,16 @@ acpopup[open] {
 
 acrow {
     display: block;
-    padding: 3dp 14dp;
+    min-height: 44dp;
+    padding: 12dp 14dp;
     color: #CFE4F2;
     white-space: nowrap;
 }
 
-acrow.sel {
+acrow.sel, acrow:hover {
     color: #06121F;
     background-color: #009dda;
     font-weight: bold;
-}
-
-/* Dimmer than an acrow (#CFE4F2) and that is the WHOLE differentiation: this
- * row used to add `font-style: italic`, and ui.cpp loads Regular and Bold
- * faces only (ui.cpp:78-79 -- res/fonts has no italic Inter at all).
- * FontFamily::GetFaceHandle matches style EXACTLY (FontFamily.cpp:27, an
- * `== style` test with no fallback), so an italic request found no face,
- * returned handle 0, and ElementText::OnRender returned before generating any
- * geometry (ElementText.cpp:129) -- the row occupied its padding and drew no
- * glyphs. Dropping the one declaration leaves every box declaration in this
- * rule untouched; what changes is that the text now has a face to render
- * with. */
-acmore {
-    display: block;
-    padding: 3dp 14dp;
-    color: #8FA9BC;
-    white-space: nowrap;
 }
 
 /* --- the bar itself ---------------------------------------------------- */
@@ -197,6 +180,23 @@ cmdbar input {
     background-color: transparent;
     color: #E6F2FA;
     caret-color: #4CC7F5;
+}
+
+#console-close {
+    flex: 0 0 auto;
+    min-width: 64dp;
+    min-height: 44dp;
+    padding: 10dp 12dp;
+    border: 1dp rgba(0, 157, 218, 55%);
+    border-radius: 6dp;
+    background-color: rgba(0, 157, 218, 18%);
+    color: #E6F2FA;
+    text-align: center;
+}
+
+#console-close:hover, #console-close:active {
+    background-color: #009dda;
+    color: #06121F;
 }
 
 /* SELECTION IS AN ELEMENT, NOT A PROPERTY. This rule used to be a

@@ -5,75 +5,37 @@ replaced, and the handful of hard rules everything else hangs off.
 
 ## Module map
 
-```
-decomp repo (read-only, sibling checkout -- see DECOMP_DEPENDENCY.md)
-  src/game/*.c  src/REL/{bootDll,selmenuDll,fileseldll,mdseldll}/*.c
-        |                                   |
-        |  compiled as-is                   |  + patches/decomp/ queue
-        v                                   v
-   +---------------------------------------------------------+
-   |                    game code (unmodified control flow)    |
-   +---------------------------------------------------------+
-        |  dolphin SDK headers (unchanged) + shim/include/ compat prelude
-        v
-   +----------------+  +----------------+  +--------------------+
-   | platform/os    |  | platform/gx    |  | platform/audio     |
-   | arena, HuPrc   |  | aurora_bridge  |  | msm bridge, ADPCM, |
-   | scheduler, REL |  | (VI/GX/PAD),   |  | SDL audio out      |
-   | bridge, CARD,  |  | framescope     |  +--------------------+
-   | save marshal   |  +----------------+  +--------------------+
-   +----------------+  | platform/dvd   |  | platform/hsf       |
-   | platform/host  |  | FST + files/   |  | native HSF         |
-   | os seam:       |  +----------------+  | deserializer       |
-   | win32/android  |                      +--------------------+
-   +----------------+
-        |
-        v
-   Aurora (GX/VI/PAD/CARD over SDL3 + Dawn/WebGPU) + host OS
+The pinned decomp checkout supplies recovered game, board, menu and Towering
+Treetop sources. The Port applies `compat/decomp/` into a local staging copy,
+then links that code against `src/` and `include/`.
+
+```text
+read-only decomp -> local adapted game/board source
+                              |
+             native SDK adapters and launcher (src/)
+                              |
+               Aurora / SDL3 / Dawn + host OS
 ```
 
-- **Game code** — the decomp's `game/` tree plus the recovered overlay
-  sources (bootDll, selmenuDll, fileseldll, mdseldll), compiled directly
-  into the executable. Control flow is unmodified; the small set of
-  genuine port fixes lives in `patches/decomp/` (unified diffs applied
-  into a build-time staging copy by `tools/apply_patches.py` — the decomp
-  checkout itself is never written). Minigame DLLs have no recovered
-  source; `platform/os/dll_bridge.c` binds a black-screen stub for them
-  (and for any unrecognized overlay id).
-- **platform/os** — the low-4GB arena and OS heap family, the native
-  HuPrc process scheduler (`process_native.c`), the synthetic-REL loader
-  bridge (`dll_bridge.c`), CARD wiring (`card_native.c`), the save-box
-  endian marshal (`save_endian.c`), allocation diagnostics
-  (`malloc_direct.c`).
-- **platform/host** — the OS seam (`host.h`): time, sleep, arena
-  reservation, paths, coroutines, mutexes/threads, RSS, crash reporting.
-  One backend file per platform (`host_win32.c`, `host_android.c`) plus
-  the shared arena-backed coroutine backend (`coro_arena.c` + vendored
-  `minicoro.h`). Everything else in `platform/` is OS-agnostic C.
-- **platform/gx** — `aurora_bridge.c`, the adapter between the game's
-  GameCube idioms and Aurora: VI frame pacing, GXSetArray sizing,
-  GXBegin/GXEnd tolerance, keyboard/touch→PAD, the input-script engine,
-  the 60Hz tick throttle, window/aspect policy, and debug harnesses
-  (draw bisect, framescope).
-- **platform/android** and **platforms/android** — the on-device shell:
-  a bootstrap that maps `libmp6game.so` below 4GB, the SDL3 activity and
-  gradle project, and the touch overlay. (Windows builds compile none of
-  it.)
-- **Aurora** — consumed from `external_refs/repos/aurora` (read-only)
-  with this port's patch series in `platform/gx/aurora-patches/`
-  (mingw fixes, stable texture ids, content-fingerprint texture
-  versioning, copy-tex bind invalidation, CARD fixes, the Android
-  no-JNI asset fallback). Two build trees exist: plain (`build/`) and
-  RmlUi-enabled (`build-rmlui/`, used by the launcher). See
-  BUILDING.md.
-- **Launcher** — the pre-boot settings menu (Windows windowed builds):
-  `platform/gx/ui/` is an RmlUi component framework adapted from
-  partyboard (see `PARTYBOARD_PROVENANCE.md` for the legal/provenance
-  ledger; ripped files carry a two-line header) driven by
-  `launcher_core.cpp` (our code: config model, mode decision, settings
-  application). Config lives in a portable `mp6_config.json` next to the
-  exe. The launcher never runs for automation invocations — see
-  TESTING.md ("the automation contract").
+Native code is grouped by subsystem: `src/gx/` (rendering, presentation and UI),
+`src/audio/`, `src/hsf/`, `src/dvd/`, `src/os/` (scheduler, heaps and saves),
+and `src/host/` (Windows/Android OS calls). See [Code map](CODE_MAP.md).
+
+Minigames are unavailable. `src/os/minigame_stub.c` replaces `board/mgcall.c`
+before roulette, resource teardown and overlay dispatch. The end-turn call
+returns true so the existing board loop advances locally, without awards or
+unlocks. Direct attempts to load other incomplete overlays remain unsupported.
+
+The shared Aurora dependency is read-only. Its attested base adaptations live
+in `compat/aurora/base/`. The optimized Windows backend is built from a
+Port-local source/dependency copy under `build/`, with its additional adapters
+in `compat/aurora/windows/`.
+
+The RmlUi launcher in `src/gx/ui/` uses portable `mp6_config.json` settings
+beside the executable. It is adapted from partyboard; see
+[UI provenance](PARTYBOARD_PROVENANCE.md). Automated runs bypass user config
+unless explicitly put in launcher mode. See [Testing](TESTING.md) and
+[Settings](SETTINGS.md).
 
 ## The memory model (low 4GB everywhere)
 
@@ -113,7 +75,7 @@ main-loop context — `PADControlMotor` is queued and applied from
 dispatch loop re-enters a single `gcsetjmp` buffer with new values —
 legal for raw PPC register-poking, undefined behavior for host
 `setjmp/longjmp` (and it fails silently on this toolchain).
-`platform/os/process_native.c` reimplements the scheduler loop natively
+`src/os/process_native.c` reimplements the scheduler loop natively
 (verified line-by-line against the original for observable behavior:
 canary byte, priority ordering, exec states, sleep/pause semantics) and
 gives each process a coroutine. Two coroutine-specific rules the
@@ -135,11 +97,11 @@ this manageable:
   palette decoder consumes raw BE `u16` entries, and a host swap inverts
   alpha (opaque↔transparent).
 - **CPU-parsed fields are swapped at the parse site**, explicitly and
-  visibly, via `shim/include/be.h` (`mp6_be16/32`, byte-at-a-time,
+  visibly, via `include/be.h` (`mp6_be16/32`, byte-at-a-time,
   alignment-agnostic). The DVD layer returns raw disc bytes; each format
   parser (data.c container headers, sprite/ANM fields, message decode,
   FST walking) owns its own swaps via the patch queue.
-- **HSF models get a real deserializer** (`platform/hsf/`): the original
+- **HSF models get a real deserializer** (`src/hsf/`): the original
   loader patched pointers inside the loaded file in place, which cannot
   survive 64-bit pointers. The deserializer reads the BE 32-bit-offset
   file and builds a fresh, natively-laid-out `HSF_*` graph; consumers
@@ -153,7 +115,7 @@ this manageable:
 Saves are Dolphin-interchangeable GCI files under `saves/USA/Card A/`
 (aurora's GCI-folder CARD backend; slot A wired as `GP6E`/`01`). The
 on-card image must stay byte-true to the console format, so
-`platform/os/save_endian.c` marshals the persisted structs
+`src/os/save_endian.c` marshals the persisted structs
 (`GW_COMMON`/`GW_SYSTEM`/`GW_PLAYER`) field-by-field at the six
 struct↔buffer boundaries in the patched `saveload.c`:
 
@@ -172,7 +134,7 @@ struct↔buffer boundaries in the patched `saveload.c`:
 
 Game code never calls MusyX directly — everything funnels through the
 narrow `msm*` layer, so that is where the port cuts:
-`platform/audio/msm_bridge.c` implements the msm surface over its own
+`src/audio/msm_bridge.c` implements the msm surface over its own
 mixer (streams + sound effects, group/volume/fade semantics), decoding
 DSP-ADPCM (`dspadpcm.c`) from the disc's own sound data, and feeds an
 SDL3 audio callback (`audio_out_sdl.c`). The mixer allocates at

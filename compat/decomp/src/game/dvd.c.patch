@@ -1,0 +1,53 @@
+--- a/src/game/dvd.c
++++ b/src/game/dvd.c
+@@ -15 +15,23 @@
+-static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async)
++/* `outBufP`, when non-NULL, is written with `buf` immediately after
++ * allocation, before either read path below starts -- NOT a behavior
++ * change on real hardware (where nothing else could possibly run before
++ * this function returns anyway, since DVDReadAsyncPrio's callback only
++ * ever fires later, off a real DMA-complete interrupt), but load-bearing
++ * on this port, where DVDReadAsyncPrio completes -- and fires its
++ * callback -- SYNCHRONOUSLY (see src/dvd/dvd_files.c's own header
++ * comment for why: no real async I/O to wait on). HuDvdDataFastReadAsync's
++ * caller (game/data.c's HuDataDirReadAsync) only assigns its own
++ * readStat->dirP = <this function's return value> AFTER this whole call
++ * (recursive callback chain included) returns -- so on this port, by the
++ * time the FIRST synchronous callback fires, readStat->dirP is still
++ * whatever it was before (NULL, freshly zeroed by HuDataInit()), and
++ * HuDataDirReadAsyncCallBack's own
++ * `((u8 *)readStat->dirP)+readStat->readOfs` dereferences that -- caught
++ * directly: a real null-pointer-arithmetic panic on the exact expression
++ * above, tracing back to this exact gap, once data/title.bin's async,
++ * multi-block (2MB+) read was the first case big enough to actually chain
++ * a second callback. Passing `buf`'s own address through here so it's
++ * published before any callback can possibly run closes the gap at its
++ * true root, for both this port and real hardware alike (a strict no-op
++ * there). */
++static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async, void **outBufP)
+@@ -18 +40 @@
+-    void *buf;
++    void *buf = NULL;
+@@ -40 +62 @@
+-            break;
++            return NULL; /* OSPanic is not assumed noreturn by the native ABI. */
+@@ -47,0 +70 @@
++    if (outBufP) *outBufP = buf;
+@@ -81 +104 @@
+-        data = HuDvdDataReadWait(&file, 0, 0, FALSE);
++        data = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
+@@ -103 +126 @@
+-            file_ptrs[i] = HuDvdDataReadWait(&file, 0, 0, FALSE);
++            file_ptrs[i] = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
+@@ -117 +140 @@
+-        data = HuDvdDataReadWait(&file, 2, heap, FALSE);
++        data = HuDvdDataReadWait(&file, 2, heap, FALSE, NULL);
+@@ -130 +153 @@
+-        data = HuDvdDataReadWait(&file, 0, 0, FALSE);
++        data = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
+@@ -143 +166 @@
+-        data = HuDvdDataReadWait(&file, 1, num, FALSE);
++        data = HuDvdDataReadWait(&file, 1, num, FALSE, NULL);
+@@ -158 +181 @@
+-        data = HuDvdDataReadWait(&stat->dvdFile, 0, 0, TRUE);
++        data = HuDvdDataReadWait(&stat->dvdFile, 0, 0, TRUE, &stat->dirP);

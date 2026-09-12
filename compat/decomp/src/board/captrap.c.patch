@@ -1,0 +1,32 @@
+--- a/src/board/captrap.c
++++ b/src/board/captrap.c
+@@ -158,2 +158,3 @@
+-extern int mbev_CapEffRingAdd(OMOBJ *obj, HuVecF *pos, HuVecF *rot,
+-    HuVecF *scale, int kind, int time, int bank, GXColor *color);
++/* MP6_NATIVE_PORT: exact by-value signature from capevent.c. */
++extern int mbev_CapEffRingAdd(OMOBJ *obj, HuVecF pos, HuVecF rot,
++    HuVecF scale, int kind, int time, int bank, GXColor color);
+@@ -183,2 +184,2 @@
+-extern void mbev_CapEffRingHitAdd(OMOBJ *obj, HuVecF pos, HuVecF rot,
+-    HuVecF scale);
++extern void mbev_CapEffRingHitAdd(OMOBJ *obj, HuVecF *pos, HuVecF *rot,
++    HuVecF *scale);
+@@ -909,3 +910,3 @@
+-        mbev_CapEffRingAdd(ringObj, &ringPosArg, &ringRotArg, &ringScaleArg,
++        mbev_CapEffRingAdd(ringObj, ringPosArg, ringRotArg, ringScaleArg,
+             1, 60.0 * (0.3f + (0.15 * (double)randTimeF)), i,
+-            &ringColorArg);
++            ringColorArg);
+@@ -1673,4 +1674,2 @@
+-            GXColor *colorP = &colorArg;
+-
+-            ((int (*)())mbev_CapEffRingAdd)(work->ringObj,
+-                ringPos, ringRot, ringScale, 1, 12, 2, colorP);
++            mbev_CapEffRingAdd(work->ringObj,
++                ringPos, ringRot, ringScale, 1, 12, 2, colorArg);
+@@ -1852 +1851 @@
+-        mbev_CapEffRingHitAdd(work->ringObj, ringPos, ringRot, ringScale);
++        mbev_CapEffRingHitAdd(work->ringObj, &ringPos, &ringRot, &ringScale);
+@@ -1887 +1886 @@
+-        mbev_CapEffRingHitAdd(work->ringObj, ringPos, ringRot, ringScale);
++        mbev_CapEffRingHitAdd(work->ringObj, &ringPos, &ringRot, &ringScale);

@@ -1,0 +1,28 @@
+--- a/src/board/dice.c
++++ b/src/board/dice.c
+@@ -0,0 +1 @@
++#include <stdio.h>
+@@ -1468,0 +1470,13 @@
++
++    /* Native OM slots are reusable: a deleted opening/roll number must not
++     * remain in the lookup table and make a later special die wait on the
++     * unrelated object now occupying that slot. Detach before deletion;
++     * leave every other live number and its animation state untouched. */
++    for (int playerNo = 0; playerNo < DICE_MAX; playerNo++) {
++        for (int no = 0; no < 3; no++) {
++            if (diceNumOMObj[playerNo][no] == obj) {
++                diceNumOMObj[playerNo][no] = NULL;
++            }
++        }
++    }
++
+@@ -2433 +2447,8 @@
+-    DICE_NUM_VTX *vtxBuf;
++    /* MP6_NATIVE_PORT: vtxBuf is assigned only inside the HSF_OBJ_MESH branch
++     * of the object loop, so a model with no mesh returned an indeterminate
++     * pointer (-Werror=sometimes-uninitialized). NULL is safe here for a
++     * specific, checkable reason: the only consumer, DiceNumObjMdlBend, walks
++     * the SAME object list under the SAME `obj->type == HSF_OBJ_MESH`
++     * predicate, so a model that made this return NULL also makes Bend
++     * dereference nothing. */
++    DICE_NUM_VTX *vtxBuf = NULL;

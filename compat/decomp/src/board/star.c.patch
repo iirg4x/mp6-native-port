@@ -1,0 +1,37 @@
+--- a/src/board/star.c
++++ b/src/board/star.c
+@@ -0,0 +1 @@
++#include <stdlib.h>
+@@ -181,2 +182,2 @@
+-/* This owner consumes the target's signed 16-bit guide-model return view. */
+-MBMODELID mbGuideModelGet(OMOBJ *obj);
++/* Native declarations must match the recovered provider's full int return. */
++int mbGuideModelGet(OMOBJ *obj);
+@@ -676,2 +677,4 @@
+-        /* Retail passes the address of this parameter, not the pointed-to vector. */
+-        objNo = StarPlayerCreate(playerNo, (HuVecF *)&pos);
++        /* Native: the retail parameter-address path depends on the PPC stack.
++         * A host pointer object is not a HuVecF; retain the port's explicit
++         * position input rather than interpreting pointer/adjacent stack bytes. */
++        objNo = StarPlayerCreate(playerNo, pos);
+@@ -1046 +1049,13 @@
+-            dataP->color.a = 255.0f * (1.0f - weight);
++            /* MP6_NATIVE_PORT: the SIXTH site of the trap class in
++             * include/mp6_hwcast.h, and the one the extended board drive
++             * hit once the five projection sites were fixed -- an IMPLICIT
++             * float->u8 conversion, which is why a grep for casts never saw
++             * it. `weight` is `dataP->time++ / (float)dataP->activeF`, and a
++             * particle slot that is still zero-filled has activeF == 0: the
++             * `dataP->activeF < 0` re-seed above does not fire for 0, so the
++             * division yields NaN (time 0) or +inf, and 255 * (1 - that) then
++             * converted out of range and aborted the process at
++             * board/star.c:1008. fctiwz maps both to 0x80000000, whose low
++             * byte is 0 -- an invisible particle, which is exactly what the
++             * console showed. */
++            dataP->color.a = (u8)MP6_FCTIWZ_S32(255.0f * (1.0f - weight));
+@@ -2277,2 +2292,3 @@
+-        /* Preserve the same retail parameter-address path as StarGetMain. */
+-        objNo = ZtarPlayerCreate(playerNo, (HuVecF *)&pos);
++        /* Native: as above, use the supplied vector, not host pointer bytes.
++         * The previous port already used this input for positioned awards. */
++        objNo = ZtarPlayerCreate(playerNo, pos);

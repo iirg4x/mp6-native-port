@@ -1,0 +1,5 @@
+--- a/src/REL/mdpresultdll/utility.c
++++ b/src/REL/mdpresultdll/utility.c
+@@ -1019,0 +1020,2 @@
++    /* Finish the native trail draw before another callback changes GX state. */
++    GXEnd();

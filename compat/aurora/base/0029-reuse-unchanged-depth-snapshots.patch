@@ -1,0 +1,76 @@
+Desktop-only exact depth reuse and intermediate MSAA resolve deferral. Android retains its pre-0.4.10 path pending hardware verification.
+
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -235,6 +235,10 @@
+   // Full-target snapshots for the public resolve_pass API
+   wgpu::Texture snapshotColorDst;
+   wgpu::TextureView snapshotDepthDst;
++  // Immutable snapshot inherited only by a loading continuation. Any draw or
++  // clear invalidates reuse; offscreen suspension preserves the EFB identity.
++  wgpu::TextureView unchangedDepthSnapshot;
++  bool deferColorResolve = false;
+   Vec4<float> clearColorValue{0.f, 0.f, 0.f, 0.f};
+   float clearDepthValue = gx::UseReversedZ ? 0.f : 1.f;
+   wgpu::LoadOp colorLoadOp = wgpu::LoadOp::Undefined;
+@@ -1331,15 +1335,24 @@
+   auto& prevPass = current_render_passes()[g_currentRenderPass];
+   const uint32_t width = prevPass.targetSize.width;
+   const uint32_t height = prevPass.targetSize.height;
++#ifdef __ANDROID__
++  // Quarantine 0.4.10 AO scheduling changes until Android startup is verified.
++  const bool reuseDepth = false;
++#else
++  const bool reuseDepth = wantDepth && !g_inOffscreen && !prevPass.has_content() &&
++                          prevPass.unchangedDepthSnapshot;
++#endif
++  if (reuseDepth) out.depth = prevPass.unchangedDepthSnapshot;
++  const bool copyDepth = wantDepth && !reuseDepth;
+   // Requesting no snapshots is a plain pass break (or offscreen close, discarding its output).
+-  if (desc.color || wantDepth) {
+-    auto& entry = acquire_pass_snapshot(width, height, desc.color, wantDepth);
++  if (desc.color || copyDepth) {
++    auto& entry = acquire_pass_snapshot(width, height, desc.color, copyDepth);
+     if (desc.color) {
+       prevPass.snapshotColorDst = entry.color.texture;
+       out.color = entry.color.view;
+       out.colorFormat = entry.color.format;
+     }
+-    if (wantDepth) {
++    if (copyDepth) {
+       prevPass.snapshotDepthDst = entry.depth.view;
+       out.depth = entry.depth.view;
+     }
+@@ -1357,6 +1370,12 @@
+   // EFB writes persist into the loading continuation, so content keeps the pass alive even
+   // without a consumer.
+   prevPass.discardable = !prevPass.has_consumer() && !prevPass.has_content();
++  // A depth-only consumer never reads resolved color. Preserve the MSAA
++  // samples for the loading continuation; it still resolves normally for a
++  // later color copy or presentation, including an empty final continuation.
++#ifndef __ANDROID__
++  prevPass.deferColorResolve = !desc.color && !prevPass.resolveTarget;
++#endif
+   enqueue_pass(current_frame_packet(), g_recordingFrameSlot, g_currentRenderPass);
+   resume_efb_pass_loading(prevPass);
+   return true;
+@@ -1373,6 +1392,10 @@
+       .copySourceDepthView = prevPass.copySourceDepthView,
+       .targetSize = prevPass.targetSize,
+       .msaaSamples = prevPass.msaaSamples,
++#ifndef __ANDROID__
++      .unchangedDepthSnapshot = prevPass.snapshotDepthDst ? prevPass.snapshotDepthDst :
++                               (!prevPass.has_content() ? prevPass.unchangedDepthSnapshot : nullptr),
++#endif
+       .clearColor = false,
+       .clearDepth = false,
+       .hasDepth = prevPass.hasDepth,
+@@ -2077,7 +2100,7 @@
+     const std::array attachments{
+         wgpu::RenderPassColorAttachment{
+             .view = passInfo.colorView,
+-            .resolveTarget = passInfo.resolveView,
++            .resolveTarget = passInfo.deferColorResolve ? nullptr : passInfo.resolveView,
+             .loadOp = passInfo.colorLoadOp != wgpu::LoadOp::Undefined
+                           ? passInfo.colorLoadOp
+                           : (passInfo.clearColor ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load),

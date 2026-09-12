@@ -1,4 +1,4 @@
-/* Round-trip self-test for platform/os/save_endian.c (docs/ARCHITECTURE.md's
+/* Round-trip self-test for src/os/save_endian.c (docs/ARCHITECTURE.md's
  * Save system section).
  * 1) Real-data test (optional argv[1] = a console/Dolphin .gci): box 0's
  *    GW_COMMON image -> from_be -> print key fields -> to_be -> byte-diff vs
@@ -16,8 +16,8 @@
  *     -I build/msl_override -I build/patched_include
  *     -I ../../external_refs/repos/marioparty6/include
  *     -I ../../external_refs/repos/marioparty6/build/GP6E01/include
- *     -I shim/include -include dolphin_compat.h
- *     tools/save_endian_selftest.c platform/os/save_endian.c -o build/save_endian_selftest.exe
+ *     -I include -include dolphin_compat.h
+ *     tools/save_endian_selftest.c src/os/save_endian.c -o build/save_endian_selftest.exe
  *   build/save_endian_selftest.exe build/testsaves/pristine_dolphin.gci
  *
  * NOTE: the real-data check asserts the pristine fixture's known content

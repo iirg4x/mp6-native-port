@@ -1,0 +1,143 @@
+diff --git a/include/aurora/gfx.hpp b/include/aurora/gfx.hpp
+--- a/include/aurora/gfx.hpp
++++ b/include/aurora/gfx.hpp
+@@ -175,6 +175,13 @@
+ /// Returns false with an empty output without opening a pass on invalid input.
+ bool create_pass_from_efb_depth(BorrowedPassDepth& out);
+ 
++/// Seal EFB writes and open a same-size color-only coverage target using the
++/// existing single-sample EFB depth attachment read-only. All draws MUST have
++/// depth/stencil writes disabled. resolve_pass closes this bracket before EFB
++/// writes resume. No depth copy or private depth allocation is needed.
++/// MSAA/nested/inactive passes return false, with zero output dimensions.
++bool create_pass_with_readonly_efb_depth(uint32_t& width, uint32_t& height);
++
+ /// True while an offscreen pass (create_pass or GXCreateFrameBuffer) is open.
+ bool is_offscreen() noexcept;
+ 
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -277,6 +277,7 @@
+   bool clearDepth = true;
+   bool hasDepth = true;
+   bool hasStencil = false;
++  bool depthReadOnly = false;
+   bool hasDraws = false;
+   bool discardable = false;
+   bool captureDepthSnapshot = false;
+@@ -1251,7 +1252,8 @@
+   return insertIt->second;
+ }
+ 
+-static void begin_offscreen_target(uint32_t width, uint32_t height, bool snapshotTarget) {
++static void begin_offscreen_target(uint32_t width, uint32_t height, bool snapshotTarget,
++                                   const wgpu::TextureView& readOnlyDepth = {}) {
+   ZoneScoped;
+   CHECK(g_currentRenderPass != UINT32_MAX, "begin_offscreen called outside of a frame");
+ 
+@@ -1274,8 +1276,8 @@
+   if (snapshotTarget) {
+     g_offscreenColor = acquire_pass_snapshot(width, height, true, false).color;
+     const auto format = webgpu::g_graphicsConfig.depthFormat;
+-    if (!g_snapshotPassDepth.texture || g_snapshotPassDepth.size.width != width ||
+-        g_snapshotPassDepth.size.height != height || g_snapshotPassDepth.format != format) {
++    if (!readOnlyDepth && (!g_snapshotPassDepth.texture || g_snapshotPassDepth.size.width != width ||
++        g_snapshotPassDepth.size.height != height || g_snapshotPassDepth.format != format)) {
+       const wgpu::TextureDescriptor desc{
+           .label = "Snapshot Pass Depth",
+           .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding,
+@@ -1286,7 +1288,7 @@
+       g_snapshotPassDepth = {.texture = std::move(texture), .view = std::move(view),
+                              .size = {width, height, 1}, .format = format};
+     }
+-    g_offscreenDepth = g_snapshotPassDepth;
++    g_offscreenDepth = readOnlyDepth ? webgpu::TextureWithSampler{} : g_snapshotPassDepth;
+   } else {
+     auto offscreenEntry = get_offscreen_textures(width, height);
+     g_offscreenColor = std::move(offscreenEntry.color);
+@@ -1297,18 +1299,19 @@
+   RenderPass newPass{
+       .label = pass_label("Offscreen"),
+       .colorView = g_offscreenColor.view,
+-      .depthStencilView = g_offscreenDepth.view,
++      .depthStencilView = readOnlyDepth ? readOnlyDepth : g_offscreenDepth.view,
+       .copySourceTexture = g_offscreenColor.texture,
+       .copySourceView = g_offscreenColor.view,
+-      .copySourceDepthView = g_offscreenDepth.view,
++      .copySourceDepthView = readOnlyDepth ? readOnlyDepth : g_offscreenDepth.view,
+       .targetSize = {width, height, 1},
+       .msaaSamples = 1,
+       .clearColorValue = {0.f, 0.f, 0.f, 0.f},
+       .clearDepthValue = gx::UseReversedZ ? 0.f : 1.f,
+       .clearColor = true,
+-      .clearDepth = true,
++      .clearDepth = !readOnlyDepth,
+       .hasDepth = true,
+       .hasStencil = false,
++      .depthReadOnly = bool(readOnlyDepth),
+   };
+   newPass.colorSnapshotTarget = snapshotTarget;
+   current_render_passes().emplace_back(std::move(newPass));
+@@ -1337,7 +1340,8 @@
+   // Offscreen depth is cleared on every reuse. Only a depth consumer needs a
+   // store; AO's color-only coverage export and ordinary shadow color copies do
+   // not. Never discard depth before a requested snapshot/peek/GX depth copy.
+-  if (!offscreenPass.snapshotDepthDst && !offscreenPass.captureDepthSnapshot &&
++  if (!offscreenPass.depthReadOnly && !offscreenPass.snapshotDepthDst &&
++      !offscreenPass.captureDepthSnapshot &&
+       (!offscreenPass.resolveTarget || !gx::is_depth_format(offscreenPass.resolveFormat))) {
+     offscreenPass.depthStoreOp = wgpu::StoreOp::Discard;
+   }
+@@ -1410,6 +1414,28 @@
+     return false;
+   }
+   out = std::move(source);
++  return true;
++}
++
++bool create_pass_with_readonly_efb_depth(uint32_t& width, uint32_t& height) {
++  width = height = 0;
++  gx::fifo::drain();
++  if (g_recordingFrame == nullptr || g_currentRenderPass == UINT32_MAX || g_inOffscreen) {
++    return false;
++  }
++  const auto& pass = current_render_passes()[g_currentRenderPass];
++  if (!pass.hasDepth || !pass.depthStencilView || !pass.targetSize.width ||
++      !pass.targetSize.height || pass.msaaSamples != 1) {
++    return false;
++  }
++  const auto depth = pass.depthStencilView;
++  const auto size = pass.targetSize;
++  ResolvedTargets unused;
++  if (!resolve_pass({.color = false, .depth = false}, unused)) return false;
++  // Own the view across continuation creation; queue order preserves its
++  // contents until this read-only bracket closes and EFB rendering resumes.
++  begin_offscreen_target(size.width, size.height, true, depth);
++  width = size.width; height = size.height;
+   return true;
+ }
+ 
+@@ -2289,15 +2315,18 @@
+     if (passInfo.depthStencilView) {
+       depthStencilAttachment = {
+           .view = passInfo.depthStencilView,
+-          .depthLoadOp = passInfo.hasDepth ? (passInfo.depthLoadOp != wgpu::LoadOp::Undefined
++          .depthLoadOp = passInfo.hasDepth && !passInfo.depthReadOnly ? (passInfo.depthLoadOp != wgpu::LoadOp::Undefined
+                                                   ? passInfo.depthLoadOp
+                                                   : (passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load))
+                                            : wgpu::LoadOp::Undefined,
+-          .depthStoreOp = passInfo.hasDepth ? depth_store_op(passInfo, captureDepthSnapshot) : wgpu::StoreOp::Undefined,
++          .depthStoreOp = passInfo.hasDepth && !passInfo.depthReadOnly
++                              ? depth_store_op(passInfo, captureDepthSnapshot) : wgpu::StoreOp::Undefined,
+           .depthClearValue = passInfo.clearDepthValue,
+-          .stencilLoadOp = passInfo.hasStencil ? passInfo.stencilLoadOp : wgpu::LoadOp::Undefined,
+-          .stencilStoreOp = passInfo.hasStencil ? passInfo.stencilStoreOp : wgpu::StoreOp::Undefined,
++          .depthReadOnly = passInfo.depthReadOnly,
++          .stencilLoadOp = passInfo.hasStencil && !passInfo.depthReadOnly ? passInfo.stencilLoadOp : wgpu::LoadOp::Undefined,
++          .stencilStoreOp = passInfo.hasStencil && !passInfo.depthReadOnly ? passInfo.stencilStoreOp : wgpu::StoreOp::Undefined,
+           .stencilClearValue = passInfo.stencilClearValue,
++          .stencilReadOnly = passInfo.depthReadOnly,
+       };
+       depthStencilAttachmentPtr = &depthStencilAttachment;
+     }

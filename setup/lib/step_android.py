@@ -11,7 +11,7 @@ user-confirmed step: see _ensure_sdk_licenses()'s docstring).
 
 On-device asset import (the user's disc, picked/streamed on the phone
 itself) is handled entirely by the APK's own first-run onboarding dialog
-(platform/gx/ui/content_setup.cpp) -- this setup
+(src/gx/ui/content_setup.cpp) -- this setup
 tool's job stops at producing an installable APK.
 """
 import hashlib
@@ -66,6 +66,20 @@ _ANDROID_BUILD_TOOLS_TREE = {
     "files": 170,
     "bytes": 144869412,
     "sha256": "93fb41212246011263f5661044ff5645ffda7a0ac0460a66d37e8bb9dddef246",
+}
+# Command-line Tools 15859902 adds three XML namespace declarations to
+# package.xml. All SDK payloads and all 169 other Build Tools files are
+# byte-identical to the original pins (including the complete old tree hash
+# when only that XML serialization is reconstructed). Pin both exact layouts;
+# never accept arbitrary generated metadata or skip hashing executable bytes.
+_ANDROID_PLATFORM_XML_CURRENT = {
+    "bytes": 18854,
+    "sha256": "018f4d90ac85f10a1cd2975d1982f8af6210f278d12a0539e91d546e1fc18e87",
+}
+_ANDROID_BUILD_TOOLS_TREE_CURRENT = {
+    "files": 170,
+    "bytes": 144869620,
+    "sha256": "b1f2a042e2c0368367a4e7985371848940164ad029b78ccd8ac894f12d7373e3",
 }
 _ANDROID_JDK_VERSION_OUTPUT = (
     'java version "22.0.2" 2024-07-16\n'
@@ -125,6 +139,8 @@ def _bounded_tree_fingerprint(root, label, max_files=4096, max_bytes=1024 * 1024
 def verify_android_sdk(sdk_root, platform_files=None, build_tools_tree=None):
     """Authenticate the SDK inputs that compile, lint, dex, align, and sign APKs."""
     sdk_root = os.path.realpath(os.fspath(sdk_root))
+    default_platform_pins = platform_files is None
+    default_build_tools_pin = build_tools_tree is None
     platform_files = _ANDROID_PLATFORM_FILES if platform_files is None else platform_files
     build_tools_tree = _ANDROID_BUILD_TOOLS_TREE if build_tools_tree is None else build_tools_tree
     platform_root = os.path.join(sdk_root, "platforms", _ANDROID_COMPILE_SDK)
@@ -136,14 +152,18 @@ def verify_android_sdk(sdk_root, platform_files=None, build_tools_tree=None):
         except OSError as exc:
             raise common.SetupError(f"cannot read pinned Android SDK platform input {path}: {exc}") from exc
         actual = {"bytes": size, "sha256": digest}
-        if actual != expected:
+        current_metadata = (default_platform_pins and relative == "package.xml"
+                            and actual == _ANDROID_PLATFORM_XML_CURRENT)
+        if actual != expected and not current_metadata:
             raise common.SetupError(
                 f"Android SDK {_ANDROID_COMPILE_SDK} integrity failure for {path}: "
                 f"expected {expected!r}, found {actual!r}"
             )
     build_tools_root = os.path.join(sdk_root, "build-tools", _ANDROID_BUILD_TOOLS_VERSION)
     actual_tree = _bounded_tree_fingerprint(build_tools_root, "Android Build Tools")
-    if actual_tree != build_tools_tree:
+    current_tree = (default_build_tools_pin
+                    and actual_tree == _ANDROID_BUILD_TOOLS_TREE_CURRENT)
+    if actual_tree != build_tools_tree and not current_tree:
         raise common.SetupError(
             f"Android Build Tools {_ANDROID_BUILD_TOOLS_VERSION} integrity failure: "
             f"expected {build_tools_tree!r}, found {actual_tree!r}"
@@ -200,7 +220,7 @@ def verify_android_jdk(jdk_home=None, expected_tree=None, expected_version=None)
 
 def _verify_and_prune_gradle_artifact_cache(native_root, gradle_home):
     metadata_path = os.path.join(
-        os.fspath(native_root), "platforms", "android", "gradle", "verification-metadata.xml"
+        os.fspath(native_root), "packaging", "android", "gradle", "verification-metadata.xml"
     )
     if not os.path.isfile(metadata_path):
         return 0
@@ -246,7 +266,7 @@ def _verify_and_prune_gradle_artifact_cache(native_root, gradle_home):
 def _purge_gradle_derived_state(native_root, gradle_home):
     caches = os.path.join(gradle_home, "caches")
     targets = [
-        os.path.join(os.fspath(native_root), "platforms", "android", ".gradle"),
+        os.path.join(os.fspath(native_root), "packaging", "android", ".gradle"),
         os.path.join(caches, "jars-9"),
         os.path.join(caches, "8.13", "transforms"),
         os.path.join(caches, "8.13", "generated-gradle-jars"),
@@ -302,7 +322,7 @@ def _controlled_gradle_environment(native_root):
 
 def verify_gradle_wrapper(native_root):
     """Fail closed before executing any part of the checked-in wrapper."""
-    android_dir = os.path.join(os.fspath(native_root), "platforms", "android")
+    android_dir = os.path.join(os.fspath(native_root), "packaging", "android")
     properties_path = os.path.join(android_dir, "gradle", "wrapper", "gradle-wrapper.properties")
     try:
         with open(properties_path, "r", encoding="utf-8") as f:
@@ -348,7 +368,7 @@ def verify_gradle_wrapper(native_root):
 
 def verify_gradle_dependency_metadata(native_root, expected_hash=None):
     path = os.path.join(
-        os.fspath(native_root), "platforms", "android", "gradle", "verification-metadata.xml"
+        os.fspath(native_root), "packaging", "android", "gradle", "verification-metadata.xml"
     )
     expected_hash = (_GRADLE_VERIFICATION_METADATA_SHA256
                      if expected_hash is None else expected_hash)
@@ -394,7 +414,7 @@ def verify_gradle_dependency_metadata(native_root, expected_hash=None):
     if not required_agp:
         raise common.SetupError("Gradle metadata does not authenticate AGP 8.13.2")
     baseline = os.path.join(
-        os.fspath(native_root), "platforms", "android", "app", "lint-baseline.xml"
+        os.fspath(native_root), "packaging", "android", "app", "lint-baseline.xml"
     )
     try:
         baseline_hash = _sha256_file(baseline)
@@ -460,7 +480,7 @@ def _print_sdk_install_recipe():
   3. Review and accept the licenses yourself:
        sdkmanager --licenses
   4. Either set ANDROID_SDK_ROOT / ANDROID_NDK_ROOT, or point this project's
-     port/android-sdk/ at your install (see platforms/android/local.properties).
+     port/android-sdk/ at your install (see packaging/android/local.properties).
 
   Re-run this tool with --android once that's done.
 """)
@@ -478,7 +498,7 @@ def ensure_android_toolchain():
 
 
 def _ensure_local_properties(sdk_root):
-    local_props = os.path.join(common.NATIVE_ROOT, "platforms", "android", "local.properties")
+    local_props = os.path.join(common.NATIVE_ROOT, "packaging", "android", "local.properties")
     escaped_sdk = sdk_root.replace(chr(92), "/").replace(":", r"\:")
     wanted = f"sdk.dir={escaped_sdk}"
     lines = []
@@ -547,13 +567,13 @@ def build_windowed(native_root, jobs=None):
                  "is still in build/android/)")
 
     common.info("building the Android windowed row: libmp6game.so (aurora/SDL3/Dawn) -> build/android/aurora/, "
-                "staging jniLibs for platforms/android")
+                "staging jniLibs for packaging/android")
     cmd = [sys.executable, os.path.join(native_root, "tools", "build.py"),
            "--target", "aarch64-android", "--windowed"]
     if jobs:
         cmd += ["-j", str(jobs)]
     common.run(cmd, cwd=native_root)
-    jnilibs = os.path.join(native_root, "platforms", "android", "app", "src", "main", "jniLibs", "arm64-v8a")
+    jnilibs = os.path.join(native_root, "packaging", "android", "app", "src", "main", "jniLibs", "arm64-v8a")
     names = {name for name in os.listdir(jnilibs)} if os.path.isdir(jnilibs) else set()
     expected = {"libmain.so", "libmp6game.so"}
     if names != expected or any(not os.path.isfile(os.path.join(jnilibs, name)) for name in expected):
@@ -649,7 +669,7 @@ def verify_android_native_build_manifest(native_root, variant):
     expected_names = {"libmp6game.so", "libmain.so"}
     unstripped_dir = os.path.dirname(manifest_path)
     staged_dir = os.path.join(
-        os.fspath(native_root), "platforms", "android", "app", "src", "main",
+        os.fspath(native_root), "packaging", "android", "app", "src", "main",
         "jniLibs", "arm64-v8a",
     )
 
@@ -761,7 +781,7 @@ def inspect_apk(native_root, apk):
     """Validate the exact native/resource manifest Gradle packaged."""
     expected_libs = {"lib/arm64-v8a/libmain.so", "lib/arm64-v8a/libmp6game.so"}
     staged_lib_root = os.path.join(
-        native_root, "platforms", "android", "app", "src", "main", "jniLibs", "arm64-v8a"
+        native_root, "packaging", "android", "app", "src", "main", "jniLibs", "arm64-v8a"
     )
     res_root = os.path.join(native_root, "res")
     expected_asset_paths = {
@@ -832,7 +852,7 @@ def inspect_apk(native_root, apk):
 
 
 def build_apk(native_root, variant="debug"):
-    android_dir = os.path.join(native_root, "platforms", "android")
+    android_dir = os.path.join(native_root, "packaging", "android")
     variant = variant.lower()
     if variant not in _ANDROID_NATIVE_OPTIMIZATION:
         raise common.SetupError(f"unsupported Android variant {variant!r}")
@@ -904,7 +924,7 @@ def print_onboarding_note():
     print("""
   This setup tool does NOT extract your disc for Android -- the APK does
   that itself, on first run, via its own onboarding flow:
-    platform/gx/ui/content_setup.cpp / .hpp   (the onboarding dialog + import
+    src/gx/ui/content_setup.cpp / .hpp   (the onboarding dialog + import
                                                 trigger, reusing the same nod
                                                 library this tool used for Windows)
 

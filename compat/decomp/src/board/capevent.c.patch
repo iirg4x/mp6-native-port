@@ -1,0 +1,94 @@
+--- a/src/board/capevent.c
++++ b/src/board/capevent.c
+@@ -0,0 +1,8 @@
++#include "mp6_gxarray_registry.h"
++/* Native calls must pass float angles, not default-promoted doubles.
++ * These declarations match the implemented board/math.c helpers. */
++#include "dolphin/mtx.h"
++extern void mbMtxRotXDeg(Mtx mtx, float angle);
++extern void mbMtxRotYDeg(Mtx mtx, float angle);
++extern void mbMtxRotZDeg(Mtx mtx, float angle);
++extern void mbMtxTransCat(Mtx mtx, float x, float y, float z);
+@@ -261,0 +262,5 @@
++/* MP6_NATIVE_PORT: This view aliases CapEffParticleSystemWork below.
++ * Opaque byte padding cannot stand in for pointers on 64-bit hosts: the
++ * old gridNum offset overwrote the high half of the draw callback. Keep
++ * every pointer slot native-sized, including the ones this view skips. */
++struct CapEffParticleSystemWork;
+@@ -267,1 +272,2 @@
+-    u8 _unk28[20];
++    u8 _unk28[16];
++    ANIMDATA *animP;
+@@ -269,1 +275,4 @@
+-    u8 _unk40[16];
++    HuVecF *vertices;
++    HuVec2f *texCoords;
++    void *displayList;
++    void (*_unk4C)(HU3D_MODEL *, struct CapEffParticleSystemWork *, Mtx);
+@@ -273,1 +282,1 @@
+-    u8 _unk5C[4];
++    HU3D_MODEL *_unk5C;
+@@ -303,0 +313,18 @@
++
++/* These are two views of the same allocation, not serialized disk data. */
++#define CAPEVENT_VIEW_FIELD(field) \
++    _Static_assert(__builtin_offsetof(CAPEFFGLOWKINOKOPARTICLESYSTEMWORK, field) == \
++        __builtin_offsetof(CAPEFFPARTICLESYSTEMWORK, field), "capsule view: " #field)
++CAPEVENT_VIEW_FIELD(num);
++CAPEVENT_VIEW_FIELD(animP);
++CAPEVENT_VIEW_FIELD(data);
++CAPEVENT_VIEW_FIELD(vertices);
++CAPEVENT_VIEW_FIELD(texCoords);
++CAPEVENT_VIEW_FIELD(displayList);
++CAPEVENT_VIEW_FIELD(_unk4C);
++CAPEVENT_VIEW_FIELD(grid);
++CAPEVENT_VIEW_FIELD(gridNum);
++CAPEVENT_VIEW_FIELD(_unk5C);
++#undef CAPEVENT_VIEW_FIELD
++_Static_assert(sizeof(CAPEFFGLOWKINOKOPARTICLESYSTEMWORK) ==
++    sizeof(CAPEFFPARTICLESYSTEMWORK), "capsule particle system view size");
+@@ -5162 +5189,13 @@
+-    i >= 8;
++    /* MP6_NATIVE_PORT: `i >= 8;` is a relational expression used as a
++     * statement -- no code on MWCC, no code here, but clang's
++     * -Wunused-comparison is fatal under tools/abi_warning_audit.py --deep.
++     * The void cast is provably codegen-neutral.
++     *
++     * It deliberately does NOT paper over the real finding, which is left
++     * exactly as recovered: when the search above matches nothing, `i` is 8
++     * and the line below writes (OMOBJ *)-1 ONE PAST THE END of
++     * ev_CapEffElectricOMObj (capevent.c:58 declares it [8]). Adding the
++     * guard that read is missing changes behaviour the retail DOL also had,
++     * so it belongs to its own investigation, not to a warning sweep.
++     */
++    (void)(i >= 8);
+@@ -5176 +5215,4 @@
+-    i >= 8;
++    /* MP6_NATIVE_PORT: same value-less comparison as
++     * mbev_CapEffElectricKill above, same void cast, same reason. This one
++     * does not go on to index with `i` at all. */
++    (void)(i >= 8);
+@@ -5480,3 +5523,6 @@
+-            GXSetArray(GX_VA_POS, particleWorkP->prevVtx, sizeof(HuVecF));
+-            GXSetArray(GX_VA_CLR0, particleWorkP->colorLerp,
+-                sizeof(GXColor));
++            /* Embedded arrays have no standalone heap-size header. */
++            mp6_gxarray_bind_span(GX_VA_POS, particleWorkP->prevVtx,
++                sizeof(particleWorkP->prevVtx), sizeof(HuVecF));
++            mp6_gxarray_bind_span(GX_VA_CLR0, particleWorkP->colorLerp,
++                sizeof(particleWorkP->colorLerp), sizeof(GXColor));
++
+@@ -7409,1 +7455,2 @@
+-    GXSetArray(GX_VA_POS, workP->vertices, sizeof(HuVecF));
++    mp6_gxarray_bind_span(GX_VA_POS, workP->vertices,
++        workP->num * 4 * sizeof(HuVecF), sizeof(HuVecF));
+@@ -7412,2 +7459,3 @@
+-    GXSetArray(GX_VA_CLR0, &workP->data->color,
+-        sizeof(CAPEFFGLOWPARTICLEWORK));
++    mp6_gxarray_bind_span(GX_VA_CLR0, &workP->data->color,
++        (workP->num - 1) * sizeof(*workP->data) + sizeof(GXColor),
++        sizeof(*workP->data));
+@@ -7416,1 +7464,2 @@
+-    GXSetArray(GX_VA_TEX0, workP->texCoords, sizeof(HuVec2f));
++    mp6_gxarray_bind_span(GX_VA_TEX0, workP->texCoords,
++        workP->num * 4 * sizeof(HuVec2f), sizeof(HuVec2f));

@@ -1,0 +1,72 @@
+Keep the pre-0.4.10 AO schedule on Mali and unverified Android vendors; retain optimizations on desktop/Qualcomm.
+
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -1317,6 +1317,16 @@
+   return true;
+ }
+ 
++bool ao_compatibility_mode() noexcept {
++#ifdef __ANDROID__
++  // 0.4.10 starts on the user's Qualcomm phone but fails with AO on Mali.
++  // Keep unverified Android vendors on the previous schedule as well.
++  return webgpu::g_adapterInfo.vendorID != 0x5143;
++#else
++  return false;
++#endif
++}
++
+ bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out) {
+   out = {};
+   gx::fifo::drain();
+@@ -1335,13 +1345,8 @@
+   auto& prevPass = current_render_passes()[g_currentRenderPass];
+   const uint32_t width = prevPass.targetSize.width;
+   const uint32_t height = prevPass.targetSize.height;
+-#ifdef __ANDROID__
+-  // Quarantine 0.4.10 AO scheduling changes until Android startup is verified.
+-  const bool reuseDepth = false;
+-#else
+-  const bool reuseDepth = wantDepth && !g_inOffscreen && !prevPass.has_content() &&
++  const bool reuseDepth = !ao_compatibility_mode() && wantDepth && !g_inOffscreen && !prevPass.has_content() &&
+                           prevPass.unchangedDepthSnapshot;
+-#endif
+   if (reuseDepth) out.depth = prevPass.unchangedDepthSnapshot;
+   const bool copyDepth = wantDepth && !reuseDepth;
+   // Requesting no snapshots is a plain pass break (or offscreen close, discarding its output).
+@@ -1373,9 +1378,7 @@
+   // A depth-only consumer never reads resolved color. Preserve the MSAA
+   // samples for the loading continuation; it still resolves normally for a
+   // later color copy or presentation, including an empty final continuation.
+-#ifndef __ANDROID__
+-  prevPass.deferColorResolve = !desc.color && !prevPass.resolveTarget;
+-#endif
++  prevPass.deferColorResolve = !ao_compatibility_mode() && !desc.color && !prevPass.resolveTarget;
+   enqueue_pass(current_frame_packet(), g_recordingFrameSlot, g_currentRenderPass);
+   resume_efb_pass_loading(prevPass);
+   return true;
+@@ -1392,10 +1395,9 @@
+       .copySourceDepthView = prevPass.copySourceDepthView,
+       .targetSize = prevPass.targetSize,
+       .msaaSamples = prevPass.msaaSamples,
+-#ifndef __ANDROID__
+-      .unchangedDepthSnapshot = prevPass.snapshotDepthDst ? prevPass.snapshotDepthDst :
+-                               (!prevPass.has_content() ? prevPass.unchangedDepthSnapshot : nullptr),
+-#endif
++      .unchangedDepthSnapshot = ao_compatibility_mode() ? nullptr :
++          (prevPass.snapshotDepthDst ? prevPass.snapshotDepthDst :
++           (!prevPass.has_content() ? prevPass.unchangedDepthSnapshot : nullptr)),
+       .clearColor = false,
+       .clearDepth = false,
+       .hasDepth = prevPass.hasDepth,
+--- a/include/aurora/gfx.hpp
++++ b/include/aurora/gfx.hpp
+@@ -58,6 +58,8 @@
+ wgpu::TextureFormat depth_format() noexcept;
+ uint32_t sample_count() noexcept;
+ bool uses_reversed_z() noexcept;
++/// Port AO recovery policy, fixed by the selected adapter for this device.
++bool ao_compatibility_mode() noexcept;
+ 
+ DrawTypeId register_draw_type(const DrawTypeDescriptor& desc);
+ void unregister_draw_type(DrawTypeId type) noexcept;

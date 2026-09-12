@@ -1,0 +1,84 @@
+Track potential EFB depth writes without a snapshot or render-pass break.
+
+--- a/include/aurora/gfx.hpp
++++ b/include/aurora/gfx.hpp
+@@ -135,6 +135,12 @@
+ /// device. Returns false (with a warning) outside an active render pass.
+ bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out);
+ 
++/// Game-thread serial of potential GX depth writes to the EFB (not offscreen
++/// targets). Drains pending FIFO state without breaking the pass or waiting for
++/// the GPU. Compare for inequality; merged draws also advance this serial.
++/// Clears expressed as GX draws count too; callers must mark their clear boundary.
++uint64_t efb_depth_write_serial();
++
+ /// Opens an offscreen render pass (GXCreateFrameBuffer semantics): cleared
+ /// single-sample color+depth at (width, height) with full-target
+ /// viewport/scissor. Subsequent draws target it until resolve_pass restores the
+--- a/lib/gx/command_processor.hpp
++++ b/lib/gx/command_processor.hpp
+@@ -7,4 +7,7 @@
+ // Process a buffer of GX FIFO commands
+ void process(const uint8_t* data, uint32_t size, bool bigEndian);
+ 
++// Already-processed FIFO only; use gfx::efb_depth_write_serial to drain first.
++uint64_t efb_depth_write_serial() noexcept;
++
+ } // namespace aurora::gx::fifo
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -20,6 +20,16 @@
+ 
+ namespace aurora::gx::fifo {
+ static Module Log("aurora::gx::fifo");
++
++// Owned by the FIFO/game thread, independent of worker and GPU completion.
++static uint64_t g_efbDepthWriteSerial = 0;
++uint64_t efb_depth_write_serial() noexcept { return g_efbDepthWriteSerial; }
++
++static void note_efb_depth_write() {
++  if (g_gxState.depthCompare && g_gxState.depthUpdate && !gfx::is_offscreen()) {
++    ++g_efbDepthWriteSerial;
++  }
++}
+ 
+ static u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) {
+   u16 numIndices = 0;
+@@ -1623,6 +1633,7 @@
+     lastDraw->vtxCount += vtxCount;
+     lastDraw->indexCount += numIndices;
+     ++gfx::g_mergedDrawCallCount;
++    note_efb_depth_write();
+     return;
+   }
+ 
+@@ -1661,6 +1672,7 @@
+ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange, gfx::Range idxRange,
+                          u32 numIndices) {
+   // Build pipeline, bind groups, and push draw command
++  note_efb_depth_write();
+   BindGroupRanges ranges{};
+   for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {
+     if (g_gxState.vtxDesc[i] != GX_INDEX8 && g_gxState.vtxDesc[i] != GX_INDEX16) {
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -17,6 +17,7 @@
+ #include "texture.hpp"
+ #include "../window.hpp"
+ #include "../gx/fifo.hpp"
++#include "../gx/command_processor.hpp"
+ 
+ #include <array>
+ #include <atomic>
+@@ -1325,6 +1326,11 @@
+ #else
+   return false;
+ #endif
++}
++
++uint64_t efb_depth_write_serial() {
++  gx::fifo::drain();
++  return gx::fifo::efb_depth_write_serial();
+ }
+ 
+ bool resolve_pass(const ResolveDesc& desc, ResolvedTargets& out) {

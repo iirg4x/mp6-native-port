@@ -1,0 +1,322 @@
+--- a/src/REL/w01Dll/world01.c
++++ b/src/REL/w01Dll/world01.c
+@@ -3,0 +4,176 @@
++
++/* PORT FIX -- float-argument ABI, implicit-declaration class (the class
++ * tools/abi_warning_audit.py exists for; this TU was simply not in its
++ * ABI_CRITICAL_SOURCES set, so it was never audited).
++ *
++ * world01.c calls three functions that NO header it includes declares:
++ *   mbMtxRotAxisRad(Mtx, u8, float)     src/board/math.c, called at
++ *                                       fn_1_12D58 (the ambient falling-leaf
++ *                                       draw) with particle->angle
++ *   mbHermiteCalcV(HuVecF*, HuVecF*, HuVecF*, HuVecF*, HuVecF*, float)
++ *                                       src/board/math.c:514
++ *   __fabs(double) -> double            MSL, declared only in the
++ *                                       PowerPC_EABI_Support math.h this TU
++ *                                       does not reach
++ * Without a prototype, C's default argument promotions send every `float`
++ * argument as a DOUBLE, and an undeclared function is assumed to return
++ * `int`. On PowerPC EABI that is harmless -- every float argument travels in
++ * f1..f8 as a double anyway and the callee's own frsp narrows it, and
++ * __fabs's result comes back in f1 either way -- which is exactly why the
++ * shipped game never noticed. On x86_64 the caller writes a double into
++ * XMM0 and the callee reads a float32 out of the SAME register, i.e. the
++ * LOW 32 bits of the double's bit pattern.
++ *
++ * That is not "slightly wrong", it is catastrophic and it was visible on
++ * screen: a float widened to double has its low 29 mantissa bits zero, so
++ * the low 32 bits can only ever be one of eight values, and
++ * mbMtxRotAxisRad's angle therefore collapses to one of {0, +/-0.0,
++ * +/-1.084e-19, +/-2.0, +/-3.689e19} regardless of the real angle. Through
++ * board/math.c's cos/sin lookup table those eight collapse to exactly THREE
++ * rotations -- (cos,sin) = (1,0), (-0.416,+0.909), (-0.416,-0.909) -- and
++ * the board's ambient leaves consequently snapped between three fixed poses
++ * from frame to frame instead of fluttering. Measured directly: with
++ * MP6_W01_LEAF_TRACE the integrator's own angle moves at most 8.59 deg per
++ * tick (matching an exact float32 replay of fn_1_1330C), while the drawn
++ * matrix jumped between precisely those three states, and the captured
++ * frames showed the leaf holding one silhouette for 4-6 frames and flipping
++ * to a foreshortened sliver for exactly one -- the long-standing "board
++ * leaf strobe".
++ *
++ * Declaring the three functions here restores the intended (and
++ * PowerPC-observed) behavior; it changes nothing about the decomp's own
++ * code. Kept in this TU rather than in a decomp-overrides header because
++ * world01.c includes none of the headers that would naturally carry them
++ * (game/board/guide.h declares the *Deg* siblings, and this TU does not
++ * include it). */
++void mbMtxRotAxisRad(Mtx m, u8 axis, float rad);
++void mbHermiteCalcV(HuVecF *a, HuVecF *b, HuVecF *c, HuVecF *d, HuVecF *dst,
++                    float t);
++double __fabs(double x);
++
++/* W01 falling-leaf trace (MP6_W01_LEAF_TRACE=<tick>, 16-tick window).
++ * The board's ambient leaf fall is fn_1_12A4C (spawn, 64 particles) /
++ * fn_1_1330C (per-tick flutter integrator) / fn_1_12D58 (hook-func draw,
++ * one 50x50 XZ-plane quad per particle rotated about Z by particle->angle).
++ * Every flicker report against this board eventually lands on that leaf,
++ * and the ONLY way to tell "the authored angle really moves that far in one
++ * frame" from "the angle is smooth and the DRAW is wrong" is to read the
++ * integrator's own state per tick -- a screen-space silhouette measurement
++ * cannot separate them, because both look like a one-frame pose change.
++ * So: dump angle/angleSpeed/pos/vel for all 64 particles, per tick, for a
++ * short window. Diagnostic only: prints state, never changes behavior; one
++ * cached getenv and zero output when unset. */
++#include <stdio.h>
++#include <stdlib.h>
++extern long mp6_tick_count;
++static long mp6W01LeafTick = -2; /* -2 = env not parsed yet, -1 = disabled */
++static long mp6W01LeafSpan = 16; /* MP6_W01_LEAF_TRACE_TICKS, default 16 */
++static int mp6W01LeafTrace(void)
++{
++    if (mp6W01LeafTick == -2) {
++        const char *e = getenv("MP6_W01_LEAF_TRACE");
++        const char *n = getenv("MP6_W01_LEAF_TRACE_TICKS");
++        mp6W01LeafTick = (e && atol(e) > 0) ? atol(e) : -1;
++        if (n && atol(n) > 0) {
++            mp6W01LeafSpan = atol(n);
++        }
++    }
++    return mp6W01LeafTick > 0 && mp6_tick_count >= mp6W01LeafTick &&
++           mp6_tick_count < mp6W01LeafTick + mp6W01LeafSpan;
++}
++
++/* W01 LAUNCHER-FLOWER isolation levers (diagnostic only -- each is one cached
++ * getenv, and both produce zero output and zero behavior change when unset).
++ *
++ * WHY THESE EXIST: the reported "the flower is extrapolated, it closes in
++ * itself" artifact is fn_1_8860 -- the flower masu the player jumps INTO and
++ * is flung upward out of -- and NOT board/dice.c's DiceObjOMExec bloom, which
++ * is the object every prior lane actually measured. Two separate things made
++ * the real object unmeasurable:
++ *
++ *   MP6_W01_FORCE_FLOWER=1 -- the event fires only when a player STEPS ON one
++ *     of 2 flower spaces out of ~107, so a capture run is a soak, and a soak
++ *     races the board's own GwSystem-corruption wall (docs/history/
++ *     BOARD_PAN_FLOAT_TRAP.md item 6). No soak had ever landed one. This lever
++ *     makes fn_1_760 -- the REAL masu-move-end dispatcher -- install the REAL
++ *     fn_1_8860 hook on the next move end, after pointing the player at the
++ *     real fling space (mAttr 0x00400000 == lbl_1_data_588[0][0]) so that
++ *     fn_1_8860's own workNo lookup resolves to work 0, the day
++ *     swallow+launch branch, exactly as an organic landing does. Nothing here
++ *     calls fn_1_8860 directly: it is a coroutine body (109 HuPrcVSleep
++ *     calls) and MUST run inside the player-move process, which is precisely
++ *     what mbPlayerMoveHookSet arranges.
++ *
++ *   MP6_W01_FLOWER_TRACE=1 -- the flower is driven by an HSF joint motion AND
++ *     a SHAPE (vertex-morph) motion sharing one clock. A screen-space
++ *     silhouette measurement cannot separate "the morph ran and overshot" from
++ *     "the morph never ran at all", so dump the driving state per tick: both
++ *     motion clocks, plus, per MESH object, the exact fields
++ *     game/ShapeExec.c's ShapeProc gates on and SetShapeMain consumes
++ *     (shapeNum / shapeType / baseMorph) alongside the live curr transform.
++ *     That answers the mechanism question directly and reads identically with
++ *     frame interpolation on or off, which a pixel measurement does not. */
++static int mp6W01ForceFlowerV = -1;
++static int mp6W01ForceFlower(void)
++{
++    if (mp6W01ForceFlowerV < 0) {
++        const char *e = getenv("MP6_W01_FORCE_FLOWER");
++        mp6W01ForceFlowerV = (e != NULL && atol(e) > 0) ? 1 : 0;
++    }
++    return mp6W01ForceFlowerV;
++}
++
++static int mp6W01FlowerTraceV = -1;
++static int mp6W01FlowerTrace(void)
++{
++    if (mp6W01FlowerTraceV < 0) {
++        const char *e = getenv("MP6_W01_FLOWER_TRACE");
++        mp6W01FlowerTraceV = (e != NULL && atol(e) > 0) ? 1 : 0;
++    }
++    return mp6W01FlowerTraceV;
++}
++
++/* One line for the model's two motion clocks, then one line per MESH object
++ * carrying the fields the morph path consumes. `phase` names which of
++ * fn_1_8860's two loops the sample came from. Sampled just before this tick's
++ * HuPrcVSleep, i.e. it reports the pose the LAST completed tick evaluated. */
++static void mp6W01FlowerDump(const char *phase, int i, HU3D_MODELID modelId)
++{
++    HU3D_MODEL *modelP;
++    HSF_DATA *hsf;
++    HSF_OBJECT *objP;
++    s16 k;
++
++    if (modelId < 0) {
++        return;
++    }
++    modelP = &Hu3DData[modelId];
++    hsf = modelP->hsf;
++    if (hsf == NULL) {
++        return;
++    }
++    printf("[W01-FLOWER] %s i=%d tick=%ld mot=%.4f spd=%.2f shapeMot=%.4f "
++           "shapeSpd=%.2f hsfShapeNum=%d objectNum=%d\n",
++           phase, i, mp6_tick_count, modelP->motWork.time,
++           modelP->motWork.speed, modelP->motShapeWork.time,
++           modelP->motShapeWork.speed, (int)hsf->shapeNum,
++           (int)hsf->objectNum);
++    objP = hsf->object;
++    for (k = 0; k < hsf->objectNum; k++, objP++) {
++        if (objP->type != HSF_OBJ_MESH) {
++            continue;
++        }
++        printf("[W01-FLOWER]   %s i=%d obj=%s meshShapeNum=%u shapeType=%u "
++               "baseMorph=%.4f sc=%.4f,%.4f,%.4f rot=%.2f,%.2f,%.2f "
++               "tr=%.2f,%.2f,%.2f\n",
++               phase, i, objP->name, (unsigned)objP->mesh.shapeNum,
++               (unsigned)objP->mesh.shapeType, objP->mesh.mesh.baseMorph,
++               objP->mesh.curr.scale.x, objP->mesh.curr.scale.y,
++               objP->mesh.curr.scale.z, objP->mesh.curr.rot.x,
++               objP->mesh.curr.rot.y, objP->mesh.curr.rot.z,
++               objP->mesh.curr.pos.x, objP->mesh.curr.pos.y,
++               objP->mesh.curr.pos.z);
++    }
++    fflush(stdout);
++}
++
+@@ -27,0 +204 @@
++#include "mp6_grounding.h"
+@@ -41 +218,2 @@
+-typedef float (*W01CurveEval)();
++/* Native callbacks must preserve float arguments and full-width pointers. */
++typedef float (*W01CurveEval)(HuVecF *, HuVecF *, HuVecF *, HuVecF *, float);
+@@ -601,0 +780,9 @@
++/* The generic integrator supplies a fourth control point. Quadratic Bezier
++ * ignores it, but still needs a matching native function signature. */
++static float mp6W01BezierEval(HuVecF *a, HuVecF *b, HuVecF *c,
++    HuVecF *unused, float t)
++{
++    (void)unused;
++    return fn_1_14A90(a, b, c, t);
++}
++
+@@ -998,0 +1186 @@
++    OSReport("[W01] prolog\n");
+@@ -1020,0 +1209 @@
++    OSReport("[W01] ObjectSetup board=%d\n", MBNO_WORLD_1);
+@@ -1038,0 +1228 @@
++    mp6_ground_w01_begin(mbObjModelIDGet(modelId[0]));
+@@ -1045,0 +1236 @@
++        mp6_ground_w01_scenery(mbObjModelIDGet((&modelId[1])[i]));
+@@ -1049,0 +1241 @@
++    mp6_ground_w01_scenery(mbObjModelIDGet((&modelId[1])[i]));
+@@ -1092,0 +1284 @@
++    OSReport("[W01] MB1_Create complete\n");
+@@ -1096,0 +1289 @@
++    mp6_ground_end();
+@@ -1143,0 +1337,18 @@
++    /* MP6_W01_FORCE_FLOWER -- see the lever's note at the top of this file.
++     * Deliberately routed through this dispatcher rather than around it: the
++     * player is pointed at the real fling space and THIS function installs the
++     * real hook, so fn_1_8860's own
++     * `mbMasuMAttrGet(GwPlayer[playerNo].masuId) & 0x00400000` test picks
++     * work 0 (the day swallow+launch branch) just as a real landing does. */
++    if (mp6W01ForceFlower() && playerNo >= 0) {
++        s16 flowerId = mbMasuFind_MAttrIdGet(-1, 0x00400000);
++
++        if (flowerId >= 0) {
++            GwPlayer[playerNo].masuId = flowerId;
++            mbPlayerMoveHookSet(playerNo, fn_1_8860);
++            printf("[W01-FLOWER] forced fling hook: player=%d masuId=%d "
++                   "tick=%ld\n", playerNo, (int)flowerId, mp6_tick_count);
++            fflush(stdout);
++            return 0;
++        }
++    }
+@@ -1521,2 +1732,2 @@
+-    s32 playerMasuId;
+-    s32 masuId;
++    s32 playerMasuId = -1; /* native fix -- see this hunk's note below */
++    s32 masuId = -1;
+@@ -1589 +1800,4 @@
+-        work->lastMasuId = GwPlayer[playerNo].masuId;
++        /* native fix: playerNo is GwSystem.turnPlayerNo, which is -1 for the
++         * whole board opening; GwPlayer[-1] is an out-of-bounds read. */
++        work->lastMasuId =
++            (playerNo >= 0) ? GwPlayer[playerNo].masuId : -1;
+@@ -1603 +1817 @@
+-    finalLength = w01CurveLen((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
++    finalLength = w01CurveLen(mp6W01BezierEval, &work->startPos,
+@@ -1610 +1824 @@
+-            t = w01CurveT((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
++            t = w01CurveT(mp6W01BezierEval, &work->startPos,
+@@ -1894 +2108 @@
+-    finalLength = w01CurveLen((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
++    finalLength = w01CurveLen(mp6W01BezierEval, &work->startPos,
+@@ -1901 +2115 @@
+-            t = w01CurveT((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
++            t = w01CurveT(mp6W01BezierEval, &work->startPos,
+@@ -2178 +2392,8 @@
+-    HuVecF targetPos;
++    /* MP6_NATIVE_PORT: the PSVECSubtract eleven lines below reads targetPos
++     * before anything assigns it (-Werror=uninitialized-const-pointer). Its
++     * output `delta` is DEAD -- the `for (time = 0; time < 18; time++)` loop
++     * that follows assigns targetPos from work->unk38[0] and recomputes
++     * delta on its first iteration, before any read of it -- so a zero
++     * initialiser removes the undefined read without changing one value the
++     * function goes on to use. */
++    HuVecF targetPos = { 0.0f, 0.0f, 0.0f };
+@@ -3294,0 +3516,3 @@
++            if (mp6W01FlowerTrace()) { /* flower trace -- see the top of file */
++                mp6W01FlowerDump("swallow", i, modelId);
++            }
+@@ -3327,0 +3552,3 @@
++            if (mp6W01FlowerTrace()) { /* flower trace -- see the top of file */
++                mp6W01FlowerDump("flight", i, modelId);
++            }
+@@ -4386,0 +4614,7 @@
++        /* Closes this iteration's GXBegin(displayData[0], GX_VTXFMT0, count)
++         * -- the sub-primitive loop never ends any primitive, so each pass
++         * was auto-closed by the NEXT GXBegin and the last stayed open inside
++         * fn_1_C7DC's GXBeginDisplayList bracket (fatal class, same as
++         * board/effect.c). Anchors to the for-loop close after GXColor1u32.
++         * Empty inline on hardware (GXVert.h). */
++        GXEnd();
+@@ -4436,0 +4671,6 @@
++    /* Closes the GXBegin(GX_QUADS, 4) eight lines up, whose fourth and
++     * last position/texcoord pair is the line this anchors to, before
++     * the GXEndDisplayList() just below. Empty inline on hardware
++     * (GXVert.h); needed for Aurora's byte accounting inside a
++     * display-list bracket -- see src/board/effect.c.patch. */
++    GXEnd();
+@@ -4659,2 +4899,2 @@
+-            * (((W01CurveEval)(u32)fn_1_14BF0)(&a, &b, &c, &d, t)
+-                + ((W01CurveEval)(u32)fn_1_14BF0)(&a, &b, &c, &d, 1.0)));
++            * (fn_1_14BF0(&a, &b, &c, &d, t)
++                + fn_1_14BF0(&a, &b, &c, &d, 1.0)));
+@@ -4664 +4904 @@
+-                lengthSum += ((W01CurveEval)(u32)fn_1_14BF0)(&a, &b, &c, &d,
++                lengthSum += fn_1_14BF0(&a, &b, &c, &d,
+@@ -4857 +5097 @@
+-        t = W01CurveNewton((W01CurveEval)(u32)fn_1_14BF0,
++        t = W01CurveNewton(fn_1_14BF0,
+@@ -5497,0 +5738 @@
++    mp6_ground_w01_tree(mbObjModelIDGet(work->modelId[0]));
+@@ -6153,0 +6395,9 @@
++        if (mp6W01LeafTrace()) { /* leaf trace, DRAW side: the angle this frame's
++                                  * matrix was actually built from, plus the
++                                  * view-space transform the quad is drawn with. */
++            printf("[W01-LEAFDRAW] tick=%ld i=%2d angle=%9.4f scale=%.3f vpos=(%8.1f,%8.1f,%8.1f) r0=(%.3f,%.3f,%.3f) r1=(%.3f,%.3f,%.3f)\n",
++                   mp6_tick_count, (int)i, particle->angle, particle->scale,
++                   modelMtx[0][3], modelMtx[1][3], modelMtx[2][3],
++                   modelMtx[0][0], modelMtx[0][1], modelMtx[0][2],
++                   modelMtx[1][0], modelMtx[1][1], modelMtx[1][2]);
++        }
+@@ -6183,0 +6433,6 @@
++    /* Closes the GXBegin(GX_QUADS, 4) eight lines up, whose fourth and
++     * last position/texcoord pair is the line this anchors to, before
++     * the GXEndDisplayList() just below. Empty inline on hardware
++     * (GXVert.h); needed for Aurora's byte accounting inside a
++     * display-list bracket -- see src/board/effect.c.patch. */
++    GXEnd();
+@@ -6269,0 +6525,7 @@
++        }
++        if (mp6W01LeafTrace()) { /* leaf trace -- see mp6W01LeafTrace above */
++            printf("[W01-LEAF] tick=%ld i=%2d angle=%9.4f spd=%+9.5f pos=(%8.1f,%8.1f,%8.1f) vel=(%8.1f,%8.1f,%8.1f)\n",
++                   mp6_tick_count, (int)i, particle->angle, particle->angleSpeed,
++                   particle->pos.x, particle->pos.y, particle->pos.z,
++                   particle->vel.x, particle->vel.y, particle->vel.z);
++            fflush(stdout);

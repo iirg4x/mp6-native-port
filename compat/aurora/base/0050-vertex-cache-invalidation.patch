@@ -1,0 +1,24 @@
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -418,1 +418,11 @@
+-void process(const u8* data, u32 size, bool bigEndian) {
++static void invalidate_vertex_cache() {
++  // Uploaded ranges are snapshots of mutable CPU arrays. An explicit GX
++  // invalidation must retire them before another draw can use those arrays,
++  // even if their addresses and layouts have not changed.
++  for (auto& array : g_gxState.arrays) {
++    array.cachedRange = {};
++  }
++  g_gxState.stateDirty = true; // Never merge across old/new array snapshots.
++}
++
++void process(const u8* data, u32 size, bool bigEndian) {
+@@ -484,4 +494,4 @@
+-    case CP_CMD_INVAL_VTX: {
+-      // Invalidate vertex cache
+-      break;
+-    }
++    case CP_CMD_INVAL_VTX: {
++      invalidate_vertex_cache();
++      break;
++    }

@@ -1,0 +1,360 @@
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -1,4 +1,5 @@
+ #include "common.hpp"
++#include "../gx/compact_instance.hpp"
+ #include "uniform_writer.hpp"
+ 
+ #include "clear.hpp"
+@@ -852,7 +853,9 @@
+   if (g_currentRenderPass >= current_render_passes().size()) {
+     return nullptr;
+   }
+-  auto& last = current_render_passes()[g_currentRenderPass].commands.back();
++  auto& commands = current_render_passes()[g_currentRenderPass].commands;
++  if (commands.empty()) return nullptr;
++  auto& last = commands.back();
+   if (last.type != CommandType::Draw || last.data.draw.type != ShaderType::GX) {
+     return nullptr;
+   }
+@@ -2691,12 +2694,22 @@
+   return push(current_frame_packet().verts, data, length, alignment);
+ }
+ 
++static ByteBuffer g_instanceIndexShadow;
++static uint32_t g_instanceIndexFrame = UINT32_MAX;
+ Range push_indices(const uint8_t* data, size_t length, size_t alignment) {
+   ZoneScoped;
+   if (!check_recording("push_indices")) {
+     return {};
+   }
+-  return push(current_frame_packet().indices, data, length, alignment);
++  const auto range = push(current_frame_packet().indices, data, length, alignment);
++  if (range.offset == 0 || g_instanceIndexFrame != current_frame_packet().frameIndex) {
++    g_instanceIndexShadow.clear();
++    g_instanceIndexFrame = current_frame_packet().frameIndex;
++  }
++  CHECK(g_instanceIndexShadow.size() <= range.offset, "Index shadow overlap");
++  g_instanceIndexShadow.append_zeroes(range.offset - g_instanceIndexShadow.size());
++  g_instanceIndexShadow.append(data, length);
++  return range;
+ }
+ 
+ UniformWriter begin_uniform(uint32_t capacity) {
+@@ -2720,6 +2733,9 @@
+   }
+   return push(current_frame_packet().storage, data, length, g_cachedLimits.minStorageBufferOffsetAlignment);
+ }
++
++#include "compact_instance_upload.inc"
++#include "compact_instance.inc"
+ 
+ Range push_texture_data(const uint8_t* data, u32 bytesPerRow, u32 rowsPerImage) {
+   // For CopyBufferToTexture, we need an alignment of 256 per row (see Dawn kTextureBytesPerRowAlignment)
+diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -17,6 +17,10 @@
+ #include <cstdint>
+ #include <cstring>
+ #include <optional>
++
++namespace aurora::gfx {
++bool try_compact_instance(gx::DrawData&, const gx::PipelineConfig&, const gx::ShaderInfo&);
++}
+ 
+ namespace aurora::gx::fifo {
+ static Module Log("aurora::gx::fifo");
+@@ -1781,7 +1785,7 @@
+   } else if (prim == GX_POINTS) {
+     instanceCount = vtxCount;
+   }
+-  gfx::push_draw_command(DrawData{
++  DrawData draw{
+       .pipeline = pipeline,
+       .vertRange = vertRange,
+       .idxRange = idxRange,
+@@ -1793,7 +1797,8 @@
+       .dstAlpha = g_gxState.dstAlpha,
+       .vtxFmt = fmt,
+       .mergeable = prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS,
+-  });
++  };
++  if (!gfx::try_compact_instance(draw, config, info)) gfx::push_draw_command(draw);
+ }
+ 
+ std::string read_string(const u8* data, u32& pos, u32 size, bool bigEndian) {
+diff --git a/lib/gx/shader.cpp b/lib/gx/shader.cpp
+--- a/lib/gx/shader.cpp
++++ b/lib/gx/shader.cpp
+@@ -1564,6 +1564,8 @@
+     fragmentFn += "\n    prev = vec4f(in.nrm, prev.a);";
+   }
+ 
++#include "compact_instance_shader.inc"
++
+   const auto shaderSource = fmt::format(R"""(
+ fn bswap32(v: u32, le: bool) -> u32 {{
+   if (le) {{
+diff --git a/lib/gx/shader_info.cpp b/lib/gx/shader_info.cpp
+--- a/lib/gx/shader_info.cpp
++++ b/lib/gx/shader_info.cpp
+@@ -379,7 +379,7 @@
+ gfx::Range build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGroupRanges& ranges) noexcept {
+   ZoneScoped;
+ 
+-  auto buf = gfx::begin_uniform(info.uniformSize);
++  auto buf = gfx::begin_instance_uniform(info.uniformSize);
+   if (!buf) {
+     g_gxState.stateDirty = false;
+     return {};
+@@ -509,6 +509,6 @@
+     buf.append(texture_size_bias(tex));
+   }
+   g_gxState.stateDirty = false;
+-  return buf.finish();
++  return gfx::finish_instance_uniform(buf.finish());
+ }
+ } // namespace aurora::gx
+diff --git a/lib/gx/gx.hpp b/lib/gx/gx.hpp
+--- a/lib/gx/gx.hpp
++++ b/lib/gx/gx.hpp
+@@ -466,7 +466,8 @@
+   u8 fogType = GX_FOG_NONE;
+   u8 vtxStride = 0;
+   u8 lineMode : 2 = 0; // 1 = GX_LINES, 2 = GX_LINESTRIP, 3 = GX_POINTS
+-  u8 pad1 : 6 = 0;
++  u8 meshInstancing : 1 = 0;
++  u8 pad1 : 5 = 0;
+   u8 pad2 = 0;
+   std::array<AttrConfig, MaxVtxAttr> attrs;
+   std::array<TevSwap, MaxTevSwap> tevSwapTable;
+diff --git a/lib/gfx/uniform_writer.hpp b/lib/gfx/uniform_writer.hpp
+--- a/lib/gfx/uniform_writer.hpp
++++ b/lib/gfx/uniform_writer.hpp
+@@ -54,4 +54,6 @@
+ };
+ 
+ UniformWriter begin_uniform(uint32_t capacity);
++UniformWriter begin_instance_uniform(uint32_t capacity);
++Range finish_instance_uniform(Range range);
+ } // namespace aurora::gfx
+diff --git a/lib/gx/compact_instance.hpp b/lib/gx/compact_instance.hpp
+new file mode 100644
+--- /dev/null
++++ b/lib/gx/compact_instance.hpp
+@@ -0,0 +1,39 @@
++#pragma once
++#include <array>
++#include <cstdint>
++#include <cstring>
++#include <span>
++
++namespace aurora::gx::compact_instance {
++// Word-addressed through the existing read-only attribute storage binding.
++// No float conversion: these are the original serialized GPU matrix bits.
++constexpr uint32_t RecordWords = 40;
++constexpr uint32_t RecordBytes = RecordWords * sizeof(uint32_t);
++constexpr uint32_t MaxInstances = 8;
++using Record = std::array<uint32_t, RecordWords>;
++
++inline bool compatible_uniforms(std::span<const uint8_t> a,
++                                std::span<const uint8_t> b, uint32_t texMatrices) {
++  if (texMatrices > 10) return false;
++  const size_t normal = 192 + texMatrices * 48;
++  if (a.size() != b.size() || a.size() < normal + 48) return false;
++  // Vertex address, array bases, model position/normal matrices are per-instance.
++  // Padding at 24..31 holds the record address in the instanced variant only.
++  const auto equal = [&](size_t start, size_t size) {
++    return std::memcmp(a.data() + start, b.data() + start, size) == 0;
++  };
++  return equal(4, 20) && equal(80, 64) && equal(192, normal - 192) &&
++         equal(normal + 48, a.size() - normal - 48);
++}
++
++inline Record pack_record(std::span<const uint8_t> u, uint32_t texMatrices) {
++  Record record{};
++  const size_t normal = 192 + texMatrices * 48;
++  if (texMatrices > 10 || u.size() < normal + 48) return record;
++  std::memcpy(record.data(), u.data(), 4);                    // vertex byte address
++  std::memcpy(record.data() + 1, u.data() + 32, 48);          // 12 array byte addresses
++  std::memcpy(record.data() + 16, u.data() + 144, 48);        // model position matrix
++  std::memcpy(record.data() + 28, u.data() + normal, 48);      // model normal matrix
++  return record;
++}
++} // namespace aurora::gx::compact_instance
+diff --git a/lib/gfx/compact_instance.inc b/lib/gfx/compact_instance.inc
+new file mode 100644
+--- /dev/null
++++ b/lib/gfx/compact_instance.inc
+@@ -0,0 +1,85 @@
++// Included in gfx/common.cpp after the mapped frame storage helpers.
++// Only the immediately preceding GX command is eligible. Viewport/scissor,
++// custom draws, EFB copies, pass changes and clears remain ordering barriers.
++bool try_compact_instance(gx::DrawData& current, const gx::PipelineConfig& config,
++                          const gx::ShaderInfo& info) {
++  using namespace gx::compact_instance;
++  if (!info.compactMatrices || info.lineMode || !current.mergeable || current.instanceCount != 1)
++    return false;
++  auto* previous = get_last_draw_command<gx::DrawData>();
++  if (!previous) return false;
++
++  // Recording-thread-only, valid only for the last command of this exact frame.
++  // Compare the pointer; never dereference retained pointers from earlier passes.
++  struct LastGroup {
++    uint32_t frame = UINT32_MAX;
++    gx::DrawData* draw = nullptr;
++    PipelineRef basePipeline = 0;
++    PipelineRef instancePipeline = 0;
++    Range records;
++    std::vector<uint8_t> templateUniform;
++  };
++  static LastGroup group;
++  auto& frame = current_frame_packet();
++  const bool extending = group.frame == frame.frameIndex && group.draw == previous &&
++                         group.instancePipeline == previous->pipeline && !previous->mergeable &&
++                         previous->instanceCount > 1 && previous->instanceCount < MaxInstances;
++  if (!extending && (!previous->mergeable || previous->instanceCount != 1)) return false;
++  if ((extending ? group.basePipeline : previous->pipeline) != current.pipeline ||
++      previous->vtxFmt != current.vtxFmt || previous->dstAlpha != current.dstAlpha ||
++      previous->bindGroups.textureBindGroup != current.bindGroups.textureBindGroup ||
++      previous->vtxCount != current.vtxCount || previous->indexCount != current.indexCount ||
++      previous->idxRange.size != current.idxRange.size) return false;
++
++  const auto checked_span = [](const ByteBuffer& buffer, Range range) {
++    CHECK(range.offset <= buffer.size() && range.size <= buffer.size() - range.offset,
++          "Instance source range exceeds the recording buffer");
++    return std::span<const uint8_t>(buffer.data() + range.offset, range.size);
++  };
++  const auto first = extending ? std::span<const uint8_t>(group.templateUniform) :
++                                instance_uniform_bytes(previous->uniformRange);
++  const auto next = instance_uniform_bytes(current.uniformRange);
++  if (!compatible_uniforms(first, next, info.usesTexMtx.count())) return false;
++  // Same topology, not necessarily the same geometry: each instance retains its
++  // own direct-vertex and indexed-attribute addresses. No hashing / deduplication.
++  const auto firstIndices = checked_span(g_instanceIndexShadow, previous->idxRange);
++  const auto nextIndices = checked_span(g_instanceIndexShadow, current.idxRange);
++  if (firstIndices.size() && std::memcmp(firstIndices.data(), nextIndices.data(), firstIndices.size()))
++    return false;
++
++  const auto nextRecord = pack_record(next, info.usesTexMtx.count());
++  if (!extending) {
++    auto instanceConfig = config;
++    instanceConfig.shaderConfig.meshInstancing = true;
++    gx::ShaderInfo instanceInfo{};
++    const auto pipeline = find_gx_pipeline(instanceConfig, instanceInfo);
++    wgpu::RenderPipeline ready;
++    if (!get_pipeline(pipeline, ready)) return false; // Keep ordinary draws while compiling.
++    CHECK(instanceInfo.uniformSize == info.uniformSize && instanceInfo.compactMatrices,
++          "Instancing changed the uniform layout");
++    std::array<Record, MaxInstances> records{};
++    records[0] = pack_record(first, info.usesTexMtx.count());
++    records[1] = nextRecord;
++    const auto range = push_storage(reinterpret_cast<const uint8_t*>(records.data()), sizeof(records));
++    group.frame = frame.frameIndex;
++    group.draw = previous;
++    group.basePipeline = current.pipeline;
++    group.instancePipeline = pipeline;
++    group.records = range;
++    group.templateUniform.assign(first.begin(), first.end());
++    // Mutate only the unused header padding; ordinary state comparison ignores it.
++    std::memcpy(frame.uniforms.data() + previous->uniformRange.offset + 24, &range.offset, 4);
++    previous->pipeline = pipeline;
++    previous->instanceCount = 2;
++    previous->mergeable = false; // Never append ordinary triangle indices to this group.
++  } else {
++    CHECK(group.records.size == MaxInstances * RecordBytes, "Invalid instance reservation");
++    const auto offset = group.records.offset + previous->instanceCount * RecordBytes;
++    CHECK(offset <= frame.storage.size() && RecordBytes <= frame.storage.size() - offset,
++          "Instance destination exceeds the recording buffer");
++    std::memcpy(frame.storage.data() + offset, nextRecord.data(), RecordBytes);
++    ++previous->instanceCount;
++  }
++  ++g_mergedDrawCallCount;
++  return true;
++}
+diff --git a/lib/gfx/compact_instance_upload.inc b/lib/gfx/compact_instance_upload.inc
+new file mode 100644
+--- /dev/null
++++ b/lib/gfx/compact_instance_upload.inc
+@@ -0,0 +1,38 @@
++// Two recording-thread CPU snapshots keep comparisons off write-combined GPU
++// upload memory. A growing instance group owns its own immutable template copy.
++struct InstanceUniformSnapshot {
++  ByteBuffer bytes;
++  Range gpuRange;
++  uint32_t frame = UINT32_MAX;
++};
++static std::array<InstanceUniformSnapshot, 2> g_instanceUniforms;
++static uint32_t g_instanceUniformSlot = 0;
++
++UniformWriter begin_instance_uniform(uint32_t capacity) {
++  if (!check_recording("begin_instance_uniform")) return {};
++  g_instanceUniformSlot ^= 1;
++  auto& current = g_instanceUniforms[g_instanceUniformSlot];
++  current.bytes.clear();
++  current.frame = UINT32_MAX;
++  return UniformWriter(current.bytes, capacity, 0);
++}
++
++Range finish_instance_uniform(Range initialized) {
++  auto& current = g_instanceUniforms[g_instanceUniformSlot];
++  CHECK(initialized.offset == 0 && initialized.size == current.bytes.size(),
++        "Invalid CPU uniform snapshot");
++  current.gpuRange = push_uniform(current.bytes.data(), current.bytes.size());
++  current.frame = current_frame_packet().frameIndex;
++  return current.gpuRange;
++}
++
++static std::span<const uint8_t> instance_uniform_bytes(Range range) {
++  // Prefer the newest snapshot if a renderer restart reused frame/range numbers.
++  for (uint32_t age = 0; age < 2; ++age) {
++    const auto& snapshot = g_instanceUniforms[g_instanceUniformSlot ^ age];
++    if (snapshot.frame == current_frame_packet().frameIndex &&
++        snapshot.gpuRange.offset == range.offset && snapshot.gpuRange.size == range.size)
++      return {snapshot.bytes.data(), snapshot.bytes.size()};
++  }
++  return {};
++}
+diff --git a/lib/gx/compact_instance_shader.inc b/lib/gx/compact_instance_shader.inc
+new file mode 100644
+--- /dev/null
++++ b/lib/gx/compact_instance_shader.inc
+@@ -0,0 +1,36 @@
++  if (config.meshInstancing) {
++    CHECK(info.compactMatrices && config.lineMode == 0, "Invalid instanced GX shader");
++    vtxInAttrs += ",\n    @builtin(instance_index) mesh_instance: u32";
++    // Only the vertex stage changes. Fragment uniforms and all TEV/alpha/fog
++    // expressions are byte-for-byte the ordinary shader's generated strings.
++    const auto substitute = [](std::string& source, std::string_view before, std::string_view after) {
++      size_t offset = 0;
++      while ((offset = source.find(before, offset)) != std::string::npos) {
++        source.replace(offset, before.size(), after);
++        offset += after.size();
++      }
++    };
++    for (auto* source : {&vtxXfrAttrsPre, &vtxXfrAttrs}) {
++      substitute(*source, "ubuf.vtx_start", "instance_vertex_start");
++      for (uint32_t a = 0; a < 12; ++a) {
++        substitute(*source, fmt::format("ubuf.array_start[{}]", a),
++                   fmt::format("abuf[instance_word + {}u]", a + 1));
++      }
++      substitute(*source, "ubuf.postex_mtx[in_pnmtxidx]", "instance_position");
++      substitute(*source, "ubuf.nrm_mtx[in_pnmtxidx]", "instance_normal");
++    }
++    std::string prefix =
++        "\n    let instance_word = ubuf.pad.x / 4u + mesh_instance * 40u;"
++        "\n    let instance_vertex_start = abuf[instance_word];";
++    for (uint32_t m = 0; m < 2; ++m) {
++      prefix += fmt::format("\n    let instance_{} = mat3x4f(", m == 0 ? "position" : "normal");
++      for (uint32_t row = 0; row < 3; ++row) {
++        const auto start = 16 + m * 12 + row * 4;
++        prefix += fmt::format("{}bitcast<vec4f>(vec4u(abuf[instance_word + {}u], "
++                              "abuf[instance_word + {}u], abuf[instance_word + {}u], "
++                              "abuf[instance_word + {}u]))", row ? ", " : "", start, start + 1, start + 2, start + 3);
++      }
++      prefix += ");";
++    }
++    vtxXfrAttrsPre.insert(0, prefix);
++  }

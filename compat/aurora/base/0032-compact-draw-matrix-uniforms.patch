@@ -1,0 +1,172 @@
+Compact matrix uploads without changing matrix values or shader arithmetic.
+Indexed PN/texture palettes keep their complete GX addressing.
+
+--- a/lib/gx/gx.hpp
++++ b/lib/gx/gx.hpp
+@@ -491,6 +491,7 @@
+   std::bitset<MaxTevRegs> loadsTevReg;
+   std::bitset<MaxTevRegs> writesTevReg;
+   std::bitset<MaxPTTexMtx> usesPTTexMtx;
++  std::bitset<MaxPnMtx + MaxTexMtx> usesTexMtx;
+   std::bitset<MaxVtxAttr> indexAttr;
+   std::bitset<MaxIndStages> usedIndStages;
+   std::bitset<MaxTextures> sampledIndTextures;
+@@ -498,7 +499,12 @@
+   u32 uniformSize = 0;
+   bool usesFog : 1 = false;
+   bool lightingEnabled : 1 = false;
++  bool compactMatrices : 1 = false;
+   u8 lineMode : 2 = 0;
++  template <size_t N>
++  static u32 matrix_slot(const std::bitset<N>& used, u32 index) {
++    return static_cast<u32>(std::bitset<N>(used.to_ullong() & ((1ULL << index) - 1)).count());
++  }
+ };
+ struct BindGroupRanges {
+   std::array<gfx::Range, MaxIndexAttr> vaRanges{};
+--- a/lib/gx/shader_info.cpp
++++ b/lib/gx/shader_info.cpp
+@@ -198,9 +198,12 @@
+     }
+   }
+ 
+-  // 10 position matrices, 10 texture matrices, 10 normal matrices.
+-  info.uniformSize += sizeof(Mat3x4<float>) * 30;
+-  info.uniformSize += 16; // active PN matrix index + padding
++  // A fixed PN draw needs only its active position/normal matrices. Keep
++  // the original palettes when vertices supply any matrix indices.
++  info.compactMatrices = config.attrs[GX_VA_PNMTXIDX].attrType == GX_NONE;
++  for (int i = GX_VA_TEX0MTXIDX; i <= GX_VA_TEX7MTXIDX; ++i) {
++    info.compactMatrices &= config.attrs[i].attrType == GX_NONE;
++  }
+ 
+   for (int i = 0; i < config.tevStageCount; ++i) {
+     const auto& stage = config.tevStages[i];
+@@ -307,13 +310,17 @@
+       continue;
+     }
+     const auto& tcg = config.tcgs[i];
++    if ((tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4) && tcg.mtx != GX_IDENTITY) {
++      info.usesTexMtx.set(tcg.mtx / 3);
++    }
+     if (tcg.postMtx != GX_PTIDENTITY) {
+       u32 postMtxIdx = (tcg.postMtx - GX_PTTEXMTX0) / 3;
+       info.usesPTTexMtx.set(postMtxIdx);
+     }
+   }
+-  if (info.usesPTTexMtx.any())
+-    info.uniformSize += sizeof(Mat3x4<float>) * MaxPTTexMtx;
++  info.uniformSize += sizeof(Mat3x4<float>) *
++                      (info.compactMatrices ? 2 + info.usesTexMtx.count() : 30);
++  info.uniformSize += sizeof(Mat3x4<float>) * info.usesPTTexMtx.count();
+   if (config.fogType != GX_FOG_NONE) {
+     info.usesFog = true;
+     info.uniformSize += sizeof(Fog);
+@@ -376,7 +383,7 @@
+   buf.reserve_extra(info.uniformSize);
+ 
+   buf.append(vtxStart);
+-  buf.append(g_gxState.currentPnMtx);
++  buf.append<u32>(info.compactMatrices ? 0 : g_gxState.currentPnMtx);
+   buf.append<f32>(g_gxState.renderViewport.width);
+   buf.append<f32>(g_gxState.renderViewport.height);
+   buf.append<f32>(g_gxState.logicalViewport.width);
+@@ -406,16 +413,25 @@
+   }
+   buf.append(proj);
+ 
+-  for (int i = 0; i < MaxPnMtx; i++) {
+-    buf.append(g_gxState.pnMtx[i].pos);
+-  }
+-
+-  for (int i = 0; i < MaxTexMtx; i++) {
+-    buf.append(g_gxState.texMtxs[i]);
+-  }
+-
+-  for (int i = 0; i < MaxPnMtx; i++) {
+-    buf.append(g_gxState.pnMtx[i].nrm);
++  if (info.compactMatrices) {
++    const auto pnIndex = std::min<u32>(g_gxState.currentPnMtx, MaxPnMtx - 1);
++    buf.append(g_gxState.pnMtx[pnIndex].pos);
++    for (u32 i = 0; i < info.usesTexMtx.size(); ++i) {
++      if (info.usesTexMtx.test(i)) {
++        buf.append(i < MaxPnMtx ? g_gxState.pnMtx[i].pos : g_gxState.texMtxs[i - MaxPnMtx]);
++      }
++    }
++    buf.append(g_gxState.pnMtx[pnIndex].nrm);
++  } else {
++    for (int i = 0; i < MaxPnMtx; i++) {
++      buf.append(g_gxState.pnMtx[i].pos);
++    }
++    for (int i = 0; i < MaxTexMtx; i++) {
++      buf.append(g_gxState.texMtxs[i]);
++    }
++    for (int i = 0; i < MaxPnMtx; i++) {
++      buf.append(g_gxState.pnMtx[i].nrm);
++    }
+   }
+ 
+   for (int i = 0; i < info.loadsTevReg.size(); ++i) {
+@@ -460,7 +476,9 @@
+   }
+   if (info.usesPTTexMtx.any()) {
+     for (int i = 0; i < info.usesPTTexMtx.size(); ++i) {
+-      buf.append(g_gxState.ptTexMtxs[i]);
++      if (info.usesPTTexMtx.test(i)) {
++        buf.append(g_gxState.ptTexMtxs[i]);
++      }
+     }
+   }
+   if (info.usesFog) {
+--- a/lib/gx/shader.cpp
++++ b/lib/gx/shader.cpp
+@@ -1029,8 +1029,9 @@
+   }
+ 
+   uniBufAttrs += "\n    proj: mat4x4f,";
+-  uniBufAttrs += fmt::format("\n    postex_mtx: array<mat3x4f, {}>,", MaxPnMtx + MaxTexMtx);
+-  uniBufAttrs += fmt::format("\n    nrm_mtx: array<mat3x4f, {}>,", MaxPnMtx);
++  uniBufAttrs += fmt::format("\n    postex_mtx: array<mat3x4f, {}>,",
++                            info.compactMatrices ? 1 + info.usesTexMtx.count() : MaxPnMtx + MaxTexMtx);
++  uniBufAttrs += fmt::format("\n    nrm_mtx: array<mat3x4f, {}>,", info.compactMatrices ? 1 : MaxPnMtx);
+   std::string fragmentFnPre;
+   std::string fragmentFn;
+ 
+@@ -1198,6 +1199,9 @@
+         vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0}.xyz;", i);
+       } else {
+         u32 texMtxIdx = (tcg.mtx) / 3;
++        if (info.compactMatrices) {
++          texMtxIdx = 1 + ShaderInfo::matrix_slot(info.usesTexMtx, texMtxIdx);
++        }
+         vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0} * ubuf.postex_mtx[{1}];", i, texMtxIdx);
+       }
+       if (tcg.type == GX_TG_MTX2x4) {
+@@ -1213,6 +1217,7 @@
+       vtxXfrAttrs += fmt::format("\n    var tc{0}_proj = tc{0}_tmp;", i);
+     } else {
+       u32 postMtxIdx = (tcg.postMtx - GX_PTTEXMTX0) / 3;
++      postMtxIdx = ShaderInfo::matrix_slot(info.usesPTTexMtx, postMtxIdx);
+       vtxXfrAttrs +=
+           fmt::format("\n    var tc{0}_proj = vec4f(tc{0}_tmp.xyz, 1.0) * ubuf.postmtx[{1}];", i, postMtxIdx);
+     }
+@@ -1466,7 +1471,7 @@
+                     underlying(stage.texMapId), uvIn);
+   }
+   if (info.usesPTTexMtx.any())
+-    uniBufAttrs += fmt::format("\n    postmtx: array<mat3x4f, {}>,", MaxPTTexMtx);
++    uniBufAttrs += fmt::format("\n    postmtx: array<mat3x4f, {}>,", info.usesPTTexMtx.count());
+   if (info.usesFog) {
+     uniformPre +=
+         "\n"
+--- a/lib/gx/pipeline.hpp
++++ b/lib/gx/pipeline.hpp
+@@ -16,7 +16,7 @@
+   uint32_t dstAlpha;
+ };
+ 
+-constexpr uint32_t GXPipelineConfigVersion = 13;
++constexpr uint32_t GXPipelineConfigVersion = 14;
+ struct PipelineConfig {
+   uint32_t version = GXPipelineConfigVersion;
+   uint32_t msaaSamples = 1;

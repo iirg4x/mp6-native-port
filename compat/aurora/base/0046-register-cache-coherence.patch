@@ -1,0 +1,68 @@
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -531,6 +531,33 @@
+ // Helper to extract bit fields from a 32-bit register
+ inline static u32 bp_get(u32 reg, u32 size, u32 shift) { return reg >> shift & (1u << size) - 1; }
+ 
++// Raw-register equality is not enough when another command can change the
++// decoded field. Keep BP's raw words intact: selective writes still merge them.
++static inline bool repeated_bp_register(u32 reg, u32 value) {
++  if (g_gxState.bpRegCache[reg] != value) return false;
++  if (reg == 0x00) {
++    // XF also writes numChans / numTexGens. The stage check admits the first
++    // zero GENMODE write (raw zero means one TEV stage, not zero stages).
++    return g_gxState.numChans == bp_get(value, 3, 4) &&
++           g_gxState.numTexGens == bp_get(value, 4, 0) &&
++           g_gxState.numTevStages == bp_get(value, 4, 10) + 1;
++  }
++  return reg != 0x52 && reg != 0x65; // Copy and palette-load commands must execute.
++}
++
++static inline bool repeated_xf_register(u32 reg, u32 value) {
++  if (reg > 0x19) return false; // Matrix memory, viewport and projection are not scalar cache entries.
++  const u32 mask = 1u << reg;
++  if ((g_gxState.xfRegCacheValid & mask) && g_gxState.xfRegCache[reg] == value) {
++    if (reg == 0x09) return g_gxState.numChans == value; // Also written by BP GENMODE.
++    if (reg == 0x18) return g_gxState.currentPnMtx == bp_get(value, 6, 0) / 3; // Also written by CP.
++    return true;
++  }
++  g_gxState.xfRegCache[reg] = value;
++  g_gxState.xfRegCacheValid |= mask;
++  return false; // First zero writes must decode nonzero defaults.
++}
++
+ // BP register handler - decodes BP (RAS/pixel engine) register writes and updates g_gxState
+ static void handle_bp(u32 value, bool bigEndian) {
+   u32 regId = (value >> 24) & 0xFF;
+@@ -545,7 +572,7 @@
+     g_gxState.bpRegCache[0xFE] = 0x00FFFFFF;
+     const u32 merged = (g_gxState.bpRegCache[regId] & ~ssMask) | (value & ssMask);
+     value = (regId << 24) | (merged & 0x00FFFFFF);
+-    if (g_gxState.bpRegCache[regId] == value && regId != 0x52)
++    if (repeated_bp_register(regId, value))
+       return;
+     g_gxState.bpRegCache[regId] = value;
+   }
+@@ -1354,11 +1381,8 @@
+       u32 reg = xfAddr + i;
+       u32 val = read_u32(xfData + i * 4, bigEndian);
+ 
+-      // Skip scalar register writes that haven't changed (viewport/projection handled below)
+-      if (reg <= 0x19 && val == g_gxState.xfRegCache[reg])
++      if (repeated_xf_register(reg, val))
+         continue;
+-      if (reg <= 0x19)
+-        g_gxState.xfRegCache[reg] = val;
+ 
+       switch (reg) {
+       case 0x08:
+--- a/lib/gx/gx.hpp
++++ b/lib/gx/gx.hpp
+@@ -398,6 +398,7 @@
+   // VCD low/high and VAT A/B/C for all eight vertex formats.
+   std::array<u32, 26> vertexFormatRegs{};
+   u32 vertexFormatRegsValid = 0;
++  u32 xfRegCacheValid = 0;
+ 
+   void clearVtxSizeCache() { lastVtxFmt = GX_MAX_VTXFMT; }
+ };

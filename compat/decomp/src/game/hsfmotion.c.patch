@@ -1,0 +1,176 @@
+--- a/src/game/hsfmotion.c
++++ b/src/game/hsfmotion.c
+@@ -9,0 +10 @@
++#include "mp6_boot.h" /* mp6_heap_pointer_tag -- standalone motion teardown fix below */
+@@ -75 +76,11 @@
+-    HU3D_MOTION *motP = &Hu3DMotion[motId];
++    /* mdsel's teardown calls this with the "no motion" sentinel (-1) when
++     * a mode is confirmed (reproduced as a panic at &Hu3DMotion[-1]). On
++     * hardware the out-of-bounds read lands on whatever precedes the
++     * array and the !motP->hsf gate below almost always bails; natively
++     * it's a bounds panic. Treat the sentinel as the no-op it de-facto is
++     * -- same class as this file's existing guard below. */
++    HU3D_MOTION *motP;
++    if (motId < 0) {
++        return FALSE;
++    }
++    motP = &Hu3DMotion[motId];
+@@ -100 +111,25 @@
+-        HuMemDirectFree(motP->hsf);
++        /* Port ownership fix (docs/research/hsf_stub_audit.md D4). On
++         * hardware this single free was complete: LoadHSF parsed the file
++         * IN PLACE, so motP->hsf IS the caller's file buffer
++         * (hsfload.c's SetHsfModel returns fileptr itself) and one
++         * HuMemDirectFree returned the entire standalone motion bank.
++         * This port's LoadHSF (src/hsf/hsf_load_native.c) instead
++         * allocates a fresh outer HSF_DATA (plain, freed by the line
++         * below) plus a native graph whose EVERY sub-allocation --
++         * HSF_MOTION record, HSF_TRACK array, curve arrays -- is tagged
++         * mp6_heap_pointer_tag(hsf), exactly the tag Hu3DModelKill's own
++         * bulk free reclaims for models (`HuMemDirectFreeNum(HEAP_MODEL,
++         * modelP->mallocNo)`, hsfman.c). This standalone branch had no
++         * bulk free at all, so every Hu3DMotionCreate/Hu3DMotionKill
++         * cycle leaked the graph into HEAP_MODEL (5,561 motion-only banks
++         * on the disc churn through here; median 17,600 B per teardown
++         * before counting curve arrays). Compute the tag BEFORE the outer
++         * free (mp6_heap_pointer_tag validates a live block base and
++         * exits loudly on anything else), then mirror Hu3DModelKill's
++         * plain-free + bulk-free pair. Retail-visible behaviour is
++         * unchanged: the bulk free matches only this graph's own tag. */
++        {
++            u32 mp6GraphTag = mp6_heap_pointer_tag(motP->hsf);
++            HuMemDirectFree(motP->hsf);
++            HuMemDirectFreeNum(HEAP_MODEL, mp6GraphTag);
++        }
+@@ -191 +226,19 @@
+-    HU3D_MOTION *motP = &Hu3DMotion[motId];
++    /* 64-bit/checked-build portability fix, negative-sentinel-index class:
++     * motId == HU3D_MOTIONID_NONE (-1) reaches this function ORGANICALLY.
++     * mdseldll's fn_1_6F40 does Hu3DMotionShiftSet(mdlId,
++     * Hu3DMotionIDGet(mdlId), ...) for 3 files, and one of those files'
++     * real disc HSF has motion.count == 0 (verified by decoding its own
++     * HSF header bytes), so Hu3DMotionIDGet honestly returns -1 on real
++     * hardware too. There, `&Hu3DMotion[-1]` is a DEAD computation: `motP`
++     * is never read anywhere in this function's body (every subsequent
++     * line touches only modelP->*), and the one motion-array access on the
++     * motId==-1 path further down, Hu3DMotionShiftMaxTimeGet, already has
++     * its own `motIdShift == HU3D_MOTIONID_NONE -> return 0` guard. So
++     * hardware behavior is fully well-defined EXCEPT for forming the
++     * out-of-bounds address itself -- which this port's checked build
++     * (zig cc's UB sanitizer) turns into a hard panic ("index -1 out of
++     * bounds for type 'HU3D_MOTION[384]'", reproduced driving file-select
++     * -> mode select). Guarding the index computation changes nothing
++     * observable: the pointer stays dead either way, and every modelP
++     * field write below is identical. */
++    HU3D_MOTION *motP = (motId != HU3D_MOTIONID_NONE) ? &Hu3DMotion[motId] : NULL;
+@@ -826 +879 @@
+-                if(trackP->target < hsf->objectNum && trackP->target != -1) {
++                if(trackP->target != (u16)-1 && trackP->target < hsf->objectNum) {
+@@ -871 +924 @@
+-                if(track->target < hsf->objectNum) {
++                if(track->target < hsf->objectNum && track->morphWeight >= 0 && track->morphWeight < 33) {
+@@ -880 +933 @@
+-                if(!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF) && trackP->attrIdx < hsf->materialNum) {
++                if(!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF) && trackP->attrIdx >= 0 && trackP->attrIdx < hsf->materialNum) {
+@@ -887,2 +940,19 @@
+-                    clusterP = &hsf->cluster[trackP->cluster];
+-                    clusterP->index = GetClusterCurve(trackP, time);
++                    /* hsf->cluster is still stub-tolerated (forced NULL/0
++                     * -- see src/hsf/hsf_load_native.c's LoadMotion(),
++                     * which deliberately writes -1 into every CLUSTER/
++                     * CLUSTER_WEIGHT track's own `cluster` field for this
++                     * same reason). An embedded HSF_MOTION legitimately
++                     * containing a CLUSTER track (the storybook page-turn
++                     * model does -- REL/bootDll/opening.c's own
++                     * Hu3DMotionClusterSpeedSet(OpeningMdlId[1], 0, ...)
++                     * call confirms it) would otherwise index a NULL array
++                     * here every single frame its motion runs -- a genuine,
++                     * immediate access violation, not a theoretical one.
++                     * Bounds-checked defensively; a future milestone
++                     * implementing real cluster data closes this gap by
++                     * making the condition always true, not by removing
++                     * the check. */
++                    if (trackP->cluster >= 0 && trackP->cluster < hsf->clusterNum) {
++                        clusterP = &hsf->cluster[trackP->cluster];
++                        clusterP->index = GetClusterCurve(trackP, time);
++                    }
+@@ -895,2 +965,7 @@
+-                    clusterP = &hsf->cluster[track->cluster];
+-                    clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
++                    /* Same reasoning as HSF_TRACK_CLUSTER immediately
++                     * above. */
++                    if (track->cluster >= 0 && track->cluster < hsf->clusterNum
++                            && track->clusterWeight >= 0 && track->clusterWeight < 32) {
++                        clusterP = &hsf->cluster[track->cluster];
++                        clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
++                    }
+@@ -904 +979 @@
+-                    if(track->attrIdx != -1 && track->attrIdx < hsf->attributeNum) {
++                    if(track->attrIdx >= 0 && track->attrIdx < hsf->attributeNum) {
+@@ -992 +1067 @@
+-                if (trackP->target < hsf->objectNum && trackP->target != -1) {
++                if (trackP->target != (u16)-1 && trackP->target < hsf->objectNum) {
+@@ -1190,0 +1266,12 @@
++                /* native port: the original left animId/texScrId/bitMapPtr
++                 * (and the 2D scale/trans pair) of this freshly allocated
++                 * work uninitialized -- never read without their flags on
++                 * retail, but the garbage animId was enough to trip
++                 * hsfdraw.c FaceDraw's (since-reordered) unconditional
++                 * Hu3DTexAnimData index (measured: deterministic 'index
++                 * 22086 out of bounds' panic on the W01 board; see the
++                 * FaceDraw comment). Initialize the id fields to their NONE
++                 * sentinels so no consumer can ever meet heap garbage. */
++                attrAnimP->animId = HU3D_ANIMID_NONE;
++                attrAnimP->texScrId = HU3D_TEXSCRID_NONE;
++                attrAnimP->bitMapPtr = NULL;
+@@ -1467 +1554 @@
+-    HSF_CONSTANT_KEY *data = key;
++    HSF_CONSTANT_KEY *data;
+@@ -1469 +1556,4 @@
+-    if(0.0f == time || keyNum == 1) {
++    if(keyNum <= 0 || key == NULL) {
++        return 0.0f;
++    }
++    if(time <= key[0][0] || keyNum == 1) {
+@@ -1472 +1562,2 @@
+-    for(i=0; i<keyNum; i++, data++) {
++    data = &key[1];
++    for(i=1; i<keyNum; i++, data++) {
+@@ -1474,4 +1565,4 @@
+-            return data[0][-1];
+-        }
+-    }
+-    return data[0][-1];
++            return data[-1][1];
++        }
++    }
++    return key[keyNum-1][1];
+@@ -1485 +1576,4 @@
+-    if(0.0f == time || keyNum == 1) {
++    if(keyNum <= 0 || key == NULL) {
++        return 0.0f;
++    }
++    if(time <= key[0][0] || keyNum == 1) {
+@@ -1488 +1582 @@
+-    for(i=0; i<keyNum; i++) {
++    for(i=1; i<keyNum; i++) {
+@@ -1517 +1611,4 @@
+-    if (time == 0.0f || keyNum == 1) {
++    if (keyNum <= 0 || key == NULL) {
++        return 0.0f;
++    }
++    if (time <= key[0][0] || keyNum == 1) {
+@@ -1518,0 +1616,3 @@
++    }
++    if (trackP->start == 0 || trackP->start >= keyNum) {
++        trackP->start = 1;
+@@ -1564 +1664,4 @@
+-    if(0.0f == time || keyNum == 1) {
++    if(keyNum <= 0 || key == NULL) {
++        return NULL;
++    }
++    if(time <= key->time*60.0f || keyNum == 1) {
+@@ -1567 +1670,2 @@
+-    for(i=0; i<keyNum; i++, key++) {
++    key++;
++    for(i=1; i<keyNum; i++, key++) {

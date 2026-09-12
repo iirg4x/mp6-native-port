@@ -4,7 +4,7 @@ mp6-native repo root:
 
     python setup/lib/test_path_safe.py
 
-Mirrors platform/content/test_path_safe.cpp so the C++ and Python gates stay
+Mirrors src/content/test_path_safe.cpp so the C++ and Python gates stay
 in lockstep.
 """
 import os

@@ -1,0 +1,48 @@
+diff --git a/include/aurora/gfx.hpp b/include/aurora/gfx.hpp
+--- a/include/aurora/gfx.hpp
++++ b/include/aurora/gfx.hpp
+@@ -163,1 +163,14 @@
+ bool create_pass(uint32_t width, uint32_t height);
++
++struct BorrowedPassDepth {
++  wgpu::TextureView view;
++  uint32_t width = 0, height = 0, sampleCount = 0;
++};
++
++/// Seal EFB writes and open a same-size, cleared single-sample offscreen pass.
++/// Its draws may sample the borrowed EFB depth attachment until resolve_pass
++/// closes this offscreen pass. This is NOT a snapshot: never use the view in
++/// a later EFB pass or retain it across frames. MSAA consumers must explicitly
++/// select a sample. No EFB depth writes occur during this offscreen bracket.
++/// Returns false with an empty output without opening a pass on invalid input.
++bool create_pass_from_efb_depth(BorrowedPassDepth& out);
+diff --git a/lib/gfx/common.cpp b/lib/gfx/common.cpp
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -1391,1 +1391,26 @@
++bool create_pass_from_efb_depth(BorrowedPassDepth& out) {
++  out = {};
++  gx::fifo::drain();
++  if (g_recordingFrame == nullptr || g_currentRenderPass == UINT32_MAX || g_inOffscreen) {
++    return false;
++  }
++  const auto& pass = current_render_passes()[g_currentRenderPass];
++  if (!pass.hasDepth || !pass.copySourceDepthView || !pass.targetSize.width ||
++      !pass.targetSize.height || !pass.msaaSamples) {
++    return false;
++  }
++  // Copy values before resolve_pass appends a continuation and invalidates
++  // references into the pass vector. Queue order owns the attachment contents:
++  // EFB writes, offscreen reads, then resumed EFB writes.
++  BorrowedPassDepth source{pass.copySourceDepthView, pass.targetSize.width,
++                           pass.targetSize.height, pass.msaaSamples};
++  ResolvedTargets unused;
++  if (!resolve_pass({.color = false, .depth = false}, unused) ||
++      !create_pass(source.width, source.height)) {
++    return false;
++  }
++  out = std::move(source);
++  return true;
++}
++
+ bool ao_compatibility_mode() noexcept {

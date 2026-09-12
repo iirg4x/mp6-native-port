@@ -1,0 +1,66 @@
+Memoize the last sampler per GX texture slot; full source inputs and device lifetime are respected.
+
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -857,6 +857,36 @@
+   };
+ }
+ 
++// Recording-thread-only memo. These are all inputs to get_descriptor(), not
++// texture identity: two textures may safely use the same immutable sampler.
++struct SamplerMemoKey {
++  u32 mode0;
++  u32 mode1;
++  u32 anisotropy;
++  u32 mipFlags;
++  bool operator==(const SamplerMemoKey&) const = default;
++};
++struct SamplerMemo {
++  SamplerMemoKey key{};
++  wgpu::Sampler sampler;
++};
++static std::array<SamplerMemo, MaxTextures> sSamplerMemo;
++
++static WGPUSampler texture_sampler(u32 slot, const gfx::TextureBind& tex) {
++  const SamplerMemoKey key{
++      tex.texObj.mode0, tex.texObj.mode1,
++      static_cast<u32>(g_graphicsConfig.textureAnisotropy),
++      (tex.ref->isReplacement ? 1u : 0u) |
++          (tex.ref->generatedMips ? 2u : 0u) |
++          (tex.ref->hasArbitraryMips ? 4u : 0u)};
++  auto& memo = sSamplerMemo[slot];
++  if (!memo.sampler || !(memo.key == key)) {
++    memo.sampler = gfx::sampler_ref(tex.get_descriptor());
++    memo.key = key;
++  }
++  return memo.sampler.Get();
++}
++
+ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
+   ZoneScoped;
+ 
+@@ -875,7 +905,7 @@
+     samplerEntry.binding = i * 2 + 1;
+     if (tex && (info.sampledTextures[i] || info.sampledIndTextures[i])) {
+       textureEntry.textureView = tex.ref->sampleTextureView.Get();
+-      samplerEntry.sampler = gfx::sampler_ref(tex.get_descriptor()).Get();
++      samplerEntry.sampler = texture_sampler(i, tex);
+     } else {
+       textureEntry.textureView = sEmptyTextureView.Get();
+       samplerEntry.sampler = sEmptySampler.Get();
+@@ -893,6 +923,7 @@
+ }
+ 
+ void initialize() noexcept {
++  sSamplerMemo = {};
+   {
+     std::array<wgpu::BindGroupLayoutEntry, MaxTextures * 2> textureEntries;
+     for (u32 i = 0; i < MaxTextures; ++i) {
+@@ -968,6 +999,7 @@
+ }
+ 
+ void shutdown() noexcept {
++  sSamplerMemo = {};
+   // TODO we should probably store this all in g_state.gx instead
+   sSamplerBindGroupLayout = {};
+   sTextureBindGroupLayout = {};

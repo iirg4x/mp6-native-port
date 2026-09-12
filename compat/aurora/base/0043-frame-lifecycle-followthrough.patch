@@ -1,0 +1,205 @@
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -262,6 +262,7 @@
+   bool hasDraws = false;
+   bool discardable = false;
+   bool captureDepthSnapshot = false;
++  bool finalEfb = false;
+   bool sealed = false;
+   // [MP6] aurora-patches/0020. msResolveCurrent: at the START of this pass the
+   // MSAA resolve target already holds resolve(colorView) -- true only for the
+@@ -422,8 +423,7 @@
+   });
+ }
+ 
+-static void wait_for_gpu_progress(std::chrono::nanoseconds sleepDuration) {
+-  const auto observed = render_worker::progress_version();
++static void wait_for_gpu_progress(uint64_t observed, std::chrono::nanoseconds sleepDuration) {
+   if (render_worker::is_idle()) {
+     enqueue_process_events();
+   }
+@@ -456,7 +456,7 @@
+     const int64_t remainingNs = targetStartNs - nowNs;
+     const auto sleepDuration =
+         remainingNs > 1'000'000 ? std::chrono::milliseconds{1} : std::chrono::nanoseconds{remainingNs};
+-    wait_for_gpu_progress(sleepDuration);
++    wait_for_gpu_progress(render_worker::progress_version(), sleepDuration);
+     nowNs = timestamp_ns(PresentClock::now());
+   }
+ }
+@@ -968,7 +968,6 @@
+   // ONLY place the flag is set, which is what keeps the skip above confined to
+   // consecutive GXCopyTex calls on an otherwise untouched EFB.
+   newPass.msResolveCurrent = msaaSamples > 1;
+-  newPass.commands.reserve(2048);
+   current_render_passes().emplace_back(std::move(newPass));
+   ++g_currentRenderPass;
+ 
+@@ -1033,7 +1032,6 @@
+       .hasDepth = prevPass.hasDepth,
+       .hasStencil = prevPass.hasStencil,
+   };
+-  newPass.commands.reserve(2048);
+   current_render_passes().emplace_back(std::move(newPass));
+   ++g_currentRenderPass;
+ 
+@@ -1470,7 +1468,6 @@
+       .hasDepth = prevPass.hasDepth,
+       .hasStencil = prevPass.hasStencil,
+   };
+-  newPass.commands.reserve(2048);
+   current_render_passes().emplace_back(std::move(newPass));
+   ++g_currentRenderPass;
+   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_cachedViewport});
+@@ -1814,6 +1811,7 @@
+   ZoneScopedN("Wait for buffer map");
+   map_staging_buffer(slot);
+   while (true) {
++    const auto observed = render_worker::progress_version();
+     const auto mappingState = s_mappingStates[slot].load(std::memory_order_acquire);
+     if (mappingState == BufferMapState::Mapped) {
+       return true;
+@@ -1821,7 +1819,7 @@
+     if (mappingState == BufferMapState::Unmapped) {
+       return false;
+     }
+-    wait_for_gpu_progress(std::chrono::milliseconds{1});
++    wait_for_gpu_progress(observed, std::chrono::milliseconds{1});
+   }
+ }
+ 
+@@ -1829,19 +1827,21 @@
+   ZoneScopedN("Acquire frame slot");
+   const auto waitStart = PresentClock::now();
+   while (true) {
++    const auto observed = render_worker::progress_version();
+     if (const auto slot = g_frameSlots.try_acquire()) {
+       const auto waitDuration = PresentClock::now() - waitStart;
+       const double waitMs = std::chrono::duration<double, std::milli>{waitDuration}.count();
+       TracyPlot("aurora: frameSlotWaitMs", waitMs);
+       return *slot;
+     }
+-    wait_for_gpu_progress(std::chrono::microseconds{100});
++    wait_for_gpu_progress(observed, std::chrono::microseconds{100});
+   }
+ }
+ 
+ static std::optional<size_t> acquire_mapped_staging_buffer() {
+   ZoneScopedN("Acquire mapped staging buffer");
+   while (true) {
++    const auto observed = render_worker::progress_version();
+     if (auto slot = g_stagingSlots.try_acquire()) {
+       if (wait_for_staging_buffer(*slot)) {
+         return *slot;
+@@ -1849,7 +1849,7 @@
+       g_stagingSlots.release(*slot);
+       return std::nullopt;
+     }
+-    wait_for_gpu_progress(std::chrono::microseconds{100});
++    wait_for_gpu_progress(observed, std::chrono::microseconds{100});
+   }
+ }
+ 
+@@ -2017,6 +2017,7 @@
+     frame.uniforms.append_zeroes(gx::MaxUniformSize);
+     auto& pass = frame.renderPasses[g_currentRenderPass];
+     pass.captureDepthSnapshot = true;
++    pass.finalEfb = true;
+     enqueue_pass(frame, g_recordingFrameSlot, g_currentRenderPass);
+     g_currentRenderPass = UINT32_MAX;
+   }
+@@ -2194,6 +2195,16 @@
+   }
+ }
+ 
++static wgpu::StoreOp depth_store_op(const RenderPass& pass, bool captureDepthSnapshot) {
++  // The next frame clears EFB depth. Only completed-frame depth readers need
++  // its final store; intermediate AO/task/continuation dependencies still do.
++  if (pass.finalEfb && !captureDepthSnapshot && !pass.snapshotDepthDst &&
++      (!pass.resolveTarget || !gx::is_depth_format(pass.resolveFormat))) {
++    return wgpu::StoreOp::Discard;
++  }
++  return pass.depthStoreOp;
++}
++
+ static void render(wgpu::CommandEncoder& cmd, FramePacket& frame, RenderPass& passInfo, uint32_t passIndex) {
+   ZoneScoped;
+   if (!passInfo.sealed) {
+@@ -2209,6 +2220,10 @@
+     return;
+   }
+ 
++  // Decide before encoding the attachment store. A request arriving after
++  // this check remains pending for the next frame, never reads discarded depth.
++  const bool captureDepthSnapshot = passInfo.captureDepthSnapshot && depth_peek::needs_frame_snapshot();
++
+   // [MP6] aurora-patches/0020: an empty back-to-back-copy segment contributes
+   // nothing to the EFB and its resolve target is already current, so encoding
+   // the render pass would only cost a store + reload of the multisampled
+@@ -2241,7 +2256,7 @@
+                                                   ? passInfo.depthLoadOp
+                                                   : (passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load))
+                                            : wgpu::LoadOp::Undefined,
+-          .depthStoreOp = passInfo.hasDepth ? passInfo.depthStoreOp : wgpu::StoreOp::Undefined,
++          .depthStoreOp = passInfo.hasDepth ? depth_store_op(passInfo, captureDepthSnapshot) : wgpu::StoreOp::Undefined,
+           .depthClearValue = passInfo.clearDepthValue,
+           .stencilLoadOp = passInfo.hasStencil ? passInfo.stencilLoadOp : wgpu::LoadOp::Undefined,
+           .stencilStoreOp = passInfo.hasStencil ? passInfo.stencilStoreOp : wgpu::StoreOp::Undefined,
+@@ -2264,7 +2279,7 @@
+     pass.End();
+   }
+ 
+-  if (passInfo.captureDepthSnapshot) {
++  if (captureDepthSnapshot) {
+     depth_peek::encode_frame_snapshot(cmd, passInfo.copySourceDepthView, passInfo.targetSize, passInfo.msaaSamples);
+   }
+ 
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -316,7 +316,8 @@
+         wgpu::SurfaceTexture surfaceTexture;
+         g_surface.GetCurrentTexture(&surfaceTexture);
+         surfaceStatus = surfaceTexture.status;
+-        if (surfaceStatus == wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal) {
++        if (surfaceStatus == wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal ||
++            surfaceStatus == wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) {
+           currentTexture = std::move(surfaceTexture.texture);
+           currentView = currentTexture.CreateView();
+         }
+@@ -394,6 +395,10 @@
+       }
+       if (status) {
+         gfx::after_present();
++        if (surfaceStatus == wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) {
++          // Present the usable image before refreshing the surface.
++          window::push_custom_event(window::CustomEvent::RefreshSurface);
++        }
+       } else {
+         Log.warn("Surface present failed");
+         webgpu::release_surface();
+--- a/lib/gfx/depth_peek.cpp
++++ b/lib/gfx/depth_peek.cpp
+@@ -340,6 +340,12 @@
+   return true;
+ }
+ 
++bool needs_frame_snapshot() noexcept {
++  if (!g_enabled) return false;
++  std::lock_guard lock{g_mutex};
++  return g_snapshotRequested && Clock::now() >= g_nextSnapshotTime;
++}
++
+ void encode_frame_snapshot(const wgpu::CommandEncoder& cmd, const wgpu::TextureView& depthView,
+                            wgpu::Extent3D sourceSize, uint32_t msaaSamples) noexcept {
+   if (!g_enabled) {
+--- a/lib/gfx/depth_peek.hpp
++++ b/lib/gfx/depth_peek.hpp
+@@ -12,6 +12,8 @@
+ void request_snapshot() noexcept;
+ bool read_latest(uint16_t x, uint16_t y, uint32_t& z) noexcept;
+ 
++// Non-consuming worker-side check before choosing the final depth store.
++bool needs_frame_snapshot() noexcept;
+ void encode_frame_snapshot(const wgpu::CommandEncoder& cmd, const wgpu::TextureView& depthView,
+                            wgpu::Extent3D sourceSize, uint32_t msaaSamples) noexcept;
+ void after_submit() noexcept;

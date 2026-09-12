@@ -1,0 +1,73 @@
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -1174,11 +1174,25 @@
+   }
+ }
+ 
++// Only these pure CP registers own vtxDesc/vtxFmts. Matrix registers also
++// have XF writers, and array commands can refer to changed data at the same
++// address, so neither belongs in this cache. Keep the validity with GXState:
++// a first zero write must still decode, and a state reset resets the cache.
++static inline bool repeated_vertex_format_register(u32 index, u32 value) {
++  const u32 mask = 1u << index;
++  if ((g_gxState.vertexFormatRegsValid & mask) && g_gxState.vertexFormatRegs[index] == value)
++    return true;
++  g_gxState.vertexFormatRegs[index] = value;
++  g_gxState.vertexFormatRegsValid |= mask;
++  return false;
++}
++
+ // CP register handler - decodes CP register writes and updates g_gxState
+ static void handle_cp(u8 addr, u32 value, bool bigEndian) {
+   switch (addr) {
+   // VCD low (0x50)
+   case 0x50: {
++    if (repeated_vertex_format_register(0, value)) return;
+     auto& vd = g_gxState.vtxDesc;
+     vd[GX_VA_PNMTXIDX] = static_cast<GXAttrType>(bp_get(value, 1, 0));
+     vd[GX_VA_TEX0MTXIDX] = static_cast<GXAttrType>(bp_get(value, 1, 1));
+@@ -1200,6 +1214,7 @@
+ 
+   // VCD high (0x60)
+   case 0x60: {
++    if (repeated_vertex_format_register(1, value)) return;
+     auto& vd = g_gxState.vtxDesc;
+     vd[GX_VA_TEX0] = static_cast<GXAttrType>(bp_get(value, 2, 0));
+     vd[GX_VA_TEX1] = static_cast<GXAttrType>(bp_get(value, 2, 2));
+@@ -1230,6 +1245,7 @@
+     // VAT A registers (0x70-0x77)
+     if (addr >= 0x70 && addr <= 0x77) {
+       u32 fmt = addr - 0x70;
++      if (repeated_vertex_format_register(2 + fmt, value)) return;
+       auto& vf = g_gxState.vtxFmts[fmt];
+       vf.attrs[GX_VA_POS].cnt = static_cast<GXCompCnt>(bp_get(value, 1, 0));
+       vf.attrs[GX_VA_POS].type = static_cast<GXCompType>(bp_get(value, 3, 1));
+@@ -1260,6 +1276,7 @@
+     // VAT B registers (0x80-0x87)
+     else if (addr >= 0x80 && addr <= 0x87) {
+       u32 fmt = addr - 0x80;
++      if (repeated_vertex_format_register(10 + fmt, value)) return;
+       auto& vf = g_gxState.vtxFmts[fmt];
+       vf.attrs[GX_VA_TEX1].cnt = static_cast<GXCompCnt>(bp_get(value, 1, 0));
+       vf.attrs[GX_VA_TEX1].type = static_cast<GXCompType>(bp_get(value, 3, 1));
+@@ -1279,6 +1296,7 @@
+     // VAT C registers (0x90-0x97)
+     else if (addr >= 0x90 && addr <= 0x97) {
+       u32 fmt = addr - 0x90;
++      if (repeated_vertex_format_register(18 + fmt, value)) return;
+       auto& vf = g_gxState.vtxFmts[fmt];
+       vf.attrs[GX_VA_TEX4].frac = static_cast<u8>(bp_get(value, 5, 0));
+       vf.attrs[GX_VA_TEX5].cnt = static_cast<GXCompCnt>(bp_get(value, 1, 5));
+--- a/lib/gx/gx.hpp
++++ b/lib/gx/gx.hpp
+@@ -395,6 +395,10 @@
+   f32 backScale = 0.0f;
+   f32 clamp = 0.0f;
+ 
++  // VCD low/high and VAT A/B/C for all eight vertex formats.
++  std::array<u32, 26> vertexFormatRegs{};
++  u32 vertexFormatRegsValid = 0;
++
+   void clearVtxSizeCache() { lastVtxFmt = GX_MAX_VTXFMT; }
+ };
+ extern GXState g_gxState;

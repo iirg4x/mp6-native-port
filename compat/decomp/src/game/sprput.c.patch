@@ -1,0 +1,167 @@
+--- a/src/game/sprput.c
++++ b/src/game/sprput.c
+@@ -8,0 +9,37 @@
++#include "mp6_widescreen.h" /* widescreen support */
++#include <stdio.h>  /* object census (see HuSprTexLoad below) */
++#include <stdlib.h>
++#include <math.h>
++
++static void mp6SprScissorSet(HUSPRITE *sp)
++{
++    if (!mp6_widescreen_enabled()) {
++        GXSetScissor(sp->scissorX, sp->scissorY, sp->scissorW, sp->scissorH);
++        return;
++    }
++    int width = mp6_widescreen_render_width();
++    if (!sp->scissorX && !sp->scissorY &&
++        sp->scissorW == HU_FB_WIDTH && sp->scissorH == HU_FB_HEIGHT) {
++        GXSetScissor(0, 0, width, HU_FB_HEIGHT);
++        return;
++    }
++    if (sp->scissorW <= 0 || sp->scissorH <= 0) {
++        GXSetScissor(0, 0, 0, 0);
++        return;
++    }
++    /* Custom rectangles (results statistics) are in native framebuffer,
++     * not 576-wide HUD units. Translate with the centred sprite projection;
++     * do not widen the rectangle or discard its content clipping. */
++    float dx = 0.5f * (width - HU_FB_WIDTH);
++    int x0 = (int)floorf(sp->scissorX + dx);
++    int x1 = (int)ceilf(sp->scissorX + sp->scissorW + dx);
++    int y0 = sp->scissorY, y1 = sp->scissorY + sp->scissorH;
++    if (x0 < 0) x0 = 0;
++    if (x0 > width) x0 = width;
++    if (x1 > width) x1 = width;
++    if (y0 < 0) y0 = 0;
++    if (y0 > HU_FB_HEIGHT) y0 = HU_FB_HEIGHT;
++    if (y1 > HU_FB_HEIGHT) y1 = HU_FB_HEIGHT;
++    GXSetScissor(x0, y0, x1 > x0 ? x1-x0 : 0, y1 > y0 ? y1-y0 : 0);
++}
+@@ -36 +39,22 @@
+-    MTXOrtho(proj, 0, HU_DISP_HEIGHT, 0, HU_DISP_WIDTH, 0, 10);
++    /* This is THE per-frame (called from hsfman.c's Hu3DExec every frame,
++     * and from this file's own mode-transition points) entry point that
++     * (re)establishes the 2D/HUD orthographic projection + viewport +
++     * scissor -- i.e. the entire 2D "canvas" every window/sprite-group
++     * draw goes through. Widening only the RIGHT edge left-anchors all 2D
++     * content -- an element at logical x=0 stays pinned to the true left
++     * edge while the extra width opens up only on the right, so anything
++     * not touched by a per-element shim stayed exactly where it was, and
++     * anything touched twice (a window whose position AND whose forwarded
++     * sprite-group position both got shifted) moved twice as far as
++     * intended -- the exact mispositioned-tag / cut-off-text symptom
++     * reported against file-select and the opening storybook. Recentering
++     * here instead -- shifting the LEFT edge out by the same
++     * half_width_delta the old per-element shims used to add -- maps the
++     * original [0, HU_DISP_WIDTH] logical range onto the CENTER of the
++     * wider canvas: the total span is unchanged, so every 2D element, with
++     * NO per-element shim at all, translates by exactly the same pixel
++     * delta as every other one, preserving each screen's own relative
++     * layout instead of depending on each element flowing through exactly
++     * one shimmed setter. No-op (byte-identical native calls) when
++     * disabled. */
++    MTXOrtho(proj, 0, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0, 10);
+@@ -39 +63 @@
+-        GXSetViewportJitter(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1, VIGetNextField());
++        GXSetViewportJitter(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1, VIGetNextField());
+@@ -41,3 +65,3 @@
+-        GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
+-    }
+-    GXSetScissor(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
++        GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
++    }
++    GXSetScissor(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -63 +121 @@
+-    GXSetScissor(sp->scissorX, sp->scissorY, sp->scissorW, sp->scissorH);
++    mp6SprScissorSet(sp);
+@@ -252,0 +294,22 @@
++    /* Object census: the ANIM-sourced texture binds (sprites AND
++     * hsfdraw's engine reflect/toon/hilite maps all funnel through here)
++     * -- names which ANIMDATA/format each bind came from, the piece the
++     * per-model census can't see. Same MP6_DRAW_CENSUS_OBJ=<tick> two-tick
++     * window as hsfdraw.c's census (independent parse, same env var --
++     * both TUs see the same tick). Diagnostic only: prints state, never
++     * changes behavior. */
++    {
++        static long mp6SprCensusTick = -2;
++        extern long mp6_tick_count;
++        if (mp6SprCensusTick == -2) {
++            const char *e = getenv("MP6_DRAW_CENSUS_OBJ");
++            mp6SprCensusTick = (e && atol(e) > 0) ? atol(e) : -1;
++        }
++        if (mp6SprCensusTick > 0 && mp6_tick_count >= mp6SprCensusTick &&
++            mp6_tick_count < mp6SprCensusTick + 2) {
++            printf("[CENSUS-OBJ]    SprTexLoad anim=%p bmpNo=%d texMap=%d fmt=%d %dx%d data=%p pal=%p palNum=%d\n",
++                   (void *)anim, bmpNo, texMapId, bmp->dataFmt & ANIM_BMP_FMTMASK,
++                   sizeX, sizeY, (void *)bmp->data, (void *)bmp->palData, bmp->palNum);
++            fflush(stdout);
++        }
++    }
+@@ -412 +475,15 @@
+-    MTXOrtho(proj, 0, HU_DISP_HEIGHT, 0, HU_DISP_WIDTH, 0, 100);
++    /* A fourth, independent copy of the same native-only ortho class
++     * already found and recentered twice (HuSprDispInit above in this
++     * same file, and game/window.c's MesDispFunc). HuSpr3DDisp is the
++     * hook3D draw callback game/window.c's HuWinExCreateFrame registers
++     * (via HuSpr3DSet) on sprite 0 of EVERY window it creates -- i.e. the
++     * window's own frame/border quad, used for the rotate-open "page
++     * flip" style animation every HuWin message/dialogue window gets.
++     * Left un-recentered, a window's own frame renders through the OLD
++     * native mapping while that same window's message text (now
++     * recentered) and every OTHER non-hook3D sprite do not -- the
++     * frame-vs-content mismatch grows with the window's distance from
++     * logical x=288, and scales with aspect -- small enough to miss in a
++     * 16:9 screenshot, glaring at wider ones. Recentered identically;
++     * no-op (byte-identical native call) when widescreen is disabled. */
++    MTXOrtho(proj, 0, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0, 100);
+@@ -419 +496,22 @@
+-    GXSetVtxAttrFmt(GX_VA_TEX0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
++    /* Real, unpatched original decomp bug (not a decompilation error --
++     * this exact typo shape, reusing the same GXAttr identifier for both
++     * arguments instead of the GXVtxFmt slot selector the first parameter
++     * actually wants, is a classic copy-paste mistake): every OTHER
++     * GXSetVtxAttrFmt call in this same function correctly passes
++     * GX_VTXFMT0 as the first (GXVtxFmt) argument; this one instead
++     * passes GX_VA_TEX0 (a GXAttr enumerator, value 13) where GX_VTXFMT0
++     * (0) belongs. Real hardware's own GX has no vtxfmt bounds check at
++     * all (it just computes a VAT register offset from whatever value
++     * it's given), so this silently sets up the wrong-but-not-fatal
++     * vertex-attribute-format slot on real hardware -- a genuine, latent
++     * rendering bug in the original game that nobody ever needed to
++     * notice. Aurora's own GXSetVtxAttrFmt DOES validate and FATALs
++     * outright ("invalid vtxfmt 13"), caught directly the first time any
++     * window actually gets drawn through this hook (HuSpr3DDisp, the
++     * sprite "3D warp/page-flip" hook3D effect registered on every
++     * window's sprite 0). Fixed to the value every neighboring call site
++     * already establishes as correct; the other arguments are unchanged
++     * (GX_VA_TEX0 is exactly right there -- it says WHICH attribute this
++     * call configures, a completely different, correct use of the same
++     * enumerator). */
++    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+@@ -563 +661,25 @@
+-}
++    /* Real, unpatched original decomp gap (same class as game/hsfman.c's
++     * Hu3DZClear): this function's own GXBegin(GX_QUADS, GX_VTXFMT0,
++     * col*row*4) is followed by a loop that emits EXACTLY col*row*4
++     * vertices, so on real hardware -- whose GX FIFO ends a primitive
++     * purely by vertex count, not an explicit End signal -- this was
++     * always complete and correct with no GXEnd() call at all. Patched
++     * here (unlike Hu3DZClear, left as bridge-side-tolerated) because THIS
++     * specific gap has a real, confirmed downstream consequence the
++     * general bridge fix can't safely paper over: HuSpr3DDisp is a sprite
++     * hook3D callback, called from HuSprDisp's own per-layer loop -- an
++     * arbitrary amount of OTHER code can run between this function's own
++     * last vertex and whatever the NEXT real GXBegin happens to be, and
++     * the bridge's generic "auto-close on the next GXBegin" tolerance has
++     * no way to know this function's own primitive was already, correctly,
++     * complete well before that point. Caught directly (Aurora build):
++     * "GXEnd: vertex count mismatch: GXBegin declared 128 vertices (8B
++     * each, 1024B total) but 1075 bytes were written (134 vertices)" --
++     * extra bytes from whatever ran in the gap before the bridge's own
++     * auto-close finally fired. A real, explicit GXEnd() call here is a
++     * pure no-op on real hardware (zero behavior change there) while
++     * telling Aurora exactly where this primitive really ends, closing
++     * that gap at the source instead of relying on the bridge's
++     * necessarily-coarser fallback. */
++    GXEnd();
++}

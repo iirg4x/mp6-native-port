@@ -1,0 +1,19 @@
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -1168,11 +1168,16 @@
+     if (const auto mapping = decode_tex_bp_reg(regId); mapping.has_value()) {
+       auto& slot = g_gxState.loadedTextures[mapping->texMapId];
+       switch (mapping->kind) {
++      // The resolved image fast path keys on image ID/version, not sampler
++      // state. Refresh the bound sampler words here, only on changed BP writes.
++      // Already-recorded draws retain their immutable sampler handles.
+       case TexBpRegMapping::Kind::Mode0:
+         slot.mode0 = value;
++        g_gxState.textures[mapping->texMapId].texObj.mode0 = value;
+         break;
+       case TexBpRegMapping::Kind::Mode1:
+         slot.mode1 = value;
++        g_gxState.textures[mapping->texMapId].texObj.mode1 = value;
+         break;
+       case TexBpRegMapping::Kind::Image0:
+         slot.image0 = value;

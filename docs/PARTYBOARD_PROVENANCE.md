@@ -12,17 +12,30 @@ the **partyboard** project (the Mario Party 4 PC port) was **copied
 directly into this repository** and adapted to MP6. The project's prior
 clean-room rule (L1–L3: partyboard read as a spec only, all code
 re-expressed independently) was **revoked by the user for this lane**.
-The L1–L3 ImGui reimplementation (`platform/gx/launcher_menu.cpp`) was
+The L1–L3 ImGui reimplementation (`src/gx/launcher_menu.cpp`) was
 deleted in the same change (git history retains it).
 
 ## Source
+
+### Redistribution permission recorded on 2026-09-12
+
+For the public MP6 port release, the project maintainer confirmed that they
+have permission to redistribute both the adapted Partyboard launcher UI and
+the N64 Party font. Publication proceeds on that confirmation, with all
+original credits and this provenance notice retained. This records the
+maintainer's confirmation; it does not claim that upstream has published a
+license or grant a new license to upstream material.
+
+The original private-only restriction below is superseded by this confirmation
+for this MP6 port release. The file ledger and historical adaptation notes
+remain a record of the original import, not a description of every later edit.
 
 | Fact | Value |
 |---|---|
 | Repository | `mariopartyrd/partyboard` (local checkout `external_refs/repos/partyboard`, read-only) |
 | Commit copied from | `9f607425e37703adc2650c799faf5175c62a1907` ("Update aurora", 2026-06-13) |
-| License | **NONE.** Verified at copy time: no `LICENSE`/`COPYING`/license text anywhere in the repo; the GitHub repository's license field is empty. Default copyright applies; no redistribution rights have been granted by the authors. |
-| Destination | This **private local repository** only. Files were copied at explicit user direction; this notice documents that decision and its scope. **Do not publish or redistribute this repository (or these files) without resolving the upstream licensing situation first.** |
+| Upstream license | No public `LICENSE`/`COPYING` was found at copy time. See the permission confirmation above for this port's release; upstream copyright and attribution remain unchanged. |
+| Destination | Originally restricted to the private local repository. Public MP6 port redistribution was subsequently authorized by the maintainer's permission confirmation recorded above. |
 | Authorship credit | The UI framework files carry `// Credits: TwilitRealm` upstream; README credits Mario Party R&D contributors, the aurora developers, "[ImWhoreHay] for the font", and "justcamtro for designing the assets". All such credit lines are preserved in the copies. |
 
 The rendering substrate underneath the copied UI is **not** part of this
@@ -34,7 +47,7 @@ material.
 
 ## File map (every ripped file)
 
-### Code: `src/port/ui/<name>` → `platform/gx/ui/<name>`
+### Code: `src/port/ui/<name>` → `src/gx/ui/<name>`
 
 Copied and adapted (namespace `partyboard::ui` → `mp6::ui`, includes
 retargeted, `[MP6]`-marked content adaptations; each file carries a
@@ -68,7 +81,7 @@ NOT copied: `compat.cpp` (their C bridge; ours is `launcher_core.cpp`),
 does not have), `portmain.cpp` (read as wiring reference only, per the
 lane brief).
 
-OURS (not ripped, listed for completeness): `platform/gx/ui/
+OURS (not ripped, listed for completeness): `src/gx/ui/
 launcher_core.cpp` + `launcher_state.hpp` — the kept L1–L3 MP6 glue
 (config model, automation-skip mode decision, settings application,
 HSF wordmark decode) carried forward from the deleted launcher_menu.cpp.
@@ -92,7 +105,7 @@ Exactly the five faces partyboard's `ui.cpp` loads:
 | `AlegreyaSC-Regular.ttf` | Alegreya SC | SIL OFL 1.1 (Google Fonts family) — redistributable |
 | `AlegreyaSC-Bold.ttf` | Alegreya SC | SIL OFL 1.1 — redistributable |
 | `MaterialSymbolsRounded-Regular.ttf` | Material Symbols Rounded | Apache-2.0 (Google) — redistributable |
-| `N64Party-Monochromatic.otf` | "N64 Party" | **fan font, no license text**; partyboard's README credits ImWhoreHay "for the font" (gifted to that project). Copied at explicit user direction; private local repo only. |
+| `N64Party-Monochromatic.otf` | "N64 Party" | No public license text; Partyboard credits ImWhoreHay. The maintainer confirmed permission to redistribute this font with the MP6 port on 2026-09-12; original credit retained. |
 | ~~`FOT-NewRodin Pro DB.otf`~~ (REMOVED) | FOT-NewRodin Pro | **Commercial (Fontworks), no redistribution rights — REMOVED before publication.** Replaced by Inter (SIL OFL) as the UI body font; all `.rcss` body rules re-pointed from `"FOT-NewRodin Pro"` to `"Inter"`. |
 | `Inter-Regular.ttf` / `Inter-Bold.ttf` | Inter | SIL OFL 1.1 (The Inter Project Authors) — redistributable. The open replacement for FOT-NewRodin; see res/fonts/LICENSES.txt. |
 
@@ -120,7 +133,7 @@ our branding stays the runtime-decoded, never-committed disc art
 
 The A4 lane (`docs/A4_ANDROID_UI.md` — Android launcher UI, first-run content
 onboarding, APK size) enabled the already-ripped RmlUi launcher on the Android
-build and added one new, unripped file: `platform/gx/ui/content_setup.cpp` /
+build and added one new, unripped file: `src/gx/ui/content_setup.cpp` /
 `.hpp` (the first-run "Game Content Setup" dialog). It is **our own code**,
 built on classes and stylesheet rules already covered by this notice
 (`WindowSmall`/`Button` from the ripped `window.hpp`/`button.hpp`; the
@@ -151,8 +164,8 @@ partyboard's own verbatim rules already use for their mobile layout. No
 partyboard-authored rule was read, copied, or modified for this — the fix
 is scoped entirely to content this notice already attributes to MP6. The
 actual root cause fixed by this lane was in our own C glue
-(`platform/gx/aurora_bridge.c`, `platform/gx/ui/launcher_core.cpp`,
-`platform/main_native.c`): the RmlUi launcher's presentation dimensions were
+(`src/gx/aurora_bridge.c`, `src/gx/ui/launcher_core.cpp`,
+`src/main_native.c`): the RmlUi launcher's presentation dimensions were
 being computed from the same `AURORA_VIEWPORT_FIT`-fitted framebuffer size
 the GAME's 4:3 GX viewport uses, so the launcher was quietly composed for a
 letterboxed 4:3 sub-rectangle instead of the real window/display surface —

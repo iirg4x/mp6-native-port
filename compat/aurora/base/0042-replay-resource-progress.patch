@@ -1,0 +1,227 @@
+--- a/lib/gfx/render_worker.hpp
++++ b/lib/gfx/render_worker.hpp
+@@ -48,6 +48,7 @@
+   void close();
+   void reset();
+   [[nodiscard]] size_t size() const;
++  [[nodiscard]] bool has_space() const;
+ 
+ private:
+   size_t m_capacity = 0;
+@@ -67,6 +68,7 @@
+   void release(size_t slot);
+   void reset();
+   [[nodiscard]] size_t free_count() const;
++  [[nodiscard]] std::optional<size_t> first_free() const;
+ 
+ private:
+   mutable std::mutex m_mutex;
+@@ -74,6 +76,12 @@
+   std::vector<bool> m_freeSlots;
+ };
+ 
++// Resource progress only: never signal a game-thread admission rollback.
++uint64_t progress_version();
++void notify_progress();
++void wait_for_progress(uint64_t observed, std::chrono::nanoseconds timeout);
++bool can_enqueue();
++
+ void initialize();
+ void shutdown();
+ 
+--- a/lib/gfx/render_worker.cpp
++++ b/lib/gfx/render_worker.cpp
+@@ -16,6 +16,9 @@
+ std::atomic_bool g_running = false;
+ std::atomic_size_t g_pendingItems = 0;
+ std::thread::id g_workerThreadId;
++std::mutex g_progressMutex;
++std::condition_variable g_progressCv;
++std::atomic<uint64_t> g_progressVersion{0};
+ 
+ void complete_sync(const std::shared_ptr<SyncState>& sync) {
+   if (!sync) {
+@@ -136,10 +139,12 @@
+   if (m_items.empty()) {
+     return std::nullopt;
+   }
++  const bool wasFull = m_items.size() == m_capacity;
+   auto item = std::move(m_items.front());
+   m_items.pop_front();
+   lock.unlock();
+   m_notFull.notify_one();
++  if (wasFull) notify_progress();
+   return item;
+ }
+ 
+@@ -150,6 +155,7 @@
+   }
+   m_notEmpty.notify_all();
+   m_notFull.notify_all();
++  notify_progress();
+ }
+ 
+ void BoundedQueue::reset() {
+@@ -161,6 +167,11 @@
+   m_notFull.notify_all();
+ }
+ 
++bool BoundedQueue::has_space() const {
++  std::lock_guard lock{m_mutex};
++  return !m_closed && m_items.size() < m_capacity;
++}
++
+ size_t BoundedQueue::size() const {
+   std::lock_guard lock{m_mutex};
+   return m_items.size();
+@@ -221,6 +232,36 @@
+   return static_cast<size_t>(std::ranges::count(m_freeSlots, true));
+ }
+ 
++std::optional<size_t> FrameSlotPool::first_free() const {
++  std::lock_guard lock{m_mutex};
++  for (size_t i = 0; i < m_freeSlots.size(); ++i) {
++    if (m_freeSlots[i]) return i;
++  }
++  return std::nullopt;
++}
++
++uint64_t progress_version() { return g_progressVersion.load(std::memory_order_acquire); }
++
++void notify_progress() {
++  // Serialize predicate changes with wait's unlock-and-sleep transition.
++  // The caller snapshots before probing resources to prevent a lost wakeup.
++  {
++    std::lock_guard lock{g_progressMutex};
++    g_progressVersion.fetch_add(1, std::memory_order_release);
++  }
++  g_progressCv.notify_all();
++}
++
++void wait_for_progress(uint64_t observed, std::chrono::nanoseconds timeout) {
++  if (timeout.count() <= 0) return;
++  std::unique_lock lock{g_progressMutex};
++  g_progressCv.wait_for(lock, timeout, [&] { return progress_version() != observed; });
++}
++
++bool can_enqueue() {
++  return !g_running.load(std::memory_order_acquire) || is_worker_thread() || g_queue.has_space();
++}
++
+ void initialize() {
+   if (g_running.exchange(true, std::memory_order_acq_rel)) {
+     return;
+--- a/lib/gfx/common.cpp
++++ b/lib/gfx/common.cpp
+@@ -423,10 +423,11 @@
+ }
+ 
+ static void wait_for_gpu_progress(std::chrono::nanoseconds sleepDuration) {
++  const auto observed = render_worker::progress_version();
+   if (render_worker::is_idle()) {
+     enqueue_process_events();
+   }
+-  std::this_thread::sleep_for(sleepDuration);
++  render_worker::wait_for_progress(observed, sleepDuration);
+ }
+ 
+ static void pace_frame_start() {
+@@ -476,6 +477,7 @@
+           if (releaseSlotOnCompletion) {
+             g_stagingSlots.release(slot);
+           }
++          render_worker::notify_progress();
+           return;
+         }
+         ASSERT(status == wgpu::MapAsyncStatus::Success, "Buffer mapping failed: {} {}", magic_enum::enum_name(status),
+@@ -484,6 +486,7 @@
+         if (releaseSlotOnCompletion) {
+           g_stagingSlots.release(slot);
+         }
++        render_worker::notify_progress();
+       });
+ }
+ 
+@@ -1961,6 +1964,23 @@
+   return true;
+ }
+ 
++bool wait_for_replay_resources(std::chrono::nanoseconds timeout) {
++  const auto ready = [] {
++    if (g_recordingFrame || g_reservedFrameSlot || g_reservedStagingSlot ||
++        g_frameSlots.free_count() == 0 || !render_worker::can_enqueue()) return false;
++    const auto slot = g_stagingSlots.first_free();
++    return slot && s_mappingStates[*slot].load(std::memory_order_acquire) == BufferMapState::Mapped;
++  };
++  const auto observed = render_worker::progress_version();
++  if (ready()) return true;
++  if (timeout.count() <= 0) return false;
++  // Dispatch callbacks on an idle worker too; don't wait for a map callback
++  // without giving backends that require ProcessEvents a chance to deliver it.
++  if (render_worker::is_idle()) enqueue_process_events();
++  render_worker::wait_for_progress(observed, timeout);
++  return ready();
++}
++
+ bool try_begin_frame() {
+   ZoneScopedN("Try begin replay frame");
+   if (g_recordingFrame != nullptr || g_reservedFrameSlot || g_reservedStagingSlot) {
+@@ -2063,6 +2083,7 @@
+       callback(encoder);
+     }
+     g_frameSlots.release(frameSlot);
++    render_worker::notify_progress();
+     expire_cached_bind_groups();
+     map_staging_buffer(stagingSlot, true);
+     process_events();
+--- a/lib/gfx/common.hpp
++++ b/lib/gfx/common.hpp
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <chrono>
++
+ #include "../internal.hpp"
+ #include "../webgpu/gpu.hpp"
+ 
+@@ -223,6 +225,7 @@
+ 
+ bool begin_frame();
+ bool try_begin_frame();
++bool wait_for_replay_resources(std::chrono::nanoseconds timeout);
+ void finish();
+ void end_frame(EndFrameCallback callback);
+ uint32_t current_frame() noexcept;
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -147,6 +147,10 @@
+ const AuroraEvent* aurora_update();
+ bool aurora_begin_frame();
+ bool aurora_try_begin_frame();
++/* Replay preflight: 1 ready, 0 resource pressure, -1 not presentable.
++ * The timeout is surplus before the caller's absolute simulation deadline.
++ * Does not reserve a frame, pump input, or start UI/GX recording. */
++int aurora_wait_replay_ready(uint64_t maxWaitNs);
+ void aurora_end_frame();
+ 
+ void aurora_set_log_level(AuroraLogLevel level);
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -457,6 +457,17 @@
+ const AuroraEvent* aurora_update() { return aurora::update(); }
+ bool aurora_begin_frame() { return aurora::begin_frame(); }
+ bool aurora_try_begin_frame() { return aurora::try_begin_frame(); }
++int aurora_wait_replay_ready(uint64_t maxWaitNs) {
++#ifdef AURORA_ENABLE_GX
++  if (!aurora::window::is_presentable() || aurora::window::is_paused()) return -1;
++  // A missing surface is recovered by the existing try_begin_frame path.
++  return aurora::gfx::wait_for_replay_resources(std::chrono::nanoseconds{
++      static_cast<int64_t>(std::min<uint64_t>(maxWaitNs, INT64_MAX))}) ? 1 : 0;
++#else
++  (void)maxWaitNs;
++  return 1;
++#endif
++}
+ void aurora_end_frame() { aurora::end_frame(); }
+ AuroraBackend aurora_get_backend() { return aurora::g_config.desiredBackend; }
+ const AuroraBackend* aurora_get_available_backends(size_t* count) {

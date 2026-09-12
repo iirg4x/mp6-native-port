@@ -8,7 +8,7 @@ the value). This plain Python/subprocess driver compiles every .c file to
 a .o via `zig cc`, in parallel, incrementally (skips files whose .o is
 newer than both the source and this script), then links everything into
 build/mp6native.exe with a fixed low image base and ASLR disabled (see
-platform/os/arena.c's header comment for why).
+src/os/arena.c's header comment for why).
 
 Usage:
     python tools/build.py            # build
@@ -42,10 +42,12 @@ DECOMP = setup_common.DECOMP_DIR
 ZIG = os.path.join(PORT_ROOT, "toolchain", "zig-x86_64-windows-0.16.0", "zig.exe")
 BUILD_DIR = os.path.join(NATIVE_ROOT, "build")
 OBJ_DIR = os.path.join(BUILD_DIR, "obj")
+WINDOWS_CONFIGURATION = "debug"
+AURORA_ARTIFACT_STAMP = None
 PATCHED_SRC_DIR = os.path.join(BUILD_DIR, "patched-src")
 
 TARGET = "x86_64-windows-gnu"
-IMAGE_BASE = "0x10000000"  # see platform/os/arena.c: keeps code/static-data pointers <4GB
+IMAGE_BASE = "0x10000000"  # see src/os/arena.c: keeps code/static-data pointers <4GB
 
 # ---------------------------------------------------------------------------
 # the `--target aarch64-android` row --
@@ -57,10 +59,10 @@ IMAGE_BASE = "0x10000000"  # see platform/os/arena.c: keeps code/static-data poi
 # android build and vice versa (the MSL override headers genuinely differ
 # per target -- absolute paths into each toolchain's real libc -- so they
 # can never share a directory). Output: build/android/libmp6game.so (ALL
-# game/REL TUs + platform/os + platform/host with host_android.c -- the
+# game/REL TUs + src/os + src/host with host_android.c -- the
 # headless TU set; -shared -fPIC, 16KB max-page-size per the design's own risk analysis) +
 # build/android/mp6launcher (the probe-shaped loader exe, see
-# platform/android/mp6launcher.c). Headless-only by design: aurora/SDL for
+# src/android/mp6launcher.c). Headless-only by design: aurora/SDL for
 # Android is the android row.
 ANDROID_API_LEVEL = 28  # matches the probe row used during Android bring-up
 ANDROID_NDK_VERSION = fetch_nod.ANDROID_NDK_VERSION
@@ -131,14 +133,14 @@ def _find_ndk_libc_dir(name):
     return None
 
 DECOMP_INCLUDE = os.path.join(DECOMP, "include")
-SHIM_INCLUDE = os.path.join(NATIVE_ROOT, "shim", "include")  # moved up here: AURORA_FLAGS (below) needs it too
-# platform/host/host.h -- the OS seam interface. On BOTH flag sets (like
+SHIM_INCLUDE = os.path.join(NATIVE_ROOT, "include")  # moved up here: AURORA_FLAGS (below) needs it too
+# src/host/host.h -- the OS seam interface. On BOTH flag sets (like
 # SHIM_INCLUDE) since seam consumers span both flavors: common-flavor TUs
 # (arena/process_native/card/dvd/shims_manual/msm_bridge) AND aurora-flavor
 # ones (aurora_bridge.c's tick throttle, main_native.c's crash-install call).
-HOST_INCLUDE = os.path.join(NATIVE_ROOT, "platform", "host")
+HOST_INCLUDE = os.path.join(NATIVE_ROOT, "src", "host")
 
-# The real, extracted GameCube disc tree -- platform/dvd/dvd_files.c reads
+# The real, extracted GameCube disc tree -- src/dvd/dvd_files.c reads
 # orig/GP6E01/sys/fst.bin (the real File String Table) and serves real
 # bytes straight out of orig/GP6E01/files/ at runtime (NOT baked into the
 # binary) -- so the RUNNING exe needs these two absolute, forward-slash
@@ -167,7 +169,7 @@ def mp6_port_version():
             _MP6_PORT_VERSION = "dev"
     return _MP6_PORT_VERSION
 
-# game/decode.c's HuDecodeZlib needs REAL zlib -- see platform/null/
+# game/decode.c's HuDecodeZlib needs REAL zlib -- see src/null/
 # shims_manual.c's own comment for why a fake inflate() (never actually
 # decompressing anything) is not an option once real disc data is in play.
 # Reuses the exact zlib-ng build
@@ -195,7 +197,7 @@ AURORA_DEPS = os.path.join(AURORA_BUILD, "_deps")
 
 # ---------------------------------------------------------------------------
 # The RmlUi-enabled aurora build tree. The ripped partyboard launcher UI
-# (platform/gx/ui/) runs on aurora's own RmlUi module (lib/rmlui/*), which
+# (src/gx/ui/) runs on aurora's own RmlUi module (lib/rmlui/*), which
 # AURORA_ENABLE_RMLUI compiles INTO aurora_core/aurora_gx as a PUBLIC define
 # -- i.e. enabling it changes those archives' content. To keep the
 # canonical aurora/build tree byte-untouched (and canonical mp6-native
@@ -210,9 +212,9 @@ AURORA_DEPS = os.path.join(AURORA_BUILD, "_deps")
 #     -DCMAKE_EXE_LINKER_FLAGS=-L<wrappers>/stub-libs
 #     -DAURORA_DAWN_PROVIDER=package -DAURORA_SDL3_PROVIDER=package
 #     -DAURORA_ENABLE_RMLUI=ON
-#     -DCMAKE_CXX_FLAGS="-include <NATIVE_ROOT>/shim/include/mp6_host_section.h"
+#     -DCMAKE_CXX_FLAGS="-include <NATIVE_ROOT>/include/mp6_host_section.h"
 #     -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
-#   (then apply platform/gx/aurora-patches/0001-abseil-*.patch to
+#   (then apply compat/aurora/base/0001-abseil-*.patch to
 #    build-rmlui/_deps/abseil-cpp-src)
 #   cmake --build .../build-rmlui --target aurora_core aurora_gx aurora_main
 #     aurora_vi aurora_pad aurora_si aurora_card aurora_mtx
@@ -275,7 +277,7 @@ AURORA_DEFINES = [
     "-DIMGUI_ENABLE_FREETYPE", '-DIMGUI_USER_CONFIG="aurora/imgui_config.h"',
     "-DTARGET_PC", "-DWEBGPU_DAWN",
 ]
-# platform/main_native.c and platform/gx/aurora_bridge.c ONLY -- see
+# src/main_native.c and src/gx/aurora_bridge.c ONLY -- see
 # aurora_bridge.c's own header comment for why these two files deliberately
 # do NOT also get COMMON_FLAGS's decomp -I's / -include dolphin_compat.h
 # (both header trees have e.g. `dolphin/gx/GXGeometry.h` at the identical
@@ -285,14 +287,14 @@ AURORA_DEFINES = [
 AURORA_FLAGS = [
     "-target", TARGET,
     # See COMMON_FLAGS's own comment on -g/-gcodeview -- kept consistent
-    # between both flag sets so an Aurora-only TU (platform/gx/aurora_bridge.c,
-    # the non-headless platform/main_native.c, etc.) resolves symbols just as
+    # between both flag sets so an Aurora-only TU (src/gx/aurora_bridge.c,
+    # the non-headless src/main_native.c, etc.) resolves symbols just as
     # well as a COMMON_FLAGS one.
     "-g", "-gcodeview",
     "-std=gnu11",
     # mp6_boot.h/mp6_shim_log.h only (both plain-C, no decomp dependency at
     # all -- verified) -- safe to add unconditionally since nothing under
-    # shim/include/ is named like anything in AURORA_INCLUDE's own tree.
+    # include/ is named like anything in AURORA_INCLUDE's own tree.
     "-I", SHIM_INCLUDE,
     # host.h (plain C, stdint/stddef only -- deliberately depends on
     # NEITHER dolphin.h flavor, see its own header comment) for
@@ -322,14 +324,14 @@ AURORA_LINK_ITEMS = [
     # (GCI-folder default) -- built via `cmake --build build --target
     # aurora_card` (PowerShell) after aurora patch 0008 (mingw shlobj.h).
     # Depends PUBLIC on aurora::core, so listed before it like pad/si.
-    # Configured at runtime by platform/os/card_native.c's mp6_CARDInit
+    # Configured at runtime by src/os/card_native.c's mp6_CARDInit
     # interposer.
     "libaurora_card.a",
     # aurora::mtx: a standalone leaf target (cmake/aurora_mtx.cmake has no
     # target_link_libraries at all), so link-order relative to the others
     # doesn't matter; built the same way, `cmake --build aurora/build
     # --target aurora_mtx` (PowerShell). Without it, the game's entire
-    # matrix/vector math silently no-ops -- see platform/gx/aurora_bridge.c's
+    # matrix/vector math silently no-ops -- see src/gx/aurora_bridge.c's
     # own header comment for the full story.
     "libaurora_mtx.a",
     "libaurora_core.a", "libaurora_gx.a", "libaurora_main.a", "libaurora_vi.a",
@@ -411,7 +413,7 @@ AURORA_LINK_ITEMS = [
     "_deps/dawn_prebuilt-src/lib/webgpu_dawn.lib",
     "-lkernel32", "-luser32", "-lgdi32", "-lwinspool", "-lshell32",
     "-lole32", "-loleaut32", "-luuid", "-lcomdlg32", "-ladvapi32",
-    "-lpsapi",  # the crash/RSS dbghelp+psapi consumers -- platform/host/host_win32.c
+    "-lpsapi",  # the crash/RSS dbghelp+psapi consumers -- src/host/host_win32.c
 ]
 
 # Runtime DLLs the linked exe needs sitting next to it (examples/CMakeLists.txt
@@ -460,7 +462,7 @@ AURORA_RUNTIME_DLLS = [
 # the same .so is the only shape that resolves them, and it is exactly the
 # single-.so shape the MP4 port ships. The JNI consequence: SDL3's
 # RegisterNatives-based JNI_OnLoad lives inside the LOW-loaded game image,
-# so the APK bootstrap (platform/android/mp6shell.c, libmain.so) chain-calls
+# so the APK bootstrap (src/android/mp6shell.c, libmain.so) chain-calls
 # it after android_dlopen_ext -- see that file's header for the full story.
 # Dawn/aurora/fmt/etc are static archives exactly like the Windows exe.
 AURORA_BUILD_ANDROID = os.path.join(AURORA_ROOT, "build-android")
@@ -494,7 +496,7 @@ AURORA_DEPS_ANDROID_RMLUI = os.path.join(AURORA_BUILD_ANDROID_RMLUI, "_deps")
 # nod (encounter/nod v2.0.0-alpha.10 -- the exact version aurora's own
 # dependency table pins for AURORA_ENABLE_DVD; dual-licensed MIT OR
 # Apache-2.0) backs the launcher's disc-image import
-# (platform/content/content_import.cpp). Machine-local toolchain artifacts
+# (src/content/content_import.cpp). Machine-local toolchain artifacts
 # under port/toolchain/nod (the port/toolchain convention -- zig/rust live
 # the same way), populated by `python tools/fetch_nod.py`: the official
 # prebuilt Windows package (nod.dll + import lib -- an MSVC DLL is
@@ -550,7 +552,7 @@ def android_aurora_flags():
 # Windows Debug 'd' suffixes), with exactly these deliberate deltas:
 #   - libaurora_main.a EXCLUDED: lib/main.cpp's wrapper would export an
 #     SDL_main from the GAME .so; on android the SDL_main lives in the
-#     libmain.so bootstrap shell (platform/android/mp6shell.c) instead, and
+#     libmain.so bootstrap shell (src/android/mp6shell.c) instead, and
 #     the game .so exports aurora_main directly (main_native.c's renamed
 #     main) for the shell to dlsym.
 #   - aurora_pad/si/card/mtx PREPENDED, same reasoning+order as the Windows
@@ -759,7 +761,7 @@ def patch_msl_override(dst_dir=None, find_real=None, libc_desc="zig's bundled li
     # decomp math.h no matter what's on -I, via the same "includer's own
     # directory first" rule that makes game/msm.h unshadowable (see
     # dolphin_compat.h's old MSMSE comment, now moved to
-    # shim/include/selmenu_compat.h). humath.h itself is small enough to
+    # include/selmenu_compat.h). humath.h itself is small enough to
     # just special-case directly instead of adding another generic
     # mechanism for a single file.
     humath_real = find_real("math.h")
@@ -779,7 +781,7 @@ def patch_msl_override(dst_dir=None, find_real=None, libc_desc="zig's bundled li
             '`#include "math.h"` on -- resolves that quote-include to the real '
             "(unpatched, __frsqrte/__fabs-using) decomp math.h no matter what's on "
             "-I, via the same \"includer's own directory first\" rule that makes "
-            "game/msm.h unshadowable (see shim/include/selmenu_compat.h). Only that "
+            "game/msm.h unshadowable (see include/selmenu_compat.h). Only that "
             "one line is substituted (regex, same technique as patch_headers()'s "
             "AT_ADDRESS fix) -- everything else is byte-identical to the real file, "
             "regenerated fresh every build so it can't silently drift out of sync "
@@ -836,7 +838,7 @@ _AT_ADDRESS_RE = re.compile(r"^(.*\S)[ \t]+AT_ADDRESS\([^()]*\)([ \t]*;.*)$", re
 # needs the top-level name; only game/msm.h's MSM_SE is ever visible to
 # it) and MSM_STREAMNO_NONE (src/game/audio.c needs it; only defined in
 # the top-level header, never reached from audio.c's side of the guard
-# race). See shim/include/dolphin_compat.h.
+# race). See include/dolphin_compat.h.
 GUARD_RENAME_PATCH_FILES = []
 
 # Two structs decomp's own headers size
@@ -863,7 +865,7 @@ GUARD_RENAME_PATCH_FILES = []
 #     allocation.
 # Fixed the SAME way as AT_ADDRESS above (a build-generated shadow copy,
 # regenerated fresh from the real header every build) rather than a hand-
-# written override in shim/include/dolphin_compat.h, since these are pure
+# written override in include/dolphin_compat.h, since these are pure
 # facts about the header's OWN declared shape, not per-call-site adapters.
 # Bumping the two struct sizes is harmless for the --headless build too
 # (nothing there ever writes past decomp's own original bounds); all three
@@ -885,8 +887,8 @@ GUARD_RENAME_PATCH_FILES = []
 # the decomp's call sites (which would violate "decomp is read-only") or
 # leaving the ambient -DTARGET_PC flip this one declaration under it.
 # The remaining arity gap against Aurora's real (5-arg) GXSetArray is
-# closed via a rename, not a linker trick -- see shim/include/
-# dolphin_compat.h's own section-3 comment and platform/gx/
+# closed via a rename, not a linker trick -- see include/
+# dolphin_compat.h's own section-3 comment and src/gx/
 # aurora_bridge.c's mp6_GXSetArray3 for why (short version: this
 # toolchain's zig cc/c++ rejects -Wl,--wrap outright, and a link-order
 # trick was tested and does NOT work either -- lld-link hard-errors with
@@ -919,7 +921,7 @@ HEADER_CONTENT_PATCHES = [
         ),
         "void GXSetArray(GXAttr attr, void* data, u8 stride);",
         "GXSetArray: unconditional real-hardware 3-arg shape (matching decomp's actual call "
-        "sites) regardless of TARGET_PC -- see platform/gx/aurora_bridge.c for the 5-arg adapter",
+        "sites) regardless of TARGET_PC -- see src/gx/aurora_bridge.c for the 5-arg adapter",
     ),
     (
         "game/sprite.h",
@@ -971,7 +973,7 @@ HEADER_CONTENT_PATCHES = [
 # On Windows (_WIN32) BOOL has therefore always been the 4-byte int -- which
 # is also exactly what MWCC/PPC BOOL was on real hardware, i.e. what every
 # decomp struct layout, on-disc overlay and save layout was authored
-# against (platform/os/save_endian.c's _Static_asserts pin some of them).
+# against (src/os/save_endian.c's _Static_asserts pin some of them).
 # NDK clang defines neither _WIN32 nor anything else in that condition, so
 # an unpatched android build would silently flip every BOOL to a 1-byte
 # C99 bool -- a whole-image struct-layout divergence from both real
@@ -1055,30 +1057,6 @@ def patch_abi_struct_headers(dst_root=None, extra_patches=()):
         _write_if_changed(dst, header_note + text)
 
 
-def apply_decomp_override_headers(dst_root=None):
-    """Decomp-overrides shield, header half (see resolve_source() for the
-    C-file half and the full story): copies every header materialized under
-    patches/decomp-overrides/include/ into the build-generated patched-
-    include tree, which is already searched BEFORE the decomp's include/ --
-    so a foreign lane's broken in-flight header WIP in the SHARED decomp
-    checkout can't break this port's builds, without touching that WIP.
-    Runs for both the Windows and android rows."""
-    if dst_root is None:
-        dst_root = PATCHED_INCLUDE
-    src_root = os.path.join(NATIVE_ROOT, "patches", "decomp-overrides", "include")
-    if not os.path.isdir(src_root):
-        return
-    for root, _dirs, files in os.walk(src_root):
-        rel = os.path.relpath(root, src_root)
-        for fn in files:
-            src = os.path.join(root, fn)
-            dst_dir = os.path.join(dst_root, rel) if rel != "." else dst_root
-            os.makedirs(dst_dir, exist_ok=True)
-            with open(src, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-            _write_if_changed(os.path.join(dst_dir, fn), content)
-
-
 def patch_headers(dst_root=None):
     # Parameterized like patch_abi_struct_headers; the no-arg call is
     # byte-for-byte the original Windows behavior.
@@ -1129,7 +1107,7 @@ COMMON_FLAGS = [
     # CMake build), but this port's own decomp/platform TUs need their own
     # debug-info flag too -- otherwise every crash address landing inside
     # this port's own code (as opposed to an Aurora-side frame) resolves to
-    # a flat "<no symbol>" from both the crash handler's (platform/host/
+    # a flat "<no symbol>" from both the crash handler's (src/host/
     # host_win32.c) in-process SymFromAddr AND an ad hoc standalone dbghelp
     # script, even though the crash is firmly inside the game's own
     # 0x10000000+ module range. `-gcodeview` (not plain `-g`'s default
@@ -1167,15 +1145,15 @@ COMMON_FLAGS = [
     # in decomp's copy than in Aurora's real, always-TARGET_PC-compiled ABI)
     # are reconciled without editing the decomp: GXSetArray via a
     # preprocessor rename to a uniquely-named bridge function (see
-    # shim/include/dolphin_compat.h's own section-3 comment and
-    # platform/gx/aurora_bridge.c's mp6_GXSetArray3 for why a linker
+    # include/dolphin_compat.h's own section-3 comment and
+    # src/gx/aurora_bridge.c's mp6_GXSetArray3 for why a linker
     # --wrap -- tried first -- doesn't work on this toolchain), the two
     # structs via the SAME build-generated shadow-header technique
     # patch_headers() already used for AT_ADDRESS (see
     # HEADER_CONTENT_PATCHES below).
     "-DTARGET_PC",
     # A standing, always-compiled diagnostic -- distinct from and
-    # complementary to the RSS watchdog (platform/null/shims_manual.c's
+    # complementary to the RSS watchdog (src/null/shims_manual.c's
     # mp6_rss_watchdog_check, always on, aborts past a cap): this one never
     # aborts, just periodically logs a per-HEAP breakdown (HEAP_HEAP/
     # HEAP_SOUND/HEAP_MODEL/HEAP_DVD), the "which heap is actually growing"
@@ -1194,9 +1172,9 @@ COMMON_FLAGS = [
     "-I", DECOMP_INCLUDE,
     "-I", DECOMP_INC_DATA,
     "-I", SHIM_INCLUDE,
-    "-I", HOST_INCLUDE,  # platform/host/host.h (see HOST_INCLUDE's own comment)
+    "-I", HOST_INCLUDE,  # src/host/host.h (see HOST_INCLUDE's own comment)
     "-include", "dolphin_compat.h",
-    # Only platform/dvd/dvd_files.c actually uses these, but every
+    # Only src/dvd/dvd_files.c actually uses these, but every
     # other TU ignores an unused -D harmlessly -- simpler than adding a
     # per-file flags mechanism to PLATFORM_SOURCES_COMMON for 2 defines.
     f'-DMP6_DVD_FILES_ROOT="{MP6_DVD_FILES_ROOT}"',
@@ -1265,9 +1243,9 @@ GAME_SKIP_LIST = {
                             "meaningless for a monolithic native link, fake `void NAME(void)` "
                             "prototypes would conflict with real signatures elsewhere.",
     "src/game/jmp.c":     "gcsetjmp/gclongjmp as raw MWCC PPC asm; superseded (see process.c "
-                            "entry below -- both replaced together by platform/os/process_native.c).",
+                            "entry below -- both replaced together by src/os/process_native.c).",
     "src/game/malloc.c":  "7 functions use unguarded `asm { mflr retaddr }`; replaced by "
-                            "platform/os/malloc_direct.c (__builtin_return_address(0)).",
+                            "src/os/malloc_direct.c (__builtin_return_address(0)).",
     "src/game/process.c": "HuPrcCall's scheduling loop needs "
                             "gcsetjmp(&processjmpbuf) to 'return again', later, with a new "
                             "value, from arbitrary points after HuPrcCall's own subsequent "
@@ -1277,45 +1255,29 @@ GAME_SKIP_LIST = {
                             "a manual stack-snapshot-and-restore around the pair). Real "
                             "hardware's gcsetjmp/gclongjmp are raw PPC asm with no such "
                             "constraint (they just poke sp/lr registers). Replaced in full by "
-                            "platform/os/process_native.c, which reimplements HuPrcCall's "
+                            "src/os/process_native.c, which reimplements HuPrcCall's "
                             "exact observable behavior (verified line-by-line) using ordinary, "
                             "same-stack C control flow -- 'dispatch a process and wait for it "
                             "to yield' becomes a plain function call/return, so nothing needs "
                             "processjmpbuf's broken resume trick at all. This also removes the "
                             "only caller of gcsetjmp/gclongjmp, so jmp.c's replacement "
-                            "(formerly platform/os/jmp_native.c + hostjmp.c) is superseded too.",
+                            "(formerly src/os/jmp_native.c + hostjmp.c) is superseded too.",
 }
 
 # Resolves a decomp-relative source path (e.g.
 # "src/game/decode.c") to build/patched-src/<same path> if apply_patches.py
-# produced one (i.e. patches/decomp/<same path>.patch exists), else to the
+# produced one (i.e. compat/decomp/<same path>.patch exists), else to the
 # real, untouched decomp file. Checked fresh per build (not cached) so a
 # patch added/removed between runs is picked up without a --clean.
 def resolve_source(rel):
-    # Decomp-overrides shield. The decomp checkout is SHARED across
-    # lanes and consumed read-only here; when a foreign lane leaves broken
-    # in-flight WIP in its own working tree (e.g. a source file modified to
-    # include an untracked, incomplete generated header), this port must
-    # neither fail nor touch that WIP. Files materialized
-    # under patches/decomp-overrides/<rel> (pristine `git show HEAD:<rel>`
-    # snapshots) take priority over the decomp working tree; remove the
-    # override once the decomp lane lands or reverts its WIP.
-    override = os.path.join(NATIVE_ROOT, "patches", "decomp-overrides", rel.replace("/", os.sep))
-    if os.path.exists(override):
-        return override
     patched = os.path.join(PATCHED_SRC_DIR, rel.replace("/", os.sep))
     base_patch = os.path.join(
-        NATIVE_ROOT, "patches", "decomp", rel.replace("/", os.sep) + ".patch"
-    )
-    fragment_glob = os.path.join(
-        NATIVE_ROOT, "patches", "decomp-fragments",
-        rel.replace("/", os.sep) + ".patch.*",
+        NATIVE_ROOT, "compat", "decomp", rel.replace("/", os.sep) + ".patch"
     )
     # build/patched-src is an output cache and may retain a file after its
     # owning patch is removed. Never let such stale output shadow the pinned
-    # checkout: a generated copy is eligible only while an active base patch
-    # or ordered patch fragment still owns that logical source.
-    if os.path.exists(patched) and (os.path.exists(base_patch) or glob.glob(fragment_glob)):
+    # checkout: a generated copy is eligible only while an active patch owns it.
+    if os.path.exists(patched) and os.path.exists(base_patch):
         return patched
     return os.path.join(DECOMP, rel.replace("/", os.sep))
 
@@ -1406,7 +1368,7 @@ BOARD_NATIVE_ABI_FLAGS = {
     # three TUs called functions with no declaration in scope; the ones that
     # DO have a decomp header get it force-included here, and the ones the
     # decomp never gave a header get a cited prototype in
-    # shim/include/mp6_board_compat.h instead (already force-included for
+    # include/mp6_board_compat.h instead (already force-included for
     # every board TU by board_sources()).
     #
     # config.c's is the load-bearing one: `flipScale = fabs(mbCosDeg(180.0f *
@@ -1414,7 +1376,7 @@ BOARD_NATIVE_ABI_FLAGS = {
     # weight)` (config.c:375) called a FLOAT-returning function through an
     # implicit `int` declaration, so the returned cosine was read out of the
     # integer return register and truncated. mbSinDeg/mbCosDeg get their
-    # prototypes from shim/include/mp6_board_compat.h rather than from
+    # prototypes from include/mp6_board_compat.h rather than from
     # game/board/guide.h, which DOES declare them (:80-81) but also carries
     # `int mbObjMotionShiftIDGet(int)` where game/board/object.h:63 has
     # `int mbObjMotionShiftIDGet(MBMODELID)` -- two incompatible declarations
@@ -1425,7 +1387,7 @@ BOARD_NATIVE_ABI_FLAGS = {
     "src/board/capselect.c": ["-include", "game/board/comchoice.h"],
     # The second wave of audit rows, visible only after
     # tools/abi_warning_audit.py stopped skipping unpatched decomp TUs.
-    # last5.c gets mbObjHookReset from shim/include/mp6_board_compat.h, not
+    # last5.c gets mbObjHookReset from include/mp6_board_compat.h, not
     # from game/board/object.h: it already includes game/board/guide.h, and
     # guide.h:71 declares `void mbObjKill(int)` where object.h:12 declares
     # `void mbObjKill(MBMODELID)` -- the same mutually-exclusive pair that
@@ -1455,7 +1417,7 @@ def board_sources():
          ["-DMP6_NATIVE_PORT=1", "-include", "mp6_board_compat.h"]
          + list(BOARD_NATIVE_ABI_FLAGS.get(f"src/board/{filename}", ())))
         for filename in sorted(os.listdir(board_dir))
-        if filename.endswith(".c")
+        if filename.endswith(".c") and filename != "mgcall.c"
     ]
 
 
@@ -1467,6 +1429,15 @@ def board_sources():
 # three into one exe makes those genuine duplicate-symbol clashes; -D
 # renames each one per-file (verified for ObjectSetup: called only from
 # its own file's _prolog in all 3, same as boot.c's other renamed names).
+# These seven REL-local names collide with already-linked menu/board objects.
+# Apply the same namespace to both recovered results units: utility.c and
+# mdpresult.c share declarations through REL/mdpresultDll.h.
+MDPRESULT_NATIVE_FLAGS = [
+    "-D" + name + "=mdpresult_" + name
+    for name in ("fn_1_0", "fn_1_2CC", "lbl_1_data_C0", "lbl_1_data_15C",
+                 "lbl_1_data_0", "fn_1_12D7C", "lbl_1_data_5F4")
+]
+
 REL_SOURCES = [
     ("src/REL/bootDll/boot.c", ["-D_prolog=bootDll_prolog", "-D_epilog=bootDll_epilog",
                                  "-D_ctors=bootDll_ctors", "-D_dtors=bootDll_dtors",
@@ -1478,7 +1449,7 @@ REL_SOURCES = [
     ("src/REL/selmenuDll/selmenu.c", ["-D_prolog=selmenuDll_prolog", "-D_epilog=selmenuDll_epilog",
                                        "-D_ctors=selmenuDll_ctors", "-D_dtors=selmenuDll_dtors",
                                        "-DObjectSetup=selmenuDll_ObjectSetup",
-                                       # see shim/include/selmenu_compat.h for why this is
+                                       # see include/selmenu_compat.h for why this is
                                        # per-file rather than in the global dolphin_compat.h
                                        "-include", "selmenu_compat.h",
                                        "-include", "game/charman.h"]),
@@ -1566,6 +1537,12 @@ REL_SOURCES = [
                                         "-include", "mp6_hwcast.h",
                                         "-include", "game/saveload.h"]),
     ("src/REL/mdpartydll/stage.c", []),
+    # Party-results scene and shared utility code recovered on main 5f71cac.
+    # The PPC runtime wrapper is supplied by the native toolchain, as above.
+    ("src/REL/mdpresultdll/mdpresult.c", ["-D_prolog=mdpresultDll_prolog", "-D_epilog=mdpresultDll_epilog",
+                                        "-D_ctors=mdpresultDll_ctors", "-D_dtors=mdpresultDll_dtors"]
+                                       + MDPRESULT_NATIVE_FLAGS),
+    ("src/REL/mdpresultdll/utility.c", MDPRESULT_NATIVE_FLAGS),
     # w01Dll (Towering Treetop, board 1). world01.c is recovered/matching at
     # the pinned decomp revision. Its runtime.c is the same one-line include
     # of Runtime.PPCEABI.H/runtime.c as the menu REL wrappers above; the
@@ -1605,7 +1582,7 @@ MAIN_C_FLAGS = ["-Dmain=GameMain"]
 
 # Compiled with COMMON_FLAGS (decomp -I's + -include dolphin_compat.h), same
 # as every game/REL source, in BOTH build modes.
-# Savestate carve-out (shim/include/mp6_host_section.h).
+# Savestate carve-out (include/mp6_host_section.h).
 # These TUs' file-scope statics are owned by something other than the game
 # thread -- the SDL audio callback thread's mixer, the content-import worker
 # threads, the SDL/Dawn handle holders -- or, in savestate.c's own case, must
@@ -1614,34 +1591,34 @@ MAIN_C_FLAGS = ["-Dmain=GameMain"]
 # savestate.c then excludes from both capture and restore BY NAME, so the
 # carve-out cannot rot when someone adds a new static to one of these files.
 #
-# Deliberately NOT listed: platform/os/process_native.c and
-# platform/host/coro_arena.c. Both are port code, but both hold load-bearing
+# Deliberately NOT listed: src/os/process_native.c and
+# src/host/coro_arena.c. Both are port code, but both hold load-bearing
 # GAME state (the HuPrc scheduler table, and the coroutine wrappers it points
 # at) that a savestate must restore -- the split here is host-owned vs
 # game-owned, never port vs decomp.
 HOST_STATE_SECTION_SOURCES = {
-    "platform/os/savestate.c",
-    # The Expanded-heaps scale latch (shim/include/mp6_heap_scale.h). Same
+    "src/os/savestate.c",
+    # The Expanded-heaps scale latch (include/mp6_heap_scale.h). Same
     # category as savestate.c's own statics: it must describe the RUNNING
     # process, not the captured one. mp6_arena_size() reads through it, and
     # that value is both the arena region's recorded extent in every capture
     # and the live side of the restore-time extent check -- so a restored copy
     # of a foreign scale would let a state misstate its own arena, which is
     # the one thing a memory-image format may never do.
-    "platform/os/heap_scale.c",
-    "platform/audio/msm_bridge.c",
-    "platform/audio/audio_out_sdl.c",
-    "platform/gx/aurora_bridge.c",
+    "src/os/heap_scale.c",
+    "src/audio/msm_bridge.c",
+    "src/audio/audio_out_sdl.c",
+    "src/gx/aurora_bridge.c",
     # SDL mouse/touch accumulators and finger/down-edge latches describe the
     # running process's event stream, never deterministic game state. They are
     # also explicitly cleared after restore so pre-load input cannot leak into
     # the restored timeline.
-    "platform/gx/freecam_input.c",
-    "platform/android/touch_pad.cpp",
-    "platform/content/content_import.cpp",
+    "src/gx/freecam_input.c",
+    "src/android/touch_pad.cpp",
+    "src/content/content_import.cpp",
     # Android SAF bridge owns JNI global refs and pending picker state. Those
     # handles belong to the running VM/process and must never be restored.
-    "platform/android/saf_bridge.c",
+    "src/android/saf_bridge.c",
     # The DVD layer's whole statics set is host-owned
     # -- the FST blob and its string pool are CRT-heap pointers, g_entryPaths
     # is a heap array of heap strings, and g_resolvedFilesRoot/_FstPath are
@@ -1653,17 +1630,17 @@ HOST_STATE_SECTION_SOURCES = {
     # pointer can never self-heal. The one thing that stops restoring is
     # g_openReal[]'s open-file identity -- which is empty at every capture
     # point in today's build, asserted at capture time in savestate.c.
-    "platform/dvd/dvd_files.c",
+    "src/dvd/dvd_files.c",
     # A GetProcAddress result from winmm.dll plus path caches. No game
     # state (audited: timer-resolution fn ptr/flag and resolved host paths).
-    "platform/host/host_win32.c",
+    "src/host/host_win32.c",
     # Pure host UI state -- RmlUi document stacks, toasts, picked-path
     # std::string heap pointers, connected-gamepad lists. content_setup.cpp
     # was a plain omission: its near-identically-named sibling
     # content_import.cpp was already listed.
-    "platform/gx/ui/ui.cpp",
-    "platform/gx/ui/content_setup.cpp",
-    "platform/gx/ui/launcher_core.cpp",
+    "src/gx/ui/ui.cpp",
+    "src/gx/ui/content_setup.cpp",
+    "src/gx/ui/launcher_core.cpp",
     # Review finding (savestate-x1): the list originally covered only 4 of the
     # ~22 aurora-only C++ TUs. The rest hold heap-backed namespace-scope
     # std::strings (R"RML" document sources), per-TU log objects, and mutable
@@ -1673,70 +1650,70 @@ HOST_STATE_SECTION_SOURCES = {
     # aurora-archive carve-out fixed, via the port's own files instead.
     # framescope.c additionally holds env-latched arming state and
     # dumped-pointer dedupe tables that must describe the RUNNING process.
-    "platform/gx/framescope.c",
-    "platform/gx/ui/event.cpp",
-    "platform/gx/ui/component.cpp",
-    "platform/gx/ui/document.cpp",
-    "platform/gx/ui/button.cpp",
-    "platform/gx/ui/select_button.cpp",
-    "platform/gx/ui/bool_button.cpp",
-    "platform/gx/ui/number_button.cpp",
-    "platform/gx/ui/string_button.cpp",
-    "platform/gx/ui/pane.cpp",
-    "platform/gx/ui/tab_bar.cpp",
-    "platform/gx/ui/window.cpp",
-    "platform/gx/ui/modal.cpp",
-    "platform/gx/ui/input.cpp",
-    "platform/gx/ui/overlay.cpp",
-    "platform/gx/ui/menu_bar.cpp",
-    "platform/gx/ui/graphics_tuner.cpp",
-    "platform/gx/ui/prelaunch.cpp",
-    "platform/gx/ui/settings.cpp",
-    # The dev console's RmlUi view (shim/include/mp6_console.h). Same category
+    "src/gx/framescope.c",
+    "src/gx/ui/event.cpp",
+    "src/gx/ui/component.cpp",
+    "src/gx/ui/document.cpp",
+    "src/gx/ui/button.cpp",
+    "src/gx/ui/select_button.cpp",
+    "src/gx/ui/bool_button.cpp",
+    "src/gx/ui/number_button.cpp",
+    "src/gx/ui/string_button.cpp",
+    "src/gx/ui/pane.cpp",
+    "src/gx/ui/tab_bar.cpp",
+    "src/gx/ui/window.cpp",
+    "src/gx/ui/modal.cpp",
+    "src/gx/ui/input.cpp",
+    "src/gx/ui/overlay.cpp",
+    "src/gx/ui/menu_bar.cpp",
+    "src/gx/ui/graphics_tuner.cpp",
+    "src/gx/ui/prelaunch.cpp",
+    "src/gx/ui/settings.cpp",
+    # The dev console's RmlUi view (include/mp6_console.h). Same category
     # as its ui/ neighbours -- an R"RML" document source in a namespace-scope
     # std::string plus live element pointers -- and additionally holds the
     # deferred-focus and history cursors of the RUNNING debug session.
-    "platform/gx/ui/console.cpp",
-    # Freecam (shim/include/mp6_freecam.h): the enable flag + fly pose belong
+    "src/gx/ui/console.cpp",
+    # Freecam (include/mp6_freecam.h): the enable flag + fly pose belong
     # to the RUNNING process's UI session -- a restored state must neither
     # re-enable freecam nor teleport the camera the user is flying.
-    "platform/hsf/mp6_freecam.c",
+    "src/hsf/mp6_freecam.c",
     # The Enhancements seam's published settings block
-    # (shim/include/mp6_enhancements.h). Same category as freecam right above:
+    # (include/mp6_enhancements.h). Same category as freecam right above:
     # it describes the RUNNING process's user settings, never game state. A
     # savestate captured with 32 voices must not silently re-point a 16-voice
     # session's settings on restore -- the consumers version their own tables
     # for a size change, and this block is not part of that.
-    "platform/enh/mp6_enhancements.c",
-    # Unlocked FPS identity/camera metadata (shim/include/mp6_fi_model.h): the
+    "src/enh/mp6_enhancements.c",
+    # Unlocked FPS identity/camera metadata (include/mp6_fi_model.h): the
     # model-generation/context and camera snapshot buffers are host-owned render state
     # of the RUNNING process, not captured game state -- a restore must not
     # reinstate a pre-restore snapshot (it would interpolate across the state
     # discontinuity). Same carve-out shape as frame_interp.c right below.
     # Compiled in BOTH modes (COMMON_FLAGS), so the section pragma is asserted
     # against both builds; harmless in headless (no interpolation there).
-    "platform/hsf/mp6_fi_model.c",
-    # MP6_SHADOW_DUMP (shim/include/mp6_shadow_dump.h): same shape as
+    "src/hsf/mp6_fi_model.c",
+    # MP6_SHADOW_DUMP (include/mp6_shadow_dump.h): same shape as
     # framescope.c right above -- an env-latched arming flag and a dump
     # counter that describe the RUNNING process's debug session, not game
     # state.
-    "platform/gx/shadow_dump.c",
-    # MP6_FRAME_DUMP (shim/include/mp6_frame_dump.h): same category again --
+    "src/gx/shadow_dump.c",
+    # MP6_FRAME_DUMP (include/mp6_frame_dump.h): same category again --
     # an env latch, the armed/written burst position, and (worse) the
     # realloc'd readback scratch buffer's heap POINTER. Restoring a capturing
     # process's buffer pointer into the loading one is the exact heap-
     # corruption class this carve-out exists to prevent.
-    "platform/gx/frame_dump.c",
-    # The developer console (shim/include/mp6_console.h). Same category as
+    "src/gx/frame_dump.c",
+    # The developer console (include/mp6_console.h). Same category as
     # framescope.c/frame_dump.c right above: an availability/open latch, ring
     # positions, and -- worse -- the command table's registered FUNCTION
     # POINTERS. Restoring a capturing process's function pointers into a
     # loading one is the same class of corruption the carve-out exists for.
     # Both TUs are in PLATFORM_SOURCES_COMMON, so these entries are asserted
     # against BOTH builds.
-    "platform/gx/console/console_core.c",
-    "platform/gx/console/console_stats.c",
-    # Unlocked FPS presentation layer (shim/include/mp6_unlocked_fps.h): the
+    "src/gx/console/console_core.c",
+    "src/gx/console/console_stats.c",
+    # Unlocked FPS presentation layer (include/mp6_unlocked_fps.h): the
     # idle-window pacing statics are monotonic timestamps taken from the RUNNING
     # process's timer plus diagnostic counters -- host state, not captured game
     # state. Restoring a capturing process's timestamps into the loading one
@@ -1745,7 +1722,8 @@ HOST_STATE_SECTION_SOURCES = {
     # pointer VALUES would corrupt the heap. Aurora-only
     # TU (PLATFORM_AURORA_ONLY); the headless build never compiles it, so this
     # entry is asserted only against the windowed build.
-    "platform/gx/frame_interp.c",
+    "src/gx/frame_interp.c",
+    "src/gx/ambient_occlusion.cpp",
 }
 
 
@@ -1818,47 +1796,46 @@ def verify_host_section_sources():
 
 
 PLATFORM_SOURCES_COMMON = [
-    # The Enhancements seam (shim/include/mp6_enhancements.h): the pure preset
+    # The Enhancements seam (include/mp6_enhancements.h): the pure preset
     # table + derivation, and the published settings store every consumer
     # reads. In COMMON -- not with the aurora-only launcher -- for the same
     # reason console_core.c is: it must LINK HEADLESS (the heap-scale and
     # voice-count consumers exist in both builds) and it must be compilable on
     # its own by tools/enh_preset_selftest.c, which has no aurora/decomp
     # universe available. Dependency-light by contract: stdlib + string only.
-    "platform/enh/mp6_enhancements.c",
-    "platform/os/arena.c",
-    "platform/os/heap_scale.c",  # Enhancements "Expanded heaps" (shim/include/
+    "src/enh/mp6_enhancements.c",
+    "src/os/arena.c",
+    "src/os/heap_scale.c",  # Enhancements "Expanded heaps" (include/
                                    # mp6_heap_scale.h): the process-wide scale latch
                                    # both arena.c and malloc_direct.c read. Dependency-
                                    # free (no decomp/Aurora headers), BOTH modes because
                                    # both of its consumers are in both. Carved out --
                                    # see HOST_STATE_SECTION_SOURCES.
-    "platform/os/sdk_native.c",  # portable PS-matrix/quaternion SDK names;
+    "src/os/sdk_native.c",  # portable PS-matrix/quaternion SDK names;
                                   # headless-only C_QUAT/GX attribute sinks
-    "platform/os/process_native.c",  # replaces jmp_native.c + hostjmp.c +
+    "src/os/process_native.c",  # replaces jmp_native.c + hostjmp.c +
                                        # prc_trace.c (game/jmp.c AND game/process.c
                                        # skipped together, see GAME_SKIP_LIST) --
                                        # gcsetjmp/gclongjmp(&processjmpbuf) had no
                                        # working native equivalent; see its own
                                        # header comment for the full investigation.
-    "platform/os/malloc_direct.c",
-    "platform/os/savestate.c",  # cross-session savestate capture/restore
+    "src/os/malloc_direct.c",
+    "src/os/savestate.c",  # cross-session savestate capture/restore
                                   # In BOTH build modes on
                                   # purpose: the headless build is where the
                                   # capture/restore regression gate runs, since
                                   # it is the mode with a byte-identical log.
-    "platform/os/dll_bridge.c",
-    "platform/os/board_runtime.c",  # board lifecycle marker/state bridge used by W01
-    "platform/os/board_constants.c",  # original .sdata2 values referenced by
-                                        # recovered board owners on decomp main
-    "platform/os/board_placeholders.c",  # stable empty board-seam diagnostic ABI;
+    "src/os/dll_bridge.c",
+    "src/os/overlay_fallback.c",
+    "src/os/board_runtime.c",  # board lifecycle marker/state bridge used by W01
+    "src/os/board_placeholders.c",  # stable empty board-seam diagnostic ABI;
                                           # latest pinned decomp owns the routines
-    "platform/os/log.c",
-    "platform/os/hwcast.c",  # the rate-limited saturation report behind
-                               # shim/include/mp6_hwcast.h's inline fctiwz
+    "src/os/log.c",
+    "src/os/hwcast.c",  # the rate-limited saturation report behind
+                               # include/mp6_hwcast.h's inline fctiwz
                                # conversion. BOTH modes: the patched decomp
                                # expressions that call it are compiled in both.
-    "platform/os/input_script.c",  # the deterministic --input-script engine
+    "src/os/input_script.c",  # the deterministic --input-script engine
                                      # (spec parser + per-tick state machine +
                                      # the event-bound waitev/pressuntil steps).
                                      # Moved out of aurora_bridge.c: nothing in
@@ -1869,155 +1846,158 @@ PLATFORM_SOURCES_COMMON = [
                                      # and every board drive had to take the
                                      # shared GPU lock. BOTH modes, and inert
                                      # until an --input-script arms it.
-    "platform/os/mp6_events.c",  # the game-event bus (shim/include/mp6_events.h):
+    "src/os/mp6_events.c",  # the game-event bus (include/mp6_events.h):
                                    # typed [EVENT] lines for overlay/DLL/screen state
                                    # changes, so automation can bind input to observed
                                    # state instead of guessed tick offsets. Needs the
                                    # decomp's include/ovl_table.h (COMMON_FLAGS' decomp
                                    # -I's) to name overlays; BOTH modes, since the
-                                   # OSReport tap that feeds it (platform/null/
+                                   # OSReport tap that feeds it (src/null/
                                    # shims_manual.c) is in both.
-    "platform/os/card_native.c",  # memory-card slot A: CARDInit(void)->aurora
+    "src/os/card_native.c",  # memory-card slot A: CARDInit(void)->aurora
                                     # CARDInit(game,maker) interposer + saves/
                                     # base path; honest no-op under
                                     # MP6_HEADLESS_BUILD (see its header)
-    "platform/host/host_win32.c",  # the win32 host backend -- the OS seam
+    "src/host/host_win32.c",  # the win32 host backend -- the OS seam
                                      # (time/memory/paths/coro/mutex/thread/
                                      # rss/crash). Links in BOTH modes:
                                      # kernel32/dbghelp/psapi are already on
                                      # both link lines.
-    "platform/host/coro_arena.c",  # the DEFAULT coro backend -- minicoro
+    "src/host/coro_arena.c",  # the DEFAULT coro backend -- minicoro
                                      # (MCO_USE_ASM) over a low-4GB arena stack
                                      # pool. Self-guarded #ifndef MP6_CORO_FIBERS,
                                      # so it compiles to nothing (and host_win32.c's
                                      # fiber backend takes over) under the
                                      # --coro-fibers A/B lever. Links in BOTH
                                      # modes, like process_native.c.
-    "platform/os/save_endian.c",  # field-wise BE marshal for the persisted
+    "src/os/save_endian.c",  # field-wise BE marshal for the persisted
                                     # GW_COMMON/GW_SYSTEM/GW_PLAYER save-box
                                     # structs -- called only from the patched
                                     # game/saveload.c struct<->saveBuf boundaries
-                                    # (see shim/include/mp6_save_endian.h)
-    "platform/dvd/dvd_files.c",  # real FST + host-file serving, see dll_bridge.c's own header
-    "platform/hsf/hsf_load_native.c",  # real HSF (3D scene) deserializer
-    "platform/sprite/anim_native.c",  # bounded 32-bit-BE ANM -> native graph + ownership cache
-    "platform/hsf/mp6_freecam.c",  # freecam camera override (shim/include/mp6_freecam.h):
+                                    # (see include/mp6_save_endian.h)
+    "src/dvd/dvd_files.c",  # real FST + host-file serving, see dll_bridge.c's own header
+    "src/hsf/hsf_load_native.c",  # real HSF (3D scene) deserializer
+    "src/sprite/anim_native.c",  # bounded 32-bit-BE ANM -> native graph + ownership cache
+    "src/hsf/mp6_freecam.c",  # freecam camera override (include/mp6_freecam.h):
                                      # needs game/hu3d.h (COMMON_FLAGS' decomp -I's) like its
                                      # neighbors; BOTH modes because its one caller is the
                                      # shared Hu3DExec patch hook -- a permanently-false
                                      # branch in headless (nothing there can enable it).
-    "platform/hsf/mp6_fi_model.c",  # Unlocked FPS identity/camera metadata (shim/include/
+    "src/hsf/mp6_ambient_occlusion.c", # optional 3D-camera shading boundary; headless no-op
+    "src/hsf/mp6_grounding.c", # AO-gated W01 visual grounding; gameplay positions untouched
+    "src/hsf/mp6_fi_model.c",  # Unlocked FPS identity/camera metadata (include/
                                       # mp6_fi_model.h): stable model generations + camera-cut history.
                                       # Needs game/hu3d.h (COMMON_FLAGS' decomp -I's) like mp6_freecam.c;
                                       # BOTH modes because shared hsfman.c records the same real-draw
                                       # identity context even when headless never captures a GX stream.
-    "platform/hsf/mp6_widescreen_extrude.c",  # The shared backdrop-extrude helpers:
+    "src/hsf/mp6_widescreen_extrude.c",  # The shared backdrop-extrude helpers:
                                                  # shared backdrop-extrude helper, hoisted out of
                                                  # mdpartydll/mdparty.c's own file-local static so every
                                                  # widescreen-extruded REL calls one definition. Needs
                                                  # game/hu3d.h (COMMON_FLAGS' decomp -I's), same as
                                                  # hsf_load_native.c above; links into BOTH modes since
                                                  # its REL callers are shared between them.
-    "platform/hsf/mp6_motion_leaktest.c",  # MP6_MOTION_LEAKTEST ownership probe
-                                             # (shim/include/mp6_boot.h): real
+    "src/hsf/mp6_motion_leaktest.c",  # MP6_MOTION_LEAKTEST ownership probe
+                                             # (include/mp6_boot.h): real
                                              # Hu3DMotionCreate/Kill cycles + HEAP_MODEL
                                              # accounting for tools/motion_census_gate.py.
                                              # Needs game/hu3d.h (COMMON_FLAGS' decomp
-                                             # -I's) like its platform/hsf/ neighbors;
+                                             # -I's) like its src/hsf/ neighbors;
                                              # BOTH modes (its caller is the shared
                                              # mp6_tick_advance choke point) and a
                                              # standing no-op unless the env var is set.
-    "platform/hsf/mp6_shadow_quality.c",  # Mods-page Shadow Quality (shim/include/
+    "src/hsf/mp6_shadow_quality.c",  # Mods-page Shadow Quality (include/
                                              # mp6_shadow_quality.h): mp6_shadow_quality_scale(), the
                                              # Hu3DShadowMultiCreate/Hu3DShadowMultiSizeSet origin-site
                                              # helper. Needs game/memory.h (HEAPID/HuMemMaxMemorySizeGet),
-                                             # same COMMON_FLAGS access as its platform/hsf/ neighbors;
+                                             # same COMMON_FLAGS access as its src/hsf/ neighbors;
                                              # links into BOTH modes (its one caller is the shared
                                              # hsfman.c.patch origin site), internally #ifdef
                                              # MP6_HEADLESS_BUILD like shims_manual.c's widescreen stubs.
-    "platform/gx/gxarray_registry.c",  # GXSetArray real-size registry.
+    "src/gx/gxarray_registry.c",  # GXSetArray real-size registry.
                                          # Dependency-free (no decomp/Aurora headers), so either flavor's
                                          # flags compile it fine; lives in COMMON so it's linked into BOTH
                                          # modes -- hsf_load_native.c (both modes) is the writer,
                                          # aurora_bridge.c (aurora only) is the one real reader.
-    "platform/gx/shadow_dump.c",  # MP6_SHADOW_DUMP debug lever (shim/include/
+    "src/gx/shadow_dump.c",  # MP6_SHADOW_DUMP debug lever (include/
                                      # mp6_shadow_dump.h): GPU->CPU readback + PNG dump of the
                                      # resolved Hu3DShadow copy texture (aurora-patches/0016).
                                      # Needs game/hu3d.h (Hu3DShadow), same COMMON_FLAGS access as
-                                     # its platform/gx/framescope.c and platform/hsf/ neighbors;
+                                     # its src/gx/framescope.c and src/hsf/ neighbors;
                                      # links into BOTH modes, internally #ifdef MP6_HEADLESS_BUILD
                                      # (headless has no renderer/GPU -- standing no-op there).
-    "platform/gx/frame_dump.c",  # MP6_FRAME_DUMP debug lever (shim/include/
+    "src/gx/frame_dump.c",  # MP6_FRAME_DUMP debug lever (include/
                                     # mp6_frame_dump.h): per-present GPU->CPU capture of
                                     # aurora's present source (aurora-patches/0025). In COMMON
                                     # for the same reason shadow_dump.c is -- its trigger entry
-                                    # point is called from platform/os/mp6_events.c, which links
+                                    # point is called from src/os/mp6_events.c, which links
                                     # into BOTH modes -- and split internally by #ifdef
                                     # MP6_HEADLESS_BUILD/__ANDROID__ (no renderer there, and the
                                     # Android aurora archive has no 0025 symbol to link against).
-    # The developer console (shim/include/mp6_console.h). console_core.c is
+    # The developer console (include/mp6_console.h). console_core.c is
     # the registry/ring/lever state and is deliberately dependency-light
     # (stdio/string/stdarg + the header-only strict parser) exactly like
     # mp6_events.c above -- it is in COMMON so it LINKS HEADLESS, which is what
     # lets tools/console_selftest.c drive the real code with no window, no GPU
     # and no aurora (tools/test_console_contract.py).
-    "platform/gx/console/console_core.c",
+    "src/gx/console/console_core.c",
     # console_stats.c is the sampler + every stat panel's text. In COMMON for
     # the same reason frame_dump.c is, and split internally by #ifdef
     # MP6_HEADLESS_BUILD the same way: the memory/audio/board panels read
     # probes that exist in both builds, while fps/unit/scenerendering need
     # aurora and the GX bridge and report that plainly when asked headless.
-    "platform/gx/console/console_stats.c",
-    # platform/null/shims_generated{,_aurora}.c is NOT in this list -- see
+    "src/gx/console/console_stats.c",
+    # src/null/shims_generated{,_aurora}.c is NOT in this list -- see
     # collect_units() below, it's the one PLATFORM_SOURCES_COMMON entry
     # whose SOURCE FILE (not just its compile flags) differs per mode. See
     # tools/gen_shims.py's OUT_FILE_AURORA comment for why a real content
     # difference (not weak symbols, not #ifdef) is what this split needs.
-    "platform/null/shims_manual.c",  # VIInit/VIWaitForRetrace/VIGetRetraceCount/
+    "src/null/shims_manual.c",  # VIInit/VIWaitForRetrace/VIGetRetraceCount/
                                        # VIGetNextField/GXInit inside are now
                                        # `#ifdef MP6_HEADLESS_BUILD`-guarded; harmless
                                        # to always compile this file in both modes.
-    # Real streamed-music playback -- see platform/audio/msm_bridge.c's own
+    # Real streamed-music playback -- see src/audio/msm_bridge.c's own
     # header comment for the full design. All three compile with COMMON_FLAGS
     # in BOTH build modes
     # (dspadpcm.c/wav_writer.c are plain dependency-free C that happens to
     # tolerate the decomp -I's/-include harmlessly; msm_bridge.c genuinely
     # needs them for the real dolphin.h/msm.h types its taken-over msm*/AI*
     # symbols must match exactly). The live-playback SDL3 backend
-    # (platform/audio/audio_out_sdl.c) is Aurora-only -- see
+    # (src/audio/audio_out_sdl.c) is Aurora-only -- see
     # PLATFORM_AURORA_ONLY below, same split as aurora_bridge.c's own.
-    "platform/audio/dspadpcm.c",
-    "platform/audio/wav_writer.c",
-    "platform/audio/msm_bridge.c",
+    "src/audio/dspadpcm.c",
+    "src/audio/wav_writer.c",
+    "src/audio/msm_bridge.c",
 ]
 
 # Compiled with AURORA_FLAGS instead of
 # COMMON_FLAGS (Aurora's own -I's, no decomp -I/-include at all -- see
 # AURORA_FLAGS's own comment for why), and ONLY for the non-headless build.
-# platform/main_native.c is the one file compiled in BOTH modes but with
+# src/main_native.c is the one file compiled in BOTH modes but with
 # DIFFERENT flags per mode (its own #ifdef MP6_HEADLESS_BUILD chooses which
 # half of the file is even reachable) -- see PLATFORM_AURORA_ONLY below for
 # the file that exists in the aurora build alone.
-MAIN_NATIVE = "platform/main_native.c"
+MAIN_NATIVE = "src/main_native.c"
 PLATFORM_AURORA_ONLY = [
-    "platform/gx/aurora_bridge.c", "platform/gx/framescope.c",
-    "platform/gx/frame_interp.c",  # Unlocked FPS presentation layer
-                                     # (shim/include/mp6_unlocked_fps.h): the frame-boundary
+    "src/gx/aurora_bridge.c", "src/gx/framescope.c",
+    "src/gx/frame_interp.c",  # Unlocked FPS presentation layer
+    "src/gx/ambient_occlusion.cpp", # public Aurora depth snapshot/custom GPU passes
+                                     # (include/mp6_unlocked_fps.h): the frame-boundary
                                      # hooks + retained-FIFO rewrite/submission and pacing.
                                      # Aurora headers only (AURORA_FLAGS), same split as
                                      # aurora_bridge.c -- headless untouched by construction.
-    "platform/gx/freecam_input.c",  # freecam host-input collector (SDL keyboard/
+    "src/gx/freecam_input.c",  # freecam host-input collector (SDL keyboard/
                                       # mouse/touch/gamepad -> per-tick camera deltas;
-                                      # shim/include/mp6_freecam.h's windowed-only half)
+                                      # include/mp6_freecam.h's windowed-only half)
     # Real-time SDL3 playback for the msm stream mixer -- Aurora-only (needs
     # Aurora's own AURORA_FLAGS for SDL3's real headers/include path;
     # --headless has no live device to feed at all, see
-    # platform/audio/msm_bridge.c's msmSysRegularProc for its own
+    # src/audio/msm_bridge.c's msmSysRegularProc for its own
     # from-the-tick-pump verification path instead).
-    "platform/audio/audio_out_sdl.c",
+    "src/audio/audio_out_sdl.c",
     # The pre-boot launcher menu: partyboard's own RmlUi launcher
     # implementation, ripped at explicit user direction
-    # (docs/PARTYBOARD_PROVENANCE.md) into platform/gx/ui/ and adapted to
+    # (docs/PARTYBOARD_PROVENANCE.md) into src/gx/ui/ and adapted to
     # our settings content. launcher_core.cpp is OURS (the config model /
     # mode decision / HSF wordmark decode behind the same six-function C
     # seam main_native.c always consumed); the rest are the ripped
@@ -2026,35 +2006,35 @@ PLATFORM_AURORA_ONLY = [
     # set for .cpp sources); aurora-only by construction, and excluded from
     # every android unit set (collect_units skips .cpp entries on android
     # rows).
-    "platform/gx/ui/launcher_core.cpp",
-    "platform/gx/ui/ui.cpp",
-    "platform/gx/ui/event.cpp",
-    "platform/gx/ui/component.cpp",
-    "platform/gx/ui/document.cpp",
-    "platform/gx/ui/button.cpp",
-    "platform/gx/ui/select_button.cpp",
-    "platform/gx/ui/bool_button.cpp",
-    "platform/gx/ui/number_button.cpp",
-    "platform/gx/ui/string_button.cpp",
-    "platform/gx/ui/pane.cpp",
-    "platform/gx/ui/tab_bar.cpp",
-    "platform/gx/ui/window.cpp",
-    "platform/gx/ui/modal.cpp",
-    "platform/gx/ui/input.cpp",
-    "platform/gx/ui/overlay.cpp",
-    "platform/gx/ui/menu_bar.cpp",
-    "platform/gx/ui/graphics_tuner.cpp",
-    "platform/gx/ui/prelaunch.cpp",
-    "platform/gx/ui/settings.cpp",
-    "platform/gx/ui/console.cpp",
+    "src/gx/ui/launcher_core.cpp",
+    "src/gx/ui/ui.cpp",
+    "src/gx/ui/event.cpp",
+    "src/gx/ui/component.cpp",
+    "src/gx/ui/document.cpp",
+    "src/gx/ui/button.cpp",
+    "src/gx/ui/select_button.cpp",
+    "src/gx/ui/bool_button.cpp",
+    "src/gx/ui/number_button.cpp",
+    "src/gx/ui/string_button.cpp",
+    "src/gx/ui/pane.cpp",
+    "src/gx/ui/tab_bar.cpp",
+    "src/gx/ui/window.cpp",
+    "src/gx/ui/modal.cpp",
+    "src/gx/ui/input.cpp",
+    "src/gx/ui/overlay.cpp",
+    "src/gx/ui/menu_bar.cpp",
+    "src/gx/ui/graphics_tuner.cpp",
+    "src/gx/ui/prelaunch.cpp",
+    "src/gx/ui/settings.cpp",
+    "src/gx/ui/console.cpp",
     # first-run content onboarding -- the
     # ContentSetup dialog (ripped-framework idiom, ours) + the nod-backed
     # import engine it drives. Aurora-flavor .cpp like the rest of ui/;
     # compiled on BOTH the Windows windowed row and the android --windowed
     # row (collect_units no longer skips .cpp on android -- an earlier
     # "windows-windowed only" rule this lane retires).
-    "platform/gx/ui/content_setup.cpp",
-    "platform/content/content_import.cpp",
+    "src/gx/ui/content_setup.cpp",
+    "src/content/content_import.cpp",
 ]
 
 
@@ -2146,12 +2126,12 @@ def collect_units(headless, coro_fibers=False, android=False):
     """Returns a list of (abs_src_path, extra_flags, obj_name, flavor) --
     `flavor` picks the BASE flag set in compile_one(): "common" ->
     COMMON_FLAGS (decomp -I's, -include dolphin_compat.h -- game/REL
-    sources and most of platform/), "aurora" -> AURORA_FLAGS (Aurora's own
-    -I's only -- platform/main_native.c in the default build, and
-    platform/gx/aurora_bridge.c, see that file's own header comment).
+    sources and most of src/), "aurora" -> AURORA_FLAGS (Aurora's own
+    -I's only -- src/main_native.c in the default build, and
+    src/gx/aurora_bridge.c, see that file's own header comment).
 
     android=True is the headless TU set with exactly ONE swap --
-    platform/host/host_win32.c -> platform/host/host_android.c (the host-seam
+    src/host/host_win32.c -> src/host/host_android.c (the host-seam
     seam's second backend; everything else in the set is portable C, the
     the design's own 'already-portable' census + coro_arena.c). Callers pass
     headless=True with it (the android row is headless-only on Android)."""
@@ -2164,6 +2144,8 @@ def collect_units(headless, coro_fibers=False, android=False):
             f = f + MAIN_C_FLAGS
         obj_name = "game_" + os.path.basename(abs_path).replace(".c", ".o")
         units.append((abs_path, f, obj_name, "common"))
+    units.append((os.path.join(NATIVE_ROOT, "src", "os", "minigame_stub.c"),
+                  [], "board_mgcall.o", "common"))
     for rel, flags in board_sources():
         abs_path = resolve_source(rel)
         obj_name = "board_" + os.path.basename(abs_path).replace(".c", ".o")
@@ -2183,7 +2165,7 @@ def collect_units(headless, coro_fibers=False, android=False):
     # stay correct even when switching between `--headless` and the default
     # build back and forth without a --clean in between.
     # The coro backend is a compile-time choice. Default = the arena-backed
-    # minicoro backend (platform/host/coro_arena.c); --coro-fibers = the
+    # minicoro backend (src/host/coro_arena.c); --coro-fibers = the
     # Win32 fiber backend (host_win32.c), an A/B lever. The define reaches
     # every PLATFORM_SOURCES_COMMON/shims TU via headless_flags (only host_win32.c
     # and coro_arena.c actually read it; the rest ignore it harmlessly), and
@@ -2196,17 +2178,22 @@ def collect_units(headless, coro_fibers=False, android=False):
     mode_suffix = ("_headless" if headless else "_aurora") + coro_suffix
     headless_flags = (["-DMP6_HEADLESS_BUILD"] if headless else []) + coro_flags
     for rel in PLATFORM_SOURCES_COMMON:
-        if android and rel == "platform/host/host_win32.c":
-            rel = "platform/host/host_android.c"  # the one backend swap (see docstring)
+        if android and rel == "src/host/host_win32.c":
+            rel = "src/host/host_android.c"  # the one backend swap (see docstring)
         abs_path = os.path.join(NATIVE_ROOT, rel.replace("/", os.sep))
         base = os.path.basename(abs_path).replace(".c", "")
-        units.append((abs_path, headless_flags, f"plat_{base}{mode_suffix}.o", "common"))
+        flags = list(headless_flags)
+        if not headless and rel == "src/gx/console/console_stats.c":
+            # The pure-C stats view consumes Aurora's public timestamp ABI.
+            # Keep original SDK headers first; only this TU needs this include.
+            flags += ["-idirafter", AURORA_INCLUDE]
+        units.append((abs_path, flags, f"plat_{base}{mode_suffix}.o", "common"))
 
     # shims_generated.c (--headless) vs shims_generated_aurora.c (default) --
     # see tools/gen_shims.py's OUT_FILE_AURORA comment: a real source-file
     # difference, not just a flag, because the aurora variant must not even
     # DEFINE the ~100+ symbols Aurora's own linked libraries provide.
-    shims_rel = "platform/null/shims_generated.c" if headless else "platform/null/shims_generated_aurora.c"
+    shims_rel = "src/null/shims_generated.c" if headless else "src/null/shims_generated_aurora.c"
     shims_abs = os.path.join(NATIVE_ROOT, shims_rel.replace("/", os.sep))
     units.append((shims_abs, headless_flags, f"plat_shims_generated{mode_suffix}.o", "common"))
 
@@ -2554,7 +2541,7 @@ def compile_one(unit):
         # (aurora_bridge/framescope/audio_out_sdl/main_native), compiled
         # against android_aurora_flags() exactly like the Windows split.
         # "aurora_cpp": the touch-overlay
-        # TU (platform/android/touch_pad.cpp) draws through aurora's ImGui
+        # TU (src/android/touch_pad.cpp) draws through aurora's ImGui
         # pass, whose API is C++ -- same aurora include set with the C
         # -std swapped for aurora's own C++20 (its CMAKE_CXX_STANDARD),
         # compiled by NDK clang++ so the C++ driver defaults apply.
@@ -2593,7 +2580,7 @@ def compile_one(unit):
         zig_lang = "cc"
         if src.endswith(".cpp"):
             # Every .cpp TU is part of the ripped RmlUi launcher UI
-            # (platform/gx/ui/). Same AURORA_FLAGS
+            # (src/gx/ui/). Same AURORA_FLAGS
             # base with the C -std swapped for C++20 (the ripped framework
             # and aurora's RmlUi glue both use ranges/concepts/span),
             # compiled via `zig c++` (plain `zig cc` does not add the
@@ -2640,6 +2627,48 @@ def compile_one(unit):
         except OSError as exc:
             return (src, obj, False, proc.stdout + proc.stderr + f"\n{exc}\n", False)
     return (src, obj, ok, proc.stdout + proc.stderr, False)  # actually invoked the compiler
+
+
+def configure_windows(configuration):
+    """Keep optimized objects/backend/executable separate from debug saves.
+
+    Decomp code relies on aliasing across its original SDK representations;
+    use the same conservative O2 contract as Android, never fast-math.
+    """
+    global WINDOWS_CONFIGURATION, OBJ_DIR, COMMON_FLAGS, AURORA_FLAGS
+    global AURORA_BUILD_RMLUI, AURORA_DEPS_RMLUI, AURORA_RUNTIME_DLLS
+    global AURORA_LINK_ITEMS, AURORA_ARTIFACT_STAMP, AURORA_INCLUDE
+    if configuration not in ("debug", "release"):
+        raise ValueError(f"unknown Windows configuration: {configuration}")
+    if WINDOWS_CONFIGURATION != "debug":
+        raise RuntimeError("Windows configuration must be selected once per build")
+    if configuration == "debug":
+        return
+    WINDOWS_CONFIGURATION = configuration
+    OBJ_DIR = os.path.join(BUILD_DIR, "obj-release")
+    old_tree = AURORA_BUILD_RMLUI
+    AURORA_BUILD_RMLUI = os.path.join(BUILD_DIR, "aurora-release")
+    AURORA_DEPS_RMLUI = os.path.join(AURORA_BUILD_RMLUI, "_deps")
+    AURORA_ARTIFACT_STAMP = os.path.join(AURORA_BUILD_RMLUI, "mp6-artifact-stamp.json")
+    old_include = AURORA_INCLUDE
+    AURORA_INCLUDE = os.path.join(BUILD_DIR, "aurora-release-source", "include")
+
+    def release_path(value):
+        return (value.replace(old_tree, AURORA_BUILD_RMLUI).replace(old_include, AURORA_INCLUDE)
+                .replace("libpng16d.", "libpng16.")
+                .replace("libfmtd.a", "libfmt.a")
+                .replace("libfreetyped.a", "libfreetype.a"))
+
+    flags = ["-O2", "-fno-strict-aliasing", "-DNDEBUG", "-DMP6_AURORA_LIVE_AA=1"]
+    COMMON_FLAGS = [release_path(f) for f in COMMON_FLAGS] + flags
+    AURORA_FLAGS = [release_path(f) for f in AURORA_FLAGS] + flags
+    AURORA_RUNTIME_DLLS = [release_path(p) for p in AURORA_RUNTIME_DLLS]
+    AURORA_LINK_ITEMS = [release_path(p) for p in AURORA_LINK_ITEMS]
+
+
+def windows_subsystem_flags(headless):
+    """Only the player-facing release is a GUI application (no console)."""
+    return ["-Wl,--subsystem,windows"] if WINDOWS_CONFIGURATION == "release" and not headless else []
 
 
 def _resolve_aurora_link_items():
@@ -2741,6 +2770,34 @@ def _sync_tree_exact(source, destination):
             _remove_private_tree(stage, destination)
 
 
+def android_game_link_flags(windowed):
+    # Keep exports available to JNI/dlsym/dladdr, but avoid PLT indirection for
+    # strong function definitions already in this image. Unlike -Bsymbolic or
+    # -Bsymbolic-functions, weak functions and all data retain normal binding.
+    flags = ["-Wl,-soname,libmp6game.so", "-Wl,-z,max-page-size=16384",
+             "-Wl,-Bsymbolic-non-weak-functions"]
+    if windowed:
+        flags += ["-static-libstdc++", "-Wl,--build-id=sha1",
+                  "-Wl,--no-undefined", "-Wl,--gc-sections", "-Wl,-u,JNI_OnLoad"]
+    return flags
+
+
+def android_link_stamp(driver, objects, flags, items):
+    # A link-policy change can move functions without changing any object.
+    # Preserve command order (archive order affects extraction) and include
+    # nod as well as the renderer archives, not just sorted game objects.
+    digest = hashlib.sha1()
+    policy = [driver, "-target", ANDROID_TRIPLE, "-shared", *objects, *flags, *items]
+    digest.update(b"mp6-android-link-v2\0")
+    digest.update(json.dumps(policy, separators=(",", ":")).encode("utf-8"))
+    for path in [*objects, *(item for item in items if os.path.isfile(item))]:
+        digest.update(os.path.getsize(path).to_bytes(8, "little"))
+        with open(path, "rb") as source:
+            for chunk in iter(lambda: source.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def build_android(args):
     """the whole `--target
     aarch64-android` flow, kept as its own function (ending in its own
@@ -2825,7 +2882,6 @@ def build_android(args):
                        libc_desc="the NDK sysroot/clang-resource headers")
     patch_abi_struct_headers(dst_root=ANDROID_PATCHED_INCLUDE,
                              extra_patches=ANDROID_HEADER_CONTENT_PATCHES)
-    apply_decomp_override_headers(dst_root=ANDROID_PATCHED_INCLUDE)  # shield (see docstring)
     apply_patches.apply_all(decomp_root=DECOMP)  # shared patched-src, see docstring
 
     units = collect_units(headless=not windowed, coro_fibers=False, android=True)
@@ -2838,7 +2894,7 @@ def build_android(args):
         # own libimgui.a was compiled with (extern/CMakeLists.txt declares
         # it PUBLIC) -- imgui.h #includes the config header, so an
         # unmatched TU would be an ODR/ABI hazard by construction.
-        units.append((os.path.join(NATIVE_ROOT, "platform", "android", "touch_pad.cpp"),
+        units.append((os.path.join(NATIVE_ROOT, "src", "android", "touch_pad.cpp"),
                       ['-DIMGUI_USER_CONFIG="aurora/imgui_config.h"'],
                       "plat_touch_pad_aurora.o", "aurora_cpp"))
         # the SAF bridge -- the JNI poll surface
@@ -2847,7 +2903,7 @@ def build_android(args):
         # comes from the NDK sysroot; no SDL/aurora headers needed, but the
         # flavor keeps its flags in the windowed family). Android-only by
         # construction, like the touch overlay.
-        units.append((os.path.join(NATIVE_ROOT, "platform", "android", "saf_bridge.c"),
+        units.append((os.path.join(NATIVE_ROOT, "src", "android", "saf_bridge.c"),
                       [], "plat_saf_bridge_aurora.o", "aurora"))
     print(f"Total translation units: {len(units)}")
 
@@ -2896,25 +2952,19 @@ def build_android(args):
     # generate its own stamp TU or the .so link fails with an undefined
     # symbol -- which is exactly how this block's absence was discovered.
     # Distinct per android mode so aurora/headless never share a cached obj.
-    stamp_hash = hashlib.sha1()
-    stamp_inputs = sorted(objs)
+    link_driver = clang.replace("clang.exe", "clang++.exe") if windowed else clang
+    link_flags = android_game_link_flags(windowed)
     if windowed:
-        stamp_inputs = stamp_inputs + sorted(
-            [it for it in _resolve_android_aurora_link_items() if os.path.isfile(it)])
-    for it in stamp_inputs:
-        try:
-            with open(it, "rb") as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    stamp_hash.update(chunk)
-        except OSError:
-            stamp_hash.update(it.encode())  # missing input: still deterministic
-    stamp_hex = stamp_hash.hexdigest()
+        link_items = _resolve_android_aurora_link_items() + [NOD_ANDROID_LIB.replace("\\", "/")]
+    else:
+        link_items = ["-lz", "-ldl", "-lm"]
+    stamp_hex = android_link_stamp(link_driver, objs, link_flags, link_items)
     stamp_mode = "_android_aurora" if windowed else "_android_headless"
     stamp_src = os.path.join(BUILD_DIR, f"mp6_link_stamp{stamp_mode}.c")
     stamp_obj = stamp_src[:-2] + ".o"
     stamp_body = (
         "/* AUTOGENERATED by tools/build.py -- the savestate link stamp\n"
-        " * (android). sha1 over every link input; see build.py. */\n"
+        " * (android). sha1 over link policy and inputs; see build.py. */\n"
         f"const char mp6_link_stamp[] = \"{stamp_hex}\";\n")
     old_body = ""
     if os.path.exists(stamp_src):
@@ -2952,35 +3002,12 @@ def build_android(args):
         # rather than a dlopen failure on the phone.
         os.makedirs(ANDROID_AURORA_OUT_DIR, exist_ok=True)
         so_path = os.path.join(ANDROID_AURORA_OUT_DIR, "libmp6game.so")
-        clangxx = clang.replace("clang.exe", "clang++.exe")
-        link_cmd = [clangxx, "-target", ANDROID_TRIPLE, "-shared"] + objs + [
-            "-o", so_path,
-            "-Wl,-soname,libmp6game.so",
-            "-Wl,-z,max-page-size=16384",
-            "-static-libstdc++",
-            "-Wl,--build-id=sha1",
-            "-Wl,--no-undefined",
-            "-Wl,--gc-sections",
-            # aurora's own android CMake link line carries this keep-alive:
-            # SDL3-static's JNI_OnLoad (the RegisterNatives entry the APK
-            # bootstrap chain-calls) must survive --gc-sections even if some
-            # future link stops pulling SDL_android.c.o for other reasons.
-            "-Wl,-u,JNI_OnLoad",
-        ] + _resolve_android_aurora_link_items() + [
-            # nod staticlib (disc-image import; cargo cross-build, see
-            # NOD_ANDROID_LIB's comment). After the aurora items: its only
-            # consumers are content_import.o (an objs[] member) and its own
-            # libc/liblog/libm/libdl needs, all already on this line.
-            NOD_ANDROID_LIB.replace("\\", "/"),
-        ]
     else:
         so_path = os.path.join(ANDROID_BUILD_DIR, "libmp6game.so")
-        link_cmd = [clang, "-target", ANDROID_TRIPLE, "-shared"] + objs + [
-            "-o", so_path,
-            "-Wl,-soname,libmp6game.so",
-            "-Wl,-z,max-page-size=16384",
-            "-lz", "-ldl", "-lm",
-        ]
+    # Use exactly the policy hashed into the save-state identity above.
+    link_cmd = [link_driver, "-target", ANDROID_TRIPLE, "-shared"] + objs + [
+        "-o", so_path,
+    ] + link_flags + link_items
     print(f"\nLinking {so_path}...")
     proc = subprocess.run(link_cmd, capture_output=True, text=True)
     print(proc.stdout)
@@ -2991,20 +3018,20 @@ def build_android(args):
 
     if windowed:
         # ---- libmain.so (the APK bootstrap shell) + staging ----------------
-        # platform/android/mp6shell.c: pure-JNI bootstrap --
+        # src/android/mp6shell.c: pure-JNI bootstrap --
         # System.loadLibrary("main") fires its JNI_OnLoad, which installs
         # the stdout/stderr -> logcat pump, reuses mp6launcher.c's
         # reserve+dlext shape verbatim to place libmp6game.so low, then
         # chain-calls the game image's own (SDL3-static) JNI_OnLoad so SDL
         # RegisterNatives binds the org.libsdl.app classes to the low
         # image. No SDL on this link line by design.
-        shell_src = os.path.join(NATIVE_ROOT, "platform", "android", "mp6shell.c")
+        shell_src = os.path.join(NATIVE_ROOT, "src", "android", "mp6shell.c")
         shell_path = os.path.join(ANDROID_AURORA_OUT_DIR, "libmain.so")
         shell_cmd = [clang, "-target", ANDROID_TRIPLE] + configuration_flags + [
                      "-g", "-Wall", "-Wextra",
                      # The two standalone android helpers are plain C with no
                      # game/Aurora headers, but they do share the port's own
-                     # header-only seam helpers (shim/include/mp6_path.h's
+                     # header-only seam helpers (include/mp6_path.h's
                      # checked path construction). SHIM_INCLUDE is the only
                      # -I either of them needs.
                      "-I", SHIM_INCLUDE,
@@ -3045,7 +3072,7 @@ def build_android(args):
         # ever stops carrying the symbols dladdr needs.
         llvm_strip = os.path.join(os.path.dirname(clang), "llvm-strip.exe")
         llvm_nm = os.path.join(os.path.dirname(clang), "llvm-nm.exe")
-        jni_dir = os.path.join(NATIVE_ROOT, "platforms", "android", "app", "src",
+        jni_dir = os.path.join(NATIVE_ROOT, "packaging", "android", "app", "src",
                                "main", "jniLibs", "arm64-v8a")
         jni_stage = f"{jni_dir}.staging-{os.getpid()}"
         _remove_private_tree(jni_stage, jni_dir)
@@ -3111,16 +3138,16 @@ def build_android(args):
 
         print(f"\nBuilt {so_path}")
         print(f"Built {shell_path}")
-        print("APK: cd platforms/android && gradlew assembleDebug (or tools/apk_package.py "
+        print("APK: cd packaging/android && gradlew assembleDebug (or tools/apk_package.py "
               "for the gradle-free path)")
         return 0
 
     # ---- build mp6launcher (single-TU exe, plain C, no game headers) -------
-    launcher_src = os.path.join(NATIVE_ROOT, "platform", "android", "mp6launcher.c")
+    launcher_src = os.path.join(NATIVE_ROOT, "src", "android", "mp6launcher.c")
     launcher_path = os.path.join(ANDROID_BUILD_DIR, "mp6launcher")
     launcher_cmd = [clang, "-target", ANDROID_TRIPLE] + configuration_flags + [
                     "-g", "-Wall", "-Wextra",
-                    "-I", SHIM_INCLUDE,  # shim/include/mp6_path.h -- see libmain.so above
+                    "-I", SHIM_INCLUDE,  # include/mp6_path.h -- see libmain.so above
                     "-fPIE", "-pie", launcher_src, "-o", launcher_path,
                     "-ldl", "-Wl,-z,max-page-size=16384"]
     try:
@@ -3164,9 +3191,10 @@ def main():
     ap.add_argument("--link-only", action="store_true")
     ap.add_argument(
         "--configuration", choices=sorted(ANDROID_OPTIMIZATION), default="debug",
-        help="Android native compile mode: debug=-O0 (default), "
+        help="Native compile mode: debug=-O0 (default), "
              "release=-O2/-fno-strict-aliasing. "
-             "Recorded and verified for every game/platform TU; Android only.",
+             "Windows release uses build/obj-release, build/release and "
+             "the Port-local build/aurora-release backend.",
     )
     ap.add_argument(
         "--allow-dirty-decomp", action="store_true",
@@ -3184,7 +3212,7 @@ def main():
                           "build/android/{libmp6game.so,mp6launcher} (implies "
                           "--headless semantics, aurora/SDL excluded).")
     # A BUILD-time (not run-time) choice, deliberately -- see
-    # platform/main_native.c's own header comment for why a run-time flag
+    # src/main_native.c's own header comment for why a run-time flag
     # alone (linking Aurora unconditionally, just skipping
     # aurora_initialize()) is not an option: Aurora's GX layer is a
     # software FIFO only ever drained by aurora_end_frame(), and every
@@ -3202,20 +3230,17 @@ def main():
     ap.add_argument("--windowed", action="store_true",
                      help="With --target aarch64-android only: build the aurora/SDL3/Dawn "
                           "graphics libmp6game.so + the libmain.so APK bootstrap shell into "
-                          "build/android/aurora/, and stage jniLibs for platforms/android. "
+                          "build/android/aurora/, and stage jniLibs for packaging/android. "
                           "Requires external_refs/repos/aurora/build-android (see "
                           "docs/BUILDING.md). Ignored on the Windows rows.")
     ap.add_argument("--coro-fibers", action="store_true",
                      help="A/B lever: build the Win32 FIBER "
-                          "coroutine backend (platform/host/host_win32.c) instead of the DEFAULT "
-                          "arena-backed minicoro backend (platform/host/coro_arena.c). Fibers "
+                          "coroutine backend (src/host/host_win32.c) instead of the DEFAULT "
+                          "arena-backed minicoro backend (src/host/coro_arena.c). Fibers "
                           "self-allocate an OS stack not guaranteed below 4GB; the minicoro backend "
                           "puts every HuPrc process stack in the low-4GB arena. Emits a separate "
                           "'_corofib'-suffixed exe/objects so both backends can be A/B'd side by side.")
     args = ap.parse_args()
-
-    if args.target != "aarch64-android" and args.configuration != "debug":
-        ap.error("--configuration release is supported only with --target aarch64-android")
 
     if NATIVE_ROOT not in sys.path:
         sys.path.insert(0, NATIVE_ROOT)
@@ -3236,6 +3261,8 @@ def main():
     if args.target == "aarch64-android":
         return build_android(args)  # self-contained; never touches the flow below
 
+    configure_windows(args.configuration)
+
     try:
         _VERIFIED_ZIG_TREE_IDENTITY = step_toolchain.verified_required_zig_tree()
     except step_toolchain.common.SetupError as exc:
@@ -3246,20 +3273,22 @@ def main():
     # Canonical single-workspace checkout: plain exe names.
     coro_exe_suffix = "_corofib" if args.coro_fibers else ""
     out_exe = os.path.join(
-        BUILD_DIR,
+        (os.path.join(BUILD_DIR, "release-headless" if args.headless else "release")
+         if args.configuration == "release" else BUILD_DIR),
         (f"mp6native_headless{coro_exe_suffix}.exe" if args.headless
          else f"mp6native{coro_exe_suffix}.exe"))
 
-    os.makedirs(OBJ_DIR, exist_ok=True)
-
     if args.clean:
-        shutil.rmtree(BUILD_DIR, ignore_errors=True)
-        os.makedirs(OBJ_DIR, exist_ok=True)
+        # The local release backend and disc cache are prepared independently;
+        # deleting build/ here would destroy the inputs this profile needs.
+        shutil.rmtree(OBJ_DIR if args.configuration == "release" else BUILD_DIR,
+                      ignore_errors=True)
+    os.makedirs(OBJ_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(out_exe), exist_ok=True)
 
     patch_headers()
     patch_msl_override()
     patch_abi_struct_headers()
-    apply_decomp_override_headers()  # shield against foreign decomp WIP (see its docstring)
     apply_patches.apply_all(decomp_root=DECOMP)  # build/patched-src/* for the be16/be32 fixes
 
     # the windowed build now links nod (the
@@ -3371,7 +3400,7 @@ def main():
             f"-Wl,--image-base={IMAGE_BASE}",
             "-Wl,--no-dynamicbase",
             "-lkernel32",
-            "-ldbghelp", "-lpsapi",  # the crash/RSS dbghelp+psapi consumers -- platform/host/host_win32.c
+            "-ldbghelp", "-lpsapi",  # the crash/RSS dbghelp+psapi consumers -- src/host/host_win32.c
             MP6_ZLIB_LIB_ITEM.replace("\\", "/"),
         ]
     else:
@@ -3392,6 +3421,7 @@ def main():
         ]
 
     print("\nLinking...")
+    link_cmd += windows_subsystem_flags(args.headless)
     proc = subprocess.run(link_cmd, capture_output=True, text=True)
     print(proc.stdout)
     print(proc.stderr)

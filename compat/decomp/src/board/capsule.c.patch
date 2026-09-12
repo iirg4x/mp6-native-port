@@ -1,0 +1,65 @@
+--- a/src/board/capsule.c
++++ b/src/board/capsule.c
+@@ -0,0 +1,4 @@
++#include "mp6_gxarray_registry.h"
++/* The native PPC-intrinsic replacement returns double, not implicit int.
++ * Crack particles use it to normalize their position/velocity vectors. */
++extern double __frsqrte(double x);
+@@ -831,2 +831,4 @@
+-extern int mbev_CapEffRingAdd(OMOBJ *obj, HuVecF *pos, HuVecF *rot, HuVecF *vel, int kind, int time,
+-    int mode, GXColor *color);
++/* MP6_NATIVE_PORT: match capevent.c's by-value effect API. AArch64 passes
++ * these vectors in FP registers; pointers are not ABI-compatible. */
++extern int mbev_CapEffRingAdd(OMOBJ *obj, HuVecF pos, HuVecF rot, HuVecF vel, int kind, int time,
++    int mode, GXColor color);
+@@ -1645 +1645,7 @@
+-    int objId;
++    /* MP6_NATIVE_PORT: the `dataNum == MB_MODEL_NONE` path returns objId
++     * without assigning it (-Werror=sometimes-uninitialized). That same path
++     * stores MB_MODEL_NONE into capsuleColObjId, so returning MB_MODEL_NONE
++     * is the value the function already means by "no collision model" -- a
++     * caller that checks the return the way it checks capsuleColObjId now gets
++     * a consistent answer instead of a stack leftover. */
++    int objId = MB_MODEL_NONE;
+@@ -2314,2 +2314,2 @@
+-    mbev_CapEffRingAdd(capsuleThrowRingOMObj, ringStartPosP,
+-        ringStartRotP, ringStartVelP, 3, 15, 1, ringStartColorP);
++    mbev_CapEffRingAdd(capsuleThrowRingOMObj, *ringStartPosP,
++        *ringStartRotP, *ringStartVelP, 3, 15, 1, *ringStartColorP);
+@@ -2346,2 +2346,2 @@
+-            mbev_CapEffRingAdd(capsuleThrowRingOMObj, ringBurstPosP,
+-                ringBurstRotP, ringBurstVelP, 3, 10, 2, ringBurstColorP);
++            mbev_CapEffRingAdd(capsuleThrowRingOMObj, *ringBurstPosP,
++                *ringBurstRotP, *ringBurstVelP, 3, 10, 2, *ringBurstColorP);
+@@ -5671 +5671,4 @@
+-extern int capsuleBorderFileTbl[6];
++/* MP6_NATIVE_PORT: this TU owns the table below with internal linkage.
++ * Keep the forward declaration static so latest-main's later initialized
++ * definition does not conflict with an earlier extern declaration. */
++static int capsuleBorderFileTbl[6];
+@@ -7247,1 +7259,2 @@
+-    GXSetArray(GX_VA_POS, work->vtx, sizeof(*work->vtx));
++    mp6_gxarray_bind_span(GX_VA_POS, work->vtx,
++        work->vtxNum * sizeof(*work->vtx), sizeof(*work->vtx));
+@@ -7250,1 +7263,3 @@
+-    GXSetArray(GX_VA_CLR0, &work->data->color, sizeof(*work->data));
++    mp6_gxarray_bind_span(GX_VA_CLR0, &work->data->color,
++        (work->num - 1) * sizeof(*work->data) + sizeof(GXColor),
++        sizeof(*work->data));
+@@ -7253,1 +7268,2 @@
+-    GXSetArray(GX_VA_TEX0, work->st, sizeof(*work->st));
++    mp6_gxarray_bind_span(GX_VA_TEX0, work->st,
++        work->vtxNum * sizeof(*work->st), sizeof(*work->st));
+@@ -7801,1 +7817,2 @@
+-        GXSetArray(GX_VA_POS, effP->vertex, sizeof(HuVecF));
++        mp6_gxarray_bind_span(GX_VA_POS, effP->vertex,
++            effP->num * 4 * sizeof(HuVecF), sizeof(HuVecF));
+@@ -7804,1 +7821,3 @@
+-        GXSetArray(GX_VA_CLR0, &effP->data->color, sizeof(CAP_EFF_DATA));
++        mp6_gxarray_bind_span(GX_VA_CLR0, &effP->data->color,
++            (effP->num - 1) * sizeof(CAP_EFF_DATA) + sizeof(GXColor),
++            sizeof(CAP_EFF_DATA));
+@@ -7807,1 +7826,2 @@
+-        GXSetArray(GX_VA_TEX0, effP->st, sizeof(HuVec2f));
++        mp6_gxarray_bind_span(GX_VA_TEX0, effP->st,
++            effP->num * 4 * sizeof(HuVec2f), sizeof(HuVec2f));

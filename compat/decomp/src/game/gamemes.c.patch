@@ -1,0 +1,16 @@
+--- a/src/game/gamemes.c
++++ b/src/game/gamemes.c
+@@ -7,4 +7 @@
+-extern inline double fabs(double x)
+-{
+-   return __fabs(x);
+-}
++#include <math.h> /* Host CRT owns fabs, including its optimized inline. */
+@@ -25,0 +27 @@
++#include "string.h"
+@@ -213 +215 @@
+-GAMEMESID GameMesCreate(s16 mesNo, ...)
++GAMEMESID GameMesCreate(s32 mesNo, ...)
+@@ -349 +351 @@
+-    if(maxTime <= 0 && maxTime > 99) {
++    if(maxTime <= 0 || maxTime > 99) {

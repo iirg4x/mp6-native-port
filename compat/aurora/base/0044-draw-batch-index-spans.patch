@@ -1,0 +1,396 @@
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -31,73 +31,90 @@
+   }
+ }
+ 
+-static u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) {
+-  u16 numIndices = 0;
+-  if (prim == GX_QUADS) {
+-    buf.reserve_extra((vtxCount / 4) * 6 * sizeof(u16));
+-
+-    for (u16 v = 0; v < vtxCount; v += 4) {
+-      u16 idx0 = vtxStart + v;
+-      u16 idx1 = vtxStart + v + 1;
+-      u16 idx2 = vtxStart + v + 2;
+-      u16 idx3 = vtxStart + v + 3;
+-
+-      buf.append(idx0);
+-      buf.append(idx1);
+-      buf.append(idx2);
+-      numIndices += 3;
++// Consume the whole command but submit only complete hardware primitives.
++// Quads with three trailing vertices still form one triangle.
++static u16 drawable_vertex_count(GXPrimitive prim, u16 count) {
++  switch (prim) {
++  case GX_QUADS:
++    return count - (count % 4 == 3 ? 0 : count % 4);
++  case GX_TRIANGLES:
++    return count - count % 3;
++  case GX_TRIANGLESTRIP:
++  case GX_TRIANGLEFAN:
++    return count >= 3 ? count : 0;
++  case GX_LINES:
++    return count - count % 2;
++  case GX_LINESTRIP:
++    return count >= 2 ? count : 0;
++  case GX_POINTS:
++    return count;
++  default:
++    FATAL("unsupported primitive type {}", static_cast<u32>(prim));
++  }
++}
+ 
+-      buf.append(idx2);
+-      buf.append(idx3);
+-      buf.append(idx0);
+-      numIndices += 3;
++static u32 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxCount) {
++  // UI and immediate meshes predominantly submit single quads. Keep this
++  // fixed-size write ahead of generalized topology/count handling.
++  if (prim == GX_QUADS && vtxCount == 4) {
++    ASSERT(static_cast<u32>(vtxStart) + 4 <= 0xFFFFu, "triangle batch exceeds u16 vertex range");
++    const u16 v1 = vtxStart + 1, v2 = vtxStart + 2, v3 = vtxStart + 3;
++    const std::array<u16, 6> quad{vtxStart, v1, v2, v2, v3, vtxStart};
++    buf.append(quad);
++    return 6;
++  }
++  const u32 count = drawable_vertex_count(prim, vtxCount);
++  if (count == 0) return 0;
++  if (prim == GX_LINES || prim == GX_LINESTRIP || prim == GX_POINTS) {
++    constexpr std::array<u16, 6> quad{0, 1, 3, 3, 2, 0};
++    buf.append(quad);
++    return 6;
++  }
++  ASSERT(static_cast<u32>(vtxStart) + count <= 0xFFFFu, "triangle batch exceeds u16 vertex range");
++  // Common single-primitive draws do not need the loop setup.
++  if (count == 3) {
++    const std::array<u16, 3> triangle{vtxStart, static_cast<u16>(vtxStart + 1),
++                                    static_cast<u16>(vtxStart + 2)};
++    buf.append(triangle);
++    return 3;
++  }
++  if (count == 4) {
++    const u16 v1 = vtxStart + 1, v2 = vtxStart + 2, v3 = vtxStart + 3;
++    const std::array<u16, 6> quad{vtxStart, v1, v2,
++        prim == GX_TRIANGLEFAN ? vtxStart : v2,
++        prim == GX_TRIANGLESTRIP ? v1 : prim == GX_TRIANGLEFAN ? v2 : v3,
++        prim == GX_QUADS ? vtxStart : v3};
++    buf.append(quad);
++    return 6;
++  }
++  const u32 numIndices = prim == GX_QUADS ? (count / 4) * 6 + (count % 4 == 3 ? 3 : 0) :
++                         prim == GX_TRIANGLES ? count : (count - 2) * 3;
++  // One capacity check and one append for the whole span. Dedicated index
++  // scratch buffers contain u16s only; every returned byte is overwritten.
++  ASSERT(buf.size() % alignof(u16) == 0, "misaligned index scratch buffer");
++  auto* out = reinterpret_cast<u16*>(buf.append_uninitialized(numIndices * sizeof(u16)));
++  const auto triangle = [&](u32 a, u32 b, u32 c) {
++    *out++ = static_cast<u16>(vtxStart + a);
++    *out++ = static_cast<u16>(vtxStart + b);
++    *out++ = static_cast<u16>(vtxStart + c);
++  };
++  if (prim == GX_QUADS) {
++    u32 v = 0;
++    for (; v + 3 < count; v += 4) {
++      triangle(v, v + 1, v + 2);
++      triangle(v + 2, v + 3, v);
+     }
++    if (v + 2 < count) triangle(v, v + 1, v + 2);
+   } else if (prim == GX_TRIANGLES) {
+-    buf.reserve_extra(vtxCount * sizeof(u16));
+-    for (u16 v = 0; v < vtxCount; ++v) {
+-      const u16 idx = vtxStart + v;
+-      buf.append(idx);
+-      ++numIndices;
+-    }
++    for (u32 v = 0; v < count; ++v) *out++ = static_cast<u16>(vtxStart + v);
+   } else if (prim == GX_TRIANGLEFAN) {
+-    buf.reserve_extra(((u32(vtxCount) - 3) * 3 + 3) * sizeof(u16));
+-    for (u16 v = 0; v < vtxCount; ++v) {
+-      const u16 idx = vtxStart + v;
+-      if (v < 3) {
+-        buf.append(idx);
+-        ++numIndices;
+-        continue;
+-      }
+-      buf.append(std::array{vtxStart, static_cast<u16>(idx - 1), idx});
+-      numIndices += 3;
+-    }
+-  } else if (prim == GX_TRIANGLESTRIP) {
+-    buf.reserve_extra(((static_cast<u32>(vtxCount) - 3) * 3 + 3) * sizeof(u16));
+-    for (u16 v = 0; v < vtxCount; ++v) {
+-      const u16 idx = vtxStart + v;
+-      if (v < 3) {
+-        buf.append(idx);
+-        ++numIndices;
+-        continue;
+-      }
+-      if ((v & 1) == 0) {
+-        buf.append(std::array{static_cast<u16>(idx - 2), static_cast<u16>(idx - 1), idx});
+-      } else {
+-        buf.append(std::array{static_cast<u16>(idx - 1), static_cast<u16>(idx - 2), idx});
+-      }
+-      numIndices += 3;
++    for (u32 v = 2; v < count; ++v) triangle(0, v - 1, v);
++  } else {
++    for (u32 v = 2; v < count; ++v) {
++      if (v & 1) triangle(v - 1, v - 2, v);
++      else triangle(v - 2, v - 1, v);
+     }
+-  } else if (prim == GX_LINES || prim == GX_LINESTRIP || prim == GX_POINTS) {
+-    buf.reserve_extra(6 * sizeof(u16));
+-    buf.append<u16>(0);
+-    buf.append<u16>(1);
+-    buf.append<u16>(3);
+-    buf.append<u16>(3);
+-    buf.append<u16>(2);
+-    buf.append<u16>(0);
+-    numIndices = 6;
+-  } else
+-    UNLIKELY FATAL("unsupported primitive type {}", static_cast<u32>(prim));
++  }
+   return numIndices;
+ }
+ 
+@@ -1529,7 +1546,7 @@
+   pos += dataBytes;
+ }
+ 
+-static void handle_draw_overrun [[noreturn]] (u32 totalVtxBytes, const u8* data, const u32& pos, u32 size) {
++static void handle_draw_overrun [[noreturn]] (uint64_t totalVtxBytes, const u8* data, const u32& pos, u32 size) {
+   // Hex dump around the draw command for debugging
+   u32 cmdPos = pos - 2 - 1; // opcode byte position (before vtxCount and pos++)
+   u32 dumpStart = (cmdPos > 16) ? cmdPos - 16 : 0;
+@@ -1589,17 +1606,21 @@
+   else
+     UNLIKELY { vtxSize = calculate_last_vtx_size(fmt); }
+ 
+-  u32 totalVtxBytes = vtxCount * vtxSize;
+-  if (pos + totalVtxBytes > size)
++  const uint64_t totalVtxBytes = static_cast<uint64_t>(vtxCount) * vtxSize;
++  if (pos > size || totalVtxBytes > size - pos)
+     UNLIKELY { handle_draw_overrun(totalVtxBytes, data, pos, size); }
++  const u32 vertexPos = pos;
++  pos += static_cast<u32>(totalVtxBytes);
++  vtxCount = drawable_vertex_count(prim, vtxCount);
++  if (vtxCount == 0) return;
+ 
+   auto* lastDraw = !g_gxState.stateDirty ? gfx::get_last_draw_command<DrawData>() : nullptr;
+-  const bool canMerge = lastDraw != nullptr && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS &&
+-                        lastDraw->instanceCount == 1;
++  const bool canMerge = lastDraw != nullptr && lastDraw->mergeable && lastDraw->vtxFmt == fmt &&
++                        prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS &&
++                        lastDraw->vtxCount + static_cast<u32>(vtxCount) <= 0xFFFFu;
+ 
+   // Push raw vertex data to buffer. Merged draws must remain byte-contiguous with the previous range.
+-  gfx::Range vertRange = gfx::push_verts(data + pos, totalVtxBytes, canMerge ? 0 : 4);
+-  pos += totalVtxBytes;
++  gfx::Range vertRange = gfx::push_verts(data + vertexPos, vtxCount * vtxSize, canMerge ? 0 : 4);
+ 
+   // Try to merge with previous draw call
+   if (canMerge) {
+@@ -1644,7 +1665,7 @@
+   GXVtxFmt fmt = static_cast<GXVtxFmt>(cmd & CP_VAT_MASK);
+   GXPrimitive prim = static_cast<GXPrimitive>(cmd & CP_OPCODE_MASK);
+ 
+-  CHECK(pos + 2 <= size, "draw vtxCount read overrun");
++  ASSERT(pos <= size && size - pos >= 2, "draw vtxCount read overrun");
+   u16 vtxCount = read_u16(data + pos, bigEndian);
+   pos += 2;
+ 
+@@ -1713,6 +1734,8 @@
+       .instanceCount = instanceCount,
+       .bindGroups = bindGroups,
+       .dstAlpha = g_gxState.dstAlpha,
++      .vtxFmt = fmt,
++      .mergeable = prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS,
+   });
+ }
+ 
+@@ -1729,7 +1752,7 @@
+ 
+ void handle_aurora(const u8* data, u32& pos, u32 size, bool bigEndian) {
+   ZoneScoped;
+-  CHECK(pos + 2 <= size, "Aurora cmd read overrun");
++  ASSERT(pos <= size && size - pos >= 2, "Aurora cmd read overrun");
+   u16 subCmd = read_u16(data + pos, bigEndian);
+   pos += 2;
+ 
+@@ -1919,11 +1942,12 @@
+     evict_copy_texture(reinterpret_cast<const void*>(read_u64(data + pos, bigEndian)));
+     pos += 8;
+   } else if (subCmd == GX_AURORA_DRAW_SIZED) {
+-    CHECK(pos + 5 <= size, "GX_AURORA_DRAW_SIZED read overrun");
++    ASSERT(pos <= size && size - pos >= 5, "GX_AURORA_DRAW_SIZED read overrun");
+     u8 cmd = data[pos];
+     pos += 1;
+     u32 byteLen = read_u32(data + pos, bigEndian);
+     pos += 4;
++    ASSERT(byteLen <= size - pos, "GX_AURORA_DRAW_SIZED data overrun");
+     GXVtxFmt fmt = static_cast<GXVtxFmt>(cmd & CP_VAT_MASK);
+     GXPrimitive prim = static_cast<GXPrimitive>(cmd & CP_OPCODE_MASK);
+     if (byteLen != 0) {
+@@ -1941,7 +1965,7 @@
+     }
+   } else if (subCmd == GX_AURORA_DRAW_INDEXED) {
+     ZoneScopedN("DRAW_INDEXED");
+-    CHECK(pos + 7 <= size, "GX_AURORA_DRAW_INDEXED read overrun");
++    ASSERT(pos <= size && size - pos >= 7, "GX_AURORA_DRAW_INDEXED read overrun");
+     const u8 cmd = data[pos];
+     pos += 1;
+     const u16 vtxCount = read_u16(data + pos, bigEndian);
+@@ -1952,21 +1976,25 @@
+     const GXPrimitive prim = static_cast<GXPrimitive>(cmd & CP_OPCODE_MASK);
+     ASSERT(prim == GX_TRIANGLES, "GX_AURORA_DRAW_INDEXED: primitive must be GX_TRIANGLES, got {}",
+            static_cast<u32>(prim));
+-    const u32 idxBytes = indexCount * static_cast<u32>(sizeof(u16));
+-    CHECK(pos + idxBytes <= size, "GX_AURORA_DRAW_INDEXED index data overrun");
+-    // Index data is always host-endian; push it to the GPU buffer as-is
+-    const gfx::Range idxRange = gfx::push_indices(data + pos, idxBytes, 4);
+-    pos += idxBytes;
++    const uint64_t idxBytes = static_cast<uint64_t>(indexCount) * sizeof(u16);
+     u32 vtxSize;
+     if (g_gxState.lastVtxFmt == fmt) {
+       vtxSize = g_gxState.lastVtxSize;
+     } else {
+       vtxSize = calculate_last_vtx_size(fmt);
+     }
+-    const u32 totalVtxBytes = vtxCount * vtxSize;
+-    CHECK(pos + totalVtxBytes <= size, "GX_AURORA_DRAW_INDEXED vertex data overrun");
+-    const gfx::Range vertRange = gfx::push_verts(data + pos, totalVtxBytes, 4);
+-    pos += totalVtxBytes;
++    const uint64_t totalVtxBytes = static_cast<uint64_t>(vtxCount) * vtxSize;
++    ASSERT(idxBytes + totalVtxBytes <= size - pos, "GX_AURORA_DRAW_INDEXED data overrun");
++    if (indexCount == 0 || vtxCount == 0) {
++      pos += static_cast<u32>(idxBytes + totalVtxBytes);
++      return;
++    }
++    // Validate the entire payload before either upload. The proven lengths
++    // now fit the command's u32 byte range; index data stays host-endian.
++    const gfx::Range idxRange = gfx::push_indices(data + pos, static_cast<u32>(idxBytes), 4);
++    pos += static_cast<u32>(idxBytes);
++    const gfx::Range vertRange = gfx::push_verts(data + pos, static_cast<u32>(totalVtxBytes), 4);
++    pos += static_cast<u32>(totalVtxBytes);
+     if (indexCount != 0) {
+       push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, indexCount);
+     }
+
+--- a/lib/gfx/common.hpp
++++ b/lib/gfx/common.hpp
+@@ -105,6 +105,18 @@
+     m_length += size;
+   }
+ 
++  // Reserve a logical span for a caller that overwrites every byte before use.
++  // Unlike append_zeroes, growth does not initialize bytes that will be replaced.
++  uint8_t* append_uninitialized(size_t size) {
++    if (size == 0) return m_data ? m_data + m_length : nullptr;
++    if (size > SIZE_MAX - m_length) abort();
++    resize(m_length + size, false);
++    if (m_data == nullptr) abort();
++    uint8_t* out = m_data + m_length;
++    m_length += size;
++    return out;
++  }
++
+   template <typename T>
+   void append(const T& obj) {
+     append(&obj, sizeof(T));
+
+--- a/lib/gx/pipeline.hpp
++++ b/lib/gx/pipeline.hpp
+@@ -14,6 +14,8 @@
+   uint32_t instanceCount;
+   GXBindGroups bindGroups;
+   uint32_t dstAlpha;
++  GXVtxFmt vtxFmt;
++  bool mergeable;
+ };
+ 
+ constexpr uint32_t GXPipelineConfigVersion = 14;
+
+--- a/lib/gx/dl.cpp
++++ b/lib/gx/dl.cpp
+@@ -136,6 +136,7 @@
+   }
+ 
+   const u32 start = mPos;
++  const u32 remaining = mSize - start;
+   const u8 cmd = mData[start];
+   const u8 opcode = cmd & GX_OPCODE_MASK;
+ 
+@@ -145,7 +146,7 @@
+     return std::nullopt;
+   };
+   const auto passthrough = [&](const u32 cmdSize) -> std::optional<Command> {
+-    if (start + cmdSize > mSize) {
++    if (cmdSize > remaining) {
+       return fail("command overrun");
+     }
+     mPos = start + cmdSize;
+@@ -161,7 +162,7 @@
+   case GX_LOAD_CP_REG:
+     return passthrough(6);
+   case GX_LOAD_XF_REG: {
+-    if (start + 5 > mSize) {
++    if (remaining < 5) {
+       return fail("XF load overrun");
+     }
+     const u32 count = read_be16(mData + start + 1) + 1;
+@@ -175,13 +176,13 @@
+   case GX_CMD_CALL_DL:
+     return passthrough(9);
+   case GX_AURORA: {
+-    if (start + 3 > mSize) {
++    if (remaining < 3) {
+       return fail("Aurora subcommand overrun");
+     }
+     if (read_be16(mData + start + 1) != GX_AURORA_DRAW_INDEXED) {
+       return fail("unsupported Aurora subcommand");
+     }
+-    if (start + 10 > mSize) {
++    if (remaining < 10) {
+       return fail("DRAW_INDEXED header overrun");
+     }
+     const u8 drawCmd = mData[start + 3];
+@@ -192,16 +193,16 @@
+     if (lo == nullptr) {
+       return fail("no layout for DRAW_INDEXED vertex format");
+     }
+-    const u32 idxBytes = indexCount * sizeof(u16);
+-    const u32 cmdSize = 10 + idxBytes + vtxCount * lo->stride;
+-    if (start + cmdSize > mSize) {
++    const uint64_t idxBytes = static_cast<uint64_t>(indexCount) * sizeof(u16);
++    const uint64_t cmdSize = 10 + idxBytes + static_cast<uint64_t>(vtxCount) * lo->stride;
++    if (cmdSize > remaining) {
+       return fail("DRAW_INDEXED data overrun");
+     }
+-    mPos = start + cmdSize;
++    mPos = start + static_cast<u32>(cmdSize);
+     return Command{
+         Command::Kind::DrawIndexed,
+         mData + start,
+-        cmdSize,
++        static_cast<u32>(cmdSize),
+         DrawCmd{
+             static_cast<GXPrimitive>(drawCmd & GX_OPCODE_MASK),
+             fmt,
+@@ -217,7 +218,7 @@
+     if (!is_draw_opcode(opcode)) {
+       return fail("unknown opcode");
+     }
+-    if (start + 3 > mSize) {
++    if (remaining < 3) {
+       return fail("draw header overrun");
+     }
+     const auto fmt = static_cast<GXVtxFmt>(cmd & GX_VAT_MASK);
+@@ -227,7 +228,7 @@
+       return fail("no layout for draw vertex format");
+     }
+     const u32 cmdSize = 3 + vtxCount * lo->stride;
+-    if (start + cmdSize > mSize) {
++    if (cmdSize > remaining) {
+       return fail("draw data overrun");
+     }
+     mPos = start + cmdSize;

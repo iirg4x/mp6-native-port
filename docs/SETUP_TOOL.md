@@ -36,7 +36,7 @@ get it right:
 ## 2. What it does (mechanically)
 
 `setup/setup.py` is a plain-stdlib Python 3 driver (`setup/lib/*.py`);
-`setup.bat` / `setup.ps1` / `setup.sh` are thin per-platform launchers that
+`setup.bat` / `setup/run.ps1` / `setup.sh` are thin per-platform launchers that
 just locate a Python 3 interpreter and run it. Six steps, each idempotent
 (a re-run skips whatever's already correct):
 
@@ -54,7 +54,7 @@ just locate a Python 3 interpreter and run it. Six steps, each idempotent
    to the exact commit named in `docs/DECOMP_DEPENDENCY.md`, parsed at run
    time (see section 4 for a real bug this caught).
 4. **Your disc** -- validates the game ID (`GP6E01` -- the same check,
-   same two error messages, as `platform/content/content_import.cpp`'s
+   same two error messages, as `src/content/content_import.cpp`'s
    `validate_game_id()`) and extracts it via a small ctypes binding
    against `nod`'s C FFI (`setup/lib/nod_ffi.py`) directly into the decomp
    checkout's `orig/GP6E01/{sys,files}` -- full disc minus `files/movie/`
@@ -119,28 +119,12 @@ core.longpaths=true` -- found necessary the hard way (section 4) once a
 deeply-nested destination path pushed a real clone past Win32's classic
 `MAX_PATH`.
 
-## 4. A prior dependency-pin bug found while building this
+## 4. Dependency pins
 
-While implementing step 3 (decomp source), reading `docs/DECOMP_DEPENDENCY.md`
-literally would have pinned a stale commit. The doc said
-`b05ede1d53f5763539a4a33ab0505b4d7749b96d`, but the branch's own tip commit
-(`0b9dbb4`, present in the canonical `mp6-native` this setup-tool clone was
-made from) is titled *"decomp-overrides: drop stale mdparty.c/stage.c pins
--- decomp settled at 4a67610"* -- i.e. the port had already moved to
-requiring decomp commit `4a6761094935be3588ca2b1eda0a71a0988f8efb` and
-dropped the local override shim that used to compensate for the
-in-progress state at the older pin, but the dependency doc was never
-bumped to say so. Building against the stale pin would have fed the port a
-`mdparty.c`/`stage.c` with neither the old shim nor the new upstream
-content it now assumes -- a real, reproducible break, not a hypothetical
-one.
-
-That historical setup-tool change corrected the pin from `b05ede1...` to
-`4a676109...`. The port was subsequently rebased again on 2026-09-02 and
-`docs/DECOMP_DEPENDENCY.md` now pins decomp `main` commit
-`8f9c3c010da32352908b637e7d6c46e8d99989e7`. Since
-`setup/lib/step_decomp.py` reads that file at run time, keeping its current
-value accurate is load-bearing for this tool, not just informational.
+The setup tool reads the decomp revision from
+[DECOMP_DEPENDENCY.md](DECOMP_DEPENDENCY.md). The documented revision is the
+build contract; do not substitute an older revision or a local source override.
+Native compatibility changes belong in `compat/decomp/`.
 
 ## 5. Aurora-from-scratch: what's real, what's unexercised
 
@@ -148,7 +132,7 @@ value accurate is load-bearing for this tool, not just informational.
 *existing* Aurora checkout -- it stays read-only once present, same as
 every other lane on this project touches it), generates the zig CMake
 compiler-wrapper scripts, configures + builds both trees (plain and
-RmlUi-enabled), and applies `platform/gx/aurora-patches/*.patch` -- against
+RmlUi-enabled), and applies `compat/aurora/base/*.patch` -- against
 the Aurora tree directly where the patch's own `--- a/...` target resolves
 there, or against the matching CMake `FetchContent` dependency source
 (searched for under each `_deps/*-src` after configure) otherwise. The
@@ -191,7 +175,7 @@ real bug along the way (below):
   aarch64-android --windowed` for real (109 translation units, 0
   failures), linked against the RmlUi-enabled android Aurora tree, and
   staged stripped `libmp6game.so` (131.7MB -> 30.2MB) + `libmain.so` into
-  `platforms/android/app/src/main/jniLibs/arm64-v8a/`, with the
+  `packaging/android/app/src/main/jniLibs/arm64-v8a/`, with the
   post-strip `dynsym` probe confirming `mp6_android_main`/`GameMain` still
   resolve.
 - `step_android.build_apk()` ran gradle's `assembleDebug` for real and
@@ -210,7 +194,7 @@ post-check raised anyway). Fixed by searching the debug output directory
 for whatever `.apk` gradle actually produced instead of guessing its name.
 
 On-device asset import is not this tool's job at all: the APK's own
-first-run onboarding (`platform/gx/ui/content_setup.cpp`,
+first-run onboarding (`src/gx/ui/content_setup.cpp`,
 `docs/A4_ANDROID_UI.md`) reads the user's disc directly on the device. The
 one piece genuinely not exercised here is the on-device smoke itself (no
 attached device in this environment) -- `gate_android.py`'s own tier-2/3

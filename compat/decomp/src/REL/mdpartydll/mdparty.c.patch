@@ -1,0 +1,141 @@
+--- a/src/REL/mdpartydll/mdparty.c
++++ b/src/REL/mdpartydll/mdparty.c
+@@ -21,0 +22 @@
++#include "mp6_widescreen.h" /* widescreen support: camera + model extrusion helpers below */
+@@ -877,3 +878,13 @@
+-    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f, 10000.0f, 1.2f);
+-    Hu3DCameraViewportSet(
+-        1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
++    /* Centers this camera (matching hsfman.c's own defCamera pattern) rather
++     * than widening it: the backdrop's corner decorations are authored only
++     * for the native 4:3 frustum and show a hard cutoff once the FOV widens
++     * past their own edge, and a filled scene with a clipped edge beats a
++     * 4:3 pillarbox (explicit call, per user direction). Byte-identical
++     * native call when widescreen is disabled. */
++    /* Replaces the two native calls above with one call that ALSO registers
++     * this camera, so its aspect/viewport re-derive live on a later window
++     * resize -- this function only runs once per scene entry, and nothing
++     * else here re-applies Perspective/ViewportSet per frame. Same literals
++     * and effect on this call; the live re-apply happens once per tick from
++     * aurora_bridge.c. */
++    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
+@@ -1838,0 +1850,11 @@
++/* The backdrop-extrude helper (scales a model about its own authored bbox
++ * center so its visual middle stays put while its extent grows to cover a
++ * wider aspect) used to be a static function defined locally in this file.
++ * Hoisted to the port shim as mp6_widescreen_extrude_model()
++ * (src/hsf/mp6_widescreen_extrude.c, declared in
++ * include/mp6_widescreen.h, already #included above) so every
++ * widescreen-extruded scene (title/file-select/mode-select/opening) calls
++ * one shared definition instead of duplicating this ~90-line body per REL
++ * patch -- this file's own two call sites below (fn_1_861C, fn_1_9218)
++ * just call it now, comments kept. */
++
+@@ -1850,0 +1873,57 @@
++        /* Widescreen extrusion for this board's cloud/proscenium backdrop
++         * ("pillar", mdlId[0]) and floor ("yuka", mdlId[1]); the foreground
++         * prop set (mdlId[2]) stays untouched.
++         *
++         * The floor is a single baked 5x5-vertex plane: one diamond-tile
++         * texture plus a center play-circle decal, both painted into ONE
++         * image (confirmed via a raw HSF dump -- not a repeating tile).
++         * Scaling the whole piece about its center to close the widescreen
++         * gap also enlarges that decal, so instead only the outer ring of
++         * the 5x5 grid is pushed out per axis about the bbox center; the
++         * inner vertices and every UV stay untouched, so the decal and tile
++         * density stay native (mp6_widescreen_extrude_model_border_xz()).
++         *
++         * The floor's shadow texcoord is generated live from this same
++         * vertex buffer (game/hsfdraw.c's GX_TG_POS-driven SetShadow), so
++         * displacing the border ring also drags the projected shadow with
++         * it, and a texture-matrix compensation can't selectively undo a
++         * per-vertex displacement without corrupting the untouched native
++         * vertices too. Fixed by leaving this instance 100% native -- its
++         * shadow stays pixel-accurate over the area the native 4:3 game
++         * actually rendered -- and moving the border-extended visual fill
++         * to a second, non-shadow-casting duplicate of the same asset
++         * (mp6_widescreen_floor_border_fill_dup()). A shadow that would
++         * fall past this instance's native 800x800 footprint is simply
++         * absent there instead of stretched.
++         *
++         * Extending the pillar's own edges sideways to close its gap
++         * initially opened a Z-parallax window: the pillar sits nearer the
++         * camera than the golden-swirl backdrop behind it, so sliding its
++         * edge sideways swept the fixed party camera's view ray across that
++         * real depth gap, revealing the floor/backdrop through it. Several
++         * iterations pushed the pillar's own Z back toward the backdrop's
++         * depth to close this, tuned on-device by scanning for floor-
++         * colored pixels in the gap region across several reference
++         * widths, each cutting the leaked pixel count further.
++         *
++         * That Z-shift-and-split approach was retired in favor of one that
++         * avoids the parallax problem entirely: the pillar's own outermost
++         * native vertices (|x|=800 exactly) are duplicated into the
++         * object's own grown buffers, and only the duplicates translate
++         * outward -- never scaling, so the art stays byte-identical: the
++         * pillar itself never moves or splits, so there is no depth gap to
++         * open. The connecting strip between original and duplicate edge
++         * carries pinned UVs sampled from the source edge loops, continuing
++         * the native flat-white-column / grey-dissolve / gold-trim-arch
++         * texture outward at native texel density with zero stretch
++         * (mp6_widescreen_extend_pillar_edge()). The floor border-fill
++         * duplicate's own border cells also retarget their UVs onto
++         * shadow-free regions of the source texture, so the extended
++         * margins don't smear the baked house/fence shadow that the real
++         * (shadow-receiving) floor still carries untouched
++         * (mp6_ws_floor_dup_clean_sts). */
++        if (i == 0) {
++            mp6_widescreen_extend_pillar_edge(obj->mdlId[i], "pillar");
++        } else if (i == 1) {
++            mp6_widescreen_floor_border_fill_dup(DATA_mdparty + i, "yuka");
++        }
+@@ -1864,0 +1944,7 @@
++        /* Tears down the floor's own border-fill duplicate instance
++         * (created by mp6_widescreen_floor_border_fill_dup() above,
++         * fn_1_861C) -- companion to the Hu3DModelKill loop just above,
++         * same "created on scene setup, killed on scene teardown" pairing
++         * every other model in this function already follows. A true no-op
++         * when widescreen was never enabled (registry stays empty). */
++        mp6_widescreen_floor_border_fill_dup_kill_all();
+@@ -2011,0 +2098,31 @@
++        /* The golden swirl-ring backdrop ("CP") used to get the same
++         * whole-model isotropic extrude as the pillar/floor above, but that
++         * scale also magnifies -- and visibly softens -- the native center
++         * art (confirmed against a native 4:3 crop). Replaced by a
++         * pinned-UV rim ring instead: the disc itself stays native
++         * (undistorted center detail), and mp6_widescreen_extend_ring()
++         * appends one quad per rim chord (16) into the disc's own buffers
++         * -- inner loop = the native rim vertices verbatim (watertight),
++         * outer loop = the same positions scaled outward by k -- both
++         * carrying each chord's own rim UVs, so the ring reads as more of
++         * the same flat opaque gold band the disc's own edge already
++         * samples (a radial mirror would replay the disc's transparent
++         * interior as a see-through moat; a flat-color surround would carry
++         * a visible RGB step -- both rejected on the measured pixel data).
++         *
++         * Registered once, at i==0 -- deliberately BEFORE the i==1
++         * Hu3DModelLink duplicate below runs: registration grows the disc's
++         * buffers and re-bakes its display lists, and Hu3DObjDuplicate
++         * (game/hsfdraw.c, inside Hu3DModelLink) memcpy's the object array
++         * plus each constData, so the twin created AFTER the re-bake shares
++         * the grown bake and buffers outright -- both instances ride the
++         * one per-tick ring rewrite. Two accepted side effects: the
++         * authored gold surround becomes visible in the wide corners
++         * (matching the native 4:3 frame's own composition, which already
++         * just grazes the gold band there), and the live board-map render
++         * targets parented to this same model no longer scale with the
++         * window -- foreground content stays native size, where the old
++         * whole-model extrude grew it with the backdrop. */
++        if (i == 0) {
++            mp6_widescreen_extend_ring(obj->mdlId[i], "CP");
++        }
+@@ -2222 +2339,4 @@
+-            pos2D.x - 18.0f, (s16)(pos2D.y - 23.0f));
++            /* MP6_NATIVE_PORT: `fctiwz` saturation for this float->s16 cast
++             * of a projected y; see include/mp6_hwcast.h.
++             */
++            pos2D.x - 18.0f, (s16)MP6_FCTIWZ_S32(pos2D.y - 23.0f));
+@@ -5549,0 +5670 @@
++    return 0;
+@@ -6202,0 +6324 @@
++    return 0;

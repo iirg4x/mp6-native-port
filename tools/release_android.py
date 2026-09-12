@@ -26,10 +26,10 @@ from setup.lib import common, step_android  # noqa: E402
 # still change what gets compiled or packaged.
 _GENERATED_PREFIXES = (
     "build/",
-    "platforms/android/.gradle/",
-    "platforms/android/app/build/",
-    "platforms/android/build/",
-    "platforms/android/app/src/main/jnilibs/",
+    "packaging/android/.gradle/",
+    "packaging/android/app/build/",
+    "packaging/android/build/",
+    "packaging/android/app/src/main/jnilibs/",
     # Importing the release/build drivers creates these ignored bytecode
     # caches before the first integrity check.  Keep the exception narrow;
     # Python caches elsewhere in the source tree remain unexpected inputs.
@@ -37,7 +37,7 @@ _GENERATED_PREFIXES = (
     "tools/__pycache__/",
 )
 _GENERATED_FILES = {
-    "platforms/android/local.properties",
+    "packaging/android/local.properties",
 }
 
 

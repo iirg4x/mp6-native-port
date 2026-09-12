@@ -1,9 +1,9 @@
 """setup/lib/step_decomp.py -- step 3: the decomp checkout.
 
 Clones (or resyncs) the Mario Party 6 decompilation repo to the exact
-commit pinned in docs/DECOMP_DEPENDENCY.md, at the sibling path
-tools/build.py's own DECOMP constant expects
-(PORT_ROOT/../external_refs/repos/marioparty6 -- see common.py's docstring).
+commit pinned in docs/DECOMP_DEPENDENCY.md, at the port-owned path
+tools/build.py's own DECOMP constant expects (build/deps/marioparty6).
+The shared decomp development checkout is never used or updated by default.
 The pin is parsed out of the doc at RUN TIME (never hardcoded here), so this
 step always tracks whatever docs/DECOMP_DEPENDENCY.md says today.
 """

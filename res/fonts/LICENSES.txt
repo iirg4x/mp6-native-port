@@ -14,4 +14,6 @@ MaterialSymbolsRounded-Regular.ttf
 
 N64Party-Monochromatic.otf
   Display font gifted to the Mario Party R&D / partyboard project by ImWhoreHay.
-  Credited, no formal license text. See docs/PARTYBOARD_PROVENANCE.md.
+  No public license text. The MP6 port maintainer confirmed permission to
+  redistribute this font with the port on 2026-09-12. Original credit retained.
+  See docs/PARTYBOARD_PROVENANCE.md for the permission record and provenance.

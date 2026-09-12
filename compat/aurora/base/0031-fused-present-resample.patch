@@ -1,0 +1,104 @@
+Fuse fullscreen resampling/FXAA with presentation; preserve the existing shader and fallback for offset/scaled viewports.
+
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -326,9 +326,10 @@
+     const bool canPresent = currentTexture && currentView;
+     if (canPresent) {
+       wgpu::BindGroup presentBindGroup;
++      const bool directResample = (!rmlBindGroup || rmlOverlay) && webgpu::can_resample_present_direct(viewport);
+       if (rmlBindGroup && !rmlOverlay) {
+         presentBindGroup = rmlBindGroup;
+-      } else {
++      } else if (!directResample) {
+         const auto& resampledSource = webgpu::resample_present_source(encoder, viewport);
+         presentBindGroup = webgpu::create_copy_bind_group(resampledSource);
+       }
+@@ -348,12 +349,17 @@
+         };
+         const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
+         // Copy EFB -> XFB (swapchain)
+-        pass.SetPipeline(webgpu::g_CopyPipeline);
+-        pass.SetBindGroup(0, presentBindGroup, 0, nullptr);
+         set_present_viewport(pass, viewport, webgpu::g_graphicsConfig.surfaceConfiguration.width,
+                              webgpu::g_graphicsConfig.surfaceConfiguration.height);
+-
+-        pass.Draw(3);
++        if (directResample) {
++          // Same resampling/FXAA shader, directly into the surface. Avoid a
++          // full-size intermediate store/load before the UI is composited.
++          webgpu::draw_resampled_present(pass, viewport);
++        } else {
++          pass.SetPipeline(webgpu::g_CopyPipeline);
++          pass.SetBindGroup(0, presentBindGroup, 0, nullptr);
++          pass.Draw(3);
++        }
+         if (rmlBindGroup && rmlOverlay) {
+           pass.SetPipeline(webgpu::g_CopyPremultipliedAlphaPipeline);
+           pass.SetBindGroup(0, rmlBindGroup, 0, nullptr);
+--- a/lib/webgpu/gpu.cpp
++++ b/lib/webgpu/gpu.cpp
+@@ -787,14 +787,10 @@
+   return g_device.CreateBindGroup(&bindGroupDescriptor);
+ }
+ 
+-const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport) {
++static wgpu::BindGroup resample_present_bind_group(const Viewport& viewport) {
+   const auto& source = present_source();
+   const uint32_t width = viewport_extent(viewport.width);
+   const uint32_t height = viewport_extent(viewport.height);
+-  if (!g_resampledFrameBuffer.view || g_resampledFrameBuffer.size.width != width ||
+-      g_resampledFrameBuffer.size.height != height || g_resampledFrameBuffer.format != source.format) {
+-    g_resampledFrameBuffer = create_render_texture(width, height, false);
+-  }
+ 
+   const ResampleUniformBlock uniform{
+       .samplerMode = sampler_mode(g_Resampler),
+@@ -825,8 +821,34 @@
+       .entryCount = bindGroupEntries.size(),
+       .entries = bindGroupEntries.data(),
+   };
+-  const auto bindGroup = g_device.CreateBindGroup(&bindGroupDescriptor);
+-
++  return g_device.CreateBindGroup(&bindGroupDescriptor);
++}
++
++bool can_resample_present_direct(const Viewport& viewport) {
++  // Exact same pixel centers and format as the intermediate+copy path.
++  // Offset/fractional/letterboxed viewports keep that original path.
++  const auto& surface = g_graphicsConfig.surfaceConfiguration;
++  return viewport.left == 0.f && viewport.top == 0.f &&
++         viewport.width == float(surface.width) && viewport.height == float(surface.height) &&
++         present_source().format == surface.format;
++}
++
++void draw_resampled_present(const wgpu::RenderPassEncoder& pass, const Viewport& viewport) {
++  const auto bindings = resample_present_bind_group(viewport);
++  pass.SetPipeline(g_ResamplePipeline);
++  pass.SetBindGroup(0, bindings, 0, nullptr);
++  pass.Draw(3);
++}
++
++const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport) {
++  const auto& source = present_source();
++  const uint32_t width = viewport_extent(viewport.width);
++  const uint32_t height = viewport_extent(viewport.height);
++  if (!g_resampledFrameBuffer.view || g_resampledFrameBuffer.size.width != width ||
++      g_resampledFrameBuffer.size.height != height || g_resampledFrameBuffer.format != source.format) {
++    g_resampledFrameBuffer = create_render_texture(width, height, false);
++  }
++  const auto bindGroup = resample_present_bind_group(viewport);
+   const std::array attachments{
+       wgpu::RenderPassColorAttachment{
+           .view = g_resampledFrameBuffer.view,
+--- a/lib/webgpu/gpu.hpp
++++ b/lib/webgpu/gpu.hpp
+@@ -73,6 +73,8 @@
+ Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_height, uint32_t content_width,
+                                     uint32_t content_height) noexcept;
+ const TextureWithSampler& resample_present_source(const wgpu::CommandEncoder& encoder, const Viewport& viewport);
++bool can_resample_present_direct(const Viewport& viewport);
++void draw_resampled_present(const wgpu::RenderPassEncoder& pass, const Viewport& viewport);
+ void draw_clear(const wgpu::RenderPassEncoder& pass, bool clearColor, bool clearAlpha, bool clearDepth,
+                 const Vec4<float>& clearColorValue, float clearDepthValue);
+ 

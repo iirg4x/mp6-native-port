@@ -1,0 +1,165 @@
+--- a/src/REL/fileseldll/filesel.c
++++ b/src/REL/fileseldll/filesel.c
+@@ -23,0 +24,2 @@
++#include "mp6_widescreen.h" /* widescreen support */
++#include "mp6_anim_native.h" /* ANM ownership-aware teardown (see the exit-path free below) */
+@@ -238,6 +240,16 @@
+-    Hu3DCameraPerspectiveSet(1, 5.0f, 20.0f, 15000.0f, 1.2f);
+-    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f,
+-                          480.0f, 0.0f, 1.0f);
+-    Hu3DCameraPerspectiveSet(2, 10.0f, 20.0f, 15000.0f, 1.2f);
+-    Hu3DCameraViewportSet(2, 0.0f, 0.0f, 640.0f,
+-                          480.0f, 0.0f, 1.0f);
++    /* File-select's own two-camera scene (book/storybook + star-tag
++     * overlay) has the same native-640, left-anchored framing as
++     * boot.c/opening.c, left native to match the reference widescreen
++     * hack's own scope (it never edits a .rel file), leaving a black band
++     * on the right. Both cameras widened the same way as hsfman.c's
++     * defCamera/opening.c's camera: FOV aspect x scale_factor(), viewport
++     * width -> live render width. No-op when widescreen is disabled. */
++    /* Replaces the two calls above with one that also registers this
++     * camera so it re-derives live on a later window resize -- ObjectSetup
++     * only runs once, at overlay load; omOutViewMulti (this file's own
++     * shared per-frame camera-position updater) never touches Perspective/
++     * ViewportSet, so this camera stayed frozen at scene-load size without
++     * this. Same literals, same effect on this call. */
++    mp6_widescreen_camera_widen(1, 5.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
++    /* Same fix as the sibling camera above. */
++    mp6_widescreen_camera_widen(2, 10.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
+@@ -331 +343,21 @@
+-        HuMemDirectFree(lbl_1_bss_D8[i].cardTextureAnim);
++        /* Each cardTextureAnim is a HuSprAnimMake() result, and under this
++         * port that function REGISTERS the graph with the native ANM ownership
++         * table (platform/sprite/anim_native.c). A raw HuMemDirectFree here
++         * trips the table's direct-free guard and aborts the run:
++         *   [FATAL] ANM native loader: direct free bypassed ANM ownership
++         *           teardown
++         * Caught directly, not guessed: this fired on file-select's own
++         * EXIT path (right before its omOvlCallEx into mdseldll) on every
++         * retail-flow drive, killing the process between the outgoing wipe
++         * and "Call New Ovl 93". Same site-conversion as hsfanim.c.patch's
++         * Hu3DAnimKill and sprman.c's HuSprAnimKill (the two other places a
++         * registered graph is released): unregister first (which hands back
++         * a distinct owned packed backing, or NULL for a made-native graph
++         * like these), free that backing if any, then free the graph. */
++        if (lbl_1_bss_D8[i].cardTextureAnim != NULL) {
++            void *mp6PackedBacking = mp6_anim_unregister_for_free(lbl_1_bss_D8[i].cardTextureAnim);
++            if (mp6PackedBacking != NULL) {
++                HuMemDirectFree(mp6PackedBacking);
++            }
++            HuMemDirectFree(lbl_1_bss_D8[i].cardTextureAnim);
++        }
+@@ -391,0 +424,50 @@
++    /* This is the file-select storybook's own distant backdrop --
++     * positioned far behind the book itself (z=-9000 vs the book's
++     * z=-2000), drawn under camera bit 2 (already aspect-widened above).
++     * Its own explicit Hu3DModelPosSet places its local origin's world
++     * position; Hu3DModelScaleSet scales in LOCAL space before that
++     * translation is applied (game/hsfman.c's Hu3DExec), so this grows the
++     * backdrop about its own local center while its world position stays
++     * exactly where it was set above -- the same pattern used for
++     * mdpartydll's own ring/swirl backdrop prop. No-op when widescreen is
++     * disabled. */
++    /* Converted from a plain uniform scale to a bbox-center-aware extrude:
++     * this backdrop is 5 sub-objects (day/sky/night panels, a grid layer,
++     * and a light-glow accent), each with real, non-zero base.pos, so
++     * scaling about local origin was scaling about the wrong point for
++     * every one of them -- this helper composes each sub-object's own base
++     * transform first to find the correct composite center. Of this
++     * model's attribute pool, 4 entries are GX_CLAMP and bound to all 5
++     * visible sub-objects' primary texture; one GX_REPEAT entry exists but
++     * isn't bound to any of their primary attributes (purpose unresolved),
++     * and the reference capture shows a smooth day/night gradient with no
++     * visible tiling anywhere, so the whole model is treated as CLAMP in
++     * practice. This exact HSF asset (same bitmap names) is also
++     * bootDll/opening.c's OpeningMdlId[0]; both extrude the same way.
++     *
++     * That plain extrude still left a real, measured black notch near the
++     * top/bottom-center edge at wide aspect -- and the notch was seen to
++     * MOVE between the top-center and bottom-center edge across two
++     * captures of the same static screen taken ~20s apart, confirming this
++     * asset's own slow ambient motion shifts where the shortfall shows up
++     * over time, not a fixed static gap. A first attempted fix (more of
++     * the same isotropic growth via an extra multiplier) was confirmed
++     * WRONG by recapture -- it made the backdrop mostly vanish instead of
++     * closing the gap. Root cause: this backdrop is not a flat plane -- its
++     * 5 sub-objects span real local-Z depth, and isotropic scaling grows Z
++     * by the same factor as X/Y; the deepest sub-object's own farthest
++     * point already sits within roughly 100 units of this scene's far clip
++     * (15000) at the plain scale_factor() this project ships, so any extra
++     * Z multiplier pushes it past the clip and this engine's own per-object
++     * cull check drops the whole sub-object. This also plausibly explains
++     * the original notch itself: the backdrop's own ambient motion can walk
++     * a marginal sub-object across that same threshold as it plays, with no
++     * widescreen-side change at all. Real fix: grow only X and Y by
++     * scale_factor() and leave Z completely untouched
++     * (mp6_widescreen_extrude_model_xy()) -- identical contribution on the
++     * two axes that matter for screen-space coverage, with no depth-clip
++     * risk regardless of window width. Every other extruded scene (Party
++     * mode, title, mode-select, and opening's own identical-asset call)
++     * still goes through the plain, fully-isotropic
++     * mp6_widescreen_extrude_model(), byte-unchanged. */
++    mp6_widescreen_extrude_model_xy(lbl_1_bss_2D8[1]);
+@@ -1014 +1096,15 @@
+-        strcpy(obj->name, lbl_1_data_190[i]);
++        /* Under this port's HSF loader stub, every loaded model has
++         * objectNum==0, so the by-name lookup above can never succeed --
++         * it reports the not-found case and returns NULL (its own existing
++         * contract, unchanged). The original code writes through that
++         * pointer unconditionally because on real hardware the model
++         * always contains this object, so the NULL branch is unreachable
++         * there; natively it's a guaranteed null-pointer write, confirmed
++         * as this exact crash by the log ending at hsfman.c's own
++         * not-found report line. Skipping the rename when the object
++         * doesn't exist is semantically exact: the rename only retargets
++         * which sub-object later per-slot logic finds by name, and with
++         * zero objects there is nothing to find either way. */
++        if (obj != NULL) {
++            strcpy(obj->name, lbl_1_data_190[i]);
++        }
+@@ -1048,0 +1145,18 @@
++    /* fn_1_35AC runs every frame and grabs a screen-space snapshot of each
++     * save slot's own star/date/count sprite group into a texture pasted
++     * onto the "page label" 3D quad -- the same photograph-a-live-frame
++     * trick bootDll/opening.c's own page-turn effect uses. Its X argument
++     * converts the group's own logical X into native framebuffer pixels by
++     * the fixed 640/576 display-to-framebuffer ratio (unrelated to
++     * widescreen), but without the same recenter offset the shared ortho
++     * (game/sprput.c) now adds when it maps that same logical position onto
++     * the wider screen -- so the sprite group itself renders correctly
++     * recentered, but this capture kept grabbing the old, un-recentered
++     * rectangle, increasingly missing the group's actual screen position as
++     * the window widens: exactly a "part of the label tracks the star, part
++     * floats elsewhere" symptom. Fixed by adding the same recenter offset
++     * inside the sum before the ratio is applied -- the 640/576 ratio
++     * itself is unchanged (both the logical canvas and the render target
++     * widen by the same factor, so it cancels out of the ratio; only the
++     * additive recenter survives) -- a no-op (byte-identical float ops)
++     * when disabled. */
+@@ -1051 +1165 @@
+-        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1)),
++        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1) + mp6_widescreen_half_width_delta()),
+@@ -1193,0 +1308,5 @@
++    if (i >= 4) {
++        HuPrcEnd();
++        return;
++    }
++    prevState = p->visualState;
+@@ -1402 +1521 @@
+-    proc->property = (void *)arg1;
++    proc->property = (void *)(intptr_t)arg1;
+@@ -1414 +1533 @@
+-    bank = (s32)proc->property;
++    bank = (s32)(intptr_t)proc->property;
+@@ -1827,0 +1947,5 @@
++    /* Closes the GXBegin(GX_QUADS, 0, 4) camera Z-clear above -- anchors to
++     * its fourth and last GXPosition3f32. Shaped exactly like hsfman.c's
++     * Hu3DZClear, closed the same way. Empty inline on hardware (GXVert.h);
++     * was the last 'vertex data not evenly divisible' source. */
++    GXEnd();
+@@ -1946 +2070 @@
+-                proc2->property = (void *)a;
++                proc2->property = (void *)(intptr_t)a;
+@@ -2010 +2134 @@
+-    idx = (s32)proc->property;
++    idx = (s32)(intptr_t)proc->property;

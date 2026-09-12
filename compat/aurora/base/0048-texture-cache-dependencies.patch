@@ -1,0 +1,304 @@
+--- a/lib/gfx/texture.hpp
++++ b/lib/gfx/texture.hpp
+@@ -138,12 +138,46 @@
+ static_assert(sizeof(GXTlutObj_) <= sizeof(GXTlutObj), "GXTlutObj too small!");
+ 
+ namespace aurora::gfx {
++// Keys describe source bytes, not the converted GPU format or sampler state.
++// Object IDs select cache owners; metadata and content versions select images.
++struct TextureDataKey {
++  const void* data = nullptr;
++  u32 width = 0, height = 0, format = 0, mipCount = 0, version = 0;
++
++  static TextureDataKey from(const GXTexObj_& obj) noexcept {
++    return {obj.data, obj.width(), obj.height(), obj.format(), obj.mip_count(), obj.texDataVersion};
++  }
++  bool matches(const GXTexObj_& obj) const noexcept {
++    return data == obj.data && width == obj.width() && height == obj.height() &&
++           format == obj.format() && mipCount == obj.mip_count() && version == obj.texDataVersion;
++  }
++};
++
++struct PaletteDataKey {
++  const void* data = nullptr;
++  u32 id = 0, version = 0;
++  GXTlutFmt format = GX_TL_IA8;
++  u16 numEntries = 0;
++
++  static PaletteDataKey from(const GXTlutObj_* obj) noexcept {
++    return obj ? PaletteDataKey{obj->data, obj->tlutObjId, obj->tlutDataVersion, obj->format, obj->numEntries}
++               : PaletteDataKey{};
++  }
++  bool matches(const GXTlutObj_& obj) const noexcept {
++    return data == obj.data && id == obj.tlutObjId && version == obj.tlutDataVersion &&
++           format == obj.format && numEntries == obj.numEntries;
++  }
++};
++
+ struct TextureBind {
+   TextureHandle ref;
+   GXTexObj_ texObj;
++  TextureDataKey sourceData;
++  PaletteDataKey paletteData;
+ 
+   TextureBind() noexcept = default;
+-  TextureBind(const GXTexObj_& obj, TextureHandle handle) noexcept : ref(std::move(handle)), texObj(obj) {}
++  TextureBind(const GXTexObj_& obj, TextureHandle handle, const GXTlutObj_* tlut = nullptr) noexcept
++  : ref(std::move(handle)), texObj(obj), sourceData(TextureDataKey::from(obj)), paletteData(PaletteDataKey::from(tlut)) {}
+   void reset() noexcept { ref.reset(); }
+   [[nodiscard]] wgpu::SamplerDescriptor get_descriptor() const noexcept;
+   operator bool() const noexcept { return ref.operator bool(); }
+--- a/lib/gx/gx.cpp
++++ b/lib/gx/gx.cpp
+@@ -64,14 +64,13 @@
+ 
+ struct CachedTextureEntry {
+   gfx::TextureHandle handle;
+-  u32 texDataVersion = 0;
+-  u32 tlutObjId = 0;
+-  u32 tlutDataVersion = 0;
++  gfx::TextureDataKey sourceData;
++  gfx::PaletteDataKey paletteData;
+ };
+ 
+ struct CachedTlutTextureEntry {
+   gfx::TextureHandle handle;
+-  u32 tlutDataVersion = 0;
++  gfx::PaletteDataKey sourceData;
+ };
+ 
+ struct TlutObjectCache {
+@@ -89,6 +88,19 @@
+   for (auto& [_, cache] : s_tlutObjectCaches) {
+     cache.staticTextureUsers.clear();
+   }
++  // Retire live static bindings as well as secondary cache entries. Destroyed
++  // objects may retain an uploaded image, but their CPU source is no longer
++  // guaranteed to exist. Copy images are unrelated to replacement reloads.
++  for (u32 i = 0; i < MaxTextures; ++i) {
++    const auto& obj = g_gxState.loadedTextures[i];
++    const auto tlutIdx = static_cast<size_t>(obj.tlut);
++    const bool retiredPalette = is_palette_format(obj.format()) && tlutIdx < g_gxState.loadedTluts.size() &&
++                                g_gxState.loadedTluts[tlutIdx].no_cache();
++    auto& bound = g_gxState.textures[i];
++    if (!obj.no_cache() && !retiredPalette && !g_gxState.copyTextures.contains(bound.texObj.data)) {
++      bound.texObj.texObjId = 0;
++    }
++  }
+ }
+ 
+ DynamicPaletteKey make_dynamic_palette_key(const GXTexObj_& obj, const GXState::CopyTextureRef& source) {
+@@ -113,60 +125,61 @@
+   }
+ }
+ 
+-void store_cached_texture(const GXTexObj_& obj, gfx::TextureHandle handle, u32 tlutObjId = 0, u32 tlutDataVersion = 0) {
++void store_cached_texture(const GXTexObj_& obj, gfx::TextureHandle handle, const GXTlutObj_* tlut = nullptr) {
+   if (obj.texObjId == 0) {
+     return;
+   }
+ 
++  const auto paletteData = gfx::PaletteDataKey::from(tlut);
+   auto& entry = s_textureObjectCaches[obj.texObjId];
+-  if (entry.tlutObjId != tlutObjId) {
+-    clear_texture_dependency(obj.texObjId, entry.tlutObjId);
++  if (entry.paletteData.id != paletteData.id) {
++    clear_texture_dependency(obj.texObjId, entry.paletteData.id);
+   }
+-
+-  entry.handle = std::move(handle);
+-  entry.texDataVersion = obj.texDataVersion;
+-  entry.tlutObjId = tlutObjId;
+-  entry.tlutDataVersion = tlutDataVersion;
+-
+-  if (tlutObjId != 0) {
+-    s_tlutObjectCaches[tlutObjId].staticTextureUsers.insert(obj.texObjId);
++  entry = {std::move(handle), gfx::TextureDataKey::from(obj), paletteData};
++  if (paletteData.id != 0) {
++    s_tlutObjectCaches[paletteData.id].staticTextureUsers.insert(obj.texObjId);
+   }
+ }
+ 
+ gfx::TextureHandle get_tlut_texture(const GXTlutObj_& tlut) {
+-  if (tlut.tlutObjId != 0) {
++  const bool cacheable = tlut.tlutObjId != 0 && !tlut.no_cache();
++  if (cacheable) {
+     auto& cache = s_tlutObjectCaches[tlut.tlutObjId];
+-    if (cache.tlutTexture.handle && cache.tlutTexture.tlutDataVersion == tlut.tlutDataVersion) {
++    if (cache.tlutTexture.handle && cache.tlutTexture.sourceData.matches(tlut)) {
+       return cache.tlutTexture.handle;
+     }
+     cache.dynamicPaletteTextures.clear();
+-    for (const u32 texObjId : cache.staticTextureUsers) {
+-      s_textureObjectCaches.erase(texObjId);
++    // Static conversions may already use this exact palette, even when its
++    // GPU TLUT image has not been needed yet. Retain those users; invalidate
++    // only stale dependencies instead of uploading correct images again.
++    for (auto it = cache.staticTextureUsers.begin(); it != cache.staticTextureUsers.end();) {
++      const auto image = s_textureObjectCaches.find(*it);
++      if (image == s_textureObjectCaches.end() || !image->second.paletteData.matches(tlut)) {
++        if (image != s_textureObjectCaches.end()) {
++          s_textureObjectCaches.erase(image);
++        }
++        cache.staticTextureUsers.erase(it++);
++      } else {
++        ++it;
++      }
+     }
+-    cache.staticTextureUsers.clear();
+   }
+ 
+   const auto handle = gfx::new_static_texture_2d(
+       tlut.numEntries, 1, 1, gfx::tlut_texture_format(tlut.format),
+       {static_cast<const u8*>(tlut.data), static_cast<size_t>(tlut.numEntries) * sizeof(u16)}, true, "Loaded TLUT");
+-  if (tlut.tlutObjId != 0) {
+-    auto& cache = s_tlutObjectCaches[tlut.tlutObjId];
+-    cache.tlutTexture.handle = handle;
+-    cache.tlutTexture.tlutDataVersion = tlut.tlutDataVersion;
++  if (cacheable) {
++    s_tlutObjectCaches[tlut.tlutObjId].tlutTexture = {handle, gfx::PaletteDataKey::from(&tlut)};
+   }
+   return handle;
+ }
+ 
+ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
+   ZoneScoped;
+-  if (s_staticTextureCacheClearPending.exchange(false, std::memory_order_acq_rel)) {
+-    do_clear_static_texture_cache();
+-  }
+-
+   if (obj.texObjId != 0) {
+     if (const auto it = s_textureObjectCaches.find(obj.texObjId); it != s_textureObjectCaches.end()) {
+       const auto& entry = it->second;
+-      if (entry.handle && entry.texDataVersion == obj.texDataVersion && entry.tlutObjId == 0) {
++      if (entry.handle && entry.sourceData.matches(obj) && entry.paletteData.id == 0) {
+         return entry.handle;
+       }
+     }
+@@ -193,15 +206,10 @@
+ 
+ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GXTlutObj_& tlut) {
+   ZoneScoped;
+-  if (s_staticTextureCacheClearPending.exchange(false, std::memory_order_acq_rel)) {
+-    do_clear_static_texture_cache();
+-  }
+-
+-  if (obj.texObjId != 0) {
++  if (obj.texObjId != 0 && tlut.tlutObjId != 0) {
+     if (const auto it = s_textureObjectCaches.find(obj.texObjId); it != s_textureObjectCaches.end()) {
+       const auto& entry = it->second;
+-      if (entry.handle && entry.texDataVersion == obj.texDataVersion && entry.tlutObjId == tlut.tlutObjId &&
+-          entry.tlutDataVersion == tlut.tlutDataVersion) {
++      if (entry.handle && entry.sourceData.matches(obj) && entry.paletteData.matches(tlut)) {
+         return entry.handle;
+       }
+     }
+@@ -222,8 +230,8 @@
+                                    {converted.data.data(), converted.data.size()}, false, "GX Static Palette Texture");
+     handle->hasArbitraryMips = converted.hasArbitraryMips;
+   }
+-  if (!obj.no_cache() && !tlut.no_cache()) {
+-    store_cached_texture(obj, handle, tlut.tlutObjId, tlut.tlutDataVersion);
++  if (!obj.no_cache() && tlut.tlutObjId != 0 && !tlut.no_cache()) {
++    store_cached_texture(obj, handle, &tlut);
+   }
+   return handle;
+ }
+@@ -233,14 +241,20 @@
+   ZoneScoped;
+ 
+   const auto tlutHandle = get_tlut_texture(tlut);
+-  auto& tlutCache = s_tlutObjectCaches[tlut.tlutObjId];
+-  auto& entry = tlutCache.dynamicPaletteTextures[make_dynamic_palette_key(obj, source)];
+-  if (!entry.handle) {
++  // Anonymous/retired palettes have no persistent cache owner. A local entry
++  // still leaves queued draws and the bound slot holding their GPU resources.
++  DynamicPaletteEntry uncachedEntry;
++  auto& entry = tlut.tlutObjId != 0 && !tlut.no_cache()
++                    ? s_tlutObjectCaches[tlut.tlutObjId].dynamicPaletteTextures[make_dynamic_palette_key(obj, source)]
++                    : uncachedEntry;
++  const bool needsInitialConversion = !entry.handle;
++  if (needsInitialConversion) {
+     // Use source size instead of target (logical) size
+     entry.handle = gfx::new_conv_texture(source.handle->size.width, source.handle->size.height, GX_TF_RGBA8,
+                                          "GX Dynamic Palette Texture");
+   }
+-  if (entry.sourceRevision != source.revision || entry.tlutDataVersion != tlut.tlutDataVersion) {
++  if (needsInitialConversion || entry.sourceRevision != source.revision ||
++      entry.tlutDataVersion != tlut.tlutDataVersion) {
+     gfx::queue_palette_conv({
+         .variant = obj.format() == GX_TF_C4 ? gfx::tex_palette_conv::Variant::FromFloat4
+                                             : gfx::tex_palette_conv::Variant::FromFloat8,
+@@ -435,7 +449,7 @@
+ 
+ void evict_texture_object(u32 texObjId) noexcept {
+   if (const auto it = s_textureObjectCaches.find(texObjId); it != s_textureObjectCaches.end()) {
+-    clear_texture_dependency(texObjId, it->second.tlutObjId);
++    clear_texture_dependency(texObjId, it->second.paletteData.id);
+     s_textureObjectCaches.erase(it);
+   }
+   // If there is a loaded slot with this ID, mark it as no_cache to avoid inserting it when it's resolved.
+@@ -510,33 +524,39 @@
+ 
+ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
+   ZoneScoped;
++  // UI replacement reload requests are consumed on the render producer, before
++  // the binding fast path. No atomic RMW on ordinary draws or texture misses.
++  if (s_staticTextureCacheClearPending.load(std::memory_order_relaxed) &&
++      s_staticTextureCacheClearPending.exchange(false, std::memory_order_acq_rel)) {
++    do_clear_static_texture_cache();
++  }
+ 
+   for (u32 i = 0; i < MaxTextures; ++i) {
+     if (!info.sampledTextures.test(i)) {
+       continue;
+     }
+ 
+-    GXTexObj_ obj = g_gxState.loadedTextures[i];
++    const auto& obj = g_gxState.loadedTextures[i];
+     auto& textureBind = g_gxState.textures[i];
+-    if (obj.texObjId != 0 && obj.texObjId == textureBind.texObj.texObjId &&
+-        obj.texDataVersion == textureBind.texObj.texDataVersion) {
+-      // Texture bind unchanged
++    const bool palette = is_palette_format(obj.format());
++    const auto tlutIdx = static_cast<size_t>(obj.tlut);
++    const GXTlutObj_* tlut = palette && tlutIdx < g_gxState.loadedTluts.size()
++                                ? &g_gxState.loadedTluts[tlutIdx] : nullptr;
++    if (textureBind.ref && obj.texObjId != 0 && obj.texObjId == textureBind.texObj.texObjId &&
++        textureBind.sourceData.matches(obj) &&
++        (!palette || (tlut && tlut->tlutObjId != 0 && textureBind.paletteData.matches(*tlut)))) {
+       continue;
+     }
+ 
+     gfx::TextureHandle handle;
+     const auto copyIt = g_gxState.copyTextures.find(obj.data);
+     const GXState::CopyTextureRef* copyRef = copyIt != g_gxState.copyTextures.end() ? &copyIt->second : nullptr;
+-    if (is_palette_format(obj.format())) {
+-      const auto tlutIdx = static_cast<size_t>(obj.tlut);
+-      if (tlutIdx < g_gxState.loadedTluts.size()) {
+-        const auto& tlut = g_gxState.loadedTluts[tlutIdx];
+-        if (tlut.data != nullptr) {
+-          if (copyRef != nullptr) {
+-            handle = resolve_dynamic_palette_texture(obj, *copyRef, tlut);
+-          } else if (obj.has_data()) {
+-            handle = resolve_static_palette_texture(obj, tlut);
+-          }
++    if (palette) {
++      if (tlut && tlut->data != nullptr && tlut->numEntries != 0) {
++        if (copyRef != nullptr) {
++          handle = resolve_dynamic_palette_texture(obj, *copyRef, *tlut);
++        } else if (obj.has_data()) {
++          handle = resolve_static_palette_texture(obj, *tlut);
+         }
+       }
+     } else if (copyRef != nullptr) {
+@@ -545,8 +565,8 @@
+       handle = resolve_static_texture(obj);
+     }
+ 
+-    obj.mFormat = resolved_format_for_handle(handle);
+-    textureBind = gfx::TextureBind{obj, std::move(handle)};
++    textureBind = gfx::TextureBind{obj, std::move(handle), tlut};
++    textureBind.texObj.mFormat = resolved_format_for_handle(textureBind.ref);
+   }
+ }

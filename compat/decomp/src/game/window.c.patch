@@ -1,0 +1,113 @@
+--- a/src/game/window.c
++++ b/src/game/window.c
+@@ -4,0 +5 @@
++#include "be.h"
+@@ -16,0 +18 @@
++#include "mp6_widescreen.h" /* widescreen support */
+@@ -536,0 +539,15 @@
++/* messDataPtr (game/window.c's HuWinMesRead()) is a plain memcpy() of a
++ * real DVD file's raw bytes (mess/messdata*.bin), never byte-swapped on
++ * the way in -- the exact same "directory count, then a per-entry offset
++ * table" container shape game/data.c's GetFileInfo and game/armem.c's
++ * HuAR_ARAMtoMRAMFileRead already fix elsewhere in this patch queue, just
++ * unfixed here until now. Every one of these 3 functions read it as plain
++ * native u32 -- wrong on every single call, not just an edge case, which
++ * is exactly why "Error: Message Dir Over"/"Error: Message Number Over"
++ * fired on EVERY message lookup this port ever made (confirmed: neither
++ * original error path actually returns early, so a garbage bounds check
++ * silently let a garbage offset chain through every time). OpeningExec's
++ * own HuWinMesSet(messageWinId, 0x10005) call is what surfaced this: the
++ * corrupted messData pointer it produced is the direct cause of the
++ * first-ever "GXBegin: called without matching GXEnd" Aurora FATAL this
++ * port hit, a few lines later, once real frame drawing tried to use it. */
+@@ -540 +557 @@
+-    return *dirNum;
++    return be32(dirNum);
+@@ -547 +564 @@
+-    if(dir >= *messData) {
++    if(dir >= be32(messData)) {
+@@ -551,2 +568,2 @@
+-    messData += messData[dir]/sizeof(u32);
+-    return *messData;
++    messData += be32(&messData[dir])/sizeof(u32);
++    return be32(messData);
+@@ -560 +577 @@
+-    if(dir >= *messData) {
++    if(dir >= be32(messData)) {
+@@ -564,2 +581,2 @@
+-    messData += messData[dir]/sizeof(u32);
+-    if(num >= *messData) {
++    messData += be32(&messData[dir])/sizeof(u32);
++    if(num >= be32(messData)) {
+@@ -569 +586 @@
+-    messData += messData[num]/sizeof(u32);
++    messData += be32(&messData[num])/sizeof(u32);
+@@ -596 +613,19 @@
+-        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, 0.0f, HU_DISP_WIDTH, 0.0f, 10.0f);
++        /* This is a THIRD, independent copy of the exact ortho
++         * HuSprDispInit sets up (game/sprput.c) -- MesDispFunc is a "func
++         * sprite" draw callback, invoked from game/sprput.c's HuSprDisp for
++         * EVERY HuWin window's message-glyph quads, every frame. A func
++         * sprite re-establishes its OWN GX pipeline state from scratch
++         * (HuSprDisp calls HuSprDispInit() again right after it returns,
++         * specifically because a func sprite is free to leave this state
++         * however it wants) -- including its own hardcoded, native-only
++         * MTXOrtho(0, HU_DISP_WIDTH). The shared canvas's own recenter never
++         * touched this second, self-contained copy, so every character
++         * glyph in every message window was still being projected through
++         * the OLD native-only mapping while that same window's own frame/
++         * background sprites (ordinary, non-func sprites drawn through the
++         * shared, now-recentered ortho) were correctly centered -- a real
++         * mismatch between where a window's box renders and where its own
++         * text renders. Recentered exactly like HuSprDispInit's own copy --
++         * same accessor, same formula, no-op (byte-identical native call)
++         * when widescreen is disabled. */
++        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0.0f, 10.0f);
+@@ -1524,0 +1560,26 @@
++/* "Message Dir Over" crash fix. HuWinMesSet/HuWinInsertMesSet's "is
++ * messNum a real pointer, or a packed dir<<16|num value?" check was
++ * `messNum & 0x80000000` -- reliable on real hardware, where EVERY live
++ * pointer (static .bss/.data OR heap) unconditionally starts at MEM1's
++ * 0x80000000 base. This port's low-4GB game arena (src/os/arena.c)
++ * deliberately starts at 0x80000000 too, for this exact reason -- so HEAP
++ * pointers still satisfy the check -- but the executable's own fixed,
++ * non-ASLR image base (tools/build.py's IMAGE_BASE=0x10000000) does NOT,
++ * so a STATIC/GLOBAL (.bss/.data) buffer address passed this way has bit
++ * 31 CLEAR and gets misclassified as a small packed dir/num value
++ * instead. Confirmed by direct reproduction: REL/fileseldll/filesel.c's
++ * fn_1_36C4 passes the address of a static per-save-slot text buffer
++ * (living in the image's low .bss, around 0x10xxxxxx, not 0x80000000+) to
++ * HuWinInsertMesSet; the low bit pattern of THAT address decodes as a
++ * huge, bogus "directory" once right-shifted 16, printing "Error: Message
++ * Dir Over" and then (since neither original error path actually
++ * returns) chasing a wild offset computed from it -- a real access
++ * violation. Real dir/num encodings are always tiny (dir<<16|num; the
++ * largest dir this whole codebase ever uses is under 0x100) --
++ * comfortably below EVERY real pointer this port ever produces, whether
++ * image-based (0x10000000+) or arena-based (0x80000000+ and up) -- so a
++ * generous, safely-in-between threshold replaces the bit-31 check with
++ * one that is still correct for real hardware's own address range AND
++ * this port's. */
++#define MP6_MESSNUM_ENCODED_MAX 0x01000000u
++
+@@ -1530 +1591 @@
+-    if(!(messNum & 0x80000000)) {
++    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
+@@ -1563 +1624 @@
+-    if(!(messNum & 0x80000000)) {
++    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
+@@ -2033 +2094,9 @@
+-    if(messNum > 0x80000000) {
++    /* Same fix as HuWinMesSet/HuWinInsertMesSet above (this file's own
++     * section-comment there has the full story): a SECOND, independent
++     * instance of the same "is messNum a real pointer or a packed
++     * dir<<16|num value?" check, reached via GetMesMaxSizeSub2 -- confirmed
++     * by direct reproduction, a second real crash on the exact same
++     * fileseldll path, one level deeper. Branch order/bodies unchanged
++     * from the original -- only the condition itself changes, same as the
++     * other two instances. */
++    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
+@@ -2224 +2293,2 @@
+-    if(messNum > 0x80000000) {
++    /* Same fix, third instance in this file. */
++    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {

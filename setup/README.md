@@ -13,7 +13,7 @@ and why this exists instead of a downloadable executable.
 setup.bat --disc "D:\path\to\Mario Party 6 (USA).iso"
 ```
 
-or just double-click `setup.bat` / right-click `setup.ps1` -> Run with
+or just double-click `setup.bat` / right-click `setup/run.ps1` -> Run with
 PowerShell, and it will prompt you for the disc path. When it finishes:
 
 ```
@@ -52,7 +52,7 @@ copy the whole `dist\` folder anywhere you like.
    the same way any open-source git dependency would be.
 4. **Your disc** -- validates it's really Mario Party 6 (USA / `GP6E01`)
    and extracts it (via `nod`, the same disc-image library
-   `platform/content/content_import.cpp` uses for the Android on-device
+   `src/content/content_import.cpp` uses for the Android on-device
    import) into the decomp checkout's `orig/GP6E01/` folder -- never into
    this repository, never anywhere else. By default this skips
    `files/movie/` (336MB of FMVs not needed to build or boot to the menu
@@ -140,7 +140,7 @@ whatever it complained about.
   artifact stale instead of silently blessing it.
   The disc itself is never
   touched by this tool for Android: the APK's own first-run onboarding
-  (`platform/gx/ui/content_setup.cpp`) handles
+  (`src/gx/ui/content_setup.cpp`) handles
   that on-device.
 - **Linux/macOS (`setup.sh`): partial by design.** The prerequisite check,
   decomp clone, and disc extraction (`nod` ships Linux/macOS builds too)
