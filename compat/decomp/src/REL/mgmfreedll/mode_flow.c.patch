@@ -1,0 +1,8 @@
+--- a/src/REL/mgmfreedll/mode_flow.c
++++ b/src/REL/mgmfreedll/mode_flow.c
+@@ -12 +12 @@
+-extern u8 lbl_1_bss_28[8];
++extern OMOBJ *lbl_1_bss_28;
+@@ -60 +60 @@
+-            obj = (*(OMOBJ **)&lbl_1_bss_28[0]);
++            obj = lbl_1_bss_28;

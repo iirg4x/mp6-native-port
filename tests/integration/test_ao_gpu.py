@@ -39,6 +39,8 @@ class Renderer:
             compatibility=mobile, prepared_depth=True, attachment_depth=True,
             multisampled_depth=depth_samples>1, decals=attachment_decals)) if attachment_depth else self.shader
         depth_bindings = (1,3,4) if not attachment_depth or attachment_decals else (1,)
+        if prepared_depth or attachment_depth:
+            depth_bindings = (*depth_bindings, 5)
         self.depth_layout = self.device.create_bind_group_layout(entries=[
             dict(binding=0, visibility=wgpu.ShaderStage.FRAGMENT, buffer=dict(type='uniform', min_binding_size=80)),
             *[dict(binding=i, visibility=wgpu.ShaderStage.FRAGMENT,
@@ -118,10 +120,12 @@ class Renderer:
             after = upload_depth(z if decal_after is None else decal_after)
             decal_views = (before.create_view(), after.create_view())
         foreground=np.ascontiguousarray(np.zeros((h,w,4)) if foliage is None else foliage,dtype=np.float32)
-        mask=self.device.create_texture(size=(w,h,1),format='rgba32float',
+        mh,mw,channels=foreground.shape
+        assert channels == 4 and (mh,mw) in ((h,w),(1,1))
+        mask=self.device.create_texture(size=(mw,mh,1),format='rgba32float',
             usage=wgpu.TextureUsage.COPY_DST|wgpu.TextureUsage.TEXTURE_BINDING)
         self.device.queue.write_texture(dict(texture=mask),foreground,
-            dict(bytes_per_row=w*16,rows_per_image=h),(w,h,1))
+            dict(bytes_per_row=mw*16,rows_per_image=mh),(mw,mh,1))
         textures = []
         encoder = self.device.create_command_encoder()
         if self.attachment_depth:
@@ -172,7 +176,9 @@ class Renderer:
                 dict(binding=1, resource=depth.create_view()),
                 *([dict(binding=3, resource=before.create_view()),
                    dict(binding=4, resource=after.create_view())]
-                  if not self.attachment_depth or self.attachment_decals else [])])
+                  if not self.attachment_depth or self.attachment_decals else []),
+                *([dict(binding=5, resource=mask.create_view())]
+                  if self.prepared_depth or self.attachment_depth else [])])
             draws.append((4, self.depth_pipeline, group, clean.create_view()))
             render = encoder.begin_render_pass(**stamps(4, 0), color_attachments=[dict(view=clean.create_view(),
                 clear_value=(0, 0, 0, 0), load_op='clear', store_op='store')])
@@ -295,6 +301,13 @@ class Renderer:
                 valid=(d >= 0.) & (d < .999999)
                 low=np.where(valid,reconstructed(d-delta),0.)
                 high=np.where(valid,reconstructed(d+delta),0.)
+                # Prepared geometry rejects visible water before depth
+                # conversion or decal substitution. RGB-only foliage is not
+                # water. The production empty mask can be a clamped 1x1.
+                water=np.broadcast_to(foreground[...,3],(h,w)) > 0
+                expected=np.where(water,0.,expected)
+                low=np.where(water,0.,low)
+                high=np.where(water,0.,high)
                 self_error=np.maximum(low-self.last_clean_depth,self.last_clean_depth-high)
                 np.testing.assert_array_less(self_error, np.maximum(np.abs(expected)*2e-6,np.finfo(np.float32).tiny))
             else:

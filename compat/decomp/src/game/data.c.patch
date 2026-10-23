@@ -1,80 +1,80 @@
 --- a/src/game/data.c
 +++ b/src/game/data.c
-@@ -3,0 +4 @@
+@@ -4,0 +5 @@
 +#include "be.h"
-@@ -116 +117 @@
+@@ -130 +131 @@
 -    if(DataDirMax <= dirId) {
 +    if(dirId < 0 || DataDirMax <= dirId) {
-@@ -123,2 +124,4 @@
--        if(dirAMemP = HuARDirCheck(dataNum)) {
--            HuAR_ARAMtoMRAM(dirAMemP);
-+        if((dirAMemP = HuARDirCheck(dataNum)) != 0) {
-+            if(HuAR_ARAMtoMRAM(dirAMemP) == NULL) {
+@@ -137,2 +138,4 @@
+-        if(aramArchiveAddress = HuARDirCheck(dataNum)) {
+-            HuAR_ARAMtoMRAM(aramArchiveAddress);
++        if((aramArchiveAddress = HuARDirCheck(dataNum)) != 0) {
++            if(HuAR_ARAMtoMRAM(aramArchiveAddress) == NULL) {
 +                return NULL;
 +            }
-@@ -126,0 +130,3 @@
+@@ -140,0 +144,3 @@
 +            if(statId < 0) {
 +                return NULL;
 +            }
-@@ -153 +159 @@
+@@ -169 +175 @@
 -    if(DataDirMax <= dirId) {
 +    if(dirId < 0 || DataDirMax <= dirId) {
-@@ -266 +272 @@
+@@ -295 +301 @@
 -    if(DataDirMax <= dirId) {
 +    if(dirId < 0 || DataDirMax <= dirId) {
-@@ -272 +278 @@
--        if(dirAMemP = HuARDirCheck(dataNum)) {
-+        if((dirAMemP = HuARDirCheck(dataNum)) != 0) {
-@@ -274 +280,3 @@
--            HuAR_ARAMtoMRAM(dirAMemP);
-+            if(HuAR_ARAMtoMRAM(dirAMemP) == NULL) {
+@@ -301 +307 @@
+-        if(aramArchiveAddress = HuARDirCheck(dataNum)) {
++        if((aramArchiveAddress = HuARDirCheck(dataNum)) != 0) {
+@@ -303 +309,3 @@
+-            HuAR_ARAMtoMRAM(aramArchiveAddress);
++            if(HuAR_ARAMtoMRAM(aramArchiveAddress) == NULL) {
 +                return HU_DATA_STAT_NONE;
 +            }
-@@ -299 +307 @@
+@@ -330 +338 @@
 -    if(DataDirMax <= dirId) {
 +    if(dirId < 0 || DataDirMax <= dirId) {
-@@ -330,0 +339,3 @@
+@@ -365,0 +374,3 @@
 +    /* dirP's own directory/index table and the per-file rawLen/decodeType
 +     * header are both big-endian-packed -- read via be32() rather than a
 +     * native u32 dereference. */
-@@ -333 +344 @@
--    readStat->fileDataP = PTR_OFFSET(readStat->dirP, *ptr);
-+    readStat->fileDataP = PTR_OFFSET(readStat->dirP, be32(ptr));
-@@ -335,2 +346,2 @@
--    readStat->rawLen = *ptr++;
--    readStat->decodeType = *ptr++;
-+    readStat->rawLen = be32(ptr); ptr++;
-+    readStat->decodeType = be32(ptr); ptr++;
-@@ -471 +482 @@
--        if(DataDirMax <= dirId) {
-+        if(dirId < 0 || DataDirMax <= dirId) {
-@@ -625 +636 @@
--	if(dir >= (s32)DataDirMax) {
-+	if(dir < 0 || dir >= (s32)DataDirMax) {
-@@ -630,2 +641,2 @@
--		char panic_str[48];
--		sprintf(panic_str, "HuDataDVDdirDirectOpen: File Open Error(%08x)", dataNum);
-+		char panic_str[64];
-+		snprintf(panic_str, sizeof(panic_str), "HuDataDVDdirDirectOpen: File Open Error(%08x)", dataNum);
-@@ -659 +670 @@
--	if((u32)buf & 0x3) {
-+	if((uintptr_t)buf & 0x3u) {
-@@ -670,0 +682,2 @@
-+		/* Aligned case: same big-endian header as the unaligned branch above,
-+		 * just read a word at a time -- needs the same be32() fix. */
-@@ -672,2 +685,2 @@
--		rawLen = *data++;
--		decodeType = *data++;
-+		rawLen = (s32)be32(data); data++;
-+		decodeType = (s32)be32(data); data++;
-@@ -731 +744,3 @@
--	fileNumMax = *fileData;
+@@ -368 +379 @@
+-    readStat->fileDataP = PTR_OFFSET(readStat->dirP, *entryOffset);
++    readStat->fileDataP = PTR_OFFSET(readStat->dirP, be32(entryOffset));
+@@ -370,2 +381,2 @@
+-    readStat->rawLen = *entryOffset++;
+-    readStat->decodeType = *entryOffset++;
++    readStat->rawLen = be32(entryOffset); entryOffset++;
++    readStat->decodeType = be32(entryOffset); entryOffset++;
+@@ -518 +529 @@
+-        if(DataDirMax <= archiveId) {
++        if(archiveId < 0 || DataDirMax <= archiveId) {
+@@ -681 +692 @@
+-	if(archiveId >= (s32)DataDirMax) {
++	if(archiveId < 0 || archiveId >= (s32)DataDirMax) {
+@@ -686,2 +697,2 @@
+-		char panicMessage[48];
+-		sprintf(panicMessage, "HuDataDVDdirDirectOpen: File Open Error(%08x)", dataNum);
++		char panicMessage[64];
++		snprintf(panicMessage, sizeof(panicMessage), "HuDataDVDdirDirectOpen: File Open Error(%08x)", dataNum);
+@@ -722 +733 @@
+-    if((u32)entryHeader & 0x3) {
++    if((uintptr_t)entryHeader & 0x3) {
+@@ -735,2 +746,2 @@
+-        decodedSize = *headerWord++;
+-        decodeType = *headerWord++;
++        decodedSize = (s32)be32(headerWord); headerWord++;
++        decodeType = (s32)be32(headerWord); headerWord++;
+@@ -798 +809,3 @@
+-	archiveFileCount = *archiveHeader;
 +	/* The direct/short reader sees the same big-endian archive index as
 +	 * HuDataFileRead. Native word loads corrupt counts and DVD offsets. */
-+	fileNumMax = (s32)be32(fileData);
-@@ -740 +755 @@
--	fileOfs = *dataHdr;
-+	fileOfs = (s32)be32(dataHdr);
-@@ -747 +762 @@
--		dataOfs = (*dataHdr)-readOfs;
-+		dataOfs = (s32)be32(dataHdr)-readOfs;
++	archiveFileCount = (s32)be32(archiveHeader);
+@@ -807 +820 @@
+-	entryOffsetBytes = *entryOffset;
++	entryOffsetBytes = (s32)be32(entryOffset);
+@@ -809 +821,0 @@
+-	// DVD reads begin at a 32-byte boundary and extend to the next entry or archive end.
+@@ -815,2 +827 @@
+-		entrySpanOrOffsetBytes = (*entryOffset)-dvdReadOffsetBytes;
+-		// This file-length assignment is overwritten by the rounded span below.
++		entrySpanOrOffsetBytes = (s32)be32(entryOffset)-dvdReadOffsetBytes;

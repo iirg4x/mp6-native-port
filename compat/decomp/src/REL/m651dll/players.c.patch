@@ -1,0 +1,9 @@
+--- a/src/REL/m651dll/players.c
++++ b/src/REL/m651dll/players.c
+@@ -1,0 +2 @@
++#include "mp6_widescreen.h"
+@@ -593,0 +595,4 @@
++    /* The rotating outer star disc is scenery, separate from the tunnel,
++     * players and obstacles. Grow its radius uniformly so rotation never
++     * exposes its rim; retain its depth and the playable tunnel's shape. */
++    mp6_widescreen_extrude_model_xy(lbl_1_bss_64.sceneModels[4]);

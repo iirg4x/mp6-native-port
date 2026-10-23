@@ -1,0 +1,6 @@
+--- a/src/REL/s02Dll/s02.c
++++ b/src/REL/s02Dll/s02.c
+@@ -925,0 +926,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

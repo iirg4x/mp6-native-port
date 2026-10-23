@@ -4,7 +4,19 @@
 #include "touch_pad_draw.hpp"
 #include "../gx/ui/launcher_state.hpp"
 #include "mp6_console.h"
+#include "mp6_mic.h"
 #include "mp6_host_section.h"
+#ifdef __EMSCRIPTEN__
+#include "mp6_web_content.h" /* mp6_web_window_safe_area: notch + bottom gesture zone */
+#include <emscripten.h>
+/* The on-screen controller (and its settings/console buttons) is for phones
+ * and tablets; a desktop browser plays like the PC build, with keyboard,
+ * mouse and gamepads. ?touch=1 forces it on for testing. */
+EM_JS(int, mp6_web_touch_device, (), {
+    if (Module.mp6ForceTouch) return 1;
+    return (navigator.maxTouchPoints > 0 && matchMedia('(pointer: coarse)').matches) ? 1 : 0;
+});
+#endif
 
 extern "C" void mp6_launcher_toggle_menu(void);
 extern "C" int mp6_launcher_menu_visible(void);
@@ -19,7 +31,7 @@ struct HostFinger
 {
     bool active = false;
     int64_t device = 0, id = 0;
-    int action = -1; // 0 gear, 1 console, 2 save, 3 cancel, 4 reset, 5 drag
+    int action = -1; // 0 gear, 1 console, 2 save, 3 cancel, 4 reset, 5 drag, 6 send state, 7 mic
     float dx = 0, dy = 0;
 };
 static HostFinger g_hostFingers[16];
@@ -30,6 +42,12 @@ extern "C" void mp6_touch_pad_savestate_reset(void)
     for (auto &f : g_hostFingers)
         f = {};
     g_selected = -1;
+    mp6_mic_set_talk_button(MP6_MIC_TALK_TOUCH, 0);
+}
+/* The Mic button shows only while a game mode has the Mic in use. */
+static bool mic_button_shown()
+{
+    return mp6_mic_in_use() != 0 && !mp6_launcher_menu_visible() && !mp6_console_is_open();
 }
 extern "C" int mp6_touch_pad_editing(void) { return g_edit || g_beginEdit; }
 extern "C" void mp6_touch_pad_begin_edit(void) { g_beginEdit = true; }
@@ -75,6 +93,8 @@ static int host_hit(float x, float y)
         return 0;
     if ((!mp6_launcher_menu_visible() || mp6_console_is_open()) && inside(g_pad.layout.console, x, y))
         return 1;
+    if (mic_button_shown() && inside(g_pad.layout.mic, x, y, 1.15f))
+        return 7;
     return -1;
 }
 extern "C" int mp6_touch_pad_control_at(float nx, float ny)
@@ -147,6 +167,8 @@ extern "C" void mp6_touch_pad_event(const SDL_Event *event)
                     f.device = t.touchID;
                     f.id = t.fingerID;
                     f.action = action;
+                    if (action == 7) // held, not tapped
+                        mp6_mic_set_talk_button(MP6_MIC_TALK_TOUCH, 1);
                     if (action == 5)
                     {
                         g_selected = selected;
@@ -183,6 +205,8 @@ extern "C" void mp6_touch_pad_event(const SDL_Event *event)
             *host = {};
             if (action == 5)
                 g_selected = -1;
+            if (action == 7)
+                mp6_mic_set_talk_button(MP6_MIC_TALK_TOUCH, 0);
             if (!canceled && host_hit(x, y) == action)
             {
                 if (action == 0) {
@@ -219,9 +243,26 @@ extern "C" void mp6_touch_pad_collect(Mp6TouchState *out)
         return;
     }
     *out = g_pad.collect();
+#ifdef __EMSCRIPTEN__
+    {
+        /* Phone reports: every Start edge from the touch controller, to tell a
+         * flickering Start (pause opening and closing) from a real double tap. */
+        static bool prevStart = false;
+        const bool start = (out->buttons & 0x1000u) != 0; /* PAD_BUTTON_START */
+        if (start != prevStart) {
+            printf("[MP6-TOUCH] start %s\n", start ? "down" : "up");
+            prevStart = start;
+        }
+    }
+#endif
 }
 extern "C" void mp6_touch_pad_draw(void)
 {
+#ifdef __EMSCRIPTEN__
+    static const bool touchDevice = mp6_web_touch_device() != 0;
+    if (!touchDevice)
+        return;
+#endif
     auto size = ImGui::GetIO().DisplaySize;
     if (size.x <= 0 || size.y <= 0)
         return;
@@ -233,7 +274,12 @@ extern "C" void mp6_touch_pad_draw(void)
     {
         SDL_Rect safe;
         int ww = 0, wh = 0;
-        if (SDL_GetWindowSize(window, &ww, &wh) && ww > 0 && wh > 0 && SDL_GetWindowSafeArea(window, &safe) &&
+#ifdef __EMSCRIPTEN__
+        const bool hasSafe = mp6_web_window_safe_area(window, &safe);
+#else
+        const bool hasSafe = SDL_GetWindowSafeArea(window, &safe);
+#endif
+        if (SDL_GetWindowSize(window, &ww, &wh) && ww > 0 && wh > 0 && hasSafe &&
             safe.w > 0 && safe.h > 0)
         {
             ox = safe.x * size.x / ww;
@@ -283,6 +329,13 @@ extern "C" void mp6_touch_pad_draw(void)
         draw_system(dl, g_pad.layout, false);
         if (!mp6_launcher_menu_visible() || mp6_console_is_open())
             draw_system(dl, g_pad.layout, true, mp6_console_is_open() != 0);
+        if (mic_button_shown())
+        {
+            bool held = false;
+            for (const auto &f : g_hostFingers)
+                held = held || (f.active && f.action == 7);
+            draw_mic_button(dl, g_pad.layout, held, mp6_mic_in_use() == 2);
+        }
         if (!mp6_launcher_menu_visible())
         {
             if (!blocked() && g_pad.config.enabled)

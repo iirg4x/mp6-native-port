@@ -1,0 +1,90 @@
+--- a/src/REL/mgmtournamentdll/scene.c
++++ b/src/REL/mgmtournamentdll/scene.c
+@@ -0,0 +1 @@
++#include "mp6_mgmtournament_native.h"
+@@ -28,10 +29,10 @@
+-void fn_1_2E28(void);
+-void fn_1_1A8C(void);
+-void fn_1_5154(void);
+-void fn_1_74BC(void);
+-void fn_1_3E04(void);
+-void fn_1_7924(void);
+-void fn_1_FE8(void);
+-void fn_1_3F8C(void);
+-void fn_1_5590(void);
+-void fn_1_B57C(void);
++
++
++
++
++
++
++
++
++
++
+@@ -44,32 +45,32 @@
+-void fn_1_1138(void);
+-void fn_1_1134(void);
+-void fn_1_13A4(s16 duration);
+-void fn_1_143C(s16 mode, s16 duration);
+-void fn_1_1BA0(void);
+-void fn_1_1D74(void);
+-void fn_1_1E80(void);
+-void fn_1_1F90(void);
+-s16 fn_1_2128(void);
+-s16 fn_1_2BA0(void);
+-void fn_1_2948(void);
+-void fn_1_34F0(void);
+-void fn_1_4A1C(void);
+-void fn_1_56B4(s16 mode);
+-void fn_1_5740(s16 mode, s16 duration);
+-void fn_1_57E0(s16 duration);
+-void fn_1_5A44(s16 duration);
+-void fn_1_64A8(void);
+-void fn_1_6D78(void);
+-void fn_1_7F0(void);
+-void fn_1_824(void);
+-void fn_1_818C(void);
+-void fn_1_A6B4(void);
+-void fn_1_AB48(void);
+-void fn_1_AD50(void);
+-void fn_1_B014(void);
+-void fn_1_B2E0(void);
+-void fn_1_B80C(void);
+-void fn_1_B850(void);
+-s16 fn_1_BAD4(void);
+-void fn_1_CF6C(void);
+-void fn_1_D69C(void);
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++

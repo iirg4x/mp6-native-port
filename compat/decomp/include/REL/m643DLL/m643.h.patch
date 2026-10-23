@@ -1,0 +1,21 @@
+--- a/include/REL/m643DLL/m643.h
++++ b/include/REL/m643DLL/m643.h
+@@ -161,0 +162,18 @@
++/* Cross-unit native ABI: startup owns allocation; math owns vector helpers. */
++void *fn_1_16C(s32 priority, u32 bytes, OMOBJ_FUNC callback);
++void fn_1_20C(OMOBJ *object, OMOBJ_FUNC callback);
++void fn_1_17A0(OMOBJ *object);
++float fn_1_214(float cosine);
++void fn_1_298(HuVecF *out, f32 x, f32 y, f32 z);
++float fn_1_2A8(const HuVecF *vec);
++f32 fn_1_3C8(const HuVecF *vector);
++f32 fn_1_3F8(const HuVecF *left, const HuVecF *right);
++void fn_1_428(HuVecF *dst, const HuVecF *left, const HuVecF *right);
++void fn_1_460(HuVecF *dst, const HuVecF *left, const HuVecF *right);
++void fn_1_498(HuVecF *dst, const HuVecF *left, const HuVecF *right);
++f32 fn_1_4D0(HuVecF *dst, const HuVecF *src);
++void fn_1_6B0(HuVecF *dst, const HuVecF *src, f32 scale);
++void fn_1_6E8(HuVecF *dst, const HuVecF *src, Mtx matrix);
++s32 fn_1_77C(Mtx matrix, const Vec *start, const Vec *end, const Vec *direction);
++s32 fn_1_E74(Vec *angles, Mtx matrix);
++

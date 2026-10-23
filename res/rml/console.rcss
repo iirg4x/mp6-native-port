@@ -1,7 +1,7 @@
 /* Developer console (src/gx/ui/console.cpp) -- THE BOTTOM INPUT BAR.
  *
  * Deliberately NOT modelled on window.rcss: this is an instrument, not a menu.
- * It is one translucent line pinned to the bottom edge of the game window, a
+ * It is one paper strip pinned to the bottom edge of the game window, a
  * completion popup rising above it, and -- only in the LOG state -- a
  * scrollback page above that. Nothing here is centred and nothing covers the
  * game by default, because the whole increment is "play while watching the
@@ -34,7 +34,7 @@ body {
     font-family: "Inter";
     font-weight: normal;
     font-size: 13dp;
-    color: #D8E6F0;
+    color: #17100b;
     z-index: 40;
 }
 
@@ -72,9 +72,9 @@ output {
     overflow-x: hidden;
     white-space: pre;
     padding: 8dp 14dp;
-    border-top: 1dp rgba(0, 157, 218, 30%);
-    background-color: rgba(6, 10, 26, 90%);
-    color: #A9C4D6;
+    border-top: 1dp #dfbd60;
+    background-color: #fff9e7;
+    color: #17100b;
 }
 
 /* Visible enough to say "there is more above", thin enough not to eat the
@@ -92,19 +92,19 @@ scrollbarvertical sliderarrowinc {
 
 scrollbarvertical slidertrack {
     width: 6dp;
-    background-color: rgba(0, 157, 218, 12%);
+    background-color: #f3e7bd;
 }
 
 scrollbarvertical sliderbar {
     width: 6dp;
     min-height: 24dp;
     border-radius: 3dp;
-    background-color: rgba(0, 157, 218, 55%);
+    background-color: #dfbd60;
 }
 
 scrollbarvertical sliderbar:hover,
 scrollbarvertical sliderbar:active {
-    background-color: #4CC7F5;
+    background-color: #a87a28;
 }
 
 scrollbarhorizontal {
@@ -129,23 +129,23 @@ acpopup[open] {
     overflow-x: hidden;
     margin: 0 0 2dp 14dp;
     padding: 4dp 0;
-    border: 1dp rgba(0, 157, 218, 55%);
+    border: 1dp #dfbd60;
     border-radius: 6dp 6dp 0 0;
-    background-color: rgba(6, 10, 26, 94%);
-    box-shadow: 0 -4dp 14dp 2dp rgba(0, 0, 0, 55%);
+    background-color: #fff9e7;
+    box-shadow: 0 -2dp 4dp 0 rgba(82, 53, 9, 20%);
 }
 
 acrow {
     display: block;
     min-height: 44dp;
     padding: 12dp 14dp;
-    color: #CFE4F2;
+    color: #17100b;
     white-space: nowrap;
 }
 
 acrow.sel, acrow:hover {
-    color: #06121F;
-    background-color: #009dda;
+    color: #ffffff;
+    background-color: #e92313;
     font-weight: bold;
 }
 
@@ -158,18 +158,18 @@ cmdbar {
     gap: 8dp;
     flex: 0 0 auto;
     padding: 3dp 12dp;
-    border-top: 1dp #009dda;
-    background-color: rgba(6, 10, 26, 86%);
+    border-top: 2dp #dfbd60;
+    background-color: #fff9e7;
 }
 
 prompt {
     display: inline-block;
-    color: #4CC7F5;
+    color: #df200c;
     font-weight: bold;
     font-size: 15dp;
 }
 
-/* No border and no background of its own: the translucent strip IS the field.
+/* No border and no background of its own: the paper strip IS the field.
  * A boxed input inside a boxed bar reads as a dialog, which is the shape this
  * increment exists to stop being. */
 cmdbar input {
@@ -178,8 +178,8 @@ cmdbar input {
     padding: 0;
     border: 0;
     background-color: transparent;
-    color: #E6F2FA;
-    caret-color: #4CC7F5;
+    color: #17100b;
+    caret-color: #df200c;
 }
 
 #console-close {
@@ -187,16 +187,17 @@ cmdbar input {
     min-width: 64dp;
     min-height: 44dp;
     padding: 10dp 12dp;
-    border: 1dp rgba(0, 157, 218, 55%);
+    border: 1dp #dfbd60;
     border-radius: 6dp;
-    background-color: rgba(0, 157, 218, 18%);
-    color: #E6F2FA;
+    background-color: #f3e7bd;
+    color: #17100b;
+    font-family: "Titan One";
     text-align: center;
 }
 
 #console-close:hover, #console-close:active {
-    background-color: #009dda;
-    color: #06121F;
+    background-color: #e92313;
+    color: #ffffff;
 }
 
 /* SELECTION IS AN ELEMENT, NOT A PROPERTY. This rule used to be a
@@ -204,7 +205,7 @@ cmdbar input {
  * RmlUi has no such properties -- StyleSheetSpecification never registers
  * them, so both declarations were dropped at parse time and the field's
  * selection kept painting the default (RmlUi's fallback is the INVERSE of the
- * text colour, i.e. a near-black block on #E6F2FA).
+ * text colour).
  *
  * The supported mechanism is a child element: WidgetTextInput's constructor
  * instances a `<selection>` element under the input
@@ -214,6 +215,6 @@ cmdbar input {
  * as inline style (ElementStyle.cpp:309), so a stylesheet rule reaches it.
  * Same two colours the dead pair asked for, now actually painted. */
 cmdbar input selection {
-    background-color: rgba(0, 157, 218, 55%);
+    background-color: #e92313;
     color: #FFFFFF;
 }

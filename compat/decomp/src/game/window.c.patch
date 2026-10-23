@@ -1,10 +1,19 @@
 --- a/src/game/window.c
 +++ b/src/game/window.c
-@@ -4,0 +5 @@
+@@ -0,0 +1,2 @@
++#include <stdint.h>
++#include "mp6_window.h"
+@@ -5,0 +8 @@
 +#include "be.h"
-@@ -16,0 +18 @@
+@@ -15,0 +19 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -17,0 +21 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -536,0 +539,15 @@
+@@ -232 +236 @@
+-static s32 GetMesMaxSizeSub(u32 messNum);
++static s32 GetMesMaxSizeSub(uintptr_t messNum);
+@@ -555 +559,15 @@
+-// Returns the number of message directories in the loaded archive.
 +/* messDataPtr (game/window.c's HuWinMesRead()) is a plain memcpy() of a
 + * real DVD file's raw bytes (mess/messdata*.bin), never byte-swapped on
 + * the way in -- the exact same "directory count, then a per-entry offset
@@ -20,29 +29,29 @@
 + * corrupted messData pointer it produced is the direct cause of the
 + * first-ever "GXBegin: called without matching GXEnd" Aurora FATAL this
 + * port hit, a few lines later, once real frame drawing tried to use it. */
-@@ -540 +557 @@
+@@ -559 +577 @@
 -    return *dirNum;
 +    return be32(dirNum);
-@@ -547 +564 @@
--    if(dir >= *messData) {
-+    if(dir >= be32(messData)) {
-@@ -551,2 +568,2 @@
--    messData += messData[dir]/sizeof(u32);
+@@ -568 +586 @@
+-    if(directoryIndex >= *messData) {
++    if(directoryIndex >= be32(messData)) {
+@@ -572,2 +590,2 @@
+-    messData += messData[directoryIndex]/sizeof(u32);
 -    return *messData;
-+    messData += be32(&messData[dir])/sizeof(u32);
++    messData += be32(&messData[directoryIndex])/sizeof(u32);
 +    return be32(messData);
-@@ -560 +577 @@
--    if(dir >= *messData) {
-+    if(dir >= be32(messData)) {
-@@ -564,2 +581,2 @@
--    messData += messData[dir]/sizeof(u32);
--    if(num >= *messData) {
-+    messData += be32(&messData[dir])/sizeof(u32);
-+    if(num >= be32(messData)) {
-@@ -569 +586 @@
--    messData += messData[num]/sizeof(u32);
-+    messData += be32(&messData[num])/sizeof(u32);
-@@ -596 +613,19 @@
+@@ -583 +601 @@
+-    if(directoryIndex >= *messageData) {
++    if(directoryIndex >= be32(messageData)) {
+@@ -587,2 +605,2 @@
+-    messageData += messageData[directoryIndex]/sizeof(u32);
+-    if(messageIndex >= *messageData) {
++    messageData += be32(&messageData[directoryIndex])/sizeof(u32);
++    if(messageIndex >= be32(messageData)) {
+@@ -592 +610 @@
+-    messageData += messageData[messageIndex]/sizeof(u32);
++    messageData += be32(&messageData[messageIndex])/sizeof(u32);
+@@ -620 +638,19 @@
 -        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, 0.0f, HU_DISP_WIDTH, 0.0f, 10.0f);
 +        /* This is a THIRD, independent copy of the exact ortho
 +         * HuSprDispInit sets up (game/sprput.c) -- MesDispFunc is a "func
@@ -63,7 +72,110 @@
 +         * same accessor, same formula, no-op (byte-identical native call)
 +         * when widescreen is disabled. */
 +        C_MTXOrtho(proj, 0.0f, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(), HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0.0f, 10.0f);
-@@ -1524,0 +1560,26 @@
+@@ -747,0 +785,56 @@
++/* [MP6] Quick Party (include/mp6_quick_play.h): on sped-up scenes a
++ * "press A to continue" pause dismisses itself after a short glance, as if
++ * every player allowed on the window had pressed its push key. Questions
++ * (choice state) are never answered for the player. Ticks waited so far: */
++static s16 mp6QuickKeyWaitTime[HUWIN_MAX];
++/* Set when the window's message states what is at stake: that page waits
++ * for a person's press (mp6_quick_play_must_read). */
++static u8 mp6QuickMustRead[HUWIN_MAX];
++/* Set by mp6_window_quick_action_set: a live action prompt. */
++static u8 mp6QuickAction[HUWIN_MAX];
++
++void mp6_window_quick_action_set(HUWINID winId)
++{
++    if (winId >= 0 && winId < HUWIN_MAX) mp6QuickAction[winId] = 1;
++}
++
++/* A computer's pause already has its press scripted in the shared queue
++ * (board/window.c KeyWaitSet: a delay, then A, per page). Take that press
++ * now instead of adding one: left queued, it answers whichever window
++ * polls next. A stale A then picked the first entry of the following
++ * choice, and that choice's own scripted cursor keys spilled into the menu
++ * after it -- on a Duel space they reached the wager menu's "Back", which
++ * reopens the opponent list, round after round. Returns FALSE when nothing
++ * is queued (a person's window). */
++static BOOL mp6_quick_play_take_com_press(void)
++{
++    while (comKeyIdxNow != comKeyIdx) {
++        WINCOMKEY *entry = &winComKeyBuf[comKeyIdxNow];
++        u32 press = 0;
++        s16 i;
++        comKeyIdxNow = (comKeyIdxNow + 1) & 255;
++        for (i = 0; i < GW_PLAYER_MAX; i++) {
++            if (entry->controllerKey[i] != HUWIN_COMKEY_NONE) {
++                press |= entry->controllerKey[i];
++                winKey[i] |= entry->controllerKey[i];
++            }
++        }
++        if (press) {
++            return TRUE;
++        }
++    }
++    return FALSE;
++}
++
++static void mp6_quick_play_keywait(HUWINID winId, HUWIN *winP)
++{
++    u32 key;
++    s16 i;
++    if (mp6QuickMustRead[winId] && mp6_quick_play_scene() && mp6_quick_play_human_present()) {
++        /* Everyone should read what is at stake, so only a person's press
++         * ends it: drop the computer's scripted press and take the live
++         * pads, even on a computer's turn (whose windows shut people out;
++         * computers' pads stay idle). */
++        comKeyIdxNow = comKeyIdx;
++        for (i = 0; i < GW_PLAYER_MAX; i++) {
++            winKey[i] = HuPadDStkRep[i] | HuPadBtnDown[i];
++        }
++        mp6_quick_play_hold("stakes line");
++        return;
++    }
++    if (!mp6_quick_play_scene() ||
++        ++mp6QuickKeyWaitTime[winId] < mp6_quick_play_keywait_ticks() ||
++        (HuWinActivePadGet(winP) & winP->pushKey)) {
++        return;
++    }
++    if (mp6_quick_play_take_com_press()) {
++        return;
++    }
++    /* One key, preferring A: callers may read which key ended the wait. */
++    key = (winP->pushKey & PAD_BUTTON_A) ? PAD_BUTTON_A
++                                         : (winP->pushKey & (0u - (u32)winP->pushKey));
++    for (i = 0; i < GW_PLAYER_MAX; i++) {
++        if (winP->padMask & (1 << i)) {
++            winKey[i] |= key;
++        }
++    }
++}
++
+@@ -759,0 +821,3 @@
++                    if (winP->stat != HUWIN_STAT_KEYWAIT) {
++                        mp6QuickKeyWaitTime[winId] = 0;
++                    }
++                    if (mp6QuickAction[winId]) {
++                        mp6_quick_play_action_prompt();
++                    }
+@@ -769,0 +834 @@
++                            mp6_quick_play_keywait(winId, winP);
+@@ -773,0 +839,5 @@
++                            /* [MP6] Quick Party: a choice waiting on live input
++                             * (no scripted CPU keys queued) keeps normal speed. */
++                            if (comKeyIdx == comKeyIdxNow) {
++                                mp6_quick_play_hold("choice window");
++                            }
+@@ -828 +898,4 @@
+-    while(winP->mesTime >= winP->mesSpeed || (winP->attr & HUWIN_ATTR_CHOICE)) {
++    /* [MP6] Quick Party: sped-up boards print the whole page at once (the
++     * game's own speed 0, used by its help windows). */
++    while(winP->mesTime >= (mp6_quick_play_instant_text() ? 0 : winP->mesSpeed) ||
++          (winP->attr & HUWIN_ATTR_CHOICE)) {
+@@ -1607,3 +1643,27 @@
+-// Starts a message by archive ID or inline pointer and resets the current page.
+-// With no loaded archive, an archive ID leaves the old page and pointer in draw-message state.
+-void HuWinMesSet(HUWINID winId, u32 messNum)
 +/* "Message Dir Over" crash fix. HuWinMesSet/HuWinInsertMesSet's "is
 + * messNum a real pointer, or a packed dir<<16|num value?" check was
 + * `messNum & 0x80000000` -- reliable on real hardware, where EVERY live
@@ -90,14 +202,61 @@
 + * this port's. */
 +#define MP6_MESSNUM_ENCODED_MAX 0x01000000u
 +
-@@ -1530 +1591 @@
--    if(!(messNum & 0x80000000)) {
++static void mp6_window_finish_message(HUWINID winId, u32 messNum)
+@@ -1613,13 +1672,0 @@
+-    winP->stat = HUWIN_STAT_DRAWMES;
+-    if(!(messNum & WIN_INLINE_MESSAGE_POINTER_BIT_PATTERN)) {
+-        if(!messDataPtr) {
+-            OSReport("Error: No Message\n");
+-            return;
+-        }
+-        winP->messData = HuWinMesPtrGet(messNum);
+-        if(!winP->messData) {
+-            OSReport("Error: No Message data\n");
+-        }
+-    } else {
+-        winP->messData = (void *)messNum;
+-    }
+@@ -1642,0 +1690,27 @@
++void HuWinMesSet(HUWINID winId, u32 messNum)
++{
++    HUWIN *winP = &winData[winId];
++    winP->stat = HUWIN_STAT_DRAWMES;
++    mp6QuickMustRead[winId] = mp6_quick_play_must_read(messNum);
++    mp6QuickAction[winId] = 0;
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-@@ -1563 +1624 @@
--    if(!(messNum & 0x80000000)) {
++        if(!messDataPtr) {
++            OSReport("Error: No Message\n");
++            return;
++        }
++        winP->messData = HuWinMesPtrGet(messNum);
++        if(!winP->messData) {
++            OSReport("Error: No Message data\n");
++        }
++    } else {
++        winP->messData = (void *)messNum;
++    }
++    mp6_window_finish_message(winId, messNum);
++}
++
++void mp6_window_set_text(HUWINID winId, const char *text)
++{
++    if (winId < 0 || winId >= HUWIN_MAX || !text) return;
++    winData[winId].stat = HUWIN_STAT_DRAWMES;
++    winData[winId].messData = (char *)text;
++    mp6QuickMustRead[winId] = 0;
++    mp6QuickAction[winId] = 0;
++    mp6_window_finish_message(winId, 0);
++}
++
+@@ -1648 +1722 @@
+-    if(!(messNum & WIN_INLINE_MESSAGE_POINTER_BIT_PATTERN)) {
 +    if(messNum < MP6_MESSNUM_ENCODED_MAX) {
-@@ -2033 +2094,9 @@
--    if(messNum > 0x80000000) {
+@@ -2123 +2197 @@
+-static s32 GetMesMaxSizeSub(u32 messNum)
++static s32 GetMesMaxSizeSub(uintptr_t messNum)
+@@ -2134 +2208,9 @@
+-    if(messNum > WIN_INLINE_MESSAGE_POINTER_BIT_PATTERN) {
 +    /* Same fix as HuWinMesSet/HuWinInsertMesSet above (this file's own
 +     * section-comment there has the full story): a SECOND, independent
 +     * instance of the same "is messNum a real pointer or a packed
@@ -107,7 +266,20 @@
 +     * from the original -- only the condition itself changes, same as the
 +     * other two instances. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
-@@ -2224 +2293,2 @@
--    if(messNum > 0x80000000) {
+@@ -2255 +2337 @@
+-            HuWinInsertMesSizeGet((u32)winP->messDataInsert[i], i);
++            mp6_window_measure_insert_text(winP->messDataInsert[i], i);
+@@ -2330 +2412,2 @@
+-    if(messNum > WIN_INLINE_MESSAGE_POINTER_BIT_PATTERN) {
 +    /* Same fix, third instance in this file. */
 +    if(messNum >= MP6_MESSNUM_ENCODED_MAX) {
+@@ -2712,0 +2796,9 @@
++
++void mp6_window_measure_insert_text(const char *text, s16 slot)
++{
++    if (!text || slot < 0 || slot >= HUWIN_INSERTMES_MAX) return;
++    winInsertF = TRUE;
++    winMaxWidth = winMaxHeight = 0;
++    GetMesMaxSizeSub((uintptr_t)text);
++    mesWInsert[slot] = winMaxWidth;
++}

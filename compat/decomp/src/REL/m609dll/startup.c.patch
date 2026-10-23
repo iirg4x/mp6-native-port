@@ -1,0 +1,23 @@
+--- a/src/REL/m609dll/startup.c
++++ b/src/REL/m609dll/startup.c
+@@ -18,0 +19,3 @@
++#include <stddef.h>
++#include "game/audio.h"
++#include "game/charman.h"
+@@ -34 +37 @@
+-void fn_1_D1CC(void);
++s32 fn_1_D1CC(void);
+@@ -43 +46 @@
+-s32 fn_1_1188C(void);
++int fn_1_1188C(void);
+@@ -96,0 +100,4 @@
++_Static_assert(offsetof(ParticleContext, parameters) == offsetof(HU3D_PARTICLE, work), "m609 particle work");
++_Static_assert(offsetof(ParticleContext, entryCount) == offsetof(HU3D_PARTICLE, maxCnt), "m609 particle count");
++_Static_assert(offsetof(ParticleContext, entries) == offsetof(HU3D_PARTICLE, data), "m609 particle data");
++_Static_assert(sizeof(ParticleEntry) == sizeof(HU3D_PARTICLE_DATA), "m609 particle entry");
+@@ -119 +126 @@
+-void fn_1_46F8(s16 voiceSlot, s16 mode, M609VoicePanPosition *position);
++void fn_1_46F8(s16 voiceSlot, s16 mode, Vec *position);
+@@ -1220 +1227 @@
+-void fn_1_46F8(s16 voiceSlot, s16 panMode, M609VoicePanPosition *position) {
++void fn_1_46F8(s16 voiceSlot, s16 panMode, Vec *position) {

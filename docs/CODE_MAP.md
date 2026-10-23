@@ -7,8 +7,8 @@ lists define the recovered game, board and overlay files compiled into the port.
 | --- | --- |
 | Settings, config, launcher | `src/gx/ui/settings.cpp`, `launcher_core.cpp` |
 | FPS, display, input | `src/gx/aurora_bridge.c`, `frame_interp.c` |
-| Audio / voice limits | `src/audio/msm_bridge.c` |
-| Skipping unavailable minigames | `src/os/minigame_stub.c` |
+| Audio / voice limits | `src/audio/msm_bridge.c` (mixer, API), `msm_bank.c`, `msm_internal.h` |
+| Unavailable minigames / modes | `src/os/overlay_fallback.c` |
 | Scheduling / heaps | `src/os/process_native.c`, `arena.c`, `heap_scale.c` |
 | Saves | `src/os/savestate.c`, `card_native.c`, `save_endian.c` |
 | Models, cameras, shadows | `src/hsf/` |
@@ -23,9 +23,10 @@ Recovered game code comes from the pinned, read-only decomp checkout.
 `compat/decomp/` is applied to `build/patched-src/`; do not edit that generated
 copy or the dependency checkout to implement a Port change.
 
-`minigame_stub.c` replaces the decomp's `board/mgcall.c`. It returns true from
-the end-turn call, selecting the board's continue-in-place branch instead of
-waiting for an unavailable overlay. It advertises zero selectable minigames.
+Boards compile the decomp's own `board/mgcall.c`. `overlay_fallback.c` stands
+in for single missing minigame modules: from a board they end as a draw and
+the results overlay still runs; elsewhere they return to the nearest menu.
+`board_mgcall_abi.c` gives two mgcall exports the signatures their callers use.
 
 The numbered Aurora adaptations remain ordered, content-attested build inputs.
 See [Compatibility](../compat/README.md), [Building](BUILDING.md) and

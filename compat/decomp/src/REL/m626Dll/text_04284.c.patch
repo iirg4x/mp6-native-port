@@ -1,0 +1,5 @@
+--- a/src/REL/m626Dll/text_04284.c
++++ b/src/REL/m626Dll/text_04284.c
+@@ -32 +32 @@
+-extern s32 fn_1_960(s32 player, u32 group, s16 character);
++extern void fn_1_960(s32 playerIndex, s32 sideId, s32 winnerId);

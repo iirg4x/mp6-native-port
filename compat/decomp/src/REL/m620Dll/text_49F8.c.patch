@@ -1,0 +1,12 @@
+--- a/src/REL/m620Dll/text_49F8.c
++++ b/src/REL/m620Dll/text_49F8.c
+@@ -378,3 +378,3 @@
+-s32 fn_1_110C(s32 actionId);
+-
+-s32 fn_1_112C(void);
++void fn_1_110C(unsigned int playerIndex);
++
++int fn_1_112C(void);
+@@ -605 +605 @@
+-s32 fn_1_1018(u32 playerId);
++u32 fn_1_1018(u32 playerId);

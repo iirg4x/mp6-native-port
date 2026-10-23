@@ -1,0 +1,17 @@
+--- a/include/game/mic.h
++++ b/include/game/mic.h
+@@ -16,0 +17,14 @@
++/* Recovered definitions in game/mic.c; shared by native mode consumers. */
++u16 *HuMCCurResponseGet(void);
++void HuMCMicSet(s32 micChoice);
++s32 HuMCMount(s32 port);
++s32 HuMCButtonGet(void);
++void HuMCShiftsSet(u32 shifts);
++void HuMCSelWinContextSet(s16 contextId, MCResponseCallback callback, u8 padNo);
++int HuMCSelWinChoiceGet(void);
++void HuMCSessionSet(short playerIndex);
++s32 HuMCUnkResponseCheck(void);
++s32 HuMCNewResponseGet(s32 messageBase);
++void HuMCVolSampleCreate(void);
++s32 HuMCVolGet(s32 minDb, u32 scale);
++

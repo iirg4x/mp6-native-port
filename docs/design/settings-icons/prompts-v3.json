@@ -1,0 +1,84 @@
+{
+  "tool": "built-in imagegen",
+  "date": "2026-10-01",
+  "direction": "Contemporary Mario Party menu pictograms with softly shaded Brighton/Twila character emblem.",
+  "referencePages": [
+    "https://www.nintendo.com/jp/topics/article/107fc72c-c536-454d-89c7-1f5500510832",
+    "https://www.nintendo.com/au/games/nintendo-switch/mario-party-superstars/"
+  ],
+  "images": [
+    {
+      "name": "picture",
+      "prompt": "Use case: style-transfer.\nAsset type: one production menu icon for a modern Mario Party 6 native-port settings screen.\nImage 1 is the current icon to revise. Image 2 is a Mario Party Superstars menu reference; match the treatment of its illustrated menu icons, NOT its text, backdrop, characters or layout.\nPrimary request: redraw the subject as a clean, simple contemporary Mario Party menu pictogram: crisp flat colored shapes, minimal two-tone dimensional shading, a thin WHITE outer separation line. Smooth confident contours, large readable features, bright Nintendo party colors. No brown/black outline around every shape, no cream sticker backing, no hand-painted texture, no faceted papercraft, no thick bevels, no shiny plastic, no 3D toy rendering. The result should sit naturally alongside the Superstars menu's illustrated star, clock and Toad icons.\nComposition: ONE centered compact icon on a square genuinely transparent background; fully inside canvas with 10% clear padding all around. Designed to be readable at 40px. No labels, text, watermark, badge panel, solid background, ground shadow, decorative sparkles, or unrelated props.\nSubject: Keep a gold picture frame with a small simple star crest and blue-sky/green-treetop scene. Simplify the frame into a slim golden band with gently rounded corners, NO bulky round corner bolts. The inside is just a sky-blue field, two big green treetop shapes and one white cloud. Use very few lines and just one darker gold side for slight depth.",
+      "refs": [
+        "docs/design/settings-icons/picture-v2.png",
+        "docs/design/settings-icons/references/superstars-settings.png"
+      ],
+      "output": "docs/design/settings-icons/picture-v3.png",
+      "generatedFile": "exec-d2b96daf-9a37-472c-a015-eb74d30f1044.png"
+    },
+    {
+      "name": "sound",
+      "prompt": "Use case: style-transfer.\nAsset type: one production menu icon for a modern Mario Party 6 native-port settings screen.\nImage 1 is the current icon to revise. Image 2 is a Mario Party Superstars menu reference; match the treatment of its illustrated menu icons, NOT its text, backdrop, characters or layout.\nPrimary request: redraw the subject as a clean, simple contemporary Mario Party menu pictogram: crisp flat colored shapes, minimal two-tone dimensional shading, a thin WHITE outer separation line. Smooth confident contours, large readable features, bright Nintendo party colors. No brown/black outline around every shape, no cream sticker backing, no hand-painted texture, no faceted papercraft, no thick bevels, no shiny plastic, no 3D toy rendering. The result should sit naturally alongside the Superstars menu's illustrated star, clock and Toad icons.\nComposition: ONE centered compact icon on a square genuinely transparent background; fully inside canvas with 10% clear padding all around. Designed to be readable at 40px. No labels, text, watermark, badge panel, solid background, ground shadow, decorative sparkles, or unrelated props.\nSubject: Keep a compact blue speaker facing right, with two coral sound-wave curves. Reduce it to broad blue and pale-blue shapes with one dark-blue cone opening, no nested decorative rings. Thin white outer separation edge. Pure navigation icon, not a modeled megaphone.",
+      "refs": [
+        "docs/design/settings-icons/sound-v2.png",
+        "docs/design/settings-icons/references/superstars-settings.png"
+      ],
+      "output": "docs/design/settings-icons/sound-v3.png",
+      "generatedFile": "exec-d086a072-9770-4fd2-9767-b7938d91b333.png",
+      "cleanupPrompt": "Use case: precise-object-edit. Image 1 is the edit target. Clean up ONLY its silhouette/alpha edges: remove all ragged white specks, paint crumbs, and irregular white fringes around the blue speaker and two coral sound-wave arcs. Preserve the exact existing simple colored design, shape, layout, two-tone shading, and proportions. Give each of the three shapes one smooth, thin, even white separation outline. The gaps BETWEEN the two arcs and the speaker must be genuinely transparent, like the rest of the background; no connecting white blobs. No other changes, no shadow, text or added objects. Square image, genuine transparent alpha.",
+      "cleanupTarget": "exec-2225f1db-24ac-483e-b4e7-fb3939adf6fe.png"
+    },
+    {
+      "name": "controls",
+      "prompt": "Use case: style-transfer.\nAsset type: one production menu icon for a modern Mario Party 6 native-port settings screen.\nImage 1 is the current icon to revise. Image 2 is a Mario Party Superstars menu reference; match the treatment of its illustrated menu icons, NOT its text, backdrop, characters or layout.\nPrimary request: redraw the subject as a clean, simple contemporary Mario Party menu pictogram: crisp flat colored shapes, minimal two-tone dimensional shading, a thin WHITE outer separation line. Smooth confident contours, large readable features, bright Nintendo party colors. No brown/black outline around every shape, no cream sticker backing, no hand-painted texture, no faceted papercraft, no thick bevels, no shiny plastic, no 3D toy rendering. The result should sit naturally alongside the Superstars menu's illustrated star, clock and Toad icons.\nComposition: ONE centered compact icon on a square genuinely transparent background; fully inside canvas with 10% clear padding all around. Designed to be readable at 40px. No labels, text, watermark, badge panel, solid background, ground shadow, decorative sparkles, or unrelated props.\nSubject: A recognizable emerald GameCube controller in a clear slightly tilted front view. Gray left stick in an octagonal gate, white plus D-pad, yellow right C-stick, green A, red B and two light-gray kidney-shaped buttons. No letters on the buttons. Simple smooth silhouette, very restrained two-tone green shading, thin white outer separation edge. Omit grip contour lines and tiny stick rings.",
+      "refs": [
+        "docs/design/settings-icons/controls-v2.png",
+        "docs/design/settings-icons/references/superstars-settings.png"
+      ],
+      "output": "docs/design/settings-icons/controls-v3.png",
+      "generatedFile": "exec-1ebd50a3-acfe-45ea-986b-e507cf8e90e5.png"
+    },
+    {
+      "name": "game",
+      "prompt": "Use case: style-transfer.\nAsset type: one production menu icon for a modern Mario Party 6 native-port settings screen.\nImage 1 is the current icon to revise. Image 2 is a Mario Party Superstars menu reference; match the treatment of its illustrated menu icons, NOT its text, backdrop, characters or layout.\nPrimary request: redraw the subject as a clean, simple contemporary Mario Party menu pictogram: crisp flat colored shapes, minimal two-tone dimensional shading, a thin WHITE outer separation line. Smooth confident contours, large readable features, bright Nintendo party colors. No brown/black outline around every shape, no cream sticker backing, no hand-painted texture, no faceted papercraft, no thick bevels, no shiny plastic, no 3D toy rendering. The result should sit naturally alongside the Superstars menu's illustrated star, clock and Toad icons.\nComposition: ONE centered compact icon on a square genuinely transparent background; fully inside canvas with 10% clear padding all around. Designed to be readable at 40px. No labels, text, watermark, badge panel, solid background, ground shadow, decorative sparkles, or unrelated props.\nSubject: A Mushroom Orb: a red and white mushroom with two thin black oval eyes inside a pale-blue round capsule. Use one thin light-blue perimeter and one small white crescent highlight to suggest the shell. No thick gold ring. Large clean red cap with three large white spots, cream stem, no mouth. Contemporary Mario Party inventory icon with flat colors and only minimal shadow.",
+      "refs": [
+        "docs/design/settings-icons/game-v2.png",
+        "docs/design/settings-icons/references/superstars-settings.png"
+      ],
+      "output": "docs/design/settings-icons/game-v3.png",
+      "generatedFile": "exec-f042428e-a26e-42ef-8d48-95d933ef0fa9.png"
+    },
+    {
+      "name": "extras",
+      "prompt": "Use case: style-transfer.\nAsset type: one production menu icon for a modern Mario Party 6 native-port settings screen.\nImage 1 is the current icon to revise. Image 2 is a Mario Party Superstars menu reference; match the treatment of its illustrated menu icons, NOT its text, backdrop, characters or layout.\nPrimary request: redraw the subject as a clean, simple contemporary Mario Party menu pictogram: crisp flat colored shapes, minimal two-tone dimensional shading, a thin WHITE outer separation line. Smooth confident contours, large readable features, bright Nintendo party colors. No brown/black outline around every shape, no cream sticker backing, no hand-painted texture, no faceted papercraft, no thick bevels, no shiny plastic, no 3D toy rendering. The result should sit naturally alongside the Superstars menu's illustrated star, clock and Toad icons.\nComposition: ONE centered compact icon on a square genuinely transparent background; fully inside canvas with 10% clear padding all around. Designed to be readable at 40px. No labels, text, watermark, badge panel, solid background, ground shadow, decorative sparkles, or unrelated props.\nSubject: A cheerful magenta extras book tipped slightly, with a simple yellow five-point star emblem on its cover, cream-white pages and a small gold ribbon bookmark. Star has two thin black oval eyes and NO mouth. Broad clean forms, no grain, no heavy ink lines, no ornate spine bands, no texture. Thin white outer separation edge.",
+      "refs": [
+        "docs/design/settings-icons/extras-v2.png",
+        "docs/design/settings-icons/references/superstars-settings.png"
+      ],
+      "output": "docs/design/settings-icons/extras-v3.png",
+      "generatedFile": "exec-9ee412c8-fd47-42ad-97e9-eac700fc3fca.png"
+    },
+    {
+      "name": "star",
+      "prompt": "Use case: style-transfer.\nAsset type: one production menu icon for a modern Mario Party 6 native-port settings screen.\nImage 1 is the current icon to revise. Image 2 is a Mario Party Superstars menu reference; match the treatment of its illustrated menu icons, NOT its text, backdrop, characters or layout.\nPrimary request: redraw the subject as a clean, simple contemporary Mario Party menu pictogram: crisp flat colored shapes, minimal two-tone dimensional shading, a thin WHITE outer separation line. Smooth confident contours, large readable features, bright Nintendo party colors. No brown/black outline around every shape, no cream sticker backing, no hand-painted texture, no faceted papercraft, no thick bevels, no shiny plastic, no 3D toy rendering. The result should sit naturally alongside the Superstars menu's illustrated star, clock and Toad icons.\nComposition: ONE centered compact icon on a square genuinely transparent background; fully inside canvas with 10% clear padding all around. Designed to be readable at 40px. No labels, text, watermark, badge panel, solid background, ground shadow, decorative sparkles, or unrelated props.\nSubject: A clean five-point Mario Party collectible star used as a selection cursor. Solid bright yellow, only a slim warm-orange side for gentle depth. Two narrow vertical black oval eyes, NO mouth or eyebrows. Balanced lightly rounded points, no big shine, facets or heavy border. A fine white outer separation edge only; readable at 32px. Match the star illustration in image 2.",
+      "refs": [
+        "docs/design/settings-icons/star-v2.png",
+        "docs/design/settings-icons/references/superstars-settings.png"
+      ],
+      "output": "docs/design/settings-icons/star-v3.png",
+      "generatedFile": "exec-e4efd84e-d1b6-4272-95de-24d061a19795.png"
+    },
+    {
+      "name": "day-night",
+      "prompt": "Use case: style-transfer.\nAsset type: modern Mario Party settings-header character emblem.\nImage 1 is the current emblem to restyle. Image 2 is the actual Brighton character design. Image 3 is the actual Twila character design. Preserve their identities exactly, not generic sun/moon emoji.\nCreate a modern Nintendo-style softly shaded 3D character-head emblem, Brighton on the left foreground and Twila just behind at the right, both heads fully readable. Heads ONLY, no bodies, hands or props.\nBrighton: round face sharply split yellow/orange-red along his angular nose, opposing orange-red/yellow plain oval eyes, pointed alternating red/yellow sun rays, simple closed smile. Twila: slim green/yellow crescent face, sharp split colors, opposite-colored plain oval eyes and a simple closed smile; NOT a blue moon, sleepy emoji or generic crescent.\nArt: contemporary Super Mario Party/Jamboree character-menu rendering. Precisely shaped, lively proportions, soft diffuse studio light, smooth satin surfaces with very restrained highlights and natural dimensional shading. No waxy balloon-toy gloss, huge black sparkling eyes, teeth, tongue, blush, illustrated outlines, cream sticker edge, papercraft facets, painterly texture or dark drop shadow. Sharper sun rays and distinctive split-color faces provide the personality.\nOne compact emblem with 10% transparent margin on all sides, genuine transparent background, entire silhouette visible, square canvas, legible at 72px. No lettering, logo or additional decorations.",
+      "refs": [
+        "docs/design/settings-icons/day-night-v2.png",
+        "docs/design/settings-icons/references/brighton.jpg",
+        "docs/design/settings-icons/references/twila.jpg"
+      ],
+      "output": "docs/design/settings-icons/day-night-v3.png",
+      "generatedFile": "exec-bcf92837-2e5d-4e8f-99ee-91fa62dec6c4.png"
+    }
+  ]
+}

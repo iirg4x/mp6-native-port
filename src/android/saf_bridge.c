@@ -36,6 +36,7 @@ typedef struct SafJni {
     jmethodID importCurrent;   /* static String mp6TreeImportCurrent() */
     jmethodID importError;     /* static String mp6TreeImportError() */
     jmethodID importCancel;    /* static void mp6TreeImportCancel() */
+    jmethodID persistUri;      /* static boolean mp6PersistUri(String) */
 } SafJni;
 
 static SafJni g_jni;
@@ -95,6 +96,7 @@ static SafJni *saf_jni(void)
     MP6_SAF_GET_METHOD(importCurrent, "mp6TreeImportCurrent", "()Ljava/lang/String;");
     MP6_SAF_GET_METHOD(importError, "mp6TreeImportError", "()Ljava/lang/String;");
     MP6_SAF_GET_METHOD(importCancel, "mp6TreeImportCancel", "()V");
+    MP6_SAF_GET_METHOD(persistUri, "mp6PersistUri", "(Ljava/lang/String;)Z");
 #undef MP6_SAF_GET_METHOD
 
     candidate.activityClass = (jclass)(*env)->NewGlobalRef(env, cls);
@@ -297,4 +299,22 @@ void mp6_saf_tree_import_cancel(void)
     if (env == NULL) return;
     (*env)->CallStaticVoidMethod(env, j->activityClass, j->importCancel);
     saf_clear_exception(env, "mp6TreeImportCancel");
+}
+
+int mp6_saf_persist_uri(const char *uri)
+{
+    SafJni *j = saf_jni();
+    if (j == NULL || uri == NULL || uri[0] == '\0') return -1;
+    JNIEnv *env = SDL_GetAndroidJNIEnv();
+    if (env == NULL) return -1;
+    jstring juri = (*env)->NewStringUTF(env, uri);
+    jboolean ok = JNI_FALSE;
+    if (saf_clear_exception(env, "NewStringUTF(uri)") || juri == NULL) {
+        if (juri != NULL) (*env)->DeleteLocalRef(env, juri);
+        return -1;
+    }
+    ok = (*env)->CallStaticBooleanMethod(env, j->activityClass, j->persistUri, juri);
+    if (saf_clear_exception(env, "mp6PersistUri")) ok = JNI_FALSE;
+    (*env)->DeleteLocalRef(env, juri);
+    return ok ? 0 : -1;
 }

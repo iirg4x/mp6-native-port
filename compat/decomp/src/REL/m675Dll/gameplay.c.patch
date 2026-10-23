@@ -1,0 +1,311 @@
+--- a/src/REL/m675Dll/gameplay.c
++++ b/src/REL/m675Dll/gameplay.c
+@@ -0,0 +1,2 @@
++#include "mp6_widescreen.h"
++#include "mp6_m675.h"
+@@ -44,40 +46,4 @@
+-typedef struct M675EmitterRecord M675EmitterRecord;
+-
+-typedef struct M675PropMotionParameter {
+-    s32 resource; /* Motion resource index; -1 skips this slot and -2 ends the list. */
+-    f32 blend; /* Blend duration multiplier used when switching from another motion. */
+-    u32 attributes; /* Motion attributes applied when this motion starts. */
+-} M675PropMotionParameter;
+-
+-typedef struct M675PropParameter {
+-    s32 count; /* Number of instances created from this entry. */
+-    s32 linkModel; /* Reuse an existing model when nonzero. */
+-    s32 type; /* Category used by the prop lookup table. */
+-    s16 firstId; /* ID assigned to the first instance. */
+-    s16 layer; /* Render layer for each instance's model. */
+-    u32 attributes; /* Model attributes enabled at creation. */
+-    s32 shadowMode; /* Selects no shadow, model shadow, or shadow-map reception. */
+-    s32 modelResource; /* Model data resource, or -1 when the prop has no model. */
+-    M675PropMotionParameter * motions; /* Motion resource and playback settings. */
+-    Vec * position; /* Optional initial world position. */
+-    f32 rotationY; /* Initial yaw in degrees. */
+-    OMOBJ_FUNC update; /* Per-frame callback assigned to each instance. */
+-} M675PropParameter;
+-
+-typedef struct M675Collision M675Collision;
+-
+-struct M675Collision {
+-    /* Collision enable flags, mask, and effect category. */
+-    u32 flags, mask, type;
+-    s32 index; /* Owner-supplied record index. */
+-    s32 shapeType; /* Collision shape selector: 0 for sphere, 10 for ring, 11 for boundary. */
+-    OMOBJ *owner;
+-    void *excludedOwner;
+-    OMOBJ_FUNC update;
+-    s32 (*contact)(M675Collision *, M675Collision *);
+-    Vec *position, *velocity;
+-    Vec positionCopy;
+-    f32 radius;
+-    f32 yieldOnContact; /* Nonzero makes this sphere move against a zero-valued sphere. */
+-    s32 handled;
+-};
++
++
++
++
+@@ -86,95 +52,2 @@
+-typedef struct M675ActorState {
+-    M675Collision collision; /* Player contact data; prop instances leave it disabled. */
+-    s32 playerMappingIndex; /* Player mapping used by the player gameplay helpers. */
+-    s32 formationIndexAtCreation; /* Formation slot supplied when a player is created. */
+-    s32 formationIndex; /* Current player slot in the formation arrays. */
+-    s32 active; /* Gates human input, motion-offset easing, result arrival reporting and character
+-                 * feedback. */
+-    Vec basePosition; /* Player formation position before a motion offset is applied. */
+-    Vec position, velocity, rotation; /* World position, per-frame movement and Euler angles. */
+-    f32 baseYaw; /* Player facing angle before its motion offset is applied. */
+-    u32 buttonsDown, buttons; /* Buttons pressed this frame and currently held. */
+-    f32 stickAngle, stickMagnitude; /* Stick angle in degrees and its magnitude. */
+-    s32 motion, motionFrame; /* Selected motion and transform-update count since that motion was
+-                              * selected. */
+-    s32 requestedMotion; /* Motion queued by the current frame's behavior. */
+-    f32 motionSpeed; /* Playback speed for the queued motion. */
+-} M675ActorState;
+-
+-typedef struct M675PropState {
+-    M675ActorState actor;
+-    /* Script phase and its frame timer or repeated-action counter; countdown and desired yaw. */
+-    s32 phase;
+-    s32 phaseTimer;
+-    f32 countdown; /* Remaining frames in a timed action. */
+-    f32 targetAngle;
+-    /* World-space destination and sub-action progress. */
+-    Vec targetPosition;
+-    s32 actionPhase;
+-    s32 actionTimer; /* Elapsed frames for the current action. */
+-    s32 soundTimer; /* Frames until the next repeated sound. */
+-    /* Unused bytes cleared when the prop is created. */
+-    u8 unknown_0D0_to_0D3[4];
+-    s32 movementPhase; /* Substate of a turn, walk, or jump routine. */
+-    s32 movementTimer; /* Frames remaining or elapsed in that movement substate. */
+-    /* Unused bytes cleared when the prop is created. */
+-    u8 unknown_0DC_to_0FB[32];
+-    s32 motionActive; /* Nonzero while the selected motion is being tracked. */
+-    s32 motionTimer; /* Cleared when motion tracking is inactive or the motion and blend have
+-                      * ended. */
+-    /* Unused bytes cleared when the prop is created. */
+-    u8 unknown_104_to_107[4];
+-    s32 airborne; /* Whether display positioning uses the airborne depth bands. */
+-    /* Unused bytes cleared when the prop is created. */
+-    u8 unknown_10C_to_127[28];
+-    s32 positionSyncEnabled; /* Follows the paired sequence actor's position when set. */
+-    Vec displayOffset; /* Temporary offset added when placing the model. */
+-    f32 movementSoundDistance; /* Accumulated requested walk speed, used to space walking sounds. */
+-    s32 effectRegistrationActive; /* Nonzero enables drawing the prop's registered ground ring. */
+-    f32 effectRegistrationRadius; /* Ground-ring radius in world units. */
+-    Vec * effectRegistrationPosition; /* Position shared with the effect manager. */
+-    /* Unused bytes cleared when the prop is created. */
+-    u8 unknown_148_to_1B3[108];
+-} M675PropState;
+-
+-typedef struct M675PropWork {
+-    M675PropState state;
+-    M675PropParameter * parameters;
+-    s32 id;
+-    s32 updateCount;
+-    Vec initialPosition;
+-    /* Outer sequence phase, delayed-start frames, and phase timer. */
+-    s32 sequencePhase;
+-    s32 delay;
+-    s32 sequenceTimer;
+-    /* Unused bytes cleared when the prop is created. */
+-    u8 unknown_1D8_to_1DB[4];
+-    /* Sequence selection values used by the prop callbacks. */
+-    union {
+-        s32 controlValue;
+-        s32 frameCount;
+-    };
+-    union {
+-        s32 secondaryControlValue;
+-        s32 lastRecordedFrame;
+-    };
+-    /* Bounce deformation scale and angle. */
+-    f32 bounceScale;
+-    f32 bounceAngle;
+-    /* Unused bytes cleared when the prop is created. */
+-    u8 unknown_1EC_to_283[152];
+-    /* Type 0's path recorder and types 2 through 4's emitters share this slot. */
+-    union {
+-        Vec *samples;
+-        M675EmitterRecord *records;
+-    };
+-    s32 soundHandle; /* Active sound-effect handle, or the stored inactive value. */
+-    s32 eventCount; /* Number of sequence events recorded for this prop. */
+-    s32 shuffleIndex; /* Current index in the shuffled effect-type list. */
+-    s32 effectActive; /* Whether the prop's triggered main/shape motion sequence is active. */
+-    f32 effectMotionSpeed; /* Shared main/shape motion playback-speed multiplier. */
+-    s32 alternateMotionStart; /* Main/shape motion start selector: zero uses frame 0, nonzero uses
+-                               * frame 15. */
+-    u8 shuffledEffectTypes[20]; /* Shuffled effect types emitted by this sequence. */
+-    Vec displayPosition; /* Ground-ring position; airborne props choose its Y from depth bands. */
+-} M675PropWork;
++
++
+@@ -185,35 +58 @@
+-typedef struct M675EmitterRecord {
+-    /* Effect category, visibility/interaction state, and animation timer. */
+-    s32 type, enabled, state;
+-    f32 timer;
+-    u32 unmappedWordAfterTimer; /* Cleared with the emitter record; no later access is shown. */
+-    /* Phase count, model slot, and source player index. */
+-    s32 phaseCounter, modelId, playerIndex;
+-    /* Current transform and per-frame movement/rotation increments. */
+-    Vec position, rotation, velocity, rotationDelta;
+-    /* Uniform scale, model height adjustment, and floor cutoff offset from world Y=200. */
+-    f32 scale, verticalOffset, heightLimit;
+-    /* Endpoints used when moving the effect toward a screen-space target. */
+-    Vec sourcePosition, projectedPosition;
+-    M675Collision collision;
+-} M675EmitterRecord;
+-
+-typedef struct M675MotionObjectView_s {
+-    u8 unmappedHeaderBytes[64];
+-    s32 modelIdsAddress;
+-    s32 unmappedWordAfterModelIds;
+-    s32 unmappedWordBetweenModelIdsAndVector;
+-    s32 unmappedWordBeforeVector;
+-    HuVecF unmappedVectorBeforeGap;
+-    u8 unmappedBytesBetweenVectors[12];
+-    HuVecF unmappedVectorAfterGap;
+-    u8 unmappedBytesBeforeTail[4];
+-    s32 unmappedTailStart;
+-    s32 unmappedWordBeforeFloatPair;
+-    f32 unmappedFloatPairStart;
+-    f32 unmappedFloatPairEnd;
+-    s32 unmappedWordAfterFloatPair;
+-    s32 unmappedMiddleTailWord;
+-    s32 unmappedWordBeforeTailEnd;
+-    f32 unmappedTailEnd;
+-} M675MotionObjectView;
++
+@@ -235,50 +74,24 @@
+-extern void fn_1_6210(M675ActorState *sequence, s32 motion, f32 speed);
+-
+-extern f32 fn_1_47DC(f32 start, f32 end, f32 speed);
+-
+-extern f32 fn_1_48F8(f32 start, f32 end);
+-
+-void fn_1_74FC(M675ActorState *work, s32 modelId);
+-
+-extern void fn_1_F0B0(s32 playerIndex, float *x, float *y);
+-
+-extern void fn_1_E4F8(Point3d *position, f32 radius, s32 count);
+-
+-extern void fn_1_4BB4(Vec *start, Vec *end, f32 timer, Vec *position);
+-
+-extern void fn_1_EF88(s32 playerIndex, s32 amount);
+-
+-extern void fn_1_E918(void *registration);
+-
+-extern f32 fn_1_49AC(Vec *start, Vec *end);
+-
+-extern s32 fn_1_4C0C(Vec *start, Vec *end, f32 delta, f32 step,
+-    Vec *velocity);
+-
+-extern void fn_1_3C70(s32 resource, Vec *position);
+-
+-extern s32 fn_1_32EC(Vec *position);
+-
+-extern void fn_1_E0F0(Vec *position);
+-
+-extern s32 fn_1_A40(void);
+-
+-extern s32 fn_1_B6C(void);
+-
+-extern s32 fn_1_A50(void);
+-
+-extern void fn_1_74C8(M675ActorState *work);
+-
+-extern void fn_1_61F4(M675ActorState *work);
+-
+-extern f32 fn_1_4A48(Vec *first, Vec *second);
+-
+-s32 fn_1_46CC(s32 model, s32 resource);
+-
+-int fn_1_45C4(int dataNum);
+-
+-s32 fn_1_A38(s32 resource);
+-
+-s32 fn_1_10170(M675Collision *registration);
+-
+-void fn_1_E48(s16 model, char *name, s32 mode);
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+@@ -290 +103 @@
+-BOOL fn_1_7D88(M675MotionObjectView *actor);
++BOOL fn_1_7D88(OMOBJ *actor);
+@@ -302 +114,0 @@
+-void fn_1_7554(HUPROCESS *process);
+@@ -352 +163,0 @@
+-void fn_1_D494(s32 type, s32 value);
+@@ -378 +188,0 @@
+-void fn_1_766C(void);
+@@ -402,3 +212 @@
+-s32 fn_1_D3BC(void);
+-
+-s32 fn_1_D3CC(void);
++
+@@ -860,0 +669,14 @@
++        if (param->modelResource == 19) {
++            /* Finite backdrop art only; no town, actors or collision scaling. */
++            mp6_widescreen_extend_sides(model, "sora", TRUE);
++            mp6_widescreen_extend_billboard_mirror(model, "yama", -1);
++            /* The second obj24 is the near seawall. Repeat its six authored
++             * atlas bands along Z, retaining concrete joints and texel density. */
++            mp6_widescreen_extend_tiled_sloped_rim_at(model, "obj24", 1, 2,
++                -1356.09485f, 13000.0f, 1.0f);
++            mp6_widescreen_extend_shape_mirror(model, "umi");
++        } else if (param->modelResource == 20) {
++            /* Continue only the outer grass edges, not the sidewalk blocks. */
++            mp6_widescreen_extend_terrain_outer_sides(model, "siba3", 0.0f, 2.0f, TRUE);
++            mp6_widescreen_extend_tiled_rim_sides(model, "bouha", 2500.0f, 1.0f);
++        }
+@@ -976 +798 @@
+-BOOL fn_1_7D88(M675MotionObjectView *actor)
++BOOL fn_1_7D88(OMOBJ *actor)
+@@ -980 +802 @@
+-    model_id = *(s16 *) actor->modelIdsAddress;
++    model_id = actor->mdlId[0];
+@@ -1095 +916,0 @@
+-    s32 selectedDataAddress;
+@@ -1133 +953,0 @@
+-        selectedDataAddress = (s32)selected->data;
+@@ -2076,4 +1896,4 @@
+-    active->state.effectRegistrationActive = 1;
+-    active->state.effectRegistrationRadius = 60.0f;
+-    active->state.effectRegistrationPosition = &activeWork->displayPosition;
+-    fn_1_E918(&active->state.effectRegistrationActive);
++    active->state.effect.active = 1;
++    active->state.effect.radius = 60.0f;
++    active->state.effect.position = &activeWork->displayPosition;
++    fn_1_E918(&active->state.effect);
+@@ -3031,0 +2852,2 @@
++
++/* Storage only; omOvlKill owns runtime allocation teardown. */

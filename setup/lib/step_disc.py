@@ -137,7 +137,7 @@ def _directory_has_entries(path):
         return next(entries, None) is not None
 
 
-def ensure_disc(decomp_dir, disc_arg=None, include_movies=False, force=False, assume_yes=False):
+def ensure_disc(decomp_dir, disc_arg=None, include_movies=True, force=False, assume_yes=False):
     orig_root = os.path.join(decomp_dir, "orig", "GP6E01")
     incoming, _previous = _tree_paths(orig_root)
     _recover_tree(orig_root)

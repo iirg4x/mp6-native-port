@@ -1,0 +1,11 @@
+--- a/src/REL/m660dll/text_0D29C.c
++++ b/src/REL/m660dll/text_0D29C.c
+@@ -20 +20 @@
+-s32 fn_1_601C(M660Player *player, s32 mode);
++void fn_1_601C(M660Player *player, s16 direction);
+@@ -23 +23 @@
+-void fn_1_4004(HuVecF *origin);
++void fn_1_4004(Vec *origin);
+@@ -26 +26 @@
+-void fn_1_67D4(s16 slot, s16 mode, struct VoicePosition *position);
++void fn_1_67D4(s16 slot, s16 mode, Vec *position);

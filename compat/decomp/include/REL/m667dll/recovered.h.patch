@@ -1,0 +1,100 @@
+--- a/include/REL/m667dll/recovered.h
++++ b/include/REL/m667dll/recovered.h
+@@ -4,0 +5 @@
++#include <stdint.h>
+@@ -16,0 +18,2 @@
++    union {
++        struct {
+@@ -23,0 +27,3 @@
++        };
++        OMOBJ *objects[7]; /* Indexed by the scene-node descriptor table. */
++    };
+@@ -256,2 +262,2 @@
+-extern void *lbl_1_data_AB8[7];
+-extern void *lbl_1_data_AD4[7];
++extern const M667ModelDescription *const lbl_1_data_AB8[7];
++extern const M667ModelDescription *const lbl_1_data_AD4[7];
+@@ -267 +272,0 @@
+-s8 *fn_1_895C(s32 model);
+@@ -289,4 +293,0 @@
+-f32 fn_1_80AC(HuVecF *start, HuVecF *end);
+-s32 fn_1_8544(HuVecF *source, HuVecF *destination);
+-void fn_1_8254(M667QuadraticView *out, HuVecF *start, HuVecF *peak, HuVecF *end);
+-f32 fn_1_84E8(M667QuadraticView *curve, f32 x);
+@@ -295,3 +296,2 @@
+-void fn_1_7350(void *description, s32 *models, s32 *motions);
+-void fn_1_7424(OMOBJ *object, M667ModelDescription *description);
+-OMOBJ *fn_1_7868(void *description);
++void fn_1_7350(const M667ModelDescription *description, s32 *models, s32 *motions);
++void fn_1_7424(OMOBJ *object, const M667ModelDescription *description);
+@@ -298,0 +299,53 @@
++void fn_1_7C1C(M667Pool *pool, void *item);
++s16 fn_1_8FC4(void);
++
++/* Native allocation and callback owners. */
++typedef struct M667RegistryDescriptorView {
++    void (*render)(void);
++    void (*update)(M667ModelEffectView *item, s32 event);
++    s32 itemBytes;
++    s32 count;
++} M667RegistryDescriptorView;
++
++typedef struct LightSetupView {
++    s16 unknown_00; /* No light-object callback reads or writes this word. */
++    s16 phase;
++    u8 unknown_04[4]; /* No light-object callback accesses these bytes. */
++    s32 lightId;
++} LightSetupView;
++
++typedef struct M667ParticlePointView {
++    HuVecF position;
++    GXColor color;
++} M667ParticlePointView;
++
++typedef struct M667ParticleConfigView {
++    u32 flags;                         /* Bit 0 alternates scale between half and full size. */
++    GXColor targetColor;               /* End color used by the particle's per-update color
++                                        * blend. */
++    GXColor startingColor;              /* Start color used by the particle's per-update color
++                                         * blend. */
++    HuVecF initialVelocity;            /* Initial displacement per particle update. */
++    f32 velocityMultiplier[3];         /* Per-frame X, Y, and Z velocity multipliers. */
++    f32 velocityYDelta;                /* Per-frame change to vertical velocity. */
++    u8 reservedBytes[4];               /* Reserved bytes between velocity and scale settings. */
++    f32 scaleRate;                     /* Per-frame change to base scale. */
++    f32 alphaRate;                     /* Per-frame change to alpha. */
++    f32 colorInterpolation;            /* Blend fraction from startingColor to targetColor. */
++} M667ParticleConfigView;
++
++typedef struct M667ParticleDescription {
++    u32 flags; /* Readiness bits used to skip animation and work-buffer setup. */
++    s32 resourceId; /* Sprite-animation data number; a negative value ends the list. */
++    s32 count; /* Maximum number of particle slots. */
++    s32 blendMode; /* Blend mode passed to the particle renderer. */
++    s32 modelId; /* Created particle-system model handle. */
++    ANIMDATA *animation; /* Loaded animation used by the particle-system model. */
++    u8 reservedAfterAnimation[4]; /* Reserved bytes after the loaded animation pointer. */
++} M667ParticleDescription;
++
++/* Shared signatures follow the defining owner. */
++void fn_1_148(void);
++f64 fn_1_6C54(f64 value);
++OMOBJ *fn_1_7868(const M667ModelDescription *description);
++void fn_1_78F8(OMOBJ *object);
+@@ -301 +353,0 @@
+-void fn_1_7C1C(M667Pool *pool, void *item);
+@@ -304 +356,13 @@
+-s16 fn_1_8FC4(void);
++void fn_1_7EF0(Point3d *start, Point3d *end, Point3d *out, f32 blend);
++f32 fn_1_7F48(HuVecF *direction);
++f32 fn_1_7FA0(f32 start, f32 end, f32 blend);
++f32 fn_1_80AC(HuVecF *start, HuVecF *end);
++void fn_1_8254(M667QuadraticView *out, HuVecF *origin, HuVecF *middle, HuVecF *end);
++f32 fn_1_84E8(M667QuadraticView *curve, f32 distance);
++s32 fn_1_8544(Point3d *source, Point3d *destination);
++s8 *fn_1_895C(s32 model);
++void fn_1_8AE4(s32 model, const s8 *colors, f32 redScale, f32 greenScale, f32 blueScale);
++void fn_1_8C30(s32 modelId, char *objectName, s32 targetModelId);
++void fn_1_8CBC(HuVecF *worldPos, s32 soundId);
++s32 fn_1_8E5C(s32 soundId);
++const M667ModelDescription *fn_1_8F58(s32 descriptionIndex);

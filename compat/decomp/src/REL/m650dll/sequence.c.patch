@@ -1,0 +1,46 @@
+--- a/src/REL/m650dll/sequence.c
++++ b/src/REL/m650dll/sequence.c
+@@ -3,0 +4 @@
++#include "mp6_widescreen.h"
+@@ -84,0 +86,7 @@
++/* Widescreen: the record scene stages the Chomp and bone just past the native
++ * edge. fn_1_F90 pushes them out by the widened margin on its third tick, once
++ * the winner camera has been posed under the wipe (its right axis is world X
++ * here). The bone's
++ * first throw gets mp6WsBoneExtraX so it still lands where it does at 4:3. */
++static s32 mp6WsOffstagePending;
++static f32 mp6WsBoneExtraX;
+@@ -398,0 +407,27 @@
++    if (mp6WsOffstagePending > 0 && --mp6WsOffstagePending == 0) {
++        float point[3], offset[3];
++        Hu3DModelPosGet(winnerWork->model20, &modelPosition);
++        point[0] = modelPosition.x, point[1] = modelPosition.y, point[2] = modelPosition.z;
++        if (mp6_widescreen_offstage_offset(lbl_1_data_150[winner], point, offset)) {
++            Hu3DModelPosSet(winnerWork->model20, modelPosition.x + offset[0], modelPosition.y,
++                            modelPosition.z);
++        }
++        Hu3DModelPosGet(winnerWork->model52, &modelPosition);
++        point[0] = modelPosition.x, point[1] = modelPosition.y, point[2] = modelPosition.z;
++        if (mp6_widescreen_offstage_offset(lbl_1_data_150[winner], point, offset)) {
++            float y = modelPosition.y, vy = winnerWork->boneVelocity.y;
++            s32 flightFrames = 0;
++            /* Same steps as case 1 below, up to the first landing. */
++            do {
++                y += vy;
++                vy -= 1.6333333f;
++                flightFrames++;
++            } while (y > 0.5f && flightFrames < 600);
++            mp6WsBoneExtraX = -offset[0] / (f32)flightFrames;
++            winnerWork->boneVelocity.x += mp6WsBoneExtraX;
++            Hu3DModelPosSet(winnerWork->model52, modelPosition.x + offset[0], modelPosition.y,
++                            modelPosition.z);
++            Hu3DModelPosSet(winnerWork->model54, modelPosition.x + offset[0], 0.2f,
++                            modelPosition.z);
++        }
++    }
+@@ -407,0 +443,2 @@
++            winnerWork->boneVelocity.x -= mp6WsBoneExtraX;
++            mp6WsBoneExtraX = 0.0f;
+@@ -460,0 +498,2 @@
++    mp6WsOffstagePending = 3;
++    mp6WsBoneExtraX = 0.0f;

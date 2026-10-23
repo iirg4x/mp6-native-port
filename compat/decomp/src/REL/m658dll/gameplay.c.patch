@@ -1,0 +1,315 @@
+--- a/src/REL/m658dll/gameplay.c
++++ b/src/REL/m658dll/gameplay.c
+@@ -28 +27,0 @@
+-#include "include/game/mg/actman.h"
+@@ -140,5 +138,0 @@
+-typedef struct M658RegistryDescriptor {
+-    void (*render)(void);
+-    void (*update)(void *, s32);
+-    s32 itemBytes, count;
+-} M658RegistryDescriptor;
+@@ -148,6 +142,6 @@
+-    {NULL, fn_1_2000, 64, 2},
+-    {NULL, fn_1_2188, 64, 2},
+-    {NULL, fn_1_2310, 64, 2},
+-    {NULL, fn_1_24F0, 64, 1},
+-    {NULL, fn_1_260C, 64, 1},
+-    {NULL, fn_1_2728, 64, 1},
++    {NULL, fn_1_2000, sizeof(M658HookActor), 2},
++    {NULL, fn_1_2188, sizeof(M658HookActor), 2},
++    {NULL, fn_1_2310, sizeof(M658HookActor), 2},
++    {NULL, fn_1_24F0, sizeof(M658HookActor), 1},
++    {NULL, fn_1_260C, sizeof(M658HookActor), 1},
++    {NULL, fn_1_2728, sizeof(M658HookActor), 1},
+@@ -191 +185 @@
+-                      (const s8 *)player->omObj->work[0], fade);
++                      (const s8 *)((M658PlayerWork *)player->actor->correctHookParam)->materialColors, fade);
+@@ -195 +189 @@
+-                      (u8 *)player->omObj->work[0]);
++                      (u8 *)((M658PlayerWork *)player->actor->correctHookParam)->materialColors);
+@@ -249 +243 @@
+-    lbl_1_bss_38 = fn_1_A0(100, 132, fn_1_2828);
++    lbl_1_bss_38 = fn_1_A0(100, sizeof(M658Runtime), fn_1_2828);
+@@ -252,2 +245,0 @@
+-extern void fn_1_6414(void *resource);
+-extern s16 *fn_1_753C(s32 index);
+@@ -713 +705 @@
+-void fn_1_1B58(MGACTOR *actor, int workValue)
++void fn_1_1B58(MGACTOR *actor, intptr_t workValue)
+@@ -733,8 +724,0 @@
+-typedef struct M658CameraStorageView {
+-    s16 mode;
+-    s16 frame;
+-    u8 unreadBytesBeforePosition[12];
+-    Vec position;
+-    Vec target;
+-    u8 unreadBytesAfterTarget[56];
+-} M658CameraStorageView;
+@@ -858,7 +841,0 @@
+-typedef struct M658HookActor {
+-    u8 unreadBytesBeforeModel[6];
+-    s16 model;
+-    u8 unreadBytesBeforeHost[48];
+-    s32 hostModel;
+-    char *hook;
+-} M658HookActor;
+@@ -1048 +1024,0 @@
+-s16 *fn_1_753C(s32 index);
+@@ -1074,3 +1050,3 @@
+-    lbl_1_bss_1C = fn_1_A0(10, 96, fn_1_358C);
+-    lbl_1_bss_24 = fn_1_A0(10, 140, fn_1_3940);
+-    lbl_1_bss_20 = fn_1_A0(10, 16, fn_1_34E0);
++    lbl_1_bss_1C = fn_1_A0(10, sizeof(M658CameraStorageView), fn_1_358C);
++    lbl_1_bss_24 = fn_1_A0(10, sizeof(M658Rows), fn_1_3940);
++    lbl_1_bss_20 = fn_1_A0(10, sizeof(M658LightWork), fn_1_34E0);
+@@ -1080 +1056 @@
+-            lbl_1_bss_28[index] = fn_1_A0(20, 132, fn_1_3BC0);
++            lbl_1_bss_28[index] = fn_1_A0(20, sizeof(M658PlayerWork), fn_1_3BC0);
+@@ -1085 +1061 @@
+-    lbl_1_bss_18 = fn_1_A0(30, 92, fn_1_5430);
++    lbl_1_bss_18 = fn_1_A0(30, sizeof(M658RegistryWork), fn_1_5430);
+@@ -1121 +1097 @@
+-    s16 *work = (s16 *)obj->data;
++    M658Runtime *work = obj->data;
+@@ -1124 +1100 @@
+-    if (work[0] == 0) {
++    if (work->timer == 0) {
+@@ -1127 +1103 @@
+-    work[0] += 1;
++    work->timer += 1;
+@@ -1135,19 +1111,3 @@
+-        work[1] = 2;
+-    }
+-}
+-typedef struct M658TransitionWork {
+-
+-    s16 timer;
+-
+-    s16 phase;
+-
+-} M658TransitionWork;
+-typedef struct M658SequenceUpdateWork {
+-
+-    s16 timer;
+-
+-    s16 phase;
+-
+-    s16 state;
+-
+-} M658SequenceUpdateWork;
++        work->phase = 2;
++    }
++}
+@@ -1160 +1119,0 @@
+-extern void fn_1_7468(s32 soundId);
+@@ -1162 +1120,0 @@
+-extern void fn_1_571C(s32 player, s32 amount);
+@@ -1174 +1132 @@
+-    M658TransitionWork *work = object->data;
++    M658Runtime *work = object->data;
+@@ -1213 +1171 @@
+-        if ((u32)lbl_1_bss_38->selected != 0) {
++        if (lbl_1_bss_38->selected != NULL) {
+@@ -1237,5 +1195,3 @@
+-    M658SequenceUpdateWork *work = object->data;
+-
+-    s32 secondSequenceSnapshot;
+-
+-    s32 firstSequenceSnapshot;
++    M658Runtime *work = object->data;
++
++
+@@ -1248,5 +1204,3 @@
+-    firstSequenceSnapshot = (s32)lbl_1_bss_24->entries[0][0];
+-
+-    secondSequenceSnapshot = (s32)lbl_1_bss_24->entries[1][0];
+-
+-    switch (work->state) {
++
++
++    switch (work->substate) {
+@@ -1276 +1230 @@
+-            work->state++;
++            work->substate++;
+@@ -1314 +1268 @@
+-            work->state++;
++            work->substate++;
+@@ -1349 +1303 @@
+-        work->state++;
++        work->substate++;
+@@ -1371 +1325 @@
+-            work->state = 0;
++            work->substate = 0;
+@@ -1384,5 +1337,0 @@
+-typedef struct M658ModeState {
+-    s16 timer;
+-    s16 phase;
+-    s16 substate;
+-} M658ModeState;
+@@ -1399 +1348 @@
+-    M658ModeState *state = object->data;
++    M658Runtime *state = object->data;
+@@ -1430 +1379 @@
+-    M658ModeState *state;
++    M658Runtime *state;
+@@ -1464 +1413 @@
+-    M658ModeState *state = object->data;
++    M658Runtime *state = object->data;
+@@ -1480,6 +1428,0 @@
+-typedef struct M658LightWork {
+-    u8 unreadBytesBeforePhase[2];
+-    s16 phase;
+-    u8 unreadBytesBeforeLight[8];
+-    s32 light;
+-} M658LightWork;
+@@ -1505 +1447,0 @@
+-extern void *memset(void *destination, int value, unsigned long count);
+@@ -1532,3 +1474,3 @@
+-    s16 *state = object->data;
+-
+-    switch (*state) {
++    M658CameraStorageView *state = object->data;
++
++    switch (state->mode) {
+@@ -1578 +1520 @@
+-    s16 *work = obj->data;
++    M658CameraStorageView *work = obj->data;
+@@ -1581,2 +1523,2 @@
+-        work[1] = 0;
+-        work[0] = 3;
++        work->frame = 0;
++        work->mode = 3;
+@@ -1630 +1572 @@
+-    memset(work, 0, 140);
++    memset(work, 0, sizeof(*work));
+@@ -1667 +1609 @@
+-extern void fn_1_1B58(MGACTOR *actor, int workValue);
++extern void fn_1_1B58(MGACTOR *actor, intptr_t workValue);
+@@ -1669 +1610,0 @@
+-extern void *fn_1_6F70(s32 value);
+@@ -1690 +1631 @@
+-    memset(work, 0, 132);
++    memset(work, 0, sizeof(*work));
+@@ -1700 +1641 @@
+-    actorParam.correctHookParam = (int)work;
++    actorParam.correctHookParam = (intptr_t)work;
+@@ -1717 +1657,0 @@
+-    work->player->omObj->work[0] = (u32)work->materialColors;
+@@ -1823 +1763 @@
+-        u16 *animation;
++        M658HookActor *animation;
+@@ -1827,3 +1767,3 @@
+-        animation = fn_1_1F04(1);
+-        if ((u32)animation != 0) {
+-            Hu3DModelPosSetV(((s16 *)animation)[3], &position);
++        animation = (M658HookActor *)fn_1_1F04(1);
++        if (animation != NULL) {
++            Hu3DModelPosSetV(animation->model, &position);
+@@ -1897,11 +1836,0 @@
+-typedef struct M658PlayerPhaseWork {
+-    u8 unreadBytesBeforeTimer[12];
+-    s32 timer;
+-    MGPLAYER *player;
+-    u8 unreadBytesBeforePlayerNumber[6];
+-    s8 playerIndex;
+-    u8 unreadByteBeforeModelIndex;
+-    s32 modelIndex;
+-    u8 unreadBytesBeforeRotation[20];
+-    f32 rotation;
+-} M658PlayerPhaseWork;
+@@ -1944 +1873 @@
+-    M658PlayerPhaseWork *work = object->data;
++    M658PlayerWork *work = object->data;
+@@ -1950,2 +1879,2 @@
+-    if (work->timer == 0) {
+-        if ((*(u16 *)work & 0x40) != 0) {
++    if (work->frame == 0) {
++        if ((work->flags & 0x40) != 0) {
+@@ -1956 +1885 @@
+-        fn_1_1040(lbl_1_data_1E4[(s32)work->playerIndex][work->modelIndex], 0,
++        fn_1_1040(lbl_1_data_1E4[(s32)work->playerIndex][work->action], 0,
+@@ -1967,3 +1896,3 @@
+-    work->timer++;
+-    if (work->timer >= 20) {
+-        progress = (work->timer - 20) / 2e+01f;
++    work->frame++;
++    if (work->frame >= 20) {
++        progress = (work->frame - 20) / 2e+01f;
+@@ -1978,2 +1907,2 @@
+-            if ((*(u16 *)work & 0x40) == 0) {
+-                work->modelIndex++;
++            if ((work->flags & 0x40) == 0) {
++                work->action++;
+@@ -1981 +1910 @@
+-            fn_1_1040(lbl_1_data_1E4[(s32)work->playerIndex][work->modelIndex], 1,
++            fn_1_1040(lbl_1_data_1E4[(s32)work->playerIndex][work->action], 1,
+@@ -1985 +1914 @@
+-            if (work->modelIndex >= 5) {
++            if (work->action >= 5) {
+@@ -1987,3 +1916,3 @@
+-                work->timer = 120;
+-            } else if ((*(u16 *)work & 0x40) != 0) {
+-                work->timer = 120;
++                work->frame = 120;
++            } else if ((work->flags & 0x40) != 0) {
++                work->frame = 120;
+@@ -2007 +1936 @@
+-    M658PlayerPhaseWork *work = object->data;
++    M658PlayerWork *work = object->data;
+@@ -2013,2 +1942,2 @@
+-    if (work->timer == 0) {
+-        fn_1_1040(lbl_1_data_1E4[(s32)work->playerIndex][work->modelIndex], 0,
++    if (work->frame == 0) {
++        fn_1_1040(lbl_1_data_1E4[(s32)work->playerIndex][work->action], 0,
+@@ -2018 +1947 @@
+-        if (work->modelIndex < 5) {
++        if (work->action < 5) {
+@@ -2029,3 +1958,3 @@
+-    work->timer++;
+-    if (work->timer >= 20) {
+-        progress = (work->timer - 20) / 2e+01f;
++    work->frame++;
++    if (work->frame >= 20) {
++        progress = (work->frame - 20) / 2e+01f;
+@@ -2040 +1969 @@
+-            if (work->modelIndex >= 5) {
++            if (work->action >= 5) {
+@@ -2043 +1972 @@
+-                if ((*(u16 *)work & 1) != 0) {
++                if ((work->flags & 1) != 0) {
+@@ -2167 +2095,0 @@
+-extern void fn_1_69C8(Vec *start, Vec *end, f32 t, Vec *out);
+@@ -2190 +2118 @@
+-    fn_1_69C8(&work->motionStart, &work->motionEnd, progress, &position);
++    fn_1_69C8(&work->motionStart, &work->motionEnd, &position, progress);
+@@ -2207,6 +2135,6 @@
+-    s16 *state = obj->data;
+-
+-    if (state[59] != 0) {
+-        state[59]--;
+-    }
+-    switch (state[58]) {
++    M658PlayerWork *state = obj->data;
++
++    if (state->inputDelayFrames != 0) {
++        state->inputDelayFrames--;
++    }
++    switch (state->inputState) {
+@@ -2225 +2153 @@
+-    state[61]++;
++    state->elapsedInputFrames++;
+@@ -2369 +2297 @@
+-    memset(work, 0, 92);
++    memset(work, 0, sizeof(*work));
+@@ -2376 +2304 @@
+-        bufferBytes = (descriptor->itemBytes + 8) * descriptor->count + 16;
++        bufferBytes = (descriptor->itemBytes + sizeof(M658PoolNode)) * descriptor->count + sizeof(M658Pool);
+@@ -241 +241 @@
+-        return;
++        return 0;
+@@ -393,0 +393,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -764,0 +764,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

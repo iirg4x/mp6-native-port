@@ -70,6 +70,13 @@ struct Mp6LauncherConfig {
     double tickHz;          /* game.tick_hz: 60 default; 0 = free-run */
     char contentRoot[1024]; /* game.content_root: "" = auto */
     int masterVolume;       /* audio.master_volume: 0..100 */
+    int menuMotion;         /* interface.menu_motion: decorative menu animation */
+    int unlockAll;          /* game.unlock_all: the Unlock All mod (include/mp6_unlock_all.h);
+                               default off, published live, never written into saves */
+    int quickPlay;          /* game.quick_play: the Quick Party mod (include/mp6_quick_play.h);
+                               1 = off (default), 2..4 = board speed, published live */
+    int microphone;         /* game.microphone: the GameCube Mic in slot B (include/mp6_mic.h);
+                               default on, published live */
     /* video.widescreen, default OFF
      * (= today's fixed 4:3 pillarboxed behavior, byte-unchanged). ON: the
      * window unlocks to free-resize (aspectLocked's own 4:3 window-shape
@@ -106,6 +113,10 @@ struct Mp6LauncherConfig {
      * video.fi_mode is ignored by the tolerant parser (launcher_core.cpp),
      * exactly like the retired video.aspect_locked. */
     int unlockedFps;        /* video.unlocked_fps */
+    /* video.frame_blending: Unlocked FPS smooth mode, default on (include/mp6_unlocked_fps.h,
+     * mp6_fi_smooth_hide_tick) -- in-between frames blend the last two ticks
+     * instead of predicting ahead, for one tick of extra delay. LIVE. */
+    int smoothFrames;
     /* Extended SFX voices (enhancements.sfx_voices): the mixer's voice table
      * size -- 16 is retail, 32 is the raise. UI + config only in this lane;
      * the mixer-side consumer (and the savestate version bump the table-size
@@ -145,10 +156,11 @@ int validate_root(const char *root, char *err, size_t errn); /* 1 ok, 0 empty, -
 int auto_root(char *buf, size_t n);                          /* auto-detected files root; 0 if none */
 bool content_ready();       /* configured-or-auto root currently valid (cached) */
 void refresh_content_state();
+bool content_missing_movies(); /* linked content predates the movie/ import */
 const char *active_root_display(); /* for the prelaunch detail line */
 
 /* --- misc display strings --- */
-const char *port_version(); /* MP6_PORT_VERSION (git short hash) */
+const char *port_version(); /* "VERSION (VERSION_CODE, commit)" */
 const char *save_dir_abs(); /* absolute save folder path (display / open) */
 
 /* --- run-loop flags (prelaunch buttons -> mp6_launcher_run_menu loop) --- */

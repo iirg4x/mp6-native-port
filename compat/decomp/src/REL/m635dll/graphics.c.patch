@@ -1,0 +1,9 @@
+--- a/src/REL/m635dll/graphics.c
++++ b/src/REL/m635dll/graphics.c
+@@ -2,0 +3 @@
++#include "mp6_widescreen.h"
+@@ -153,0 +155,4 @@
++    /* Continue both background perimeters; the garden and props stay native. */
++    mp6_widescreen_extend_floor(modelId, nightMode ? "green_n" : "green", 1.0f, 0.0f, 0.0f);
++    mp6_widescreen_extend_terrain_sides(modelId, nightMode ? "ground02_n" : "ground02", 0.0f, 0);
++

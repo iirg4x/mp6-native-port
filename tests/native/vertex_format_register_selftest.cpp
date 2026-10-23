@@ -34,10 +34,14 @@ struct Logger { unsigned errors=0; template<class... T> void error(const char*,T
 inline u32 bp_get(u32 reg,u32 size,u32 shift) { return (reg>>shift)&((1u<<size)-1); }
 namespace reference {
 State g_gxState;Logger Log;
+bool g_pipelineConfigDirty=false;
+void mark_pipeline_state_dirty() { g_pipelineConfigDirty=true; g_gxState.stateDirty=true; }
 #include "vertex_format_reference.inc"
 }
 namespace candidate {
 State g_gxState;Logger Log;
+bool g_pipelineConfigDirty=false;
+void mark_pipeline_state_dirty() { g_pipelineConfigDirty=true; g_gxState.stateDirty=true; }
 #include "vertex_format_subject.inc"
 }
 std::array<u8,26> registers() {

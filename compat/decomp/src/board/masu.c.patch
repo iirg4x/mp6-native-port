@@ -1,27 +1,30 @@
 --- a/src/board/masu.c
 +++ b/src/board/masu.c
-@@ -1,0 +2,3 @@
+@@ -2,0 +3,6 @@
 +#include "be.h"
 +#include "mp6_ambient_occlusion.h"
++#include "mp6_unlocked_fps.h"
++#include "mp6_boot.h"
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
 +
-@@ -134 +137 @@
+@@ -135 +139 @@
 -    (dst) = *(u16 *)(ptr); \
 +    (dst) = be16(ptr); /* native port: masu blob is big-endian disc data */ \
-@@ -139 +142 @@
+@@ -140 +144 @@
 -    (dst) = *(u16 *)(ptr) + 1; \
 +    (dst) = be16(ptr) + 1; /* native port: big-endian link index */ \
-@@ -144 +147 @@
+@@ -145 +149 @@
 -    (dst) = *(u32 *)(ptr); \
 +    (dst) = be32(ptr); /* native port: big-endian attribute word */ \
-@@ -149 +152 @@
+@@ -150 +154 @@
 -    (dst) = *(s32 *)(data); \
 +    (dst) = (s32)be32(data); /* native port: big-endian tile count */ \
-@@ -154 +157,3 @@
+@@ -155 +159,3 @@
 -    memcpy(&(dst), (ptr), sizeof(HuVecF)); \
 +    (dst).x = bef32((const u8 *)(ptr) + 0); /* native port: 3 big-endian floats */ \
 +    (dst).y = bef32((const u8 *)(ptr) + 4); \
 +    (dst).z = bef32((const u8 *)(ptr) + 8); \
-@@ -209,0 +215,7 @@
+@@ -213,0 +220,7 @@
 +    {
 +        const unsigned char *mp6DiagB = (const unsigned char *)data;
 +        OSReport("[MASU-DIAG] mbMasuDataRead(dataNum=%08x): buf=%p masuNum=%d bytes=%02x %02x %02x %02x %02x %02x %02x %02x%c",
@@ -29,7 +32,7 @@
 +                 mp6DiagB[0], mp6DiagB[1], mp6DiagB[2], mp6DiagB[3],
 +                 mp6DiagB[4], mp6DiagB[5], mp6DiagB[6], mp6DiagB[7], 10);
 +    }
-@@ -233,0 +246,11 @@
+@@ -237,0 +251,11 @@
 +    }
 +    {
 +        int mp6DiagI;
@@ -41,7 +44,76 @@
 +                     masuData[masuLayer][mp6DiagI].pos.y, masuData[masuLayer][mp6DiagI].pos.z, 10);
 +        }
 +        OSReport("[MASU-DIAG] star-tile (mAttr&0x80) count=%d%c", mbMasuMAttrListGet(0x80, NULL), 10);
-@@ -367,0 +391 @@
+@@ -372,0 +397 @@
++    int mp6StableSpaceDraw = FALSE;
+@@ -377,0 +403,10 @@
++    /* These matrices share one hook-model identity. Camera culling shifts
++     * their ordinals and snaps the whole space group while the terrain keeps
++     * interpolating. Keep membership stable during paced replay; the GPU
++     * still clips offscreen quads. Normal and free-run draws retain culling. */
++#ifndef MP6_HEADLESS_BUILD
++    mp6StableSpaceDraw = mp6_unlocked_fps_enabled()
++        && mp6_tick_interpolation_possible();
++#endif
++
 +    mp6_ao_decals(Hu3DCameraNo, FALSE);
-@@ -467,0 +492 @@
+@@ -425 +460 @@
+-        if (!mbCameraCullCheck(&pos, 200.0f)) {
++        if (!mp6StableSpaceDraw && !mbCameraCullCheck(&pos, 200.0f)) {
+@@ -477,0 +513 @@
 +    mp6_ao_decals(Hu3DCameraNo, TRUE);
+@@ -493 +529 @@
+-        if (!mbCameraCullCheck(&pos, 200.0f)) {
++        if (!mp6StableSpaceDraw && !mbCameraCullCheck(&pos, 200.0f)) {
+@@ -886,0 +924,25 @@
++/* Test-only: MP6_TEST_HATENA_ATTR=<mask> runs a ? space event as if on the
++ * next space (cycling the board) whose attributes match mask, with the
++ * player moved there first. Boards pick their ? event from the space's
++ * attributes, so a forced run reaches each event kind on demand. */
++static s16 mp6_test_hatena_masu(int playerNo, s16 id)
++{
++    static int cursor;
++    const char *env = getenv("MP6_TEST_HATENA_ATTR");
++    u32 mask = env && *env ? strtoul(env, NULL, 0) : 0;
++    int spaces = mbMasuNumGet() - 1;
++    HuVecF pos;
++
++    for (int step = 1; mask && step <= spaces; step++) {
++        s16 next = (s16)((cursor + step - 1) % spaces + 1);
++        if (mbMasuMAttrGet(next) & mask) {
++            cursor = next;
++            GwPlayer[playerNo].masuId = next;
++            mbMasuPosGet(next, &pos);
++            mbPlayerPosSetV(playerNo, &pos);
++            OSReport("[TEST] hatena space=%d attr=0x%x player=%d\n", next,
++                     (unsigned)mbMasuMAttrGet(next), playerNo);
++            return next;
++        }
++    }
++    return id;
++}
++
+@@ -902 +939 @@
+-        switch (mbMasuTypeGet(id)) {
++        switch (mp6_test_masu_type(mbMasuTypeGet(id))) {
+@@ -919 +956 @@
+-                result = ev_MasuHatena(playerNo, id);
++                result = ev_MasuHatena(playerNo, mp6_test_hatena_masu(playerNo, id));
+@@ -1001 +1001,6 @@
+-        result = masuev_MasuEnd(playerNo, GwPlayer[playerNo].masuId);
++        /* [MP6] Quick Party: each board hook call is one board event (its
++         * timed challenges and what to watch around them keep normal
++         * speed, include/mp6_quick_play.h). */
++        mp6_quick_play_event_begin(playerNo);
++        result = masuev_MasuEnd(playerNo, GwPlayer[playerNo].masuId);
++        mp6_quick_play_event_end();
+@@ -1039 +1039,3 @@
+-        result = masuev_MasuStart(playerNo, id);
++        mp6_quick_play_event_begin(playerNo);
++        result = masuev_MasuStart(playerNo, id);
++        mp6_quick_play_event_end();
+@@ -1075 +1075,3 @@
+-        result = masuev_HatenaHook(playerNo, id);
++        mp6_quick_play_event_begin(playerNo);
++        result = masuev_HatenaHook(playerNo, id);
++        mp6_quick_play_event_end();

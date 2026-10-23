@@ -1,0 +1,30 @@
+--- a/src/REL/mgmtournamentdll/window.c
++++ b/src/REL/mgmtournamentdll/window.c
+@@ -0,0 +1,2 @@
++#include "mp6_window.h"
++#include "mp6_mgmtournament_native.h"
+@@ -27,8 +29,8 @@
+-void fn_1_5728(void);
+-s32 fn_1_6A24(void);
+-void fn_1_71E8(s16 *firstPlayer, s16 *secondPlayer);
+-s16 fn_1_7BC0(s16 player);
+-s16 fn_1_7C00(s16 player);
+-s16 fn_1_7C44(s16 player);
+-s16 fn_1_A42C(void);
+-void fn_1_2D1C(HUWINID windowId, u32 messageId, s16 callbackCode);
++
++
++
++
++
++
++
++
+@@ -69,5 +71,2 @@
+-	char messageText[2] = "";
+-
+-	messageText[0] = messageText[1] = 0;
+-	/* The window keeps the local string's pointer rather than copying its text. */
+-	HuWinInsertMesSet(windowId, (u32) &messageText, insertionSlot);
++    static const char emptyText[] = "";
++    mp6_window_insert_text(windowId, emptyText, insertionSlot);

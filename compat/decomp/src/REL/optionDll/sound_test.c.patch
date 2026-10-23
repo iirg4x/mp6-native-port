@@ -1,0 +1,12 @@
+--- a/src/REL/optionDll/sound_test.c
++++ b/src/REL/optionDll/sound_test.c
+@@ -0,0 +1 @@
++#include "mp6_window.h"
+@@ -1151,2 +1152 @@
+-                HuWinMesSet(lbl_1_bss_AE0[row][column],
+-                    (s32)lbl_1_data_1AA8);
++                mp6_window_set_text(lbl_1_bss_AE0[row][column], lbl_1_data_1AA8);
+@@ -1158,0 +1159,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

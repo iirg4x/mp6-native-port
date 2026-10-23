@@ -23,13 +23,15 @@ class AndroidCpuProfile(unittest.TestCase):
             (run/'request.json').write_text(json.dumps({'serial': 'phone', 'pid': '123'}))
             (run/'logcat.txt').write_bytes(b'original timing window')
             (run/'thermal.txt').write_bytes(b'original thermal window')
-            log = b'[EVENT] w01.live=board tick=100\n[MP6-TICKRATE] tick=1000\n'
+            log = b'[EVENT] w01.live=board tick=100\n[MP6-TICKRATE] tick=2000\n'
 
             def shell(serial, *args, **kwargs):
                 if args[0] == 'getprop':
                     return 'SM-S906E'
                 if args[0] == 'pidof':
                     return '123'
+                if args[:2] == ('dumpsys', 'activity'):
+                    return 'topResumedActivity=ActivityRecord{ com.mp6.game/ }'
                 if args[0] == 'dumpsys':
                     return 'Thermal Status: 0\n'
                 return ''

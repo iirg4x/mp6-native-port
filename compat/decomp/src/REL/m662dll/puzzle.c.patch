@@ -1,0 +1,39 @@
+--- a/src/REL/m662dll/puzzle.c
++++ b/src/REL/m662dll/puzzle.c
+@@ -24,10 +24,9 @@
+-#include "REL/m662dll/game.h"
+-
+-void fn_1_3C4(void), fn_1_808(void), fn_1_8C08(void), fn_1_90AC(void), fn_1_9910(void),
+-    fn_1_AC88(void);
+-void fn_1_984(void), fn_1_5884(void), fn_1_2670(void), fn_1_4EAC(void);
+-s16 fn_1_9C1C(void);
+-s32 fn_1_A170(void);
+-int fn_1_2DA0(f32 *, f32, f32, f32);
+-f32 fn_1_3C74(f32);
+-void fn_1_5008(s16, s16, void *);
++#include "mp6_m662_native.h"
++#include "mp6_widescreen.h"
++#include <string.h>
++
++static int mp6_m662_hill_surface(const char *name)
++{
++    return strcmp(name, "bg_field") == 0;
++}
++
+@@ -101,0 +101,16 @@
++        if (modelIndex == 3) {
++            /* This resource contains only the untextured background gradient. */
++            mp6_widescreen_extrude_model_horizontal(lbl_1_bss_4B4[modelIndex].modelId);
++        }
++        if (modelIndex == 5) {
++            /* Follow the curved sky's X mapping/depth order. Only the hill
++             * surface grows; the smaller decorative trees stay native. */
++            mp6_widescreen_extrude_model_selective_horizontal(lbl_1_bss_4B4[modelIndex].modelId,
++                                                               mp6_m662_hill_surface);
++        }
++        if (modelIndex == 7)
++            mp6_widescreen_extend_tiled_sloped_rim(lbl_1_bss_4B4[modelIndex].modelId,
++                                                   "hei_L", 2, 612.94458f, 1200.0f, 1.0f);
++        if (modelIndex == 8)
++            mp6_widescreen_extend_tiled_sloped_rim(lbl_1_bss_4B4[modelIndex].modelId,
++                                                   "hei_R", 2, -612.94458f, 1200.0f, 1.0f);

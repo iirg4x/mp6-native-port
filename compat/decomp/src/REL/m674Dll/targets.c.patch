@@ -1,0 +1,71 @@
+--- a/src/REL/m674Dll/targets.c
++++ b/src/REL/m674Dll/targets.c
+@@ -15,0 +16,14 @@
++#include "mp6_widescreen.h"
++
++#define MP6_M674_FROND_PIVOT 0.35f
++
++static int mp6_m674_frame_frond(const char *name)
++{
++    const char *digits = name[0] == 'h' && name[1] == 'a' ? name + 2
++        : name[0] == 'y' && name[1] == 'a' && name[2] == 's' && name[3] == 'i'
++            && name[4] == '_' && name[5] == 'K' ? name + 6 : NULL;
++    if (digits == NULL || *digits == '\0') return 0;
++    for (; *digits; ++digits) if (*digits < '0' || *digits > '9') return 0;
++    return 1;
++}
++void fn_1_1218(s32 modelId, char *lightName);
+@@ -20,2 +34,2 @@
+-extern s32 fn_1_F3C(void);
+-extern s32 fn_1_4994(void);
++extern int fn_1_F3C(void);
++extern int fn_1_4994(int dataNum);
+@@ -24,3 +38,3 @@
+-extern void fn_1_112A8(M674Entry *record);
+-extern s32 fn_1_4040(s32 effect, void *position);
+-extern f32 fn_1_4BAC(f32 start, f32 end, f32 factor);
++extern s32 fn_1_112A8(M674Entry *entry);
++extern s32 fn_1_4040(s32 effect, Vec *position);
++extern float fn_1_4BAC(float start, float end, float factor);
+@@ -28 +42 @@
+-extern f32 fn_1_4D7C(Vec *start, Vec *end);
++extern float fn_1_4D7C(HuVecF *firstPosition, HuVecF *secondPosition);
+@@ -215,2 +229 @@
+-                fn_1_E18(param->modelResource);
+-                model = fn_1_4994();
++                                model = fn_1_4994(fn_1_E18(param->modelResource));
+@@ -224,0 +238,19 @@
++        if (model >= 0 && Hu3DData[model].hsf != NULL) {
++            HSF_DATA *hsf = Hu3DData[model].hsf;
++            s32 objectIndex;
++            /* DK's plaza (and its underwater wall) runs off the 4:3 frame
++             * along local +X and simply stops at x=600; continue it into its
++             * mirror image so a wide view never sees the cut. */
++            mp6_widescreen_mirror_mesh(model, "cyl21", 0, 0, 600.0f);
++            /* The prop clip owns these positions, so widen its X keys.
++             * Shadows scale about the centred camera. A frond hangs
++             * inward from its pivot, so its visible blade sits nearer
++             * the centre: widen about a pivot partway out instead. */
++            for (objectIndex = 0; objectIndex < hsf->objectNum; objectIndex++) {
++                HSF_OBJECT *frond = &hsf->object[objectIndex];
++                if (frond->name != NULL && mp6_m674_frame_frond(frond->name)) {
++                    mp6_widescreen_motion_x(model, frond->name,
++                        frond->name[0] == 'h' ? MP6_M674_FROND_PIVOT * frond->mesh.base.pos.x : 0.0f);
++                }
++            }
++        }
+@@ -441 +473 @@
+-    fn_1_1218(model, "inf_light", 1);
++    fn_1_1218(model, "inf_light");
+@@ -729,2 +761 @@
+-        fn_1_E18(resource);
+-        entries->modelId = fn_1_4994();
++                entries->modelId = fn_1_4994(fn_1_E18(resource));
+@@ -1026,2 +1057 @@
+-    fn_1_E18(24);
+-    work->secondaryModel = fn_1_4994();
++        work->secondaryModel = fn_1_4994(fn_1_E18(24));
+@@ -1220,2 +1250 @@
+-    fn_1_E18(3);
+-    modelWork->state.shadowModel = fn_1_4994();
++        modelWork->state.shadowModel = fn_1_4994(fn_1_E18(3));

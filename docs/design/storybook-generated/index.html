@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MP6 — animated storybook visual proof</title>
+<link rel="icon" href="data:,">
+<style>
+  @font-face { font-family: Chapters; src: url('assets/TitanOne-Regular.ttf'); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #151a29; color: #f8f5e8; font: 16px system-ui, sans-serif; }
+
+  /* The stage keeps the 1672x941 design aspect and leaves room for the controls. */
+  #stage { display: block; width: min(100vw, calc((100vh - 120px) * 1672 / 941)); height: auto; margin: auto; aspect-ratio: 1672 / 941; outline-offset: -4px; }
+  nav { padding: 16px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  button { background: #30364a; color: inherit; border: 1px solid #78809c; border-radius: 7px; padding: 10px 18px; font: inherit; cursor: pointer; }
+  button:hover, button:focus-visible { background: #444d69; outline: 2px solid #ffe14c; outline-offset: 2px; }
+  button:active { transform: translateY(1px); }
+  p { text-align: center; color: #bcc7da; margin: 0 16px 16px; }
+  #rotate { display: none; margin-top: 16px; color: #ffe14c; }
+  /* Screen-reader only: announces the selected row. */
+  #status { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  #gallery { display: none; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; padding: 20px; }
+  .asset { padding: 16px; border: 1px solid #495571; border-radius: 10px; background: #222a3b; }
+  .asset canvas { width: 100%; height: 220px; object-fit: contain; background: repeating-conic-gradient(#354055 0% 25%, #293346 0% 50%) 50% / 20px 20px; }
+  .asset h3 { margin: 12px 0 4px; font-size: 16px; }
+  .asset small { color: #bbc8dd; }
+
+  @media (max-width: 900px) { #gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { #gallery { grid-template-columns: minmax(0, 1fr); padding: 16px; } }
+  @media (orientation: portrait) and (max-width: 700px) { #rotate { display: block; } }
+  /* Short landscape screens (phones turned sideways): the book gets the full height. */
+  @media (orientation: landscape) and (max-height: 500px) { #stage { width: min(100vw, calc(100vh * 1672 / 941)); } }
+
+  body.gallery #stage, body.gallery #rotate { display: none; }
+  body.gallery #gallery { display: grid; }
+  /* ?capture: the stage alone, for screenshots. */
+  body.capture nav, body.capture p, body.capture #rotate { display: none; }
+  body.capture #stage { width: min(100vw, calc(100vh * 1672 / 941)); }
+</style>
+
+<canvas id="stage" width="1672" height="941" tabindex="0" role="application"
+  aria-label="Animated storybook design preview. Up and down select. Left and right change values. Q and E change chapters. No game settings are changed."></canvas>
+<nav aria-label="Visual proof controls">
+  <button id="assembled">Assembled preview</button>
+  <button id="pieces">Component gallery</button>
+  <button id="motion">Pause animation</button>
+  <button id="turn">Replay page turn</button>
+</nav>
+<p>Visual-only · ↑ ↓ select · ← → adjust · Q / E or click tabs to turn chapters · no game settings or audio are changed</p>
+<p id="rotate">Turn your phone sideways for a larger book.</p>
+<p id="status" aria-live="polite"></p>
+<div id="gallery"></div>
+
+<script src="page-mesh.js"></script>
+<script src="confetti.js"></script>
+<script src="backdrop.js"></script>
+<script src="clouds.js"></script>
+<script src="chapters.js"></script>
+<script src="menu.js"></script>
+<script src="paper.js"></script>
+<script src="preview.js"></script>
+</html>

@@ -1,0 +1,7 @@
+--- a/src/game/THPDraw.c
++++ b/src/game/THPDraw.c
+@@ -36 +36,3 @@
+-    GXSetAlphaUpdate(GX_FALSE);
++    /* The native RGBA copy preserves EFB alpha; movie pixels must remain
++     * opaque when the preview is sampled by the bus material. */
++    GXSetAlphaUpdate(GX_TRUE);

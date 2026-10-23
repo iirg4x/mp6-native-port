@@ -23,6 +23,12 @@ public:
     void update() override;
 
     void set_selected_item(int index);
+    bool move_focus(int direction);
+    void activate_focused();
+    bool cycle_choice(int direction);
+    int focused_index() const;
+    void promote_first(const Rml::String &title);
+    int item_count() const { return static_cast<int>(mChildren.size()); }
     Component &register_control(Component &component, Pane &nextPane, std::function<void(Pane &)> callback);
 
     Rml::Element *add_section(const Rml::String &text);
@@ -46,6 +52,8 @@ public:
 private:
     Type mType;
     bool finalized = false;
+    Component *mDetailOwner = nullptr;
+    Rml::String mSectionTitle;
 };
 
 } // namespace mp6::ui

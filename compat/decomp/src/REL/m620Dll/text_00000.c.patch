@@ -1,0 +1,56 @@
+--- a/src/REL/m620Dll/text_00000.c
++++ b/src/REL/m620Dll/text_00000.c
+@@ -66 +66 @@
+-extern void fn_1_1244(OMOBJMAN *, void *, void *, void *);
++extern void fn_1_1244(OMOBJMAN *manager, HuVecF *position, HuVecF *target, GXColor *color);
+@@ -71 +71 @@
+-extern void fn_1_26F8(s32, s32);
++extern void fn_1_26F8(u32 cameras, void *motionData);
+@@ -73,2 +73,2 @@
+-extern void fn_1_24F4(void (*)(void));
+-extern void fn_1_2D7C(OMOBJMAN *, void *);
++extern void fn_1_24F4(void (*callback)(OMOBJ *, u32, s32));
++extern void fn_1_2D7C(HUPROCESS *process, void *userData);
+@@ -77,3 +77,3 @@
+-extern void fn_1_4A50(OMOBJMAN *);
+-extern void fn_1_64A8(OMOBJMAN *);
+-extern void fn_1_B7D4(OMOBJMAN *);
++extern void fn_1_4A50(HUPROCESS *manager);
++extern void fn_1_64A8(HUPROCESS *process);
++extern void fn_1_B7D4(HUPROCESS *managerProcess);
+@@ -107,2 +107,2 @@
+-    fn_1_26F8(1, (s32)HuDataSelHeapReadNum(fn_1_FB8(0), HU_MEMNUM_OVL, HEAP_MODEL));
+-    fn_1_24F4((void (*)(void))fn_1_BF0);
++    fn_1_26F8(1, HuDataSelHeapReadNum(fn_1_FB8(0), HU_MEMNUM_OVL, HEAP_MODEL));
++    fn_1_24F4((void (*)(OMOBJ *, u32, s32))fn_1_BF0);
+@@ -399 +399,2 @@
+-    u8 unread_00_to_1F[32];
++    u8 unread_00_to_1B[28];
++    void (*unread_1C)(OMOBJ *, u32, s32);
+@@ -479,2 +480,2 @@
+-void fn_1_FE0(void) {
+-    MgSeqTimerValueGet();
++s32 fn_1_FE0(void) {
++    return MgSeqTimerValueGet();
+@@ -533 +534 @@
+-int fn_1_112C() {
++int fn_1_112C(void) {
+@@ -563 +564 @@
+-u32 lbl_1_bss_660;
++OMOBJ *lbl_1_bss_660;
+@@ -565 +566 @@
+-u32 lbl_1_bss_654;
++HUPROCESS *lbl_1_bss_654;
+@@ -567 +568 @@
+-u32 lbl_1_bss_648[2];
++OMOBJ *lbl_1_bss_648;
+@@ -579,3 +580,3 @@
+-u32 lbl_1_bss_338[16];
+-u32 lbl_1_bss_330[2];
+-u8 lbl_1_bss_320[16];
++u64 lbl_1_bss_338[10]; /* One boundary registration (64 bytes on the GameCube). */
++OMOBJ *lbl_1_bss_330;
++OMOBJ *lbl_1_bss_320[4];
+@@ -585 +586 @@
+-u32 lbl_1_bss_300[2];
++OMOBJ *lbl_1_bss_300;

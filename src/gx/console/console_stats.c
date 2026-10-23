@@ -40,6 +40,7 @@
 #include <string.h>
 
 #include "mp6_console.h"
+#include "mp6_enhancements.h" /* the AO A/B keeps GPU timing armed */
 #ifndef MP6_HEADLESS_BUILD
 #include <aurora/aurora.h>
 #endif
@@ -132,7 +133,8 @@ void mp6_console_note_tick_phase(long long gameNs, long long endFrameNs,
     CsPhase *p;
 #ifdef AURORA_GPU_STAT_ROWS
     aurora_gpu_stats_set_enabled(mp6_console_overlay(MP6_CONSOLE_PANEL_GPU) ||
-                                 mp6_console_overlay(MP6_CONSOLE_PANEL_UNIT));
+                                 mp6_console_overlay(MP6_CONSOLE_PANEL_UNIT) ||
+                                 mp6_enh_ao_ab_gpu_timing());
 #endif
     mp6_console_stats_active = mp6_console_stats_armed();
     if (!mp6_console_stats_active) return;

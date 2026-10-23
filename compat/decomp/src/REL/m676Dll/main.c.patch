@@ -1,0 +1,50 @@
+--- a/src/REL/m676Dll/main.c
++++ b/src/REL/m676Dll/main.c
+@@ -11,0 +12 @@
++int fn_1_15E0(void);
+@@ -25 +26 @@
+-extern void fn_1_1E50(OMOBJMAN *, u32, f32, f32, f32, f32, OM_CAMERA_VIEW *);
++extern void fn_1_1E50(OMOBJMAN *manager, u32 cameras, float fov, float nearPlane, float farPlane, float shadowRadius, OM_CAMERA_VIEW *view);
+@@ -30,6 +31,6 @@
+-extern void fn_1_3A1C(OMOBJMAN *, M676AudioConfig *);
+-extern void fn_1_11F34(OMOBJMAN *);
+-extern void fn_1_126A4(OMOBJMAN *);
+-extern void fn_1_5A10(OMOBJMAN *);
+-extern void fn_1_88C0(OMOBJMAN *);
+-extern void fn_1_1033C(OMOBJMAN *);
++extern void fn_1_3A1C(HUPROCESS *process, M676AudioConfig *config);
++extern void fn_1_11F34(HUPROCESS *process);
++extern void fn_1_126A4(HUPROCESS *process);
++extern void fn_1_5A10(HUPROCESS *manager);
++extern void fn_1_88C0(HUPROCESS *process);
++extern void fn_1_1033C(HUPROCESS *process);
+@@ -46 +47 @@
+-extern void fn_1_28BC(s32, Vec *, Vec *, f32, f32);
++extern void fn_1_28BC(s32 camera, Vec *direction, Vec *target, float fov, float radius);
+@@ -49,3 +50,3 @@
+-extern f64 fn_1_34D4(M676CameraFitParams *, M676CameraFitSphere *, s32, Vec *);
+-extern f32 fn_1_52C0(f32, f32, f32);
+-extern void fn_1_5698(Vec *, Vec *, f32, Vec *);
++extern double fn_1_34D4(M676CameraFitParams *params, M676CameraFitSphere *spheres, s32 count, Vec *out);
++extern float fn_1_52C0(float start, float end, float factor);
++extern void fn_1_5698(Point3d *start, Point3d *end, f32 factor, Point3d *out);
+@@ -54 +55 @@
+-void fn_1_348(s16, s16);
++void fn_1_348(short mode,short state);
+@@ -56 +57 @@
+-void fn_1_5B0(s16, s16);
++void fn_1_5B0(short mode, short state);
+@@ -61 +62 @@
+-void fn_1_9E8(s16, s16);
++void fn_1_9E8(short mode, short state);
+@@ -591 +592 @@
+-int fn_1_15E0() {
++int fn_1_15E0(void) {
+@@ -605 +606 @@
+-int fn_1_1650() {
++int fn_1_1650(void) {
+@@ -2,0 +2 @@
++#include "mp6_mg_winner.h"
+@@ -296,0 +296,2 @@
++            /* Port addition: name the winners (retail never did; see mp6_mg_winner.h). */
++            mp6_mg_winner_message(lbl_1_bss_168[0], lbl_1_bss_168[1], lbl_1_bss_168[2], lbl_1_bss_168[3]);

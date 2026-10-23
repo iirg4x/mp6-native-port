@@ -1,0 +1,29 @@
+--- a/src/REL/m626Dll/player.c
++++ b/src/REL/m626Dll/player.c
+@@ -5,0 +6 @@
++#include "game/audio.h"
+@@ -15,0 +17,2 @@
++void fn_1_998(unsigned int player);
++int fn_1_9B8(void);
+@@ -43 +46 @@
+-s32 fn_1_8A4(s32);
++u32 fn_1_8A4(u32 sideId);
+@@ -46 +49 @@
+-s32 fn_1_3C94(s32);
++int fn_1_3C94(int dataNumber);
+@@ -48,3 +51,3 @@
+-f32 fn_1_407C(Vec *, Vec *);
+-f32 fn_1_4118(Vec *, Vec *);
+-f32 fn_1_3EAC(f32, f32, f32);
++float fn_1_407C(HuVecF *origin, HuVecF *target);
++float fn_1_4118(Vec *first, Vec *second);
++float fn_1_3EAC(float start, float end, float factor);
+@@ -53 +56 @@
+-void fn_1_3AF4(s32, s32, Vec *, s32, s32);
++void fn_1_3AF4(int effect, int handle, Vec *position, int flag, int value);
+@@ -420 +423 @@
+-    allocatedWork = HuMemDirectMallocNum(HEAP_HEAP, 572, HU_MEMNUM_OVL);
++    allocatedWork = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*allocatedWork), HU_MEMNUM_OVL);
+@@ -422 +425 @@
+-    memset(allocatedWork, 0, 572);
++    memset(allocatedWork, 0, sizeof(*allocatedWork));

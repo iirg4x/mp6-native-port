@@ -1,0 +1,8 @@
+--- a/src/REL/staffdll/staff.c
++++ b/src/REL/staffdll/staff.c
+@@ -0,0 +1 @@
++#include "game/audio.h"
+@@ -2538,0 +2540,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

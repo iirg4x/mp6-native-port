@@ -14,6 +14,7 @@ GW_PLAYER GwPlayer[GW_PLAYER_MAX];
 static MASU spaces[3];
 static int ao=2, motion=1;
 static int registered;
+unsigned mp6_ground_test_active_calls;
 void mp6_gxarray_register(const void *data, unsigned int size) { assert(data && size); registered++; }
 int mp6_enh_ambient_occlusion(void) { return ao; }
 int mbPlayerMotionGet(int p) { return motion; }
@@ -101,35 +102,95 @@ int main(void) {
     log.mesh.curr.pos.y=0;
 #endif
     /* The normal tree is separate from the static terrain, and its combined
-     * slide/base mesh exceeds the former 512-vertex log limit. */
+     * slide/base mesh exceeds the former 512-vertex log limit. The two
+     * foreground AO exclusions are the measured 546-vertex root body and
+     * 149-vertex child body; similarly named detail meshes must stay shaded. */
     HuVecF treeVertices[600];
     for (int i=0;i<600;i++) treeVertices[i]=(HuVecF){0,100,0};
     treeVertices[0]=(HuVecF){-20,2,-20};
     treeVertices[1]=(HuVecF){20,16,20};
     treeVertices[2]=(HuVecF){0,-12,0};
     treeVertices[3]=(HuVecF){150,2,0};
-    HSF_BUFFER treeBuffer={.count=600,.data=treeVertices};
+    HSF_BUFFER treeRootBuffer={.count=546,.data=treeVertices};
+    HSF_BUFFER treeChildBuffer={.count=149,.data=treeVertices};
     HSF_OBJECT treeMesh[2]={0};
     treeMesh[0].name=treeMesh[1].name="b01_m240";
     for(int i=0;i<2;i++) {
         treeMesh[i].type=HSF_OBJ_MESH;
         treeMesh[i].mesh.base.scale=treeMesh[i].mesh.curr.scale=(HuVecF){1,1,1};
-        treeMesh[i].mesh.vertex=&treeBuffer;
     }
-    HSF_OBJECT *treeChildren[]={treeMesh+1};
-    treeMesh[0].mesh.childNum=1; treeMesh[0].mesh.child=treeChildren;
+    treeMesh[0].mesh.vertex=&treeRootBuffer;
+    treeMesh[1].mesh.vertex=&treeChildBuffer;
+    HSF_OBJECT treeDetail[4]={{.name="nose",.type=HSF_OBJ_MESH},
+                              {.name="eye",.type=HSF_OBJ_MESH},
+                              {.name="branch",.type=HSF_OBJ_MESH},
+                              {.name="b01_m240",.type=HSF_OBJ_MESH}};
+    HuVecF detailVertices[4][149];
+    HSF_BUFFER detailBuffers[4];
+    for (int i=0;i<4;i++) {
+        for (int j=0;j<149;j++) detailVertices[i][j]=(HuVecF){0,100,0};
+        detailBuffers[i]=(HSF_BUFFER){.count=i==3 ? 148 : 149,
+                                      .data=detailVertices[i]};
+        treeDetail[i].mesh.base.scale=treeDetail[i].mesh.curr.scale=(HuVecF){1,1,1};
+        treeDetail[i].mesh.vertex=detailBuffers+i;
+    }
+    HSF_OBJECT *treeChildren[]={treeMesh+1,treeDetail,treeDetail+1,
+                                treeDetail+2,treeDetail+3};
+    treeMesh[0].mesh.childNum=5; treeMesh[0].mesh.child=treeChildren;
     treeMesh[1].mesh.parent=treeMesh;
-    HSF_DATA tree={.root=treeMesh,.object=treeMesh,.objectNum=2};
+    for (int i=0;i<4;i++) treeDetail[i].mesh.parent=treeMesh;
+    HSF_DATA tree={.root=treeMesh,.object=treeMesh,.objectNum=6};
     model_init(3,&tree);
     assert(mp6_ground_vertices(Hu3DData+3,treeMesh)==treeVertices); /* explicit registration */
     mp6_ground_w01_tree(3);
     HuVecF *renderTree=mp6_ground_vertices(Hu3DData+3,treeMesh+1);
 #ifdef MP6_HEADLESS_BUILD
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh));
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1));
+#else
+    assert(mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh));
+    assert(mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1));
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeDetail)); /* nose */
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeDetail+1)); /* eye */
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeDetail+2)); /* branch */
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeDetail+3)); /* name only */
+    treeMesh[1].mesh.parent=treeDetail;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* hierarchy */
+    treeMesh[1].mesh.parent=treeMesh;
+    HuVecF alternateTreeVertices[149];
+    memcpy(alternateTreeVertices,treeVertices,sizeof(alternateTreeVertices));
+    HSF_BUFFER alternateTreeBuffer={.count=149,.data=alternateTreeVertices};
+    treeMesh[1].mesh.vertex=&alternateTreeBuffer;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* source */
+    treeMesh[1].mesh.vertex=&treeChildBuffer;
+    treeChildBuffer.count=148;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* count */
+    treeChildBuffer.count=149;
+    treeMesh[1].mesh.curr.pos.y=1;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* pose */
+    treeMesh[1].mesh.curr.pos.y=0;
+    Hu3DData[3].pos.y=1;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* model */
+    Hu3DData[3].pos.y=0;
+    Hu3DData[3].attr=HU3D_ATTR_HOOKFUNC;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* hook */
+    Hu3DData[3].attr=HU3D_ATTR_COLOR_NOUPDATE;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* no color */
+    Hu3DData[3].attr=0;
+    ao=0;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* AO off */
+    ao=2;
+    HSF_DATA registryReplacement=tree;
+    Hu3DData[3].hsf=&registryReplacement;
+    assert(!mp6_ground_is_ao_unshaded(Hu3DData+3,treeMesh+1)); /* reused HSF */
+    Hu3DData[3].hsf=&tree;
+#endif
+#ifdef MP6_HEADLESS_BUILD
     assert(renderTree==treeVertices);
 #else
     assert(renderTree!=treeVertices);
     assert(fabsf(renderTree[0].y+10.1f)<.001f && fabsf(renderTree[1].y+10.1f)<.001f);
-    assert(!memcmp(renderTree+2,treeVertices+2,598*sizeof(HuVecF)));
+    assert(!memcmp(renderTree+2,treeVertices+2,147*sizeof(HuVecF)));
     assert(treeVertices[0].y==2 && treeVertices[1].y==16 && Hu3DData[3].pos.y==0);
     treeMesh[0].mesh.curr.pos.y=5;
     assert(mp6_ground_vertices(Hu3DData+3,treeMesh+1)==treeVertices); /* moving ancestor */
@@ -269,17 +330,83 @@ int main(void) {
     HSF_DATA linkData={.root=&linkObject,.object=&linkObject,.objectNum=1};
     model_init(7,&linkData);
     mp6_ground_w01_scenery(7);
+    /* The authored W01 daisy patch is not a generic flat object: it is one
+     * cutout-depth-write quad under b01_m002/flw_low2 using s3b01t42. Its
+     * source remains untouched; only the registered draw copy follows the
+     * calibrated lawn lift. */
+    HuVecF patchVertices[4]={{-10,-5,-10},{-10,-5,10},{10,-5,-10},{10,-5,10}};
+    HSF_FACE patchFace={0}; patchFace.type=HSF_FACE_QUAD; patchFace.mat=228;
+    for(int i=0;i<4;i++) patchFace.index[i].vertex=i;
+    HSF_BUFFER patchVertexBuffer={.count=4,.data=patchVertices};
+    HSF_BUFFER patchFaceBuffer={.count=1,.data=&patchFace};
+    HSF_BITMAP patchBitmap={.name="s3b01t42"};
+    HSF_ATTRIBUTE patchAttribute={.bitmap=&patchBitmap};
+    s32 patchAttrIndex[]={0};
+    HSF_MATERIAL patchMaterials[229]={0};
+    patchMaterials[228].attrNum=1; patchMaterials[228].attr=patchAttrIndex;
+    patchMaterials[228].invAlpha=.309091f;
+    HSF_OBJECT patchRoot={.name="b01_m002",.type=HSF_OBJ_ROOT};
+    HSF_OBJECT patchParent={.name="flw_low2",.type=HSF_OBJ_ROOT};
+    HSF_OBJECT patch={.name="grid439",.type=HSF_OBJ_MESH,.flags=512};
+    patchRoot.mesh.base.scale=patchRoot.mesh.curr.scale=(HuVecF){1,1,1};
+    patchParent.mesh.base.scale=patchParent.mesh.curr.scale=(HuVecF){1,1,1};
+    patch.mesh.base.scale=patch.mesh.curr.scale=(HuVecF){1,1,1};
+    patch.mesh.parent=&patchParent; patch.mesh.vertex=&patchVertexBuffer;
+    patch.mesh.face=&patchFaceBuffer; patch.mesh.material=patchMaterials;
+    patch.mesh.attribute=&patchAttribute;
+    HSF_OBJECT *patchRootChildren[]={&patchParent};
+    HSF_OBJECT *patchParentChildren[]={&patch};
+    patchRoot.mesh.childNum=1; patchRoot.mesh.child=patchRootChildren;
+    patchParent.mesh.childNum=1; patchParent.mesh.child=patchParentChildren;
+    HSF_DATA patchData={.root=&patchRoot,.attribute=&patchAttribute,
+        .material=patchMaterials,.object=&patchRoot,.materialNum=229,
+        .attributeNum=1,.objectNum=3};
+    model_init(8,&patchData);
+    mp6_ground_w01_scenery(8);
     PSMTXScale(Hu3DCameraMtx,1,1,1);
+    /* The calibrated start path is the sole opaque receiver decal. Matching
+     * its name or flat artwork is insufficient: the production predicate is
+     * tied to this exact registered object, model owner, unchanged hierarchy
+     * and source/copy calibration. */
+    HSF_OBJECT sameName=path;
+    HSF_OBJECT patchClone=patch;
     for(int level=0;level<=2;level++) {
         ao=level;
+        assert(mp6_ground_is_decal(Hu3DData+6,&path)==
+#ifdef MP6_HEADLESS_BUILD
+            0
+#else
+            (level!=0)
+#endif
+        );
+        assert(!mp6_ground_is_decal(Hu3DData+6,&sameName)); /* same name/copy */
+        assert(!mp6_ground_is_decal(Hu3DData+6,&lawn));
+        assert(!mp6_ground_is_decal(Hu3DData+3,treeMesh));
+        assert(!mp6_ground_is_decal(Hu3DData+1,&log));
+        assert(!mp6_ground_is_decal(Hu3DData+2,&body));
+        assert(!mp6_ground_is_decal(Hu3DData+7,&linkObject));
+        assert(mp6_ground_is_decal(Hu3DData+8,&patch)==
+#ifdef MP6_HEADLESS_BUILD
+            0
+#else
+            (level!=0)
+#endif
+        );
+        assert(!mp6_ground_is_decal(Hu3DData+8,&patchClone)); /* same shape/copy */
         HuVecF *drawLawn=mp6_ground_vertices(Hu3DData+6,&lawn);
         HuVecF *drawPath=mp6_ground_vertices(Hu3DData+6,&path);
         HuVecF *drawLinks=mp6_ground_vertices(Hu3DData+7,&linkObject);
+        HuVecF *drawPatch=mp6_ground_vertices(Hu3DData+8,&patch);
 #ifndef MP6_HEADLESS_BUILD
         if(level) {
             assert(drawLawn!=lawnVertices);
             assert(drawPath!=pathVertices);
             assert(drawLinks!=links);
+            assert(drawPatch!=patchVertices);
+            for(int i=0;i<4;i++) {
+                assert(fabsf(drawPatch[i].y-(patchVertices[i].y+15.25f))<.001f);
+                assert(drawPatch[i].x==patchVertices[i].x && drawPatch[i].z==patchVertices[i].z);
+            }
             for(int i=0;i<4;i++) {
                 assert(fabsf(drawLawn[i].y-5.25f)<.001f);
                 assert(drawLawn[i].x==lawnVertices[i].x && drawLawn[i].z==lawnVertices[i].z);
@@ -299,7 +426,8 @@ int main(void) {
             assert(fabsf(flower[1][3]-5.25f)<.001f);
         } else
 #endif
-        { assert(drawLawn==lawnVertices); assert(drawPath==pathVertices); assert(drawLinks==links); }
+        { assert(drawLawn==lawnVertices); assert(drawPath==pathVertices); assert(drawLinks==links);
+          assert(drawPatch==patchVertices); }
         for(int i=0;i<9;i++) {
             HuVecF *draw=mp6_ground_vertices(Hu3DData+6,background+i);
 #ifndef MP6_HEADLESS_BUILD
@@ -323,6 +451,132 @@ int main(void) {
         assert(!memcmp(pathOriginal,pathVertices,sizeof(pathOriginal)));
         assert(!memcmp(originalLinks,links,sizeof(links)));
     }
+    ao=2;
+    /* Object grounding only validates terrain for an exact registered root.
+     * No cached validity may hide a live terrain/pose/config change. */
+    {
+        Mtx world, expected;
+        world_at(expected,0);
+        mp6_ground_test_active_calls=0;
+        memcpy(world,expected,sizeof(world));
+        mp6_ground_object(Hu3DData+6,&clover,world,0);
+        assert(!memcmp(world,expected,sizeof(world)));
+        mp6_ground_object(Hu3DData+2,&body,world,1);
+        mp6_ground_object(Hu3DData+2,&clover,world,1);
+        HSF_OBJECT otherClover=clover;
+        mp6_ground_object(Hu3DData+6,&otherClover,world,1);
+        HSF_DATA otherLawn=lawnData;
+        Hu3DData[6].hsf=&otherLawn;
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        Hu3DData[6].hsf=&lawnData;
+        assert(!memcmp(world,expected,sizeof(world)));
+        assert(mp6_ground_test_active_calls==0);
+#ifndef MP6_HEADLESS_BUILD
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        assert(fabsf(world[1][3]-5.25f)<.001f);
+        assert(mp6_ground_test_active_calls==1);
+        memcpy(world,expected,sizeof(world));
+        pathVertices[0].y=1;
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        pathVertices[0]=pathOriginal[0];
+        assert(!memcmp(world,expected,sizeof(world)));
+        assert(mp6_ground_test_active_calls==2);
+        path.mesh.curr.pos.y=1;
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        path.mesh.curr.pos.y=0;
+        assert(!memcmp(world,expected,sizeof(world)));
+        assert(mp6_ground_test_active_calls==3);
+        ao=0;
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        ao=2;
+        assert(!memcmp(world,expected,sizeof(world)));
+        assert(mp6_ground_test_active_calls==3); /* AO-off skips active(). */
+        Hu3DData[6].pos.y=1;
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        Hu3DData[6].pos.y=0;
+        assert(!memcmp(world,expected,sizeof(world)));
+        assert(mp6_ground_test_active_calls==4);
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        assert(fabsf(world[1][3]-5.25f)<.001f);
+        assert(mp6_ground_test_active_calls==5);
+#else
+        /* Headless object submissions skip active() before the prop scan. */
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        assert(!memcmp(world,expected,sizeof(world)));
+        assert(mp6_ground_test_active_calls==0);
+        ao=0;
+        mp6_ground_object(Hu3DData+6,&clover,world,1);
+        ao=2;
+        assert(!memcmp(world,expected,sizeof(world)));
+        assert(mp6_ground_test_active_calls==0);
+#endif
+    }
+    /* Unrelated geometry skips the expensive lawn validation entirely. The
+     * optimization must not cache its result for registered receivers. */
+    mp6_ground_test_active_calls=0;
+    assert(mp6_ground_vertices(Hu3DData+2,&body)==feet);
+    assert(mp6_ground_test_active_calls==0);
+    pathVertices[0].y=1;
+    assert(mp6_ground_vertices(Hu3DData+2,&body)==feet);
+    assert(mp6_ground_test_active_calls==0);
+    pathVertices[0]=pathOriginal[0];
+#ifndef MP6_HEADLESS_BUILD
+    assert(mp6_ground_vertices(Hu3DData+6,&lawn)!=lawnVertices);
+    assert(mp6_ground_test_active_calls==1);
+    pathVertices[0].y=1;
+    assert(mp6_ground_vertices(Hu3DData+6,&lawn)==lawnVertices);
+    assert(mp6_ground_test_active_calls==2);
+    pathVertices[0]=pathOriginal[0];
+    assert(mp6_ground_vertices(Hu3DData+6,&lawn)!=lawnVertices);
+    assert(mp6_ground_test_active_calls==3);
+    mp6_ground_test_active_calls=0;
+    assert(mp6_ground_vertices(Hu3DData+8,&patch)!=patchVertices);
+    assert(mp6_ground_test_active_calls==1); /* Helper validates exactly once. */
+#endif
+    mp6_ground_test_active_calls=0;
+    ao=0;
+    assert(mp6_ground_vertices(Hu3DData+6,&lawn)==lawnVertices);
+    ao=2;
+    Hu3DData[6].attr|=HU3D_ATTR_HOOKFUNC;
+    assert(mp6_ground_vertices(Hu3DData+6,&lawn)==lawnVertices);
+    Hu3DData[6].attr&=~HU3D_ATTR_HOOKFUNC;
+    assert(mp6_ground_test_active_calls==0);
+    patch.mesh.parent=&body;
+    assert(!mp6_ground_is_decal(Hu3DData+8,&patch));
+    patch.mesh.parent=&patchParent;
+    patchVertices[0].y=-4;
+    assert(!mp6_ground_is_decal(Hu3DData+8,&patch));
+    patchVertices[0].y=-5;
+    HSF_DATA patchReplacement=patchData;
+    Hu3DData[8].hsf=&patchReplacement;
+    assert(!mp6_ground_is_decal(Hu3DData+8,&patch));
+    Hu3DData[8].hsf=&patchData;
+    /* A matching HSF copy in the same model slot is not the registered owner. */
+    HSF_DATA reusedLawn=lawnData;
+    Hu3DData[6].hsf=&reusedLawn;
+    assert(!mp6_ground_is_decal(Hu3DData+6,&path));
+    Hu3DData[6].hsf=&lawnData;
+#ifdef MP6_HEADLESS_BUILD
+    assert(!mp6_ground_is_decal(Hu3DData+6,&path));
+#else
+    assert(mp6_ground_is_decal(Hu3DData+6,&path));
+#endif
+    /* Pose, source vertices, and hierarchy changes invalidate the receiver
+     * even when the model slot and HSF pointer are still live. */
+    path.mesh.curr.pos.y=1;
+    assert(!mp6_ground_is_decal(Hu3DData+6,&path));
+    path.mesh.curr.pos.y=0;
+    path.mesh.parent=&body;
+    assert(!mp6_ground_is_decal(Hu3DData+6,&path));
+    path.mesh.parent=NULL;
+    pathVertices[0].y=1;
+    assert(!mp6_ground_is_decal(Hu3DData+6,&path));
+    pathVertices[0]=pathOriginal[0];
+#ifdef MP6_HEADLESS_BUILD
+    assert(!mp6_ground_is_decal(Hu3DData+6,&path));
+#else
+    assert(mp6_ground_is_decal(Hu3DData+6,&path));
+#endif
     ao=2;
     linkObject.mesh.curr.pos.y=1;
     assert(mp6_ground_vertices(Hu3DData+7,&linkObject)==links);
@@ -360,5 +614,80 @@ int main(void) {
     mp6_ground_end();
     assert(mp6_ground_vertices(Hu3DData+6,&lawn)==lawnVertices);
     assert(mp6_ground_vertices(Hu3DData+1,&log)==logVertices);
+    assert(!mp6_ground_is_decal(Hu3DData+6,&path)); /* registry lifetime */
+    assert(!mp6_ground_is_decal(Hu3DData+8,&patch));
+
+    /* Sky AO protection is an independent, exact terrain-object registry;
+     * it must not depend on a successful lawn lift. The real W01 terrain
+     * root is b01_m000 and owns exactly sora1/sora2/sora3 plus its upper
+     * cloud panel. */
+    HSF_OBJECT skyRoot={.name="b01_m000",.type=HSF_OBJ_ROOT};
+    HSF_OBJECT sky[3]={{.name="sora1",.type=HSF_OBJ_MESH},
+                       {.name="sora2",.type=HSF_OBJ_MESH},
+                       {.name="sora3",.type=HSF_OBJ_MESH}};
+    HSF_OBJECT cloud={.name="cloud",.type=HSF_OBJ_MESH};
+    HuVecF skyVertices[3][3]={
+        {{-1,1,-1},{1,1,-1},{0,1,1}},
+        {{-1,2,-1},{1,2,-1},{0,2,1}},
+        {{-1,3,-1},{1,3,-1},{0,3,1}}};
+    HSF_BUFFER skyBuffers[3];
+    HSF_OBJECT *skyChildren[3]={sky,sky+1,sky+2};
+    HSF_OBJECT *cloudChildren[]={&cloud};
+    skyRoot.mesh.childNum=3; skyRoot.mesh.child=skyChildren;
+    for(int i=0;i<3;i++) {
+        sky[i].mesh.base.scale=sky[i].mesh.curr.scale=(HuVecF){1,1,1};
+        sky[i].mesh.parent=&skyRoot;
+        skyBuffers[i]=(HSF_BUFFER){.count=3,.data=skyVertices[i]};
+        sky[i].mesh.vertex=skyBuffers+i;
+    }
+    sky[0].mesh.childNum=1; sky[0].mesh.child=cloudChildren;
+    HuVecF cloudVertices[3]={{-2,4,-2},{2,4,-2},{0,4,2}};
+    HSF_BUFFER cloudBuffer={.count=3,.data=cloudVertices};
+    cloud.mesh.base.scale=cloud.mesh.curr.scale=(HuVecF){1,1,1};
+    cloud.mesh.parent=sky;
+    cloud.mesh.vertex=&cloudBuffer;
+    HSF_DATA skyData={.root=&skyRoot,.object=&skyRoot,.objectNum=5};
+    model_init(8,&skyData);
+    mp6_ground_w01_begin(8); /* no start/lawn mesh: sky registration still lives */
+    ao=2;
+#ifdef MP6_HEADLESS_BUILD
+    assert(!mp6_ground_is_background(Hu3DData+8,sky));
+    assert(!mp6_ground_is_background(Hu3DData+8,&cloud));
+#else
+    assert(mp6_ground_is_background(Hu3DData+8,sky));
+    assert(mp6_ground_is_background(Hu3DData+8,sky+1));
+    assert(mp6_ground_is_background(Hu3DData+8,sky+2));
+    assert(mp6_ground_is_background(Hu3DData+8,&cloud));
+#endif
+    HSF_OBJECT sameSkyName=sky[0];
+    assert(!mp6_ground_is_background(Hu3DData+8,&sameSkyName)); /* clone */
+    assert(!mp6_ground_is_background(Hu3DData+7,sky)); /* wrong owner */
+    sky[0].mesh.vertex=NULL;
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* killed source */
+    sky[0].mesh.vertex=skyBuffers;
+    sky[0].mesh.curr.pos.y=1;
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* animated pose */
+    sky[0].mesh.curr.pos.y=0;
+    sky[0].mesh.parent=NULL;
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* changed hierarchy */
+    sky[0].mesh.parent=&skyRoot;
+    Hu3DData[8].pos.y=1;
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* moved owner */
+    Hu3DData[8].pos.y=0;
+    ao=0;
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* AO gate */
+    ao=2;
+    Hu3DData[8].attr=HU3D_ATTR_COLOR_NOUPDATE;
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* no color update */
+    Hu3DData[8].attr=0;
+#ifndef MP6_HEADLESS_BUILD
+    assert(mp6_ground_is_background(Hu3DData+8,sky));
+#endif
+    HSF_DATA reusedSky=skyData;
+    Hu3DData[8].hsf=&reusedSky;
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* reused HSF */
+    Hu3DData[8].hsf=&skyData;
+    mp6_ground_end();
+    assert(!mp6_ground_is_background(Hu3DData+8,sky)); /* registry lifetime */
     return 0;
 }

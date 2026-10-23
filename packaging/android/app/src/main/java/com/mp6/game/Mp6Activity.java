@@ -65,6 +65,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
 
+
 import org.libsdl.app.SDLActivity;
 
 public class Mp6Activity extends SDLActivity {
@@ -289,6 +290,19 @@ public class Mp6Activity extends SDLActivity {
         sImportCancel = true;
     }
 
+    /** Native: keep read access to a picked disc image or folder across launches. */
+    public static boolean mp6PersistUri(String uri) {
+        final Mp6Activity activity = (Mp6Activity) mSingleton;
+        if (activity == null || uri == null) return false;
+        try {
+            activity.getContentResolver().takePersistableUriPermission(
+                    Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     /* ------------------------------------------------------------------
      * Tree import worker (DocumentsContract; no androidx dependency).
      * ------------------------------------------------------------------ */
@@ -369,7 +383,8 @@ public class Mp6Activity extends SDLActivity {
                 || rel.equals("sound/MP6_Str.pdt")
                 || rel.equals("data") || rel.startsWith("data/")
                 || rel.equals("mess") || rel.startsWith("mess/")
-                || rel.equals("mic") || rel.startsWith("mic/");
+                || rel.equals("mic") || rel.startsWith("mic/")
+                || rel.equals("movie") || rel.startsWith("movie/");
     }
 
     private static boolean safeRelPath(String rel) {
@@ -440,9 +455,10 @@ public class Mp6Activity extends SDLActivity {
             }
             if (e.isDirectory()) {
                 // Only descend into trees that can still contain wanted files
-                // (skips movie/ = 336MB and dll/ entirely).
+                // (skips dll/ entirely).
                 if (rel.equals("data") || rel.equals("mess") || rel.equals("mic") || rel.equals("sound")
-                        || rel.startsWith("data/") || rel.startsWith("mess/") || rel.startsWith("mic/")) {
+                        || rel.equals("movie") || rel.startsWith("data/") || rel.startsWith("mess/")
+                        || rel.startsWith("mic/") || rel.startsWith("movie/")) {
                     collectWanted(treeUri, e.documentId, rel, out, visitedDirs,
                             nodeCount, depth + 1);
                 }
@@ -980,4 +996,5 @@ public class Mp6Activity extends SDLActivity {
             sImportState = sImportCancel ? IMPORT_CANCELLED : IMPORT_FAILED;
         }
     }
+
 }

@@ -1,0 +1,15 @@
+--- a/src/REL/m656dll/game.c
++++ b/src/REL/m656dll/game.c
+@@ -1 +1 @@
+-/* Holds Mass Meteor stage data and its gameplay and presentation callbacks. */
++#include "mp6_widescreen.h"
+@@ -519,0 +520 @@
++    work->sprGroup = mp6_widescreen_sprite_band(work->sprGroup, 11, 0, 64.0f, 0.0f, 608.0f);
+@@ -521 +522 @@
+-        for (index = 0; index < 11; index++) {
++        for (index = 0; index < HuSprGrpData[work->sprGroup].sprNum; index++) {
+@@ -629,0 +631,4 @@
++        /* cosmo is a separate flat, repeat-wrapped starfield. Extend both
++         * geometry and UVs before linking the second view so stars keep
++         * their original size and both cameras share the same wider sky. */
++        mp6_widescreen_extrude_model_repeat(work->model38);

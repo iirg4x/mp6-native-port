@@ -1,0 +1,25 @@
+--- a/src/REL/m640dll/game.c
++++ b/src/REL/m640dll/game.c
+@@ -1,0 +2 @@
++#include "mp6_widescreen.h"
+@@ -339,0 +341 @@
++        mp6_widescreen_extend_edge(modelHandle, "floor", 2, 1000.0f);
+@@ -345,0 +348 @@
++        mp6_widescreen_extend_edge(modelHandle, "wall2", 2, 600.0f);
+@@ -491,0 +495,10 @@
++    /* Finish the merge exactly. The native loop stops at frame 59,
++     * leaving a four-line losing viewport and its two-line divider alive. */
++    if ((s16)frame == 60) {
++        u16 winnerCamera = cameras[lbl_1_bss_4E8.winnerSide];
++        u16 loserCamera = cameras[1 - lbl_1_bss_4E8.winnerSide];
++        Hu3DCameraScissorSet(loserCamera, 0, 0, 0, 0);
++        Hu3DCameraViewportSet(winnerCamera, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
++        Hu3DCameraScissorSet(winnerCamera, 0, 0, 640, 480);
++        Hu3DCameraPerspectiveSet(winnerCamera, 20.0f, 60.0f, 25000.0f, 1.2f);
++    }
+@@ -753,2 +753,3 @@
+-        /* This equality path returns no value even though the caller tests the result. */
+-        return;
++        /* Already aligned. Hardware returned the non-null player pointer still in
++         * r3, which the caller reads as aligned. */
++        return 1;

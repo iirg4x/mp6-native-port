@@ -1,0 +1,49 @@
+--- a/src/REL/m649Dll/score.c
++++ b/src/REL/m649Dll/score.c
+@@ -52,14 +52,3 @@
+-#include "include/game/gamework.h"
+-
+-typedef struct M649ScoreEntryView_s {
+-    s32 points; /* Current player score, capped at 99. */
+-    float x, y; /* Score box position in screen coordinates. */
+-    s16 box; /* Player's score-box sprite group. */
+-    MGSCORE *score; /* Number sprite displaying the current score. */
+-} M649ScoreEntryView;
+-
+-typedef struct M649ScoreWorkView_s {
+-    s32 displayState; /* 0 leaves visibility unchanged, 1 shows the displays, and 2 keeps them
+-                       * visible. */
+-    M649ScoreEntryView entries[4]; /* Scores and display handles in player order. */
+-} M649ScoreWorkView;
++#include "game/gamework.h"
++
++
+@@ -69 +57,0 @@
+-extern OMOBJ *lbl_1_bss_5A8;
+@@ -82 +70 @@
+-void fn_1_A528(void *entry);
++void fn_1_A528(M649ScoreEntryView *entry);
+@@ -88 +76 @@
+-    void *scoreWork;
++    M649ScoreWorkView *scoreWork;
+@@ -92 +80 @@
+-    scoreWork = HuMemDirectMallocNum(HEAP_HEAP, 84, HU_MEMNUM_OVL);
++    scoreWork = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*scoreWork), HU_MEMNUM_OVL);
+@@ -94 +82 @@
+-    memset(scoreWork, 0, 84);
++    memset(scoreWork, 0, sizeof(*scoreWork));
+@@ -176 +164 @@
+-void fn_1_A528(void *entry) {
++void fn_1_A528(M649ScoreEntryView *entry) {
+@@ -179,4 +167,4 @@
+-    x = (*(f32 *)((s8 *)(entry) + (4)));
+-    y = (*(f32 *)((s8 *)(entry) + (8)));
+-    MgScoreBoxPosSet((*(s16 *)((s8 *)(entry) + (12))), x, y);
+-    MgScorePosSet((*(MGSCORE * *)((s8 *)(entry) + (16))), 7.0f + x, y);
++    x = entry->x;
++    y = entry->y;
++    MgScoreBoxPosSet(entry->box, x, y);
++    MgScorePosSet(entry->score, 7.0f + x, y);
+@@ -218,0 +207,2 @@
++
++/* Native REL storage reset; runtime objects retain normal overlay ownership. */

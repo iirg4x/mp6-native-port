@@ -1,0 +1,6 @@
+--- a/src/REL/endingdll/effects.c
++++ b/src/REL/endingdll/effects.c
+@@ -1467,0 +1468,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

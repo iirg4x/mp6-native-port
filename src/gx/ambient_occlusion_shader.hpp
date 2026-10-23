@@ -1,4 +1,5 @@
 #pragma once
+#include <cassert>
 #include <string>
 #include "ambient_occlusion_denoise_shader.hpp"
 
@@ -8,7 +9,10 @@
  * MP6 retains R32 depth, deterministic sampling and its dual-plane denoiser. */
 inline std::string ambient_occlusion_shader(bool compatibility, bool preparedDepth = false,
                                           bool attachmentDepth = false, bool multisampledDepth = false,
-                                          bool decals = true) {
+                                          bool decals = true, bool canonicalDepth = false,
+                                          bool reducedDepth = false, bool debugView = false) {
+assert(!canonicalDepth || (preparedDepth && attachmentDepth));
+assert(!reducedDepth || (preparedDepth && !canonicalDepth));
 std::string shader = R"wgsl(
 // Copyright (C) 2016-2021, Intel Corporation
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -53,6 +57,18 @@ struct Params {
 // This is a private AO input, never written back to the game's depth buffer.
 @fragment fn fs_decal_depth(@builtin(position) pixel: vec4f) -> @location(0) f32 {
     let at = vec2i(pixel.xy);
+)wgsl";
+if (preparedDepth) shader += R"wgsl(
+    // Water is neither an AO receiver nor an occluder. Remove its visible
+    // coverage from the private depth input as well as the final composite;
+    // masking only the composite leaves water edges shading adjacent land.
+    // The no-foreground binding is a 1x1 transparent texture.
+    let maskAt = clamp(at, vec2i(0), vec2i(textureDimensions(foliageColor)) - 1);
+    // Alpha 1 (water, sky) leaves AO depth; characters mark 0.25: no AO on
+    // them, but their depth still shades the ground.
+    if (textureLoad(foliageColor, maskAt, 0).a > 0.5) { return 0.0; }
+)wgsl";
+shader += R"wgsl(
     let current = textureLoad(sceneDepth, at, 0).r;
     let before = textureLoad(decalBefore, at, 0).r;
     let after = textureLoad(decalAfter, at, 0).r;
@@ -186,18 +202,24 @@ shader += R"wgsl(
     let center = position(uv, z);
     let normal = surface_normal(uv, z, max(vec2f(1), ceil(p.sizes.xy / p.sizes.zw)));
     if (dot(normal, normal) < 0.5) { return vec4f(1, 0, 0, 0); }
-    let radius = 32.0; // world units, independent of resolution/camera zoom
+    let radius = 64.0; // world units, independent of resolution/camera zoom
     let projectedRadius = min(vec2f(0.08), radius / (2.0 * z * p.projection.x) *
                                p.viewport.zw / vec2f(p.projection.y, 1.0));
     let view = normalize(-center);
     let pi = 3.14159265359;
+    // A fixed 4x4 interleave rotates the slices and offsets the steps per
+    // pixel; the 7-tap bilateral blur averages it out. Without it, the wide
+    // radius shows as concentric bands around every contact.
+    let cell = vec2u(pixel.xy) & vec2u(3u);
+    let sliceJitter = (f32((cell.x & 1u) * 2u + (cell.y & 1u)) + 0.5) / 4.0;
+    let stepJitter = (f32((cell.x >> 1u) * 2u + (cell.y >> 1u)) + 0.5) / 4.0;
     var occluded = 0.0;
     var unoccluded = 0.0;
     // Three hemisphere slices, four distances on either side (24 depth taps).
-    // No animated noise: the port has no TAA history to remove it. Quadratic
+    // Static noise only: the port has no TAA history to remove animated noise. Quadratic
     // spacing concentrates work at character contacts and small crevices.
     for (var slice = 0u; slice < 3u; slice++) {
-        let angle = (f32(slice) + 0.5) * pi / 3.0;
+        let angle = (f32(slice) + sliceJitter) * pi / 3.0;
         let direction = vec3f(cos(angle), sin(angle), 0);
         let axis = normalize(cross(direction, view));
         let tangent = normalize(cross(view, axis));
@@ -209,7 +231,7 @@ shader += R"wgsl(
         let screenDirection = vec2f(direction.x, -direction.y) * projectedRadius;
         let minStep = 1.3 / max(length(screenDirection * p.sizes.xy), 1.3);
         for (var step = 0u; step < 4u; step++) {
-            let t = (f32(step) + 0.5) / 4.0;
+            let t = (f32(step) + stepJitter) / 4.0;
             let offset = screenDirection * (t * t + minStep);
             for (var side = 0u; side < 2u; side++) {
                 let suv = depth_uv(uv + offset * select(1.0, -1.0, side == 1u));
@@ -258,7 +280,7 @@ shader += R"wgsl(
         occluded += projectedLength * max(0.0, openArc - visibleArc);
         unoccluded += projectedLength * openArc;
     }
-    let amount = clamp(1.7 * occluded / max(unoccluded, 1e-6), 0.0, 1.0);
+    let amount = clamp(2.5 * occluded / max(unoccluded, 1e-6), 0.0, 1.0);
     return vec4f(1.0 - p.depth.w * amount, normal);
 }
 
@@ -417,6 +439,43 @@ shader += R"wgsl(
 }
 )wgsl";
 shader += ambient_occlusion_denoise_shader();
+// Reduced prepared depth (mp6_ao_reduced_depth): the R32 target is sizes.zw.
+// Preparation picks the full-resolution texel under each reduced pixel's
+// center; every later depth read and texel snap uses the reduced grid, and
+// normals step one reduced texel so they never difference a texel with itself.
+if (reducedDepth) {
+    const auto replace_once = [&](const std::string &from, const std::string &to) {
+        const auto at = shader.find(from);
+        assert(at != std::string::npos);
+        if (at != std::string::npos) shader.replace(at, from.size(), to);
+    };
+    replace_once("@fragment fn fs_decal_depth(@builtin(position) pixel: vec4f) -> @location(0) f32 {\n    let at = vec2i(pixel.xy);",
+                 "@fragment fn fs_decal_depth(@builtin(position) pixel: vec4f) -> @location(0) f32 {\n"
+                 "    let at = min(vec2i((floor(pixel.xy) + 0.5) * p.sizes.xy / p.sizes.zw), vec2i(p.sizes.xy) - 1);");
+    replace_once("return (floor(uv * p.sizes.xy) + 0.5) / p.sizes.xy;", "return (floor(uv * p.sizes.zw) + 0.5) / p.sizes.zw;");
+    replace_once("let at = clamp(vec2i(uv * p.sizes.xy), vec2i(0), vec2i(p.sizes.xy) - 1);",
+                 "let at = clamp(vec2i(uv * p.sizes.zw), vec2i(0), vec2i(p.sizes.zw) - 1);");
+    replace_once("surface_normal(uv, z, max(vec2f(1), ceil(p.sizes.xy / p.sizes.zw)))", "surface_normal(uv, z, p.sizes.xy / p.sizes.zw)");
+    // The receiver is the full-resolution pixel on the surface of the reduced
+    // texel under it: the view ray through this pixel intersected with that
+    // texel's tangent plane (its depth and GTAO's normal, carried in .gba).
+    // Pairing the full-size UV with the texel's raw depth put the receiver off
+    // the surface (every weight zero, no visible AO); snapping it to the texel
+    // centre made AO edges blocky at the shading resolution. The plane keeps
+    // full-size edge placement with no full-size depth read. A grazing plane
+    // falls back to the texel depth.
+    replace_once("    let center = position(uv, z);\n"
+                 "    // Validate BOTH surfaces at silhouettes, including mobile upsampling.\n"
+                 "    let normal = surface_normal(uv, z, vec2f(1));",
+                 "    let texelUv = depth_uv(uv);\n"
+                 "    let normal = textureLoad(obscurance, clamp(vec2i(texelUv * p.sizes.zw), vec2i(0),\n"
+                 "                                               vec2i(p.sizes.zw) - 1), 0).gba;\n"
+                 "    let ray = position(uv, 1.0);\n"
+                 "    let facing = dot(normal, ray);\n"
+                 "    let planeZ = dot(normal, position(texelUv, z)) / select(1.0, facing, abs(facing) > 1e-4);\n"
+                 "    let center = position(uv, select(z, clamp(planeZ, z * 0.5, z * 2.0), abs(facing) > 0.05));\n"
+                 "    // Validate BOTH surfaces at silhouettes, including mobile upsampling.");
+}
 // The ordered preparation pass can sample the original attachment directly.
 // Sample zero exactly matches Aurora's existing single/MSAA depth snapshot.
 // Only this pipeline uses the depth-typed binding; GTAO and reconstruction
@@ -438,6 +497,43 @@ if (attachmentDepth) {
         replace("    let after = textureLoad(decalAfter, at, 0).r;\n", "");
         replace("select(current, before, current == after && before != after)", "current");
     }
+}
+if (canonicalDepth) {
+    // Keep the R32 view-Z round trip's operation order, including exact decal
+    // selection and water rejection. Returning normalized raw depth directly
+    // is algebraically equivalent but not necessarily bit-identical.
+    const std::string signature = "@fragment fn fs_decal_depth(@builtin(position) pixel: vec4f) -> @location(0) f32";
+    const auto at = shader.find(signature);
+    assert(at != std::string::npos);
+    shader.replace(at, signature.size(), "fn prepare_viewz(pixel: vec4f) -> f32");
+    shader += R"wgsl(
+struct AdapterParams {
+    depth: vec4f,
+    viewport: vec4f,
+    scissor: vec4f,
+};
+@group(0) @binding(7) var<uniform> adapter: AdapterParams;
+
+@fragment fn fs_canonical_depth(@builtin(position) pixel: vec4f) -> @location(0) f32 {
+    let z: f32 = prepare_viewz(pixel);
+    let uv = pixel.xy / p.sizes.xy;
+    let lo = max(adapter.viewport.xy, adapter.scissor.xy);
+    let hi = min(adapter.viewport.xy + adapter.viewport.zw, adapter.scissor.xy + adapter.scissor.zw);
+    let receiver = all(uv >= lo) && all(uv < hi) && all(uv >= vec2f(0)) && all(uv < vec2f(1));
+    if (!(z > 0.0) || !receiver) { return 1.0; }
+    return clamp(adapter.depth.y - adapter.depth.x / z, 0.0, 1.0);
+}
+)wgsl";
+}
+// MP6_AO_DEBUG_VIEW=1: the composite writes AO visibility itself (white =
+// unshaded) instead of shading the scene, for inspecting the AO term alone.
+if (debugView) {
+    const auto replace_all = [&](const std::string &from, const std::string &to) {
+        for (size_t at = 0; (at = shader.find(from, at)) != std::string::npos; at += to.size())
+            shader.replace(at, from.size(), to);
+    };
+    replace_all("return vec4f(0,0,0,1);", "return vec4f(1,1,1,0);");
+    replace_all("return vec4f(foreground*(1.0-visibility),visibility);", "return vec4f(vec3f(visibility),0.0);");
 }
 return shader;
 }

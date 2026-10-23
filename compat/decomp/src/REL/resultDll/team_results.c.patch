@@ -1,0 +1,19 @@
+--- a/src/REL/resultDll/team_results.c
++++ b/src/REL/resultDll/team_results.c
+@@ -0,0 +1,4 @@
++#include "mp6_board_compat.h"
++#include "mp6_widescreen.h"
++#include "game/hsfex.h"
++#include "game/esprite.h"
+@@ -304,0 +309 @@
++        mp6_widescreen_esp_scroll_update(&lbl_1_bss_950[0][0]);
+@@ -483,0 +489,3 @@
++    /* The wrap spans 697 units of 576: repeat that span into the wide
++     * margins, at native density and phase. */
++    mp6_widescreen_esp_scroll_begin(&lbl_1_bss_950[0][0], 9 * 10, 697.0f);
+@@ -511,0 +520 @@
++    mp6_widescreen_esp_scroll_forget(&lbl_1_bss_950[0][0]);
+@@ -870,0 +880,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

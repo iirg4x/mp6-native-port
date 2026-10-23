@@ -1,0 +1,8 @@
+--- a/src/REL/m626Dll/text_0052C.c
++++ b/src/REL/m626Dll/text_0052C.c
+@@ -115 +115 @@
+-void fn_1_86C(void)
++s32 fn_1_86C(void)
+@@ -117 +117 @@
+-    MgSeqTimerValueGet();
++    return MgSeqTimerValueGet();

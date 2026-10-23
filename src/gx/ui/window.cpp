@@ -40,6 +40,7 @@ namespace {
 <head>
     <link type="text/rcss" href="res/rml/tabbing.rcss" />
     <link type="text/rcss" href="res/rml/window.rcss" />
+    <link type="text/rcss" href="res/rml/settings.rcss" />
 </head>
 <body>
     <window id="window"></window>
@@ -72,13 +73,18 @@ namespace {
 
 } // namespace
 
-Window::Window()
+Window::Window(bool fullscreen)
     : Document(formatted_source(kDocumentSource))
     , mRoot(mDocument->GetElementById("window"))
+    , mFullscreen(fullscreen)
 {
+    if (fullscreen) {
+        mDocument->SetClass("settings-document", true);
+        mRoot->SetClass("party-settings", true);
+    }
     mTabBar = std::make_unique<TabBar>(mRoot,
         TabBar::Props {
-            .onClose = [this] { request_close(); },
+            .onClose = fullscreen ? std::function<void()>{} : [this] { request_close(); },
             .selectedTabIndex = 0,
             .autoSelect = true,
         });
@@ -136,6 +142,9 @@ void Window::hide(bool close)
 {
     mRoot->RemoveAttribute("open");
     mPendingClose = close;
+    // The full-screen menu has no opacity-filter transition or extra render
+    // target. Release its input immediately, including during rapid reopen.
+    if (mFullscreen) Document::hide(close);
 }
 
 void Window::update()
@@ -154,7 +163,7 @@ void Window::update_safe_area() noexcept
     }
 
     Rml::Context *context = mDocument->GetContext();
-    const float basePadding = base_body_padding(context);
+    const float basePadding = mFullscreen ? 0.0f : base_body_padding(context);
     Insets safeInsets = safe_area_insets(context);
     safeInsets = {
         std::round(std::max(basePadding, safeInsets.top)),
@@ -167,10 +176,11 @@ void Window::update_safe_area() noexcept
     }
 
     mBodyPadding = safeInsets;
-    mDocument->SetProperty(Rml::PropertyId::PaddingTop, Rml::Property(safeInsets.top, Rml::Unit::PX));
-    mDocument->SetProperty(Rml::PropertyId::PaddingRight, Rml::Property(safeInsets.right, Rml::Unit::PX));
-    mDocument->SetProperty(Rml::PropertyId::PaddingBottom, Rml::Property(safeInsets.bottom, Rml::Unit::PX));
-    mDocument->SetProperty(Rml::PropertyId::PaddingLeft, Rml::Property(safeInsets.left, Rml::Unit::PX));
+    auto *insetTarget = mFullscreen ? mRoot : mDocument;
+    insetTarget->SetProperty(Rml::PropertyId::PaddingTop, Rml::Property(safeInsets.top, Rml::Unit::PX));
+    insetTarget->SetProperty(Rml::PropertyId::PaddingRight, Rml::Property(safeInsets.right, Rml::Unit::PX));
+    insetTarget->SetProperty(Rml::PropertyId::PaddingBottom, Rml::Property(safeInsets.bottom, Rml::Unit::PX));
+    insetTarget->SetProperty(Rml::PropertyId::PaddingLeft, Rml::Property(safeInsets.left, Rml::Unit::PX));
 }
 
 bool Window::set_active_tab(int index)

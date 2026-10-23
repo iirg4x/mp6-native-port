@@ -1,0 +1,111 @@
+--- a/include/REL/micquizdll/quiz_functions.h
++++ b/include/REL/micquizdll/quiz_functions.h
+@@ -5,0 +6,2 @@
++#include "mp6_window.h"
++#include "mp6_widescreen.h"
+@@ -211,0 +214,14 @@
++}
++
++/* Native inline-text form of fn_1_20D08. Each window slot owns its text. */
++static char mp6_micquiz_insert_text_storage[4][HUWIN_INSERTMES_MAX][32];
++static void mp6_micquiz_insert_text(s32 windowNo, const char *text, s16 insertNo)
++{
++    char *slot;
++
++    if (windowNo < 0 || windowNo >= 4 || insertNo < 0 || insertNo >= HUWIN_INSERTMES_MAX)
++        return;
++    slot = mp6_micquiz_insert_text_storage[windowNo][insertNo];
++    strncpy(slot, text, sizeof(mp6_micquiz_insert_text_storage[0][0]) - 1);
++    slot[sizeof(mp6_micquiz_insert_text_storage[0][0]) - 1] = 0;
++    mp6_window_insert_text(fn_1_206FC(windowNo), slot, insertNo);
+@@ -297,0 +314 @@
++        f32 margin = mp6_widescreen_half_width_delta();
+@@ -299 +316 @@
+-                   0.0f, 576.0f, 0.0f, 10.0f);
++                   -margin, 576.0f + margin, 0.0f, 10.0f);
+@@ -303 +320 @@
+-            GXSetViewportJitter(0.0f, 0.0f, 640.0f, 480.0f,
++            GXSetViewportJitter(0.0f, 0.0f, (f32)mp6_widescreen_render_width(), 480.0f,
+@@ -306 +323 @@
+-            GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f,
++            GXSetViewport(0.0f, 0.0f, (f32)mp6_widescreen_render_width(), 480.0f,
+@@ -310 +327 @@
+-        GXSetScissor(0, 0, 640, 480);
++        GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
+@@ -348,8 +365,8 @@
+-        GXPosition2f32(0.0f, 0.0f);
+-        GXTexCoord2f32(0.0f, 0.0f);
+-        GXPosition2f32(576.0f, 0.0f);
+-        GXTexCoord2f32(36.0f, 0.0f);
+-        GXPosition2f32(576.0f, 480.0f);
+-        GXTexCoord2f32(36.0f, 30.0f);
+-        GXPosition2f32(0.0f, 480.0f);
+-        GXTexCoord2f32(0.0f, 30.0f);
++        GXPosition2f32(-margin, 0.0f);
++        GXTexCoord2f32(-margin / 16.0f, 0.0f);
++        GXPosition2f32(576.0f + margin, 0.0f);
++        GXTexCoord2f32(36.0f + margin / 16.0f, 0.0f);
++        GXPosition2f32(576.0f + margin, 480.0f);
++        GXTexCoord2f32(36.0f + margin / 16.0f, 30.0f);
++        GXPosition2f32(-margin, 480.0f);
++        GXTexCoord2f32(-margin / 16.0f, 30.0f);
+@@ -650 +667 @@
+-            lbl_1_bss_340[0]->property = (void *) lbl_1_data_20A;
++            lbl_1_bss_340[0]->property = (void *)(intptr_t)lbl_1_data_20A;
+@@ -658 +675 @@
+-            lbl_1_bss_340[0]->property = (void *) lbl_1_data_20C;
++            lbl_1_bss_340[0]->property = (void *)(intptr_t)lbl_1_data_20C;
+@@ -675 +692 @@
+-                lbl_1_bss_340[playerIndex + 2]->property = (void *) lbl_1_data_210[playerIndex];
++                lbl_1_bss_340[playerIndex + 2]->property = (void *)(intptr_t)lbl_1_data_210[playerIndex];
+@@ -684 +701 @@
+-            lbl_1_bss_340[0]->property = (void *) lbl_1_data_218;
++            lbl_1_bss_340[0]->property = (void *)(intptr_t)lbl_1_data_218;
+@@ -691 +708 @@
+-            lbl_1_bss_340[1]->property = (void *) lbl_1_data_21A;
++            lbl_1_bss_340[1]->property = (void *)(intptr_t)lbl_1_data_21A;
+@@ -699 +716 @@
+-            lbl_1_bss_340[0]->property = (void *) lbl_1_data_20C;
++            lbl_1_bss_340[0]->property = (void *)(intptr_t)lbl_1_data_20C;
+@@ -812 +829 @@
+-    sprite = (s16)process->property;
++    sprite = (s16)(intptr_t)process->property;
+@@ -850 +867 @@
+-    groupId = (s16) currentProcess->property;
++    groupId = (s16)(intptr_t)currentProcess->property;
+@@ -924 +941 @@
+-    f32 angle;
++    f32 angle = 0.0f;
+@@ -930 +947 @@
+-    spriteGroup = (s16) process->property;
++    spriteGroup = (s16)(intptr_t)process->property;
+@@ -1398 +1415 @@
+-        if ((u32)lbl_1_bss_C != 0) {
++        if (lbl_1_bss_C != NULL) {
+@@ -1407 +1424 @@
+-        if ((u32)lbl_1_bss_C == 0) {
++        if (lbl_1_bss_C == NULL) {
+@@ -1418 +1435 @@
+-        if ((u32)lbl_1_bss_C != 0) {
++        if (lbl_1_bss_C != NULL) {
+@@ -1428 +1445 @@
+-        if ((u32)lbl_1_bss_C != 0) {
++        if (lbl_1_bss_C != NULL) {
+@@ -3086 +3103 @@
+-        lbl_1_bss_504 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
+@@ -3088 +3105 @@
+-        lbl_1_bss_504 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
+@@ -3090 +3107 @@
+-        lbl_1_bss_504 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 11), 7, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 11), 7, (s16)padNo);
+@@ -3092 +3109 @@
+-        lbl_1_bss_504 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 54), 3, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 54), 3, (s16)padNo);
+@@ -3094 +3111 @@
+-        lbl_1_bss_504 = HuMCSelWinItemSet(MESSNUM(MESS_MIC_RETYPING, 118), 9, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_MIC_RETYPING, 118), 9, (s16)padNo);
+@@ -3119 +3136 @@
+-    lbl_1_bss_504 = HuMCSelWinItemSet(messageBase, 11, (s16) padNo);
++    HuMCSelWinItemSet(messageBase, 11, (s16) padNo);

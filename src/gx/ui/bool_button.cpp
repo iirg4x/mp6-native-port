@@ -3,6 +3,7 @@
 // Credits: TwilitRealm
 
 #include "bool_button.hpp"
+#include "../../audio/menu_sfx.hpp"
 
 /* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
@@ -25,6 +26,15 @@ BoolButton::BoolButton(Rml::Element *parent, Props props)
     , mIsDisabled(std::move(props.isDisabled))
     , mIsModified(std::move(props.isModified))
 {
+    mRoot->SetClass("toggle-row", true);
+    mSwitch = append(mRoot, "toggle-switch");
+    mSwitch->SetInnerRML("<toggle-knob/>");
+}
+
+void BoolButton::update()
+{
+    BaseControlledSelectButton::update();
+    mSwitch->SetPseudoClass("checked", mGetValue() != 0);
 }
 
 bool BoolButton::modified() const
@@ -50,10 +60,11 @@ Rml::String BoolButton::format_value()
 
 bool BoolButton::handle_nav_command(NavCommand cmd)
 {
+    // In the deck, horizontal input browses cards; A/tap changes a toggle.
+    if ((cmd == NavCommand::Left || cmd == NavCommand::Right) && mRoot->Closest(".card-deck")) return false;
     if (cmd == NavCommand::Confirm || cmd == NavCommand::Left || cmd == NavCommand::Right) {
-        const bool newValue = !mGetValue();
-        mSetValue(newValue);
-        // mDoAud_seStartMenu(newValue ? kSoundItemEnable : kSoundItemDisable); // TODO PC
+        const bool newValue = cmd == NavCommand::Left ? false : cmd == NavCommand::Right ? true : !mGetValue();
+        if (newValue != static_cast<bool>(mGetValue())) {mSetValue(newValue);audio::play_menu_sound(audio::MenuSound::Confirm);}
         return true;
     }
     return false;

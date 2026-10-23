@@ -352,18 +352,109 @@ int mp6_enh_sfx_voices(void)
     return v.sfxVoices;
 }
 
-int mp6_enh_ambient_occlusion(void)
+static int g_aoAbConfigured = -1; /* -1 = env not read; 0 = inactive */
+static int g_aoAbParts, g_aoAbGpu;
+static int g_aoAbVariant = MP6_AO_AB_FULL;
+
+static int ao_ab_flag(const char *name)
 {
-    if (g_resolvedValid) return g_resolved.ambientOcclusion;
+    const char *env = getenv(name);
+    return env && env[0] == '1' && !env[1];
+}
+
+int mp6_enh_ao_ab_variant(void)
+{
+    if (g_aoAbConfigured < 0) {
+        const char *env = getenv("MP6_AO_AB");
+        g_aoAbConfigured = (env && (env[0] == '1' || env[0] == '2') && !env[1]) ? env[0] - '0' : 0;
+        g_aoAbParts = ao_ab_flag("MP6_AO_AB_PARTS");
+        g_aoAbGpu = ao_ab_flag("MP6_AO_AB_GPU");
+    }
+    return g_aoAbConfigured ? g_aoAbVariant : -1;
+}
+
+static int enh_configured_ambient_occlusion(void)
+{
     Mp6EnhValues v;
+    if (g_resolvedValid) return g_resolved.ambientOcclusion;
     enh_base(&v);
     (void)enh_env_int("MP6_ENH_AMBIENT_OCCLUSION", &v.ambientOcclusion);
     mp6_enh_values_sanitize(&v);
     return v.ambientOcclusion;
 }
 
+/* The A/B only acts while AO is switched on in the settings, at that level:
+ * the tester keeps AO off through boot and menus and turns it on in game
+ * (an iPhone Safari build aborted at game boot whenever AO was forced on). */
+int mp6_enh_ao_ab_level(void)
+{
+    const int variant = mp6_enh_ao_ab_variant();
+    if (variant < 0) return -1;
+    return variant == MP6_AO_AB_OFF ? 0 : enh_configured_ambient_occlusion();
+}
+
+int mp6_enh_ao_ab_gpu_timing(void)
+{
+    return mp6_enh_ao_ab_variant() >= 0 && g_aoAbGpu;
+}
+
+const char *mp6_enh_ao_ab_variant_name(int variant)
+{
+    static const char *const names[MP6_AO_AB_VARIANTS] = {
+        "full", "off", "no-foliage", "no-decals", "no-blur", "cap960", "no-apply",
+        "no-passes", "no-composite", "every-frame"};
+    return variant >= 0 && variant < MP6_AO_AB_VARIANTS ? names[variant] : "none";
+}
+
+void mp6_enh_ao_ab_flip(void)
+{
+    /* MP6_AO_AB_CYCLE: comma-separated variant names to cycle through with
+     * MP6_AO_AB_PARTS=1. The default splits the apply step. */
+    static int cycle[16], count = -1;
+    if (mp6_enh_ao_ab_variant() < 0) return;
+    if (count < 0) {
+        const char *env = getenv("MP6_AO_AB_CYCLE");
+        count = 0;
+        while (env && *env && count < 16) {
+            const char *end = strchr(env, ',');
+            const size_t length = end ? (size_t)(end - env) : strlen(env);
+            int v;
+            for (v = 0; v < MP6_AO_AB_VARIANTS; ++v) {
+                const char *name = mp6_enh_ao_ab_variant_name(v);
+                if (strlen(name) == length && !strncmp(name, env, length)) cycle[count++] = v;
+            }
+            env = end ? end + 1 : env + length;
+        }
+        if (!count) {
+            static const int fallback[] = {MP6_AO_AB_FULL, MP6_AO_AB_OFF, MP6_AO_AB_NO_PASSES,
+                                           MP6_AO_AB_NO_COMPOSITE, MP6_AO_AB_NO_APPLY};
+            for (count = 0; count < (int)(sizeof fallback / sizeof fallback[0]); ++count)
+                cycle[count] = fallback[count];
+        }
+    }
+    if (g_aoAbParts) {
+        int i = 0;
+        while (i < count && cycle[i] != g_aoAbVariant) ++i;
+        g_aoAbVariant = cycle[(i + 1) % count];
+    }
+    else g_aoAbVariant = g_aoAbVariant == MP6_AO_AB_FULL ? MP6_AO_AB_OFF : MP6_AO_AB_FULL;
+}
+
+int mp6_enh_ambient_occlusion(void)
+{
+    const int ab = mp6_enh_ao_ab_level();
+    return ab >= 0 ? ab : enh_configured_ambient_occlusion();
+}
+
 int mp6_enh_heap_scale(void)
 {
+#ifdef __EMSCRIPTEN__
+    /* The browser build always runs the retail heaps: Extra Memory's 550 MB
+     * arena (with the GPU's share) is more than iOS lets a page keep, and
+     * Safari silently kills the page at the next spike -- pausing a board
+     * was enough. Mobile presets that ask for it get x1. */
+    return 1;
+#endif
     if (g_resolvedValid) return g_resolved.heapScale;
     Mp6EnhValues v;
     enh_base(&v);
@@ -381,6 +472,7 @@ void mp6_enh_cache_environment(void)
     g_resolved.aa = mp6_enh_aa_mode();
     g_resolved.sfxVoices = mp6_enh_sfx_voices();
     g_resolved.heapScale = mp6_enh_heap_scale();
-    g_resolved.ambientOcclusion = mp6_enh_ambient_occlusion();
+    /* The setting itself, never an A/B window's override. */
+    g_resolved.ambientOcclusion = enh_configured_ambient_occlusion();
     g_resolvedValid = 1;
 }

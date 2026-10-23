@@ -1,10 +1,10 @@
 --- a/src/game/sprman.c
 +++ b/src/game/sprman.c
-@@ -6,0 +7,3 @@
+@@ -7,0 +8,3 @@
 +#include "mp6_anim_native.h"
 +#include "mp6_shim_log.h"
 +#include <stdio.h>
-@@ -8,0 +12,26 @@
+@@ -9,0 +13,26 @@
 +
 +/* This TU calls mtxTransCat (HuSprBegin, below) with no prototype anywhere
 + * in its own #include chain (game/hu3d.h, the one header in the decomp
@@ -31,35 +31,35 @@
 + * divide-by-zero) -- not a decompilation error, nothing that changes
 + * observable behavior on real hardware. */
 +void mtxTransCat(Mtx dst, float x, float y, float z);
-@@ -77 +106 @@
--    while(sp = HuSprCall()) {
-+    while((sp = HuSprCall()) != NULL) {
-@@ -144,0 +174,10 @@
+@@ -82 +111 @@
+-    while(sprite = HuSprCall()) {
++    while((sprite = HuSprCall()) != NULL) {
+@@ -154,0 +184,10 @@
 +        /* The native ANM loader validates these indices before publishing
 +         * the graph. Keep a last-line runtime guard for mutable game state. */
-+        if (!sp->data || sp->bank < 0 || sp->bank >= sp->data->bankNum ||
-+            sp->data->bank[sp->bank].frame == NULL ||
-+            sp->animNo < 0 || sp->animNo >= sp->data->bank[sp->bank].timeNum) {
++        if (!sprite->data || sprite->bank < 0 || sprite->bank >= sprite->data->bankNum ||
++            sprite->data->bank[sprite->bank].frame == NULL ||
++            sprite->animNo < 0 || sprite->animNo >= sprite->data->bank[sprite->bank].timeNum) {
 +            MP6_LOG_ONCE("SPR", "HuSprCall-invalid-frame-lookup");
-+            sp->frameP = NULL;
-+            sp->patP = NULL;
-+            return sp;
++            sprite->frameP = NULL;
++            sprite->patP = NULL;
++            return sprite;
 +        }
-@@ -145,0 +185,6 @@
-+        if (sp->frameP->pat < 0 || sp->frameP->pat >= sp->data->patNum) {
+@@ -155,0 +195,6 @@
++        if (sprite->frameP->pat < 0 || sprite->frameP->pat >= sprite->data->patNum) {
 +            MP6_LOG_ONCE("SPR", "HuSprCall-invalid-pattern-lookup");
-+            sp->frameP = NULL;
-+            sp->patP = NULL;
-+            return sp;
++            sprite->frameP = NULL;
++            sprite->patP = NULL;
++            return sprite;
 +        }
-@@ -220,28 +265 @@
--    s16 i;
+@@ -236,28 +281 @@
+-    s16 index;
 -    ANIMBMP *bmp;
 -    ANIMBANK *bank;
 -    ANIMPAT *pat;
 -    
 -    ANIMDATA *anim = (ANIMDATA *)data;
--    if((u32)anim->bank & 0xFFFF0000) {
+-    if((u32)anim->bank & ANIM_POINTER_ABSOLUTE_MASK) {
 -        anim->useNum++;
 -        return anim;
 -    }
@@ -69,46 +69,51 @@
 -    anim->pat = pat;
 -    bmp = (ANIMBMP *)((u32)anim->bmp+(u32)data);
 -    anim->bmp = bmp;
--    for(i=0; i<anim->bankNum; i++, bank++) {
+-    for(index=0; index<anim->bankNum; index++, bank++) {
 -        bank->frame = (ANIMFRAME *)((u32)bank->frame+(u32)data);
 -    }
--    for(i=0; i<anim->patNum; i++, pat++) {
+-    for(index=0; index<anim->patNum; index++, pat++) {
 -        pat->layer = (ANIMLAYER *)((u32)pat->layer+(u32)data);
 -    }
--    for(i=0; i<anim->bmpNum; i++, bmp++) {
+-    for(index=0; index<anim->bmpNum; index++, bmp++) {
 -        bmp->palData = (void *)((u32)bmp->palData+(u32)data);
 -        bmp->data = (void *)((u32)bmp->data+(u32)data);
 -    }
 -    anim->useNum = 0;
 -    return anim;
 +    return mp6_anim_read(data);
-@@ -412,0 +431 @@
+@@ -439,0 +458 @@
 +        void *packedBacking = mp6_anim_unregister_for_free(anim);
-@@ -420,0 +440,3 @@
+@@ -447,0 +467,3 @@
 +        if(packedBacking) {
 +            HuMemDirectFree(packedBacking);
 +        }
-@@ -473 +495 @@
--    HUSPR_GROUP *gp = &HuSprGrpData[grpId];
-+    HUSPR_GROUP *gp;
-@@ -475,2 +497,7 @@
--    if(gp->sprNum == 0 || gp->sprNum <= memberNo || gp->sprId[memberNo] == HUSPR_NONE) {
+@@ -505 +527 @@
+-    HUSPR_GROUP *group = &HuSprGrpData[grpId];
++    HUSPR_GROUP *group;
+@@ -507,2 +529,7 @@
+-    if(group->sprNum == 0 || group->sprNum <= memberNo || group->sprId[memberNo] == HUSPR_NONE) {
 -        return;
 +    if(grpId < 0 || grpId >= HUSPR_GROUP_MAX) {
 +        return 0;
 +    }
-+    gp = &HuSprGrpData[grpId];
++    group = &HuSprGrpData[grpId];
 +
-+    if(memberNo < 0 || gp->sprNum == 0 || gp->sprNum <= memberNo || gp->sprId[memberNo] == HUSPR_NONE) {
++    if(memberNo < 0 || group->sprNum == 0 || group->sprNum <= memberNo || group->sprId[memberNo] == HUSPR_NONE) {
 +        return 0;
-@@ -682,0 +710,5 @@
+@@ -738,5 +765,26 @@
+-    anim = newAnim =
+-        HuMemDirectMalloc(HEAP_MODEL, sizeof(ANIMDATA) + sizeof(ANIMBANK) + sizeof(ANIMFRAME) +
+-                                          sizeof(ANIMPAT) + sizeof(ANIMLAYER) + sizeof(ANIMBMP));
+-
+-    /* The animation records share one block, laid out in type order. */
 +    if(sizeX <= 0 || sizeY <= 0 || dataFmt < 0 || dataFmt >= 11) {
 +        OSReport("HuSprAnimMake: invalid dimensions/format (%d, %d, %d)\n",
 +                 sizeX, sizeY, dataFmt);
 +        return NULL;
 +    }
-@@ -685 +717,19 @@
--
++    anim = newAnim = HuMemDirectMalloc(HEAP_MODEL, sizeof(ANIMDATA)+sizeof(ANIMBANK)+sizeof(ANIMFRAME)
++                                            +sizeof(ANIMPAT)+sizeof(ANIMLAYER)+sizeof(ANIMBMP));
 +    if(newAnim == NULL) {
 +        return NULL;
 +    }
@@ -128,31 +133,35 @@
 +     * frame-buffer-copy sprite downstream of the HSF stub called this
 +     * function. Total allocation size is unchanged -- same 6 sizeof()s
 +     * summed, just carved out in a different order. */
-@@ -688 +738,5 @@
--    frame = temp = ((char *)temp+sizeof(ANIMBANK));
-+    pat = temp = ((char *)temp+sizeof(ANIMBANK));
+@@ -745 +793,5 @@
+-    frame = allocationCursor = (ANIMBANK *)allocationCursor + 1;
++    pat = allocationCursor = ((char *)allocationCursor+sizeof(ANIMBANK));
 +    anim->pat = pat;
-+    bmp = temp = ((char *)temp+sizeof(ANIMPAT));
++    bmp = allocationCursor = ((char *)allocationCursor+sizeof(ANIMPAT));
 +    anim->bmp = bmp;
-+    frame = temp = ((char *)temp+sizeof(ANIMBMP));
-@@ -690,3 +744 @@
--    pat = temp = ((char *)temp+sizeof(ANIMFRAME));
++    frame = allocationCursor = ((char *)allocationCursor+sizeof(ANIMBMP));
+@@ -747,3 +799 @@
+-    pat = allocationCursor = (ANIMFRAME *)allocationCursor + 1;
 -    anim->pat = pat;
--    layer = temp = ((char *)temp+sizeof(ANIMPAT));
-+    layer = temp = ((char *)temp+sizeof(ANIMFRAME));
-@@ -694,2 +745,0 @@
--    bmp = temp = ((char *)temp+sizeof(ANIMLAYER));
+-    layer = allocationCursor = (ANIMPAT *)allocationCursor + 1;
++    layer = allocationCursor = ((char *)allocationCursor+sizeof(ANIMFRAME));
+@@ -751,2 +800,0 @@
+-    bmp = allocationCursor = (ANIMLAYER *)allocationCursor + 1;
 -    anim->bmp = bmp;
-@@ -699 +749 @@
+@@ -756 +804 @@
 -    anim->bmpNum = (1|ANIM_BMP_ALLOC);
 +    anim->bmpNum = (s16)(1|ANIM_BMP_ALLOC);
-@@ -729 +779,2 @@
+@@ -786 +834,2 @@
 -    bmp->dataSize = sizeX*sizeY*bitSizeTbl[dataFmt]/8;
 +    bmp->dataSize = (u32)((u64)(u16)sizeX*(u16)sizeY
 +                        *(u32)bitSizeTbl[dataFmt]/8u);
-@@ -731,0 +783,2 @@
+@@ -788,0 +838,2 @@
 +
 +    mp6_anim_register_native(anim);
-@@ -887 +940 @@
--    for(i=0; i<anim->bmpNum & ANIM_BMP_NUM_MASK; i++) {
-+    for(i=0; i<(anim->bmpNum & ANIM_BMP_NUM_MASK); i++) {
+@@ -959 +1010 @@
+-    for(patternIndex=0; patternIndex<anim->bmpNum & ANIM_BMP_NUM_MASK; patternIndex++) {
++    for(patternIndex=0; patternIndex<(anim->bmpNum & ANIM_BMP_NUM_MASK); patternIndex++) {
+@@ -961,2 +1012 @@
+-        OSReport("\tpixSize %d,palNum %d,size (%d,%d)\n", bmp->pixSize, bmp->palNum, bmp->sizeX,
+-                 bmp->sizeY);
++        OSReport("\tpixSize %d,palNum %d,size (%d,%d)\n", bmp->pixSize, bmp->palNum, bmp->sizeX, bmp->sizeY);

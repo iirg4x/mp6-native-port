@@ -1,0 +1,46 @@
+--- a/src/board/window.c
++++ b/src/board/window.c
+@@ -0,0 +1,3 @@
++#include "mp6_board_window.h"
++#include "mp6_window.h"
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -154 +156,3 @@
+-        if (window->insertMes[entryIndex] != MBWIN_MES_NONE) {
++        if (window->insertText[entryIndex]) {
++            mp6_window_insert_text(window->winId, window->insertText[entryIndex], entryIndex);
++        } else if (window->insertMes[entryIndex] != MBWIN_MES_NONE) {
+@@ -159,0 +163,4 @@
++        /* [MP6] Quick Party: a board event's help panel says what to press. */
++        if (window->type == MBWIN_TYPE_HELP && mp6_quick_play_action_help(window->mess)) {
++            mp6_window_quick_action_set(window->winId);
++        }
+@@ -243 +247,3 @@
+-        if (window->insertMes[insertIndex] != MBWIN_MES_NONE) {
++        if (window->insertText[insertIndex]) {
++            mp6_window_measure_insert_text(window->insertText[insertIndex], insertIndex);
++        } else if (window->insertMes[insertIndex] != MBWIN_MES_NONE) {
+@@ -303,0 +310 @@
++        window->insertText[slotIndex] = NULL;
+@@ -601,0 +609 @@
++    window->insertText[insertMesNo] = NULL;
+@@ -943 +951,3 @@
+-            if (window->insertMes[insertIndex] != MBWIN_MES_NONE) {
++            if (window->insertText[insertIndex]) {
++                mp6_window_insert_text(window->winId, window->insertText[insertIndex], insertIndex);
++            } else if (window->insertMes[insertIndex] != MBWIN_MES_NONE) {
+@@ -956,0 +967,15 @@
++
++void mp6_board_window_insert_text(s16 winNo, const char *text, int slot)
++{
++    if (!mbWinData || winNo < 0 || winNo >= MBWIN_MAX ||
++        slot < 0 || slot >= HUWIN_INSERTMES_MAX) return;
++    MBWIN *window = &mbWinData[winNo];
++    window->insertMes[slot] = MBWIN_MES_NONE;
++    window->insertText[slot] = text;
++    if (window->winId >= 0) mp6_window_insert_text(window->winId, text, slot);
++}
++
++void mp6_board_window_top_insert_text(const char *text, int slot)
++{
++    if (mbWinTopNo) mp6_board_window_insert_text(mbWinStack[mbWinTopNo - 1], text, slot);
++}

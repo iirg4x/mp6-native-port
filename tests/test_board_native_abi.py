@@ -25,6 +25,22 @@ def function(source, name):
 
 
 class BoardNativeABI(unittest.TestCase):
+    def test_motion_loader_preserves_camera_and_morph_track_index(self):
+        source = (ROOT / 'src/hsf/hsf_load_native.c').read_text()
+        load = source[source.index('static void LoadMotion('):]
+        start = load.index('        case HSF_TRACK_TRANSFORM:')
+        end = load.index('        case HSF_TRACK_CLUSTER:', start)
+        definitions = '\n'.join(line.split('/*', 1)[0] for line in source.splitlines()
+                                if line.startswith('#define FTRACK_'))
+        subject = definitions + '''
+static void subject_load(LoadCtx *ctx, const u8 *trec, HSF_TRACK *out) {
+    u16 rawTarget = be16(trec + FTRACK_TARGET);
+    switch (trec[FTRACK_TYPE]) {
+''' + load[start:end] + '\n    }\n}\n'
+        self.compile_run(subject, 'hsf_camera_track_selftest.c')
+        self.compile_run(subject.replace('out->index = be16(trec + FTRACK_UNION2);', ''),
+                         'hsf_camera_track_selftest.c', expect_success=False)
+
     def test_results_registers_hor_plus_camera_floor_and_theater_border(self):
         source=patched('src/REL/mdpresultdll/mdpresult.c')
         party=patched('src/REL/mdpartydll/mdparty.c')
@@ -61,16 +77,19 @@ class BoardNativeABI(unittest.TestCase):
     def test_cross_copy_wipe_resamples_live_width_into_original_allocation(self):
         source=patched('src/game/wipe.c')
         body=re.search(r'^static BOOL WipeCrossFade\(void\)\n\{.*?^\}',source,re.M|re.S).group()
-        capture=body[body.index('        GXSetTexCopySrc('):body.index('        wipeData.time =')]
-        subject='static void subject_capture(void) {\n'+capture+'}\n'
+        self.assertIn('WipeCaptureFrame(wipeData.image[0]);',body)
+        subject=function(source,'WipeCaptureFrame')+'\nstatic void subject_capture(void) {\n'
+        subject+='    WipeCaptureFrame(wipeData.image[0]);\n}\n'
         self.compile_run(subject,'wipe_cross_copy_selftest.c')
         self.compile_run(subject.replace('mp6_widescreen_render_width()','640'),
                          'wipe_cross_copy_selftest.c',expect_success=False)
-        self.compile_run(subject.replace('HU_FB_WIDTH/2, HU_FB_HEIGHT/2',
-                                        'mp6_widescreen_render_width()/2, HU_FB_HEIGHT/2'),
-                         'wipe_cross_copy_selftest.c',expect_success=False)
-        self.assertIn('GXGetTexBufferSize(HU_FB_WIDTH/2, HU_FB_HEIGHT/2,',body)
-        self.assertIn('Hu3DTexLoad(wipeData.image[0], HU_FB_WIDTH/2, HU_FB_HEIGHT/2,',body)
+        broken_destination = re.sub(
+            r'HU_FB_WIDTH\s*/\s*2\s*,\s*HU_FB_HEIGHT\s*/\s*2',
+            'mp6_widescreen_render_width()/2, HU_FB_HEIGHT/2', subject)
+        self.assertNotEqual(broken_destination, subject)
+        self.compile_run(broken_destination, 'wipe_cross_copy_selftest.c', expect_success=False)
+        self.assertRegex(body, r'GXGetTexBufferSize\(\s*HU_FB_WIDTH\s*/\s*2\s*,\s*HU_FB_HEIGHT\s*/\s*2\s*,')
+        self.assertRegex(body, r'Hu3DTexLoad\(\s*wipeData\.image\[0\]\s*,\s*HU_FB_WIDTH\s*/\s*2\s*,\s*HU_FB_HEIGHT\s*/\s*2\s*,')
 
     def test_crack_sqrt_uses_native_double_intrinsic(self):
         source=patched('src/board/capsule.c')
@@ -89,15 +108,19 @@ class BoardNativeABI(unittest.TestCase):
 
     def test_last5_schedule_uses_match_round_not_day_cycle(self):
         body = function(patched('src/board/board.c'), 'mbMain')
-        start = body.index('    if (GwSystem.turnPlayerNo == 0 && !interruptF && GwSystem.turnMax')
+        start = body.index('    if (GwSystem.turnPlayerNo == 0 && !turnInterruptF && GwSystem.turnMax')
         end = body.index('    mbMusBoardPlay();', start)
-        subject = 'static void check_last5(int interruptF) {\n' + body[start:end] + '\n}'
+        subject = 'static void check_last5(int turnInterruptF) {\n' + body[start:end] + '\n}'
         self.compile_run(subject, 'last5_schedule_selftest.c')
         self.compile_run(subject.replace('GwSystem.turnMax - GwSystem.turnNo < 5', 'GwSystem.turnNo >= 2'),
                          'last5_schedule_selftest.c', expect_success=False)
 
     def test_snpc_effects_use_live_widescreen_board_camera(self):
-        self.compile_run(function(patched('src/board/camera.c'), 'mp6WsBoardCameraApply'),
+        board_camera = function(patched('src/board/camera.c'), 'CameraOMExec')
+        calls = re.findall(r'Hu3DCamera(?:PerspectiveSet|ViewportSet)\([^;]+;', board_camera)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn('Hu3DCameraScissorSet', board_camera)
+        self.compile_run('static void subject(MBCAMERA *cameraP) {\n' + '\n'.join(calls) + '\n}',
                          'snpc_widescreen_selftest.c')
         snpc = patched('src/board/snpc.c')
         self.assertIn('GX_TG_POS, GX_TEXMTX4', function(snpc, 'FadeMatHook'))
@@ -106,8 +129,8 @@ class BoardNativeABI(unittest.TestCase):
 
     def test_player_reactions_hold_after_loop_and_blend(self):
         motion = patched('src/game/hsfmotion.c')
-        defs = '\n'.join(line for line in motion.splitlines()
-                         if line.startswith('#define HU3D_MOTATTR_'))
+        # Whole definitions, including backslash-continued lines.
+        defs = '\n'.join(re.findall(r'^#define HU3D_MOTATTR_(?:[^\n]*\\\n)*[^\n]*', motion, re.M))
         playback = defs + '\n' + '\n'.join(function(motion, name) for name in
                                           ('Hu3DMotionShiftSet', 'Hu3DMotionNext'))
         def subject(source):
@@ -158,23 +181,30 @@ class BoardNativeABI(unittest.TestCase):
         self.compile_run(subject.replace('camera->aspect > 0.0f ? camera->aspect : lbl_802C4368','lbl_802C4368'),
                          'boo_widescreen_selftest.c',expect_success=False)
 
-    def test_board_finishes_without_minigame_reload(self):
-        original = (Path(build.DECOMP) / 'src/board/board.c').read_text(encoding='utf-8')
-        self.compile_run(function(original,'mbNextTime'), 'board_finish_selftest.c', expect_success=False)
-        self.compile_run(function(patched('src/board/board.c'),'mbNextTime'), 'board_finish_selftest.c')
+    def test_board_minigames_use_the_game_reload(self):
+        # board/mgcall.c hands off to instdll and the board reloads after the
+        # results overlay, where mbMain's own end-of-match check runs. The
+        # stub-era continue-in-place patch to board.c is gone.
+        self.assertFalse((ROOT / 'compat/decomp/src/board/board.c.patch').exists())
+        self.assertIn('src/board/mgcall.c', dict(build.board_sources()))
 
-    def test_duel_stub_precedes_wagers_and_animation_setup(self):
+    def test_duel_keeps_the_games_own_no_minigame_roll(self):
+        # With no duel minigame to roll (or two computers and computer games
+        # hidden), the game settles the duel with its own weighted roll. No
+        # port gate may skip the duel before stakes are set.
         body = function(patched('src/board/capspecial.c'), 'mbev_CapKettou')
-        gate = body.index('if (mbMgRouletteNumGet(6) == 0)')
-        self.assertLess(body.index('mbev_CapWait(work);'),gate)
-        self.assertLess(gate,body.index('guideObj = mbGuideCreateIn();'))
-        self.assertRegex(body[gate:],r'\{\s*mbev_MgCallKettou\(\);\s*HuPrcEnd\(\);\s*return;')
+        self.assertNotIn('mbMgRouletteNumGet(6) == 0', body)
+        original = function((Path(build.DECOMP) / 'src/board/capspecial.c').read_text(encoding='utf-8'),
+                            'mbev_CapKettou')
+        self.assertIn('mbMgRouletteNumGet(6) <= 0', original)
 
     def test_short_archive_reader_big_endian_index(self):
         original = (Path(build.DECOMP) / 'src/game/data.c').read_text(encoding='utf-8')
         def subject(source):
-            return re.search(r'^void \*HuDataReadNumHeapShortForce\([^;]+?\)\n\{.*?^\}',
-                             source,re.M|re.S).group()
+            # data.c's own size/mask macros come along with the function.
+            defs = '\n'.join(re.findall(r'^#define DATA_\w+.*$', source, re.M))
+            return defs + '\n' + re.search(r'^void \*HuDataReadNumHeapShortForce\([^;]+?\)\n\{.*?^\}',
+                                           source,re.M|re.S).group()
         self.compile_run(subject(original), 'data_short_read_selftest.c', expect_success=False)
         self.compile_run(subject(patched('src/game/data.c')), 'data_short_read_selftest.c')
 
@@ -262,8 +292,16 @@ typedef struct {int num; CAP_EFF_DATA *data; HuVecF *vertex; HuVec2f *st;} QA_EF
         self.assertNotIn('(*W01CurveEval)()', source)
         math = (Path(build.DECOMP) / 'src/board/math.c').read_text(encoding='utf-8')
         pieces = [function(math, name) for name in ['mbBezierCalcSlope', 'mbHermiteCalcSlope']]
-        pieces.append(re.search(r'typedef float \(\*W01CurveEval\).*?;', source, re.S).group())
-        pieces += [function(source, name) for name in [
+        # The recovered curve helpers live in the module's shared header.
+        common = patched('include/REL/w01Dll/common.h')
+        typedef = re.search(r'typedef float \(\*W01CurveEval\).*?;', source + common, re.S).group()
+        pieces.append(typedef)
+        def defined(name):
+            try:
+                return function(source, name)
+            except AssertionError:
+                return function(common, name)
+        pieces += [defined(name) for name in [
             'fn_1_14A90', 'mp6W01BezierEval', 'fn_1_14BF0', 'fn_1_14108',
             'fn_1_142B0', 'fn_1_144C0', 'fn_1_147DC', 'w01CurveLen2',
             'w01CurveT', 'w01CurveLen', 'W01HermiteIntegrate', 'W01CurveNewton']]
@@ -282,7 +320,11 @@ typedef struct {int num; CAP_EFF_DATA *data; HuVecF *vertex; HuVec2f *st;} QA_EF
                                           source, re.M | re.S).group())
         owner = patched('src/board/capevent.c')
         owner_layout = re.search(r'typedef struct CapWork \{.*?^\} CAPWORK;', owner, re.M | re.S).group()
-        declarations.append(owner_layout.replace('struct CapWork', 'struct OwnerCapWork')
+        # The owners name the payload's first word differently (_unkB6C,
+        # effectModelId, unusedWorkValueB6C); the selftest checks its offset.
+        def payload_named(layout):
+            return re.sub(r'(CAPWORKFLAG flags;[^\n]*\n\s*int )\w+;', r'\1_unkB6C;', layout, count=1)
+        declarations.append(payload_named(owner_layout).replace('struct CapWork', 'struct OwnerCapWork')
                             .replace('} CAPWORK;', '} OWNER_CAPWORK;'))
         copy = re.search(r'    omObj->data = HuMemDirectMallocNum\([^\n]+\n'
                          r'    memcpy\(omObj->data, work, [^\n]+', source).group()
@@ -295,7 +337,7 @@ typedef struct {int num; CAP_EFF_DATA *data; HuVecF *vertex; HuVec2f *st;} QA_EF
                                other, re.M | re.S).group()
             layout = re.sub(r'typedef struct(?: \w+)? \{',
                             'typedef struct OwnerCapWork {', layout, count=1)
-            layout = layout.replace('} CAPWORK;', '} OWNER_CAPWORK;')
+            layout = payload_named(layout.replace('} CAPWORK;', '} OWNER_CAPWORK;'))
             self.compile_run('\n\n'.join(declarations[:3]+[layout, declarations[-1]]),
                              'capsule_work_selftest.c')
 

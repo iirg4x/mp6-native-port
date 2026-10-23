@@ -1,0 +1,14 @@
+--- a/src/REL/m665dll/opponent.c
++++ b/src/REL/m665dll/opponent.c
+@@ -2,0 +3,2 @@
++#include <string.h>
++float __fabsf(float value);
+@@ -1061 +1063 @@
+-extern s32 fn_1_50D4();
++extern s32 fn_1_50D4(void);
+@@ -1165 +1167 @@
+-            if (fn_1_50D4(playerNo) != 0) {
++            if (fn_1_50D4() != 0) {
+@@ -1745 +1747 @@
+-s32 fn_1_B66C(HuVecF *position);
++s32 fn_1_B66C(Point3d *position);

@@ -1,0 +1,116 @@
+--- a/src/game/thpmain.c
++++ b/src/game/thpmain.c
+@@ -28 +27,0 @@
+-static void THPDecodeFunc(void *callbackContext);
+@@ -33,3 +32,2 @@
+-static s32 decodeRate;
+-static u8 *decodeStackP; /* Stack memory for the OS idle decoder thread. */
+-static OSThread *decodeThread;
++static void *THPMovieBuffer;
++
+@@ -41,0 +40,12 @@
++static void THPDispose(void)
++{
++    THPSimpleAudioStop();
++    THPSimpleLoadStop();
++    THPSimpleClose();
++    if (THPMovieBuffer) HuMemDirectFree(THPMovieBuffer);
++    THPMovieBuffer = NULL;
++    THPSimpleQuit();
++    THPStart = 0;
++    THPProc = NULL;
++}
++
+@@ -50,0 +61 @@
++    if (!THPSimpleInit(2)) return HUSPR_NONE;
+@@ -55,0 +67 @@
++    HuPrcDestructorSet2(THPProc, THPDispose);
+@@ -58,2 +70 @@
+-        /* Sprite creation failure leaves the already-created playback process alive
+-         * and skips movie initialization. */
++        HuPrcKill(THPProc);
+@@ -63 +74 @@
+-    THPSimpleInit(THP_AUDIO_MIX_CURRENT_BUFFER);
++
+@@ -88,0 +100 @@
++    if (!THPSimpleInit(2)) return HU3D_MODELID_NONE;
+@@ -95 +107 @@
+-    THPSimpleInit(THP_AUDIO_MIX_CURRENT_BUFFER);
++
+@@ -99,0 +112 @@
++    HuPrcDestructorSet2(THPProc, THPDispose);
+@@ -100,0 +114,4 @@
++    if (movieModelId == HU3D_MODELID_NONE) {
++        HuPrcKill(THPProc);
++        return HU3D_MODELID_NONE;
++    }
+@@ -191,6 +208,6 @@
+-    u32 startAudioPlayback;
+-    void *movieBuffer;
+-
+-    while(THPSimpleOpen(THPFileName) == 0) {
+-        OSReport("THPSimpleOpen fail");
+-        HuPrcVSleep();
++    u32 startAudioPlayback = 0;
++    void *movieBuffer = NULL;
++
++    if (!THPSimpleOpen(THPFileName)) {
++        OSReport("THP movie unavailable: %s\n", THPFileName);
++        goto cleanup;
+@@ -201,0 +219 @@
++    if (requiredBufferBytes <= 0) goto cleanup;
+@@ -203 +221,2 @@
+-    /* Clear the movie workspace before the decoder uses it during preload. */
++    THPMovieBuffer = movieBuffer;
++    if (!movieBuffer) goto cleanup;
+@@ -205,10 +224 @@
+-    DCFlushRange(movieBuffer, requiredBufferBytes);
+-    /* Allocation failure is reported here; the earlier workspace clear assumes success. */
+-    if(movieBuffer == 0) {
+-        OSReport("Can't allocate the memory\n");
+-    }
+-    THPSimpleSetBuffer(movieBuffer);
+-    while(THPSimplePreLoad(THPLoopF) == 0) {
+-        OSReport("THPSimplePreLoad fail");
+-        HuPrcVSleep();
+-    }
++    if (!THPSimpleSetBuffer(movieBuffer) || !THPSimplePreLoad(THPLoopF)) goto cleanup;
+@@ -219,6 +228,0 @@
+-    decodeStackP = HuMemDirectMalloc(HEAP_HEAP, THP_DECODE_STACK_BYTES);
+-    /* Idle-thread creation is unchecked: a busy idle slot returns NULL, but startup
+-     * is still marked complete and shutdown uses the returned handle. */
+-    decodeThread = OSSetIdleFunction(THPDecodeFunc, NULL,
+-                                   decodeStackP + THP_DECODE_STACK_BYTES, THP_DECODE_STACK_BYTES);
+-    decodeRate = 0;
+@@ -263,0 +268 @@
++        if (THPStat == THP_STATE_PLAY) THPSimpleDecode();
+@@ -270,0 +276,4 @@
++    /* A movie that never opened leaves its hidden sprite or model to the
++     * caller, which put it in a group: killing it here freed a slot the group
++     * still drew, and the next sprite created there showed up twice. */
++cleanup:
+@@ -271,2 +276,0 @@
+-    OSCancelThread(decodeThread);
+-    HuMemDirectFree(decodeStackP);
+@@ -276 +280 @@
+-    HuMemDirectFree(movieBuffer);
++    THPDispose();
+@@ -297 +301 @@
+-    THPFrame = THPSimpleDrawCurrentFrame(RenderMode, &frameColor, *matrix, -videoInfo.width / 2,
++    THPFrame = THPSimpleDrawCurrentFrame(RenderMode, &frameColor, *matrix, -((s32)videoInfo.width / 2),
+@@ -335,15 +338,0 @@
+-}
+-
+-/* OSSetIdleFunction runs this decoder thread; it yields for a retrace after each decode attempt
+- * until the movie process requests close. */
+-static void THPDecodeFunc(void *callbackContext)
+-{
+-    while(1) {
+-        if(THPStat == THP_STATE_CLOSE) {
+-            break;
+-        }
+-        if(THPSimpleDecode() == 1) {
+-            OSReport("Fail to decode video data");
+-        }
+-        VIWaitForRetrace();
+-    }

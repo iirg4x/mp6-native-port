@@ -1,0 +1,18 @@
+--- a/src/REL/m665dll/player.c
++++ b/src/REL/m665dll/player.c
+@@ -2,0 +3,3 @@
++#include <string.h>
++float __fabsf(float value);
++int HuMCProbe(u32 channel);
+@@ -1086 +1089 @@
+-                HEAP_HEAP, modelData->materialNum * 60, M665_MEMORY_TAG);
++                HEAP_HEAP, modelData->materialNum * sizeof(HSF_MATERIAL), M665_MEMORY_TAG);
+@@ -1088 +1091 @@
+-                   modelData->materialNum * 60);
++                   modelData->materialNum * sizeof(HSF_MATERIAL));
+@@ -1256 +1259 @@
+-                   modelData->materialNum * 60);
++                   modelData->materialNum * sizeof(HSF_MATERIAL));
+@@ -1261 +1264 @@
+-                   modelData->materialNum * 60);
++                   modelData->materialNum * sizeof(HSF_MATERIAL));

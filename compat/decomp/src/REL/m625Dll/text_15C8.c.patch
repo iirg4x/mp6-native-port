@@ -1,0 +1,26 @@
+--- a/src/REL/m625Dll/text_15C8.c
++++ b/src/REL/m625Dll/text_15C8.c
+@@ -5,0 +6,9 @@
++#include "mp6_widescreen.h"
++#include <string.h>
++
++/* The untextured backstop never shows at 4:3; widening it keeps it behind the
++ * mirrored panorama extension instead of in front of it. */
++static int mp6_m625_backstop(const char *name)
++{
++    return strcmp(name, "skyBG") == 0;
++}
+@@ -90,0 +100,2 @@
++    mp6_widescreen_extend_wall_edges(lbl_1_bss_194.baseModel, "bg", 0.0f, 2.0f, 1);
++    mp6_widescreen_extrude_model_selective_horizontal(lbl_1_bss_194.baseModel, mp6_m625_backstop);
+@@ -154,0 +166 @@
++    mp6_widescreen_extend_sides(lbl_1_bss_0.model, "wave2", 0);
+@@ -241 +253 @@
+-    peakVertices = (Vec **)HuMemDirectMallocNum(HEAP_HEAP, peakCount * 4, HU_MEMNUM_OVL);
++    peakVertices = (Vec **)HuMemDirectMallocNum(HEAP_HEAP, peakCount * sizeof(*peakVertices), HU_MEMNUM_OVL);
+@@ -303 +315,4 @@
+-    Hu3DFbCopyExec(0, 0, 640, 480, GX_TF_RGB565, 0, lbl_1_bss_0.textureBuffer);
++    /* Downsample the full live frame into the native 640x480 texture. */
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
++    GXSetTexCopyDst(640, 480, GX_TF_RGB565, GX_FALSE);
++    GXCopyTex(lbl_1_bss_0.textureBuffer, GX_FALSE);

@@ -40,6 +40,11 @@ void GXSetScissorRender(unsigned int x, unsigned int y, unsigned int w, unsigned
 
 int main(void)
 {
+    assert(mp6_shadow_camera_contributes(30.0f, 640, 480));
+    assert(!mp6_shadow_camera_contributes(-1.0f, 640, 480));
+    assert(!mp6_shadow_camera_contributes(30.0f, 0, 480));
+    assert(!mp6_shadow_camera_contributes(30.0f, 640, 0));
+    assert(!mp6_shadow_camera_contributes(30.0f, -1, 480));
     Mp6EnhValues settings;
     mp6_enh_defaults(&settings);
     Hu3DShadowCamBit = 1;

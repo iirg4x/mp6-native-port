@@ -1,0 +1,19 @@
+Skip text paint submission when ElementText's cached computed opacity is zero.
+Keep layout, focus, decoration, child traversal, and dirty-state processing
+unchanged so a later opacity change paints the retained geometry correctly.
+
+diff --git a/Source/Core/ElementText.cpp b/Source/Core/ElementText.cpp
+--- a/Source/Core/ElementText.cpp
++++ b/Source/Core/ElementText.cpp
+@@ -124,5 +124,11 @@
+ void ElementText::OnRender()
+ {
+ 	RMLUI_ZoneScoped;
++
++	// Text layout, focus, and dirty-state maintenance happen outside this paint
++	// callback. Avoid rebuilding/submitting invisible text while preserving the
++	// geometry and dirty flags for a later opacity change.
++	if (opacity == 0.f)
++		return;
+ 
+ 	FontFaceHandle font_face_handle = GetFontFaceHandle();

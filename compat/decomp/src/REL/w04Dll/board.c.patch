@@ -1,0 +1,36 @@
+--- a/src/REL/w04Dll/board.c
++++ b/src/REL/w04Dll/board.c
+@@ -266,2 +266,2 @@
+-int mbDiceProcExec(int playerNo, int diceType, int diceNo, int diceValue,
+-    BOOL display, BOOL wait, int hook, BOOL npc);
++int mbDiceProcExec(int playerNo, int diceType, s8 *valueTbl, int *tutorialVal,
++    BOOL display, BOOL wait, HuVecF *position, int color);
+@@ -272 +272,2 @@
+-int sprintf();
++#include <stdio.h>
++#include "mp6_board_window.h"
+@@ -966 +967 @@
+-        if ((u8) (((*(u8 *)((s8 *)(&GwSystem) + (W04_DAY_BYTE_OFFSET))) >> 6U) & 1) != 0) {
++        if (GwSystem.curTime != 0) {
+@@ -1543 +1544 @@
+-        moveCount = mbDiceProcExec(playerNo, diceType, 0, 0, TRUE, TRUE, 0, TRUE);
++        moveCount = mbDiceProcExec(playerNo, diceType, NULL, NULL, TRUE, TRUE, NULL, TRUE);
+@@ -1550 +1551 @@
+-        mbWinInsertMesSet(window, (u32)numberText, 0);
++        mp6_board_window_insert_text(window, numberText, 0);
+@@ -1739 +1740 @@
+-        mbWinInsertMesSet(windowId, (u32)numberText, 0);
++        mp6_board_window_insert_text(windowId, numberText, 0);
+@@ -2155,6 +2156,3 @@
+-    if (lbl_1_bss_7248 != 0) {
+-        void *data = lbl_1_bss_7248;
+-        HuMemDirectFree(data);
+-        // Clear the ride-model pointer; the linked-space list pointer is left as it was.
+-        lbl_1_bss_726C = 0;
+-    }
++    if (lbl_1_bss_7248) HuMemDirectFree(lbl_1_bss_7248);
++    lbl_1_bss_7248 = NULL;
++    lbl_1_bss_7244 = 0;
+@@ -4635,0 +4634,2 @@
++
++

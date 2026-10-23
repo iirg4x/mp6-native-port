@@ -107,7 +107,7 @@ MenuBar::MenuBar()
         mTabBar->set_active_tab(-1);
         const auto dismiss = [](Modal &modal) { modal.pop(); };
         push(std::make_unique<Modal>(Modal::Props{
-            .title = "Quit Mario Party 6", /* [MP6] our app name */
+            .title = "Quit Starlit Party", /* [MP6] our app name */
             .bodyRml = "Unsaved progress will be lost.",
             .actions =
                 {

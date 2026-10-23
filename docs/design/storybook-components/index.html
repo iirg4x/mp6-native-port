@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MP6 — storybook component proof</title>
+<link rel="icon" href="data:,">
+<style>
+  *{box-sizing:border-box}body{margin:0;background:#171923;color:#f5f3e9;font:15px system-ui,sans-serif}
+  main{width:100%;margin:auto}canvas{display:block;width:100%;height:auto;aspect-ratio:1672/941}
+  nav{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding:16px}
+  button,select{font:inherit;color:inherit;border:1px solid #727885;border-radius:6px;background:#292c38;padding:9px 16px;cursor:pointer}
+  button[aria-pressed=true]{background:#fff000;color:#080896;border-color:#fff000}
+  p{max-width:960px;margin:0 auto 18px;text-align:center;color:#c9ced7;padding:0 16px}
+  #components{display:none;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;padding:24px}
+  .asset{min-height:180px;background:#262a38;border:1px solid #414858;border-radius:8px;padding:10px}
+  .asset canvas{height:140px;width:100%;object-fit:contain;background:repeating-conic-gradient(#393e4b 0% 25%,#2e3340 0% 50%) 50%/20px 20px}
+  .asset span{display:block;margin-top:8px;font-size:13px;overflow-wrap:anywhere}.asset small{color:#a9b5ca}
+  body.sheet #stage{display:none}body.sheet #components{display:grid}
+  body.capture nav,body.capture p,body.capture #components{display:none}
+</style>
+<main>
+  <canvas id="stage" width="1672" height="941" aria-label="Reconstructed storybook settings concept, visual proof only"></canvas>
+  <nav aria-label="Proof inspection tools">
+    <button id="assembled" aria-pressed="true">Assembled</button>
+    <button id="sheet" aria-pressed="false">Individual components</button>
+    <button id="motion" aria-pressed="true">Pause animation</button>
+    <button id="reference" aria-pressed="false">Show approved reference</button>
+  </nav>
+  <p id="status">Loading component proof…</p>
+  <div id="components"></div>
+</main>
+<script>
+'use strict';
+(async()=>{
+  const manifest=await fetch('manifest.json').then(r=>r.json());
+  const stage=document.querySelector('#stage'),ctx=stage.getContext('2d'),[W,H]=manifest.viewport;
+  const params=new URLSearchParams(location.search);let animate=!params.has('still'),reference=false;
+  if(params.has('capture'))document.body.classList.add('capture');
+  const images=new Map();
+  async function load(src){if(images.has(src))return images.get(src);const image=new Image();image.src=src;await image.decode();images.set(src,image);return image;}
+  await Promise.all([...new Set([...manifest.layers.map(l=>l.texture),...manifest.particles.map(p=>p.texture),manifest.background.mask])].map(load));
+  const mask=images.get(manifest.background.mask);
+  const night=document.createElement('canvas');night.width=W;night.height=H;const nc=night.getContext('2d');
+  nc.drawImage(mask,0,0,W,H,0,0,W,H);nc.globalCompositeOperation='source-in';nc.fillStyle=manifest.background.night;nc.fillRect(0,0,W,H);
+  const particleTints=new Map();
+  function tintedParticle(p){const key=p.type+p.color;if(particleTints.has(key))return particleTints.get(key);const source=images.get(p.texture),c=document.createElement('canvas');c.width=source.width;c.height=source.height;const x=c.getContext('2d');x.drawImage(source,0,0);x.globalCompositeOperation='source-in';x.fillStyle=p.color;x.fillRect(0,0,c.width,c.height);particleTints.set(key,c);return c;}
+  function particle(p,t){
+    const sway=Math.sin(t*.36+p.phase)*5,fall=Math.sin(t*.25+p.phase)*8;
+    const angle=p.type==='confetti'?-.55+Math.sin(t*.4+p.phase)*.3:Math.sin(t*.28+p.phase)*.16;
+    ctx.save();ctx.translate(p.position[0]+sway,p.position[1]+fall);ctx.rotate(angle);
+    const pulse=p.type==='star'?1+Math.sin(t*.75+p.phase)*.06:1;ctx.scale(pulse,pulse);
+    const sprite=tintedParticle(p);ctx.drawImage(sprite,-p.size/2,-p.size/2,p.size,p.size);ctx.restore();
+  }
+  function drawLayer(l,t){
+    const [sx,sy,w,h]=l.contentRect,[x,y]=l.position,[px,py]=l.pivot;
+    ctx.save();ctx.translate(x+px,y+py);
+    if(l.animation==='sun-turn')ctx.rotate(Math.sin(t*.18)*.14);
+    if(l.animation==='moon-rock'){ctx.rotate(Math.sin(t*.35)*.09);ctx.translate(0,Math.sin(t*.45)*3);}
+    ctx.drawImage(images.get(l.texture),sx,sy,w,h,-px,-py,w,h);ctx.restore();
+  }
+  let referenceImage;
+  function draw(t){
+    ctx.clearRect(0,0,W,H);
+    if(reference&&referenceImage){ctx.drawImage(referenceImage,0,0,W,H);return;}
+    ctx.fillStyle=manifest.background.day;ctx.fillRect(0,0,W,H);ctx.drawImage(night,0,0);
+    for(const p of manifest.particles)particle(p,t);
+    for(const l of manifest.layers)drawLayer(l,t);
+  }
+  // This atlas is a set of named semantic sprites, never a flattened menu image.
+  const items=[...manifest.layers,{id:'zigzag-mask',group:'Backdrop mask',texture:manifest.background.mask,textureSize:manifest.background.textureSize,contentRect:manifest.background.contentRect},...['star','confetti'].map(type=>({id:`particle-${type}`,group:'Particle atlas',texture:`textures/particle-${type}.png`,textureSize:type==='star'?[128,128]:[64,64],contentRect:type==='star'?[0,0,128,128]:[0,0,64,64]}))];
+  for(const l of items){
+    const card=document.createElement('div');card.className='asset';card.dataset.component=l.id;
+    const c=document.createElement('canvas');c.width=420;c.height=280;const cx=c.getContext('2d');
+    const [sx,sy,w,h]=l.contentRect,s=Math.min(396/w,256/h);cx.drawImage(images.get(l.texture),sx,sy,w,h,(420-w*s)/2,(280-h*s)/2,w*s,h*s);
+    const label=document.createElement('span');label.textContent=l.id;
+    const size=document.createElement('small');size.textContent=`${l.textureSize.join(' × ')} · ${l.group}`;
+    card.append(c,label,size);document.querySelector('#components').append(card);
+  }
+  document.querySelector('#status').textContent=`${manifest.layers.length} independent components · ${manifest.particles.length} particle instances · power-of-two textures · landscape · no game wiring`;
+  document.querySelector('#sheet').onclick=()=>{document.body.classList.add('sheet');document.querySelector('#sheet').setAttribute('aria-pressed','true');document.querySelector('#assembled').setAttribute('aria-pressed','false');};
+  document.querySelector('#assembled').onclick=()=>{document.body.classList.remove('sheet');document.querySelector('#sheet').setAttribute('aria-pressed','false');document.querySelector('#assembled').setAttribute('aria-pressed','true');};
+  const motion=document.querySelector('#motion');
+  const motionLabel=()=>{motion.textContent=animate?'Pause animation':'Play animation';motion.setAttribute('aria-pressed',String(animate));};motionLabel();
+  motion.onclick=()=>{animate=!animate;motionLabel();};
+  document.querySelector('#reference').onclick=async()=>{reference=!reference;if(reference&&!referenceImage)referenceImage=await load('../settings-storybook-approved.png');document.querySelector('#reference').setAttribute('aria-pressed',String(reference));document.querySelector('#reference').textContent=reference?'Show reconstruction':'Show approved reference';};
+  let first=null;function frame(now){first??=now;draw(animate?(now-first)/1000:0);requestAnimationFrame(frame);}requestAnimationFrame(frame);
+  window.proof={ready:true,manifest,draw,images,gameWiring:false};
+})();
+</script>
+</html>

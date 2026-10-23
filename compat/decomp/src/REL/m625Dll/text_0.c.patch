@@ -1,0 +1,4 @@
+--- a/src/REL/m625Dll/text_0.c
++++ b/src/REL/m625Dll/text_0.c
+@@ -5,0 +6 @@
++#include "game/hu3d.h"

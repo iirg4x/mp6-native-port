@@ -1,0 +1,4 @@
+--- a/src/REL/m643DLL/math.c
++++ b/src/REL/m643DLL/math.c
+@@ -2,0 +3 @@
++#include "REL/m643DLL/m643.h"

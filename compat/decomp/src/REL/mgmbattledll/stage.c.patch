@@ -1,0 +1,46 @@
+--- a/src/REL/mgmbattledll/stage.c
++++ b/src/REL/mgmbattledll/stage.c
+@@ -383 +383,2 @@
+-    lbl_1_bss_3D4->data = HuMemDirectMallocNum(HEAP_HEAP, 24, HU_MEMNUM_OVL);
++    lbl_1_bss_3D4->data = HuMemDirectMallocNum(
++        HEAP_HEAP, sizeof(Point3d) * 2, HU_MEMNUM_OVL);
+@@ -387 +388 @@
+-    memset(lbl_1_bss_3D4->data, 0, 24);
++    memset(lbl_1_bss_3D4->data, 0, sizeof(Point3d) * 2);
+@@ -988 +989 @@
+-    s16 outputSize;
++    u32 outputSize;
+@@ -1195,0 +1197 @@
++    hasDuplicate = 1;
+@@ -1863,0 +1866,11 @@
++/* Motion state for one model in the stage particle pool. */
++typedef struct {
++    /* Negative values delay emission; nonnegative values count active frames. */
++    s16 state;
++    /* Velocity along each stage axis, in units per update. */
++    f32 horizontalVelocity;
++    f32 verticalVelocity;
++    f32 depthVelocity;
++    /* Rotation about the model's Z axis, in degrees. */
++    f32 rotation;
++} MgBattleParticle;
+@@ -1872,3 +1885,3 @@
+-    lbl_1_bss_290->data = HuMemDirectMallocNum(HEAP_HEAP, 640,
+-        HU_MEMNUM_OVL);
+-    memset(lbl_1_bss_290->data, 0, 640);
++    lbl_1_bss_290->data = HuMemDirectMallocNum(
++        HEAP_HEAP, sizeof(MgBattleParticle) * 32, HU_MEMNUM_OVL);
++    memset(lbl_1_bss_290->data, 0, sizeof(MgBattleParticle) * 32);
+@@ -1928,12 +1940,0 @@
+-
+-/* Motion state for one model in the stage particle pool. */
+-typedef struct {
+-    /* Negative values delay emission; nonnegative values count active frames. */
+-    s16 state;
+-    /* Velocity along each stage axis, in units per update. */
+-    f32 horizontalVelocity;
+-    f32 verticalVelocity;
+-    f32 depthVelocity;
+-    /* Rotation about the model's Z axis, in degrees. */
+-    f32 rotation;
+-} MgBattleParticle;

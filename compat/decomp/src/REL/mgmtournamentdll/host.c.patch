@@ -1,0 +1,13 @@
+--- a/src/REL/mgmtournamentdll/host.c
++++ b/src/REL/mgmtournamentdll/host.c
+@@ -0,0 +1 @@
++#include "mp6_mgmtournament_native.h"
+@@ -21,5 +22,3 @@
+-void fn_1_5B84(OMOBJ *object);
+-s16 fn_1_A42C(void);
+-void fn_1_60F8(Vec *interpolatedPosition, const Vec *beforeStart,
+-               const Vec *startPosition, const Vec *destination,
+-               const Vec *pastDestination, f32 durationFrames, f32 elapsedFrames);
++
++
++

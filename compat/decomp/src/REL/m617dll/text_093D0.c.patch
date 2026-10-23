@@ -1,0 +1,33 @@
+--- a/src/REL/m617dll/text_093D0.c
++++ b/src/REL/m617dll/text_093D0.c
+@@ -2,0 +3,2 @@
++#include <stdio.h>
++#include "game/frand.h"
+@@ -61,3 +63,3 @@
+-s32 fn_1_780C(COL_NARROW_PARAM *first, COL_NARROW_PARAM *second);
+-
+-void fn_1_788C(MGACTOR *task);
++s32 fn_1_780C(void *first, void *second);
++
++void fn_1_788C(void *task);
+@@ -73 +75 @@
+-MGTIMER *fn_1_2FB4(int type, int duration, int end, f32 x, f32 y);
++MGTIMER *fn_1_2FB4(int type, int duration, int end, float x, float y);
+@@ -87 +89 @@
+-void fn_1_E1F0();
++void fn_1_E1F0(void);
+@@ -236 +238 @@
+-    actorParam.correctHook = (void (*)(MGACTOR *, int))fn_1_788C;
++    actorParam.correctHook = (MGACTOR_CORRECT_HOOK)fn_1_788C;
+@@ -296 +298 @@
+-s16 fn_1_A3BC() {
++s16 fn_1_A3BC(void) {
+@@ -306 +308 @@
+-s16 fn_1_A3FC() {
++s16 fn_1_A3FC(void) {
+@@ -433 +435 @@
+-s16 fn_1_3BB8(s16, s16);
++s16 fn_1_3BB8(HU3D_MODELID modelId, HU3D_LIGHTID lightId);
+@@ -1037 +1039 @@
+-s32 fn_1_16990(void *, s16);
++s16 fn_1_16990(M617PlayerStateData *participant, s16 advanceAfterChase);

@@ -1,0 +1,19 @@
+--- a/src/REL/m625Dll/text_13318.c
++++ b/src/REL/m625Dll/text_13318.c
+@@ -220,0 +221,16 @@
++
++void mp6_m625_text_0_reset(void);
++void mp6_m625_text_15C8_reset(void);
++void mp6_m625_text_296C_reset(void);
++void mp6_m625_text_11040_reset(void);
++void mp6_m625_text_13C04_reset(void);
++void mp6_m625_score_box_reset(void);
++void mp6_m625_reset(void)
++{
++    mp6_m625_text_0_reset();
++    mp6_m625_text_15C8_reset();
++    mp6_m625_text_296C_reset();
++    mp6_m625_text_11040_reset();
++    mp6_m625_text_13C04_reset();
++    mp6_m625_score_box_reset();
++}

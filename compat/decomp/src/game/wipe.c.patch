@@ -1,8 +1,40 @@
 --- a/src/game/wipe.c
 +++ b/src/game/wipe.c
-@@ -13,0 +14 @@
+@@ -14,0 +15,10 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -204,2 +205,13 @@
++
++/* Screen coverage and texture storage are separate coordinate domains. */
++static void WipeCaptureFrame(void *image)
++{
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
++    GXSetTexCopyDst(HU_FB_WIDTH/2, HU_FB_HEIGHT/2, GX_TF_RGB565, GX_TRUE);
++    GXCopyTex(image, GX_FALSE);
++    GXPixModeSync();
++}
+@@ -23,0 +34,16 @@
++/* Retail ANMs were one in-place allocation; native ANMs own a decoded graph
++ * and a packed backing allocation. Release both through the sprite owner. */
++static void WipeImageRelease(int index)
++{
++    void *image = wipeData.image[index];
++    int type = wipeData.type & WIPE_TYPE_MASK;
++    if (!image) return;
++    if (index == 1 || type == WIPE_TYPE_STAR || type == WIPE_TYPE_KOOPA ||
++        type == WIPE_TYPE_MOON || type == WIPE_TYPE_SUN || type == WIPE_TYPE_SUNMOON) {
++        HuSprAnimKill(image);
++    } else {
++        HuMemDirectFree(image);
++    }
++    wipeData.image[index] = NULL;
++}
++
+@@ -138 +164 @@
+-                HuMemDirectFree(wipeData.image[0]);
++                WipeImageRelease(0);
+@@ -142 +168 @@
+-                HuMemDirectFree(wipeData.image[1]);
++                WipeImageRelease(1);
+@@ -223,2 +249,13 @@
 -    GXPosition2u16(HU_FB_WIDTH, 0);
 -    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
 +    /* This plain full-frame fade quad's own corners are hardcoded to
@@ -18,84 +50,58 @@
 +     * (640, byte-identical) when widescreen is disabled. */
 +    GXPosition2u16(mp6_widescreen_render_width(), 0);
 +    GXPosition2u16(mp6_widescreen_render_width(), HU_FB_HEIGHT);
-@@ -227 +239,6 @@
+@@ -251 +288 @@
 -        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
-+        /* Capture the full live view into the original fixed-size image.
-+         * Hu3DFbCopyExec derives its destination from its source width. */
-+        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
-+        GXSetTexCopyDst(HU_FB_WIDTH/2, HU_FB_HEIGHT/2, GX_TF_RGB565, GX_TRUE);
-+        GXCopyTex(wipeData.image[0], GX_FALSE);
-+        GXPixModeSync();
-@@ -268 +280,2 @@
++        WipeCaptureFrame(wipeData.image[0]);
+@@ -262 +299 @@
+-                    HuMemDirectFree(wipeData.image[0]);
++                    WipeImageRelease(0);
+@@ -293 +330,2 @@
 -    GXPosition2u16(HU_FB_WIDTH, 0);
 +    /* Expand the captured full-frame image over the same live canvas. */
 +    GXPosition2u16(mp6_widescreen_render_width(), 0);
-@@ -270 +285 @@
+@@ -295 +333 @@
 -    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
 +    GXPosition2u16(mp6_widescreen_render_width(), HU_FB_HEIGHT);
-@@ -297,0 +313,28 @@
-+        /* WipeDissolve is WIPE_TYPE_DISSOLVE_IN/_OUT/_IN_BLUR's own draw
-+         * (mdseldll/mdsel.c's fn_1_A310 uses WIPE_TYPE_DISSOLVE_IN_BLUR for
-+         * confirming a chosen game mode, so this path is live, not merely
-+         * theoretical). WipeGXInit (called below) already sets up the
-+         * correctly-widened shared ortho/viewport/scissor -- but this
-+         * function's OWN quad vertices and its OWN Hu3DFbCopyExec calls use
-+         * the literal HU_FB_WIDTH (640) macro directly instead of
-+         * mp6_widescreen_render_width(), so the quad this actually draws
-+         * only ever covered the frame's original left 640px, leaving the
-+         * rest of a wider transition showing whatever's behind it -- the
-+         * wipe fills correctly at native/16:9 (where the gap is invisible
-+         * or tiny) but leaves a real uncovered strip at wider aspects.
-+         * Fixed: both FbCopyExec capture widths and both quad's X extents
-+         * now track render_width; the rotation pivot (translate-to-origin/
-+         * back pair) is re-centered on the new frame's own center so the
-+         * brief spin during the dissolve stays visually centered instead of
-+         * pivoting around the OLD native center (now off-center-left in a
-+         * wider frame). Deliberately UNCHANGED: wipeData.image[0]'s own
-+         * backing allocation and Hu3DTexLoad's declared texture size stay
-+         * at their original fixed HU_FB_WIDTH/2 x HU_FB_HEIGHT/2 (320x240)
-+         * -- widening only the CAPTURE source changes the hardware
-+         * downscale ratio, not this fixed destination's own byte size (no
-+         * overflow risk), and since the quad sampling it is ALSO now drawn
-+         * at the wider render_width, the extra squish from capturing more
-+         * source pixels into the same fixed destination is exactly undone
-+         * when that texture is stretched back across the (equally wider)
-+         * quad. Byte-identical calls throughout when widescreen is
-+         * disabled. */
-@@ -299,3 +342,3 @@
+@@ -309 +347 @@
+-            HuMemDirectFree(wipeData.image[0]);
++            WipeImageRelease(0);
+@@ -329 +367 @@
 -            Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
--        }
--        
-+            Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
-+        }
-+
-@@ -320 +363 @@
--        MTXTrans(trans, -(HU_FB_WIDTH/2), -(HU_FB_HEIGHT/2), 0);
-+        MTXTrans(trans, -(mp6_widescreen_render_width()/2.0f), -(HU_FB_HEIGHT/2), 0);
-@@ -323 +366 @@
--        mtxTransCat(modelview, (HU_FB_WIDTH/2), (HU_FB_HEIGHT/2), 0);
-+        mtxTransCat(modelview, (mp6_widescreen_render_width()/2.0f), (HU_FB_HEIGHT/2), 0);
-@@ -329 +372 @@
++            WipeCaptureFrame(wipeData.image[0]);
+@@ -351 +389 @@
+-        MTXTrans(translationMatrix, -(HU_FB_WIDTH/2), -(HU_FB_HEIGHT/2), 0);
++        MTXTrans(translationMatrix, -(mp6_widescreen_render_width()/2.0f), -(HU_FB_HEIGHT/2), 0);
+@@ -354 +392 @@
+-        mtxTransCat(modelView, (HU_FB_WIDTH/2), (HU_FB_HEIGHT/2), 0);
++        mtxTransCat(modelView, (mp6_widescreen_render_width()/2.0f), (HU_FB_HEIGHT/2), 0);
+@@ -360 +398 @@
 -            GXPosition2s16(HU_FB_WIDTH+19, -14);
 +            GXPosition2s16(mp6_widescreen_render_width()+19, -14);
-@@ -331 +374 @@
+@@ -362 +400 @@
 -            GXPosition2s16(HU_FB_WIDTH+19, HU_FB_HEIGHT+14);
 +            GXPosition2s16(mp6_widescreen_render_width()+19, HU_FB_HEIGHT+14);
-@@ -338 +381 @@
+@@ -369 +407 @@
 -            GXPosition2s16(HU_FB_WIDTH-10, 10);
 +            GXPosition2s16(mp6_widescreen_render_width()-10, 10);
-@@ -340 +383 @@
+@@ -371 +409 @@
 -            GXPosition2s16(HU_FB_WIDTH-10, HU_FB_HEIGHT-10);
 +            GXPosition2s16(mp6_widescreen_render_width()-10, HU_FB_HEIGHT-10);
-@@ -345 +388,6 @@
+@@ -376 +414,6 @@
 -        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
 +        /* Closes the GXBegin(GX_QUADS, 4) nineteen lines up; anchors to the
 +         * closing brace of the if/else that emits all four of its vertices,
 +         * before Hu3DFbCopyExec just below. Empty inline on hardware
 +         * (GXVert.h). */
 +        GXEnd();
-+        Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
-@@ -405,2 +453,8 @@
++        WipeCaptureFrame(wipeData.image[0]);
+@@ -400 +443 @@
+-        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
++        WipeCaptureFrame(wipeData.image[0]);
+@@ -411 +454 @@
+-                    HuMemDirectFree(wipeData.image[0]);
++                    WipeImageRelease(0);
+@@ -441,2 +484,8 @@
 -        GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
 -        GXSetScissor(0, 0, 640, 480);
 +    /* The 6x6 grid-shatter wipe's own viewport/scissor + per-cell grid
@@ -106,28 +112,106 @@
 +     * disabled. */
 +        GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
 +        GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -448 +502 @@
--                GXSetViewport((HU_FB_WIDTH/6.0)*i, (HU_FB_HEIGHT/6.0)*j, HU_FB_WIDTH/6.0, HU_FB_HEIGHT/6.0, 0, 1);
-+                GXSetViewport((mp6_widescreen_render_width()/6.0)*i, (HU_FB_HEIGHT/6.0)*j, mp6_widescreen_render_width()/6.0, HU_FB_HEIGHT/6.0, 0, 1);
-@@ -463,0 +518,4 @@
+@@ -488,2 +537,2 @@
+-                GXSetViewport((HU_FB_WIDTH / 6.0) * column, (HU_FB_HEIGHT / 6.0) * row,
+-                              HU_FB_WIDTH / 6.0, HU_FB_HEIGHT / 6.0, 0, 1);
++                GXSetViewport((mp6_widescreen_render_width() / 6.0) * column, (HU_FB_HEIGHT / 6.0) * row,
++                              mp6_widescreen_render_width() / 6.0, HU_FB_HEIGHT / 6.0, 0, 1);
+@@ -510,0 +560,4 @@
 +                /* Closes this 6x6 cell's own GXBegin(GX_QUADS, 4); anchors to the
 +                 * last of its four position/texcoord pairs, still inside the cell
 +                 * loop, so each cell closes its own primitive. */
 +                GXEnd();
-@@ -708 +766,10 @@
--    MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 10);
-+    /* WipeGXInit is the SHARED ortho/viewport/scissor setup for several
-+     * wipe styles (WipeNormalFade/WipeCrossFade/WipeDissolve/WipeImage/
-+     * WipeWave/WipeLoadDraw all call it) -- widened to
-+     * mp6_widescreen_render_width() so the transition covers the full
-+     * widescreen frame instead of only its native-640 left portion.
-+     * WipeDissolve/WipeImage/WipeWave/WipeLoadDraw's own downstream
-+     * geometry beyond this shared setup was not separately widened here
-+     * (not confirmed exercised by testing) -- flagged, not assumed fine.
-+     * HU_FB_WIDTH (640, byte-identical) when widescreen is disabled. */
-+    MTXOrtho(proj, 0, HU_FB_HEIGHT, 0, mp6_widescreen_render_width(), 0, 10);
-@@ -713,2 +780,2 @@
+@@ -556,0 +610,2 @@
++    /* Keep the emblem's native proportions; extend only its outside mask. */
++    float border = (mp6_widescreen_render_width() - HU_FB_WIDTH) / 6.0f;
+@@ -571 +626 @@
+-                HuMemDirectFree(wipeData.image[0]);
++                WipeImageRelease(0);
+@@ -583 +638 @@
+-                HuMemDirectFree(wipeData.image[0]);
++                WipeImageRelease(0);
+@@ -597 +652 @@
+-    MTXTrans(modelview, -HU_FB_WIDTH, -HU_FB_HEIGHT, 0);
++    MTXTrans(modelview, -HU_FB_WIDTH + 3.0f*border, -HU_FB_HEIGHT, 0);
+@@ -602 +657 @@
+-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XY, GX_U16, 0);
++    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XY, GX_S16, 0);
+@@ -616 +671 @@
+-    GXPosition2u16(imageScale*(HU_FB_WIDTH/2), imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(imageScale*(HU_FB_WIDTH/2), imageScale*(HU_FB_HEIGHT/2));
+@@ -618 +673 @@
+-    GXPosition2u16(HU_FB_WIDTH-(imageScale*(HU_FB_WIDTH/2)), imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(HU_FB_WIDTH-(imageScale*(HU_FB_WIDTH/2)), imageScale*(HU_FB_HEIGHT/2));
+@@ -620,2 +675 @@
+-    GXPosition2u16(HU_FB_WIDTH - (imageScale * (HU_FB_WIDTH / 2)),
+-                   HU_FB_HEIGHT - (imageScale * (HU_FB_HEIGHT / 2)));
++    GXPosition2s16(HU_FB_WIDTH-(imageScale*(HU_FB_WIDTH/2)), HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+@@ -623 +677 @@
+-    GXPosition2u16(imageScale*(HU_FB_WIDTH/2), HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
++    GXPosition2s16(imageScale*(HU_FB_WIDTH/2), HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+@@ -628 +682 @@
+-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XY, GX_U16, 0);
++    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XY, GX_S16, 0);
+@@ -638,17 +692,16 @@
+-    GXPosition2u16(0, 0);
+-    GXPosition2u16(HU_FB_WIDTH, 0);
+-    GXPosition2u16(HU_FB_WIDTH, imageScale*(HU_FB_HEIGHT/2));
+-    GXPosition2u16(0, imageScale*(HU_FB_HEIGHT/2));
+-    GXPosition2u16(0, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+-    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+-    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
+-    GXPosition2u16(0, HU_FB_HEIGHT);
+-    GXPosition2u16(0, imageScale*(HU_FB_HEIGHT/2));
+-    GXPosition2u16(imageScale*(HU_FB_WIDTH/2), imageScale*(HU_FB_HEIGHT/2));
+-    GXPosition2u16(imageScale*(HU_FB_WIDTH/2), HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+-    GXPosition2u16(0, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+-    GXPosition2u16(HU_FB_WIDTH-(imageScale*(HU_FB_WIDTH/2)), imageScale*(HU_FB_HEIGHT/2));
+-    GXPosition2u16(HU_FB_WIDTH, imageScale*(HU_FB_HEIGHT/2));
+-    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+-    GXPosition2u16(HU_FB_WIDTH - (imageScale * (HU_FB_WIDTH / 2)),
+-                   HU_FB_HEIGHT - (imageScale * (HU_FB_HEIGHT / 2)));
++    GXPosition2s16(-border, 0);
++    GXPosition2s16(HU_FB_WIDTH+border, 0);
++    GXPosition2s16(HU_FB_WIDTH+border, imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(-border, imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(-border, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
++    GXPosition2s16(HU_FB_WIDTH+border, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
++    GXPosition2s16(HU_FB_WIDTH+border, HU_FB_HEIGHT);
++    GXPosition2s16(-border, HU_FB_HEIGHT);
++    GXPosition2s16(-border, imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(imageScale*(HU_FB_WIDTH/2), imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(imageScale*(HU_FB_WIDTH/2), HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
++    GXPosition2s16(-border, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
++    GXPosition2s16(HU_FB_WIDTH-(imageScale*(HU_FB_WIDTH/2)), imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(HU_FB_WIDTH+border, imageScale*(HU_FB_HEIGHT/2));
++    GXPosition2s16(HU_FB_WIDTH+border, HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
++    GXPosition2s16(HU_FB_WIDTH-(imageScale*(HU_FB_WIDTH/2)), HU_FB_HEIGHT-(imageScale*(HU_FB_HEIGHT/2)));
+@@ -707 +760 @@
+-                    HuMemDirectFree(wipeData.image[0]);
++                    WipeImageRelease(0);
+@@ -710 +763 @@
+-                    HuMemDirectFree(wipeData.image[1]);
++                    WipeImageRelease(1);
+@@ -720 +773 @@
+-    Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, TRUE, wipeData.image[0]);
++    WipeCaptureFrame(wipeData.image[0]);
+@@ -755 +808 @@
+-    GXPosition2u16(HU_FB_WIDTH, 0);
++    GXPosition2u16(mp6_widescreen_render_width(), 0);
+@@ -757 +810 @@
+-    GXPosition2u16(HU_FB_WIDTH, HU_FB_HEIGHT);
++    GXPosition2u16(mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -779 +832,2 @@
+-    MTXOrtho(projection, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 10);
++    /* Fullscreen effects draw in live framebuffer coordinates. */
++    MTXOrtho(projection, 0, HU_FB_HEIGHT, 0, mp6_widescreen_render_width(), 0, 10);
+@@ -784,2 +838,2 @@
 -    GXSetViewport(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1);
 -    GXSetScissor(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
 +    GXSetViewport(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, 0, 1);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -845 +899,2 @@
+-    MTXTrans(modelview, 0, 0, 0);
++    /* The save indicator stays the same size and distance from the right. */
++    MTXTrans(modelview, mp6_widescreen_render_width() - HU_FB_WIDTH, 0, 0);

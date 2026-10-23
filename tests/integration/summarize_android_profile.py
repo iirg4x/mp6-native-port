@@ -13,6 +13,21 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT/'build/tablet-performance-20260910'
 NDK = ROOT/'build/android-sdk/ndk/27.3.13750724'
+MIN_WARMUP_BOARD_TICKS = 600
+MAX_WARMUP_BOARD_TICKS = 6000
+DEFAULT_WARMUP_BOARD_TICKS = 600
+
+
+def warmup_board_ticks(value):
+    """Parse the bounded board age used to admit the first measurement window."""
+    try:
+        ticks = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError('warmup board ticks must be an integer') from error
+    if not MIN_WARMUP_BOARD_TICKS <= ticks <= MAX_WARMUP_BOARD_TICKS:
+        raise argparse.ArgumentTypeError(
+            f'warmup board ticks must be in {MIN_WARMUP_BOARD_TICKS}..{MAX_WARMUP_BOARD_TICKS}')
+    return ticks
 
 
 def thermal_evidence(run, start_time):
@@ -52,6 +67,9 @@ def main():
     resume_choice.add_argument('--latest-resume', action='store_true', help='Use only the latest resumed board, after another 300 ticks')
     resume_choice.add_argument('--resume-marker', help='Exact resume-N.json in this run; keeps later screenshot resumes out of the comparison')
     parser.add_argument('--session', default='tablet-performance-20260910')
+    parser.add_argument('--warmup-board-ticks', type=warmup_board_ticks,
+                        default=DEFAULT_WARMUP_BOARD_TICKS,
+                        help='Minimum board age before admitting the first timing window')
     args = parser.parse_args()
     assert re.fullmatch(r'[A-Za-z0-9_-]+', args.name)
     assert re.fullmatch(r'[A-Za-z0-9_-]+', args.session)
@@ -61,7 +79,7 @@ def main():
     text = log_bytes.decode(errors='replace')
     input_evidence = {'logcat_sha256': hashlib.sha256(log_bytes).hexdigest()}
     event = re.search(r'\[EVENT\] w01.live=.*?tick=(\d+)', text)
-    first = int(event[1])+600 if event else 10**9
+    first = int(event[1])+args.warmup_board_ticks if event else 10**9
     resumed = args.latest_resume or args.resume_marker is not None
     start_time = None
     if resumed:
@@ -97,6 +115,7 @@ def main():
         for key, pattern in (
             ('tick_hz', r'\[MP6-TICKRATE\].*rate=([0-9.]+)'),
             ('presents_hz', r'\[MP6-PRESENTRATE\].*rate=([0-9.]+)'),
+            ('surface_success_rate_1s', r'\[MP6-PRESENTRATE\].*surface-success-rate-1s=([0-9.]+)'),
             ('gpu_span_ms', r'\[MP6-GPU\] span=([0-9.]+)')):
             m = re.search(pattern, line)
             if m:
@@ -109,11 +128,13 @@ def main():
             for key, value in zip(('game_ms', 'submit_ms', 'seal_ms', 'post_ms'), m.groups()):
                 series[key].append(float(value))
     result = {key: dict(n=len(v), mean=round(statistics.mean(v), 3), median=round(statistics.median(v), 3),
-                       p10=round(sorted(v)[min(len(v)-1, int(len(v)*.1))], 3),
-                       p90=round(sorted(v)[min(len(v)-1, int(len(v)*.9))], 3))
-              for key, v in series.items() if v and any(v)}
+                        p10=round(sorted(v)[min(len(v)-1, int(len(v)*.1))], 3),
+                        p90=round(sorted(v)[min(len(v)-1, int(len(v)*.9))], 3))
+              for key, v in series.items()
+              if v and (key == 'surface_success_rate_1s' or any(v))}
     result['buffer_queue_errors'] = text.count('err=NO_BUFFER_AVAILABLE')
     result['measurement_window'] = dict(first_tick=first if event else None,
+        warmup_board_ticks=args.warmup_board_ticks,
         full_tick_windows_only=True,
         board_ready=event is not None, resumed=resumed, latest_resume=args.latest_resume,
         valid=bool(event and series['presents_hz'] and series['gpu_span_ms']),

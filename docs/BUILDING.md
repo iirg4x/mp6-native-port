@@ -74,6 +74,12 @@ build\mp6native.exe 600        # 600-tick bounded run (automation mode)
 build\mp6native_headless.exe 600
 ```
 
+To keep builds off particular logical CPUs (for example a faulty core), set
+`MP6_CPU_EXCLUDE` to their indices, e.g. `MP6_CPU_EXCLUDE=8,9`. `build.py`
+and `build_windows_release.py` remove them from their own affinity mask, which
+every compiler, linker and CMake child inherits, and the default `-j` follows
+the remaining CPU count.
+
 Useful flags: `--clean`, `-j N`, `--link-only`, `--coro-fibers` (A/B
 lever: win32-fiber coroutine backend instead of the default arena-backed
 minicoro; separate `_corofib`-suffixed outputs).
@@ -115,14 +121,20 @@ instead of a stub).
 
 ## Aurora build trees (one-time per Aurora update)
 
-The windowed build links prebuilt Aurora archives from
-`external_refs/repos/aurora`, with this port's patch series
-(`compat/aurora/base/`) applied on top. Two trees:
+The windowed build links Aurora archives built from the vendored source
+in `third_party/aurora/` (upstream at the pinned commit with every port
+change already in the files; see `third_party/aurora/MP6_PROVENANCE.md`).
+There is no patch series to apply. Two trees:
 
-- `aurora/build/` — plain Aurora (gx/vi/pad/mtx/si/card + Dawn/SDL3).
-- `aurora/build-rmlui/` — the same, built with RmlUi enabled; the
+- `build/aurora-debug/` — plain Aurora (gx/vi/pad/mtx/si/card + Dawn/SDL3).
+- `build/aurora-debug-rmlui/` — the same, built with RmlUi enabled; the
   launcher links these archives. (abseil is fetched into each tree's
-  `_deps/` by Aurora's own CMake.)
+  `_deps/` by Aurora's own CMake; the four small dependency fixes in
+  `compat/aurora/deps/` are applied there by `tools/aurora_deps.py`.)
+
+The release backend (`tools/build_windows_release.py`), Android
+(`tools/build_android_aurora.py`) and web (`tools/build_wasm.py`) configure
+the same `third_party/aurora/` source into their own `build/` trees.
 
 Both are ordinary CMake builds using the same zig toolchain; build the
 specific target libraries build.py's link line names (it will tell you

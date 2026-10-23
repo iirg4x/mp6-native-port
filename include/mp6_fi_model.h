@@ -29,6 +29,11 @@ void mp6_fi_capture_camera(int camera_id);
 void mp6_fi_capture_model_begin(int model_id);
 void mp6_fi_capture_model_end(void);
 void mp6_fi_capture_auxiliary_begin(int model_id, int object_index);
+/* Validated authored object identity, shared by visible and private AO draws.
+ * The one-shot hint labels only the next position load; it never opens a
+ * model/camera context or changes the surrounding emission ordinal. */
+int mp6_fi_object_index(int model_id, const void *object);
+void mp6_fi_capture_object_matrix(int model_id, int object_index);
 int mp6_fi_capture_context_next(int *camera_id, int *model_id,
                                 uint32_t *generation, uint16_t *sub,
                                 uint16_t *ordinal);
@@ -87,6 +92,20 @@ void mp6_fi_model_reset(void);
 
 /* Existing diagnostics retained for automated state-drift comparisons. */
 void mp6_fi_model_animlog(long tick);
+
+/* CPU-deformed vertex data (shape morphs, clusters, envelope skinning). These
+ * models animate by rewriting their vertex/normal buffers in place every
+ * tick, so their motion never reaches a matrix the replay could interpolate.
+ * Hu3DExec reports each deformed HSF once its deformation is final; the
+ * replay layer snapshots the listed buffers at the tick boundary and blends
+ * consecutive ticks' contents for extra frames. Buffers are float arrays. */
+typedef struct {
+    void *data;
+    uint32_t bytes;
+} Mp6FiDeformed;
+void mp6_fi_note_deformed(void *hsf);   /* HSF_DATA *, after its deformation */
+int mp6_fi_deformed_list(const Mp6FiDeformed **out);
+void mp6_fi_deformed_reset(void);
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,7 @@
+--- a/src/REL/m666dll/text_000A0.c
++++ b/src/REL/m666dll/text_000A0.c
+@@ -130,2 +130,2 @@
+-extern s32 fn_1_3C9C(void);
+-extern s16 fn_1_D7DC(void);
++extern void fn_1_3C9C(void);
++extern s32 fn_1_D7DC(void);

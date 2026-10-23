@@ -54,15 +54,29 @@
  * The default allocator/logging stay as-is; we override the allocator per
  * coroutine via mco_desc (below) so nothing here ever calls malloc for a
  * stack, and correct usage produces no MCO_LOG output. */
+#ifdef __EMSCRIPTEN__
+/* wasm has no stack-switching asm: minicoro's emscripten fiber backend
+ * (requires -sASYNCIFY). Each coroutine also needs an asyncify buffer for
+ * its saved wasm call stack; it lives in the same pool slot (the slot is
+ * widened for it in mp6_coro_layout.h). The same size is used for the main
+ * context's buffer, which saves GameMain's whole frame chain on every
+ * switch into a process; overflowing it traps as `unreachable`. */
+#define MCO_ASYNCFY_STACK_SIZE (256 * 1024)
+#else
 #define MCO_USE_ASM
+#endif
 #define MINICORO_IMPL
 #include "minicoro.h"
 
 #include "mp6_heap_scale.h" /* MP6_ARENA_* -- the pool base must clear the arena */
+#include "mp6_coro_layout.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 /* Keep in lockstep with process_native.c's own limits (verified equal):
  * the scheduler caps concurrent processes at MP6_MAX_PROC_FIBERS=128 and
@@ -70,20 +84,15 @@
  * means this backend introduces NO new cap and NO smaller stack than the
  * fiber backend had -- zero behavior change (an overflow here would have
  * been an overflow there too). */
-#define MP6_CORO_MAX_SLOTS  128
-#define MP6_CORO_STACK_SIZE (1u * 1024u * 1024u)
 /* One pool slot holds minicoro's whole per-coroutine block (mco_coro +
  * context + 1 KB storage + the stack + alignment). 64 KB of header room
  * over the 1 MB stack is ~40x minicoro's actual ~1.5 KB overhead -- the
  * exact fit is asserted per create() below, so this generous constant can
  * never silently under-size a slot. */
-#define MP6_CORO_SLOT_SIZE  (MP6_CORO_STACK_SIZE + 0x10000u)
-#define MP6_CORO_POOL_SIZE  ((size_t)MP6_CORO_MAX_SLOTS * (size_t)MP6_CORO_SLOT_SIZE)
 
 /* The pool's own base, named rather than first-fitted.
  *
- * This reservation is the SECOND one the process makes, and until this
- * constant existed it simply took the first free entry of the shared
+ * Before this fixed preference existed it took the first free entry of the shared
  * candidate ladder -- which means its address was a function of the GAME
  * ARENA's size. That was harmless while the arena was a compile-time 256 MB
  * and the pool always landed at 0x90000000. It stopped being harmless when
@@ -99,9 +108,9 @@
  * state whose pool base differs. Pinning the base above the largest arena
  * the port can request is what lets a state captured at one heap scale load
  * at another; the asserts below are what keep that true if either constant
- * moves. Falls back to the ladder if 0xC0000000 is somehow taken, exactly
- * as before -- a pinned base is a preference, never a new failure mode. */
-#define MP6_CORO_POOL_BASE 0xC0000000u
+ * moves. Windows now reserves this range before graphics/launcher startup,
+ * then commits it here. Other hosts retain the preferred-base allocation.
+ * The layout constants are shared through mp6_coro_layout.h. */
 _Static_assert(MP6_CORO_POOL_BASE >= MP6_ARENA_LOW_BASE + MP6_ARENA_EXPANDED_BYTES,
                "the coroutine pool must start above the largest game arena");
 _Static_assert((unsigned long long)MP6_CORO_POOL_BASE +
@@ -126,6 +135,34 @@ static int16_t    g_freeList[MP6_CORO_MAX_SLOTS]; /* stack of free slot indices 
 static int        g_freeTop;                      /* # free slots available */
 static int        g_slotsInUse;                   /* live coroutines (diagnostic) */
 static int        g_slotsHighWater;               /* max concurrent (diagnostic) */
+#ifdef __EMSCRIPTEN__
+/* The web build allocates each slot the first time it is used instead of
+ * the whole pool up front: wasm memory never shrinks, iOS Safari kills a
+ * page near ~1.4 GB, and the full pool is 128 x 1.31 MB = 168 MB while a
+ * board peaks at 16 live coroutines. Slots are reused lowest-first (the
+ * free list is a stack), so memory follows the high-water mark. The host
+ * keeps the slot table (mp6_host_web_coro_slot), outside savestates, since
+ * a restored copy would hold another run's allocations; dev builds take the
+ * first MP6_WEB_CORO_FIXED_SLOTS from one block reserved at startup, so
+ * savestates find those stacks at the same addresses in every run, and a
+ * state needing a slot beyond them is refused at capture. */
+static uint8_t *mp6_coro_slot_memory(int slot)
+{
+    uint8_t *mem = (uint8_t *)mp6_host_web_coro_slot(slot);
+    if (!mem) {
+        fprintf(stderr, "[FATAL] coro_arena: could not allocate coroutine slot %d (%zu bytes)\n",
+                slot, (size_t)MP6_CORO_SLOT_SIZE);
+        fflush(stderr);
+        exit(1);
+    }
+    return mem;
+}
+#else
+static uint8_t *mp6_coro_slot_memory(int slot)
+{
+    return g_pool + (size_t)slot * (size_t)MP6_CORO_SLOT_SIZE;
+}
+#endif
 
 static void mp6_coro_pool_report(void)
 {
@@ -141,6 +178,9 @@ static void mp6_coro_pool_report(void)
 static void mp6_coro_pool_init(void)
 {
     int i;
+#ifdef __EMSCRIPTEN__ /* the web build allocates slots on first use (mp6_coro_slot_memory) */
+    g_pool = (uint8_t *)mp6_host_web_coro_pool();
+#else
     g_pool = (uint8_t *)mp6_host_arena_reserve(MP6_CORO_POOL_BASE, MP6_CORO_POOL_SIZE);
     if (!g_pool) {
         fprintf(stderr, "[FATAL] coro_arena: could not reserve a %zu-byte low-4GB coroutine stack pool\n",
@@ -160,6 +200,7 @@ static void mp6_coro_pool_init(void)
         fflush(stderr);
         exit(1);
     }
+#endif
     /* Fill the free-list so pop() hands out 0,1,2,... in order -- matches
      * the fiber table's slot-0-first growth, purely for reasoning parity;
      * slot choice is never observable. */
@@ -233,7 +274,7 @@ Mp6Coro *mp6_coro_create(void (*fn)(void *), void *arg, void *stack, size_t stac
     desc = mco_desc_init(mp6_coro_entry, stack_size ? stack_size : MP6_CORO_STACK_SIZE);
     desc.alloc_cb = mp6_coro_slot_alloc;
     desc.dealloc_cb = mp6_coro_slot_dealloc;
-    desc.allocator_data = g_pool + (size_t)slot * (size_t)MP6_CORO_SLOT_SIZE;
+    desc.allocator_data = mp6_coro_slot_memory(slot);
 
     w = &g_wrappers[slot];
     w->fn = fn;
@@ -323,7 +364,11 @@ void mp6_coro_destroy(Mp6Coro *c)
  * and the savestate writer deflates it -- so the simpler, provably-correct
  * choice costs nothing worth reclaiming with new tracking code. */
 void *mp6_coro_pool_base(void) { return g_pool; }
+#ifdef __EMSCRIPTEN__
+size_t mp6_coro_pool_size(void) { return (size_t)MP6_WEB_CORO_FIXED_SLOTS * MP6_CORO_SLOT_SIZE; }
+#else
 size_t mp6_coro_pool_size(void) { return MP6_CORO_POOL_SIZE; }
+#endif
 size_t mp6_coro_slot_size(void) { return MP6_CORO_SLOT_SIZE; }
 int mp6_coro_slot_count(void) { return MP6_CORO_MAX_SLOTS; }
 /* The high-water mark mp6_coro_pool_report() prints at exit under
@@ -348,7 +393,66 @@ void *mp6_coro_slot_addr(int slot)
     if (!g_poolInit || slot < 0 || slot >= MP6_CORO_MAX_SLOTS) {
         return NULL;
     }
+#ifdef __EMSCRIPTEN__
+    /* Fixed-pool slots have their address whether in use here yet or not;
+     * others are not at a reproducible address (capture refuses them). */
+    return (g_pool && slot < MP6_WEB_CORO_FIXED_SLOTS) ? g_pool + (size_t)slot * MP6_CORO_SLOT_SIZE : NULL;
+#else
     return g_pool + (size_t)slot * MP6_CORO_SLOT_SIZE;
+#endif
 }
+
+#ifdef __EMSCRIPTEN__
+/* Asyncify resumes a suspended fiber by calling again the exported function
+ * at the bottom of its call stack, which the fiber's asyncify data names by
+ * an id the JS runtime hands out in first-use order -- so another run can
+ * give the same function a different id. The capture records what each id
+ * meant in this captured static, and the restore makes the runtime use the
+ * same ids again before any restored fiber resumes. */
+static char g_rewindIds[512];
+
+EM_JS(void, mp6_web_rewind_ids_get, (char *buf, int n), {
+    const parts = [];
+    for (const [id, f] of Asyncify.callStackIdToFunc) parts.push(id + ':' + f.name);
+    stringToUTF8(parts.join(','), buf, n);
+});
+
+EM_JS(int, mp6_web_rewind_ids_apply, (const char *text), {
+    const byName = new Map();
+    for (const f of Asyncify.funcWrappers.keys()) byName.set(f.name, f);
+    const idToFunc = new Map(), funcToId = new Map();
+    let next = 0;
+    for (const part of UTF8ToString(text).split(',')) {
+        if (!part) continue;
+        const [id, name] = part.split(':');
+        const f = byName.get(name);
+        if (!f) { console.log('[SAVESTATE] no wasm export named ' + name + ' to resume fibers with'); return -1; }
+        idToFunc.set(Number(id), f);
+        funcToId.set(f, Number(id));
+        next = Math.max(next, Number(id) + 1);
+    }
+    for (const f of Asyncify.callstackFuncToId.keys()) {
+        if (!funcToId.has(f)) { idToFunc.set(next, f); funcToId.set(f, next); next++; }
+    }
+    Asyncify.callStackIdToFunc.clear();
+    Asyncify.callstackFuncToId.clear();
+    for (const [id, f] of idToFunc) { Asyncify.callStackIdToFunc.set(id, f); Asyncify.callstackFuncToId.set(f, id); }
+    Asyncify.callStackId = next;
+    return 0;
+});
+
+void mp6_coro_savestate_precapture(void)
+{
+    mp6_web_rewind_ids_get(g_rewindIds, (int)sizeof(g_rewindIds));
+}
+
+int mp6_coro_savestate_rehydrate(void)
+{
+    return mp6_web_rewind_ids_apply(g_rewindIds);
+}
+#else
+void mp6_coro_savestate_precapture(void) {}
+int mp6_coro_savestate_rehydrate(void) { return 0; }
+#endif
 
 #endif /* !MP6_CORO_FIBERS */

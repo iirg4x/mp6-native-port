@@ -8,11 +8,19 @@ from tools import build
 from tests.test_frame_resource_lifetimes import function
 
 ROOT = Path(__file__).resolve().parents[1]
+# The msm engine is one module split across these translation units; the
+# extracted functions and typedefs may live in any of them.
+MSM_SOURCES = ('src/audio/msm_internal.h', 'src/audio/msm_bridge.c', 'src/audio/msm_bank.c',
+               'src/audio/msm_diag.c', 'src/audio/msm_savestate.c')
+
+
+def msm_source():
+    return '\n'.join((ROOT/rel).read_text() for rel in MSM_SOURCES)
 
 
 class AudioRetirement(unittest.TestCase):
     def test_mixer_samples_and_game_thread_retirement(self):
-        source = (ROOT/'src/audio/msm_bridge.c').read_text()
+        source = msm_source()
         with tempfile.TemporaryDirectory(prefix='audio-retirement-', dir=ROOT/'build') as tmp:
             folder = Path(tmp)
             typedefs = '\n'.join(re.search(r'typedef struct \{[^{}]*\} '+name+r';', source).group(0)
@@ -31,7 +39,7 @@ class AudioRetirement(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
     def test_callback_has_no_normal_logging_or_pcm_free(self):
-        mixer = (ROOT/'src/audio/msm_bridge.c').read_text()
+        mixer = msm_source()
         render = function(mixer, 'mp6_msm_render')
         self.assertNotIn('free(', render)
         self.assertEqual(render.count('g_pcmRetired = 1;'), 4)

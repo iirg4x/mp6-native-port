@@ -132,10 +132,9 @@ Native compatibility changes belong in `compat/decomp/`.
 *existing* Aurora checkout -- it stays read-only once present, same as
 every other lane on this project touches it), generates the zig CMake
 compiler-wrapper scripts, configures + builds both trees (plain and
-RmlUi-enabled), and applies `compat/aurora/base/*.patch` -- against
-the Aurora tree directly where the patch's own `--- a/...` target resolves
-there, or against the matching CMake `FetchContent` dependency source
-(searched for under each `_deps/*-src` after configure) otherwise. The
+RmlUi-enabled) from the vendored `third_party/aurora/` source, and
+applies the dependency fixes in `compat/aurora/deps/` to the matching CMake
+`FetchContent` sources under each `_deps/*-src` after configure. The
 exact CMake invocations were ground-truthed against this workspace's own
 `external_refs/repos/aurora/{build,build-rmlui}/CMakeCache.txt` (i.e. what
 actually configured the two trees this project already has), not guessed

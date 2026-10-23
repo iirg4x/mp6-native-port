@@ -101,7 +101,7 @@ def main():
             evidence['errors'].append('requested effect capture produced no frames')
         report=dict(case=name, capsule=capsule, route=route, evidence=evidence,
                             captures=captures,
-                            visual_review='pending', minigame_stub='[MINIGAME]' in log)
+                            visual_review='pending', minigame_stub='minigame.unavailable' in log)
         print(f'{name}: {"FAIL" if evidence["errors"] else "state/return PASS; visual pending"}',flush=True)
         return report
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:

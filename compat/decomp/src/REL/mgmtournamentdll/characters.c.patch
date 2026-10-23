@@ -1,0 +1,186 @@
+--- a/src/REL/mgmtournamentdll/characters.c
++++ b/src/REL/mgmtournamentdll/characters.c
+@@ -0,0 +1 @@
++#include "mp6_mgmtournament_native.h"
+@@ -32 +32,0 @@
+-#include "REL/mgmtournamentdll/mgmbingodll_module_types.h"
+@@ -72 +72 @@
+-void fn_1_B628(void);
++
+@@ -159 +159 @@
+-s16 fn_1_A42C(void);
++
+@@ -247 +247 @@
+-s16 fn_1_A42C(void);
++
+@@ -307,3 +307,3 @@
+- s16 fn_1_A42C(void);
+-
+-void fn_1_71E8(s16 *firstPlayer, s16 *secondPlayer);
++
++
++
+@@ -410 +410 @@
+-s16 fn_1_A42C(void);
++
+@@ -454,2 +454,2 @@
+-void fn_1_8238(OMOBJ *object);
+-void fn_1_A1F4(void);
++
++
+@@ -516,2 +516,2 @@
+-        playerObject->data = HuMemDirectMallocNum(HEAP_HEAP, 84, HU_MEMNUM_OVL);
+-        memset(playerObject->data, 0, 84);
++        playerObject->data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(TournamentPlayerAnimationWork), HU_MEMNUM_OVL);
++        memset(playerObject->data, 0, sizeof(TournamentPlayerAnimationWork));
+@@ -788,6 +788,6 @@
+-s16 fn_1_3F00(void);
+-void fn_1_6278(OMOBJ *, s16);
+-s32 fn_1_E378(Point3d *, Point3d *);
+-void fn_1_E4D0(f32 angleX, f32 angleY, f32 angleZ, Vec source, Vec *destination);
+-void fn_1_A35C(s16, const Vec *);
+-s16 fn_1_A42C(void);
++
++
++
++
++
++
+@@ -813 +813 @@
+-            fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++            fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -818 +818 @@
+-                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -827 +827 @@
+-                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -844 +844 @@
+-                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -873 +873 @@
+-            fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++            fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -878 +878 @@
+-                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -887 +887 @@
+-                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -904 +904 @@
+-                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -921 +921 @@
+-            fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++            fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -926 +926 @@
+-                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++                fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -935 +935 @@
+-    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -956 +956 @@
+-    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -1022 +1022 @@
+-    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -1027 +1027 @@
+-    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -1036 +1036 @@
+-    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -1054 +1054 @@
+-    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, direction, &direction);
++    fn_1_E4D0(0.0f, playerWork->rotation.y, 0.0f, &direction, &direction);
+@@ -1448,2 +1448,2 @@
+-void fn_1_AA04(void);
+-void fn_1_3394(s16, s16);
++
++
+@@ -1620 +1620 @@
+-void fn_1_3394(s16, s16);
++
+@@ -1712,2 +1712,2 @@
+-void fn_1_143C(s16, s16);
+-s16 fn_1_A42C(void);
++
++
+@@ -1782 +1782 @@
+-s16 fn_1_A42C(void);
++
+@@ -1841 +1841 @@
+-HU3D_MODELID fn_1_0(s16, s16, HuVecF *);
++
+@@ -1859 +1859 @@
+-void fn_1_2A4(s16 count, u8 *gameOrder);
++
+@@ -1928,4 +1928,4 @@
+-s32 fn_1_43C();                                 /* Cycles the preview still image. */
+-void fn_1_4F8();                                 /* Releases the preview cycle images. */
+-s32 fn_1_5E0(u8, s16);                          /* Replaces the selected preview still. */
+-s32 fn_1_6F4();                                 /* Starts the selected preview movie. */
++/* Cycles the preview still image. */
++/* Releases the preview cycle images. */
++/* Replaces the selected preview still. */
++/* Starts the selected preview movie. */
+@@ -1995,7 +1995,7 @@
+-s16 fn_1_A42C(void);
+-void fn_1_143C(s16 cameraMode, s16 duration);
+-void fn_1_2728(s16 player);
+-void fn_1_3394(s16 model, s16 mode);
+-void fn_1_34B0(s16 model);
+-void fn_1_3F18(s16 mode);
+-void fn_1_56B4(s16 mode);
++
++
++
++
++
++
++
+@@ -2004,3 +2004,3 @@
+-void fn_1_7DA8(s16 player, s16 flag);
+-
+-void fn_1_7EA8(s16 player);
++
++
++
+@@ -2095 +2095 @@
+-void fn_1_8018(s16 player);
++
+@@ -2099 +2099 @@
+-s16 fn_1_80CC(s16 player);
++
+@@ -2400,11 +2400,11 @@
+-void fn_1_43BC(void);
+-void fn_1_56B4(s16 mode);
+-void fn_1_143C(s16 mode, s16 duration);
+-void fn_1_5740(s16 mode, s16 duration);
+-void fn_1_4A94(s16 player, s16 characterNo, s16 group, Vec position);
+-
+-s16 fn_1_7BC0(s16 player);
+-
+-void fn_1_7D58(s16 player, s16 flag);
+-
+-s16 fn_1_80CC(s16 player);
++
++
++
++
++
++
++
++
++
++
++
+@@ -2548,2 +2548,2 @@
+-void fn_1_E9C(void);
+-void fn_1_DC28(void);
++
++
+@@ -2571 +2571 @@
+-    *(s16 *)&MgModeSubMode = 0;
++    MgModeSubMode = 0;

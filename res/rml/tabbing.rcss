@@ -6,7 +6,7 @@ tab-bar {
     min-width: 0;
     overflow: auto hidden;
     clip: always;
-    text-transform: uppercase;
+    text-transform: none;
 }
 
 tab-bar scrollbarhorizontal,
@@ -23,26 +23,27 @@ tab-bar tab {
     padding: 0 24dp;
     line-height: 64dp;
     white-space: nowrap;
-    decorator: vertical-gradient(#00b4fa00 #00b4fa00);
-    transition: decorator 0.1s linear-in-out, opacity 0.1s linear-in-out;
+    background-color: transparent;
+    transition: background-color color 0.12s linear-in-out;
     cursor: pointer;
 }
 
 tab-bar tab:selected {
     opacity: 1;
-    border-bottom: 4dp #00b4fa;
-    font-effect: glow(0dp 4dp 0dp 4dp black);
+    border-bottom: 4dp #ffcd3a;
+    background-color: #e92313;
+    color: #ffffff;
 }
 
 tab-bar tab:focus-visible,
 tab-bar tab:hover {
     opacity: 1;
-    font-effect: glow(0dp 4dp 0dp 4dp black);
-    decorator: vertical-gradient(#00b4fa00 #00b4fa26);
+    background-color: #e92313;
+    color: #ffffff;
 }
 
 tab-bar tab:active {
-    decorator: vertical-gradient(#00b4fa10 #00b4fa40);
+    background-color: #bd190c;
 }
 
 tab-bar[closable] tab-end-spacer {
@@ -63,8 +64,8 @@ tab-bar[closable] close {
     font-family: "Material Symbols Rounded";
     font-weight: normal;
     font-size: 20dp;
-    color: rgba(224, 219, 200, 70%);
-    backdrop-filter: blur(2dp);
+    color: #17100b;
+    background-color: #f3e7bd;
     border-radius: 6dp;
     decorator: text("&#xe5cd;" center center);
     transition: color background-color 0.12s linear-in-out;
@@ -74,10 +75,10 @@ tab-bar[closable] close {
 tab-bar[closable] close:hover,
 tab-bar[closable] close:focus-visible {
     color: #fff;
-    background-color: rgba(194, 164, 45, 24%);
+    background-color: #e92313;
 }
 
 tab-bar[closable] close:active {
     color: #fff;
-    background-color: rgba(194, 164, 45, 40%);
+    background-color: #bd190c;
 }

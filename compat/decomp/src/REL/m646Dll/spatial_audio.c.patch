@@ -1,0 +1,5 @@
+--- a/src/REL/m646Dll/spatial_audio.c
++++ b/src/REL/m646Dll/spatial_audio.c
+@@ -5,2 +4,0 @@
+-s32 fn_1_B3C0(HuVecF *worldPosition, s32 soundId);
+-s32 fn_1_B4BC(s32 soundId);

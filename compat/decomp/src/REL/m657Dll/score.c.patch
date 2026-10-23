@@ -1,0 +1,24 @@
+--- a/src/REL/m657Dll/score.c
++++ b/src/REL/m657Dll/score.c
+@@ -2,0 +3 @@
++#include "mp6_widescreen.h"
+@@ -85 +86,14 @@
+-/* Object-create callback that builds each score panel and its display sprites. */
++static void mp6_m657_score_positions(M657ScoreWork *work)
++{
++    float shift = 0.5f * mp6_widescreen_half_width_delta();
++    for (int team = 0; team < 2; ++team) {
++        M657ScoreTeam *score = &work->teams[team];
++        float x = lbl_1_data_1E8[team].x + (team ? shift : -shift);
++        float y = lbl_1_data_1E8[team].y;
++        MgScoreBoxPosSet(score->box, x, y);
++        MgScorePosSet(score->seconds, x - 32.0f, y);
++        MgScorePosSet(score->hundredths, x + 16.0f, y);
++        HuSprGrpPosSet(score->separator, x, y);
++    }
++}
++
+@@ -133,0 +148 @@
++    mp6_m657_score_positions(scoreWork);
+@@ -146,0 +162 @@
++    mp6_m657_score_positions(scoreWork);

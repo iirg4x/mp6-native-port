@@ -1,0 +1,39 @@
+{
+  "name": "XeGTAO",
+  "upstream": "https://github.com/GameTechDev/XeGTAO",
+  "commit": "a5b1686c7ea37788eeb3576b5be47f7c03db532c",
+  "source_paths": [
+    "Source/Rendering/Shaders/XeGTAO.h",
+    "Source/Rendering/Shaders/XeGTAO.hlsli",
+    "LICENSE"
+  ],
+  "source_files": {
+    "XeGTAO.h": "Source/Rendering/Shaders/XeGTAO.h",
+    "XeGTAO.hlsli": "Source/Rendering/Shaders/XeGTAO.hlsli",
+    "LICENSE": "LICENSE"
+  },
+  "normalizedSha256": {
+    "XeGTAO.h": "c3a9ee2bcbd71b5e54a5438e8a803dc8118483e455bc920c15c30cb30a49eee1",
+    "XeGTAO.hlsli": "30faf4f5013916c14694db20fe9ec7f0c786f2edac7610968f9391987115064e",
+    "LICENSE": "d46617ae9890b74443e84a85bec3797664fe42712284a848a35bc4b14b77a2b6"
+  },
+  "rawResponseSha256": {
+    "XeGTAO.h": "c3a9ee2bcbd71b5e54a5438e8a803dc8118483e455bc920c15c30cb30a49eee1",
+    "XeGTAO.hlsli": "30faf4f5013916c14694db20fe9ec7f0c786f2edac7610968f9391987115064e",
+    "LICENSE": "1f3bfd6b628535f0f0e779e70c260cfdc1bb45bc8644d7108e65f83e24a05cba"
+  },
+  "license": "MIT",
+  "bridge": "src/gx/xegtao/bridge.hlsl",
+  "compiler": {
+    "name": "Slang",
+    "version": "2026.19",
+    "release_url": "https://github.com/shader-slang/slang/releases/tag/v2026.19",
+    "windows_x86_64_zip_sha256": "fc922f214b5d115f663932e59e80e0f6b6cc6fae140979cf307da6459b6f8f33"
+  },
+  "adaptations": {
+    "storageTextures": "The bridge uses portable WebGPU R32_UINT/R32_FLOAT storage formats; generated UAV declarations are narrowed to write-only after a textureStore-only proof.",
+    "scalarAoSaturation": "R8_UINT-equivalent scalar AO stores are clamped to 255 when represented as R32_UINT (D3D11.3 Functional Specification, section 3.2.3.13). Packed R11G11B10 normal output is a separate texture and is not clamped.",
+    "lineEndings": "Vendored source integrity hashes canonicalize CRLF and trim terminal LF bytes; raw GitHub response hashes are retained above for provenance."
+  },
+  "scope": "Feasibility baseline only: FP32 depth, spatial Hilbert/R2 sequence, no temporal accumulation, no bent normals."
+}

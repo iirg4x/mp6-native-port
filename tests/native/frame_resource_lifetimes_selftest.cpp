@@ -46,7 +46,7 @@ struct Device {
     Handle CreateTexture(const wgpu::TextureDescriptor*) { return Handle(++textures); }
     Handle CreateBindGroup(const wgpu::BindGroupDescriptor*) { return Handle(++bindings); }
 } g_device;
-struct Viewport { float x=0,y=0,width=0,height=0,minDepth=0,maxDepth=1; };
+struct Viewport { float x=0,y=0,width=0,height=0,minDepth=0,maxDepth=1,left=0,top=0; };
 struct ClipRect { int32_t x=0,y=0,width=0,height=0; };
 enum class CommandType { SetViewport,SetScissor };
 struct Command {
@@ -91,6 +91,7 @@ struct FramePacket {
     std::vector<CommandList> recycledCommands;
     std::deque<TextureUpload> textureUploads;
     std::vector<uint8_t> verts,uniforms,indices,storage,textureUpload;
+    std::vector<std::shared_ptr<const void>> retainedFrameResources;
     int encoder=0;
     uint64_t frameId=0;
 };
@@ -166,7 +167,7 @@ namespace gfx {
 using ::cached_bind_group;
 namespace render_worker { bool is_worker_thread() { return true; } }
 }
-struct ResampleUniformBlock { uint32_t samplerMode=0;float frameWidth=0,frameHeight=0;uint32_t postAaMode=0; };
+struct ResampleUniformBlock { uint32_t samplerMode=0;float frameWidth=0,frameHeight=0;uint32_t postAaMode=0;float frameLeft=0,frameTop=0; };
 ResampleUniformBlock g_lastResampleUniform;
 bool g_hasResampleUniform=false;
 int g_Resampler=0;
@@ -210,9 +211,18 @@ void frame_tests() {
     std::weak_ptr<int> weak=probe;
     for(auto& pass:frame.renderPasses) { pass.commands.reserve(64); pass.commands.push_back({{},probe}); }
     frame.renderPasses.front().commands.reserve(4*1024*1024/sizeof(Command));
+    auto resource=std::make_shared<int>(12);
+    std::weak_ptr<int> resourceWeak=resource;
+    frame.retainedFrameResources.reserve(16);
+    const auto resourceCapacity=frame.retainedFrameResources.capacity();
+    frame.retainedFrameResources.push_back(resource);
+    resource.reset();
+    assert(!resourceWeak.expired());
     probe.reset();
     recycle_frame_packet(frame);
     assert(weak.expired() && frame.renderPasses.empty() && frame.textureUploads.empty());
+    assert(resourceWeak.expired() && frame.retainedFrameResources.empty());
+    assert(frame.retainedFrameResources.capacity()==resourceCapacity);
     assert(frame.nextOpIndex==0 && frame.capturedTextureUploads==0);
     assert(frame.recycledCommands.size()<=32 && !frame.recycledCommands.empty());
     size_t retained=0;
@@ -289,18 +299,23 @@ void binding_tests() {
     g_frameIndex=16;expire_cached_bind_groups();assert(!g_cachedBindGroups.empty());
     g_frameIndex=32;expire_cached_bind_groups();assert(g_cachedBindGroups.empty());
     Viewport viewport{0,0,2340,1080,0,1};
-    const auto initial=resample_present_bind_group(viewport);
-    for(int i=0;i<1000;++i) assert(resample_present_bind_group(viewport)==initial);
+    const auto initial=resample_present_bind_group(viewport,false);
+    for(int i=0;i<1000;++i) assert(resample_present_bind_group(viewport,false)==initial);
     assert(g_queue.writes==1);
-    ++g_Resampler;resample_present_bind_group(viewport);
-    ++g_PostAa;resample_present_bind_group(viewport);
-    viewport.width=1920;resample_present_bind_group(viewport);
-    viewport.height=720;resample_present_bind_group(viewport);
+    ++g_Resampler;resample_present_bind_group(viewport,false);
+    ++g_PostAa;resample_present_bind_group(viewport,false);
+    viewport.width=1920;resample_present_bind_group(viewport,false);
+    viewport.height=720;resample_present_bind_group(viewport,false);
     assert(g_queue.writes==5);
     presentSource.view=Handle(81);
-    assert(!(resample_present_bind_group(viewport)==initial) && g_queue.writes==5);
+    assert(!(resample_present_bind_group(viewport,false)==initial) && g_queue.writes==5);
     g_hasResampleUniform=false;g_ResampleUniformBuffer=Handle(82);
-    resample_present_bind_group(viewport);assert(g_queue.writes==6);
+    resample_present_bind_group(viewport,false);assert(g_queue.writes==6);
+    // Drawn into the surface, the letterbox offset is part of the uniform.
+    viewport.left=6;resample_present_bind_group(viewport,false);assert(g_queue.writes==6);
+    resample_present_bind_group(viewport,true);assert(g_queue.writes==7);
+    resample_present_bind_group(viewport,true);assert(g_queue.writes==7);
+    resample_present_bind_group(viewport,false);assert(g_queue.writes==8);
 }
 int main() {
     frame_tests();target_tests();binding_tests();

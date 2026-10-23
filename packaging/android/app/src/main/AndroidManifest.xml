@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- MP6 native port : Android graphics support. Minimal on
-     purpose: no permissions at all (the disc tree lives in the app's OWN
-     external files dir, which needs none), landscape-locked, single
+     purpose: the disc tree lives in the app's OWN external files dir, which
+     needs no permission; the only runtime permission is the microphone,
+     asked when a Mic mode first listens. Landscape-locked, single
      instance. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     android:installLocation="auto">
@@ -16,6 +17,18 @@
          SDL's JNI call turns that into a fatal JNI abort (measured on
          device). -->
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- The GameCube Microphone (include/mp6_mic.h). Dangerous permission:
+         asked at runtime the first time a mode listens, never at launch.
+         The <queries> entry lets Android 11+ see the device's speech
+         recognition service (package visibility). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <!-- Back-button policy: OPT OUT of
          predictive back. Android 16 enables the OnBackInvokedCallback path
@@ -37,7 +50,9 @@
         android:hardwareAccelerated="true"
         android:appCategory="game"
         android:isGame="true"
-        android:label="MP6 Native"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="Starlit Party"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
 
         <activity
@@ -45,7 +60,7 @@
             android:alwaysRetainTaskState="true"
             android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:exported="true"
-            android:label="MP6 Native"
+            android:label="Starlit Party"
             android:launchMode="singleInstance"
             android:screenOrientation="landscape"
             android:preferMinimalPostProcessing="true">

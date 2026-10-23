@@ -1,0 +1,5 @@
+--- a/include/REL/m670dll.h
++++ b/include/REL/m670dll.h
+@@ -73 +73 @@
+-void fn_1_2384(MGACTOR *actor, int playerNo);
++void fn_1_2384(MGACTOR *actor, intptr_t playerNo);

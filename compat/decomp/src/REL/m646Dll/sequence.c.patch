@@ -1,0 +1,43 @@
+--- a/src/REL/m646Dll/sequence.c
++++ b/src/REL/m646Dll/sequence.c
+@@ -17,6 +16,0 @@
+-void fn_1_543C(OMOBJMAN *objman);
+-void fn_1_2B50(OMOBJMAN *objman);
+-void fn_1_4E28(OMOBJMAN *objman);
+-void fn_1_AFC(OMOBJMAN *objman, s16 player);
+-void fn_1_8E78(OMOBJMAN *objman);
+-void fn_1_98E0(OMOBJMAN *objman);
+@@ -24,7 +17,0 @@
+-void fn_1_5564(s16 player, s32 state);
+-void fn_1_5964(s16 player, s32 command);
+-void fn_1_9024(void);
+-u16 fn_1_8FD4(void);
+-void fn_1_9118(void);
+-s32 fn_1_A0D4(void);
+-s32 fn_1_A0FC(void);
+@@ -42,2 +28,0 @@
+-void fn_1_1E4(s32 camera);
+-s32 fn_1_2CC(void);
+@@ -66,3 +51 @@
+-void fn_1_AF4(s16 mode, s16 frame);
+-
+-void fn_1_AF8(s16 mode, s16 frame);
++
+@@ -158,3 +141,3 @@
+-    HuVecF initialColorSource = {20.0f, 45.0f, 1000.0f};
+-
+-    /* Creation reads the vector's first four bytes as color; the color is then set to white. */
++    GXColor initialColor = {0x41, 0xA0, 0, 0}; /* PPC bytes of 20.0f. */
++
++    /* Preserve the initial color bytes without depending on host float endianness. */
+@@ -162 +145 @@
+-        Hu3DGLightCreateV(&position, &direction, (GXColor *) &initialColorSource);
++        Hu3DGLightCreateV(&position, &direction, &initialColor);
+@@ -291,0 +275,2 @@
++
++/* Storage only; runtime allocations are freed by normal overlay teardown. */
+@@ -2,0 +2 @@
++#include "mp6_mg_winner.h"
+@@ -278,0 +278,2 @@
++        /* Port addition: name the winners (retail never did; see mp6_mg_winner.h). */
++        mp6_mg_winner_message(winningCharacters[0], winningCharacters[1], winningCharacters[2], winningCharacters[3]);

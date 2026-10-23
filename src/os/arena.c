@@ -72,16 +72,13 @@ u32 mp6_arena_size(void) { return mp6_heap_arena_bytes(); }
 
 void mp6_arena_init(void)
 {
-    /* The candidate-base loop (0x80000000 first -- game/memory.c's
-     * BLOCK_CHECK_BROKEN high-bit check) plus the verified OS-picked
-     * fallback live in mp6_host_arena_reserve (the host backends). This TU
+    /* Windows commits the address space claimed before graphics startup;
+     * Android reserves through its low-address host allocator here. This TU
      * keeps the FATAL policy and independently verifies the ABI invariant. */
     u32 arenaSize = mp6_arena_size();
-    /* No preferred base: the candidate ladder's own first entry (0x80000000)
-     * is what this reservation wants, and it is the FIRST reservation the
-     * process makes, so first-fit is deterministic here. The coroutine pool
-     * -- which comes second and would otherwise be displaced by this one's
-     * size -- is the caller that names a base. */
+    /* Zero selects the game arena. Its maximum address-space envelope is
+     * pre-reserved on Windows, but the heap setting is latched only now so
+     * changes made in the launcher still apply before Play. */
     void *got = mp6_host_arena_reserve(0, arenaSize);
 
     if (!got || !mp6_host_range_below_4gb(got, arenaSize)) {

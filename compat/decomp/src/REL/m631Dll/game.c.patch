@@ -1,0 +1,112 @@
+--- a/src/REL/m631Dll/game.c
++++ b/src/REL/m631Dll/game.c
+@@ -3 +3,2 @@
+-#include "REL/m631Dll/utilities.h"
++#include "mp6_m631_native.h"
++#include "game/audio.h"
+@@ -70,14 +70,0 @@
+-
+-extern void fn_1_A8F0(M631ActorWork *);
+-extern void fn_1_AA78(M631ActorWork *);
+-extern M631MotionPairNode *fn_1_B004(void);
+-extern void fn_1_AF94(M631ActorCallbackWork *);
+-extern void fn_1_AFF8(void *, f32, s32);
+-extern void fn_1_AF2C(void *, u32, u32, u32, u32, const HuVecF *);
+-extern void fn_1_5284(OMOBJ *);
+-extern void *fn_1_B0B8(s32 (*)(void *), void *);
+-extern void fn_1_AB4C(void);
+-extern void fn_1_AB60(void);
+-extern void fn_1_B014(void);
+-extern void fn_1_B1AC(void);
+-extern void fn_1_5AAC(M631ActorWork *, s32, s32);
+@@ -105 +92 @@
+-void fn_1_17C8(void);
++void fn_1_17C8(OMOBJ *obj);
+@@ -116 +103,2 @@
+-void fn_1_2B60(void);
++void fn_1_2B60(M631MotionPairNode *callback,
++               M631MotionPairNode *context, f32 distance);
+@@ -124 +112 @@
+-void fn_1_32C8(M631AnimationNode *inputWork);
++void fn_1_32C8(void *callbackData);
+@@ -126 +114 @@
+-inline void fn_1_3704(M631AnimationNode *work, s32 positionIndex);
++void fn_1_3704(M631AnimationNode *work, s32 positionIndex);
+@@ -129 +117 @@
+-               M631MotionPairNode *context);
++               M631MotionPairNode *context, f32 distance);
+@@ -144,3 +132,4 @@
+-void fn_1_4F18(M631SceneListNode *callbackNode);
+-s32 fn_1_4F6C(M631SceneListNode *callbackNode);
+-void fn_1_5010(void);
++void fn_1_4F18(void *callbackData);
++s32 fn_1_4F6C(void *callbackData);
++void fn_1_5010(M631MotionPairNode *callback,
++               M631MotionPairNode *context, f32 distance);
+@@ -205 +194 @@
+-    object->data = HuMemDirectMallocNum(HEAP_HEAP, 9148, HU_MEMNUM_OVL);
++    object->data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M631SceneWork), HU_MEMNUM_OVL);
+@@ -211 +200 @@
+-        object->data = HuMemDirectMallocNum(HEAP_HEAP, 356, HU_MEMNUM_OVL);
++        object->data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M631ActorWork), HU_MEMNUM_OVL);
+@@ -764 +753 @@
+-    obj->objFunc = (OMOBJ_FUNC) fn_1_17C8;
++    obj->objFunc = fn_1_17C8;
+@@ -769 +758,2 @@
+-void fn_1_17C8(void) {
++void fn_1_17C8(OMOBJ *obj) {
++    (void)obj;
+@@ -1241 +1231,7 @@
+-void fn_1_2B60(void) { }
++void fn_1_2B60(M631MotionPairNode *callback,
++               M631MotionPairNode *context, f32 distance)
++{
++    (void)callback;
++    (void)context;
++    (void)distance;
++}
+@@ -1307,2 +1303,2 @@
+-                fn_1_AF2C(&actor->callbackWork, (u32)actor, (u32)fn_1_2868,
+-                          (u32)fn_1_2A84, (u32)fn_1_2B60,
++                fn_1_AF2C(&actor->callbackWork, actor, fn_1_2868,
++                          fn_1_2A84, fn_1_2B60,
+@@ -1454,3 +1450,3 @@
+-void fn_1_32C8(M631AnimationNode *inputWork)
+-{
+-    M631AnimationNode *work = inputWork;
++void fn_1_32C8(void *callbackData)
++{
++    M631AnimationNode *work = (M631AnimationNode *)callbackData;
+@@ -1572 +1568 @@
+-inline void fn_1_3704(M631AnimationNode *work, s32 positionIndex)
++void fn_1_3704(M631AnimationNode *work, s32 positionIndex)
+@@ -1620 +1616 @@
+-               M631MotionPairNode *context)
++               M631MotionPairNode *context, f32 distance)
+@@ -1624,0 +1621 @@
++    (void)distance;
+@@ -2039,2 +2036,2 @@
+-        fn_1_AF2C(&node->callbackWork, (u32)node,
+-                  (u32)fn_1_4F18, (u32)fn_1_4F6C, (u32)fn_1_5010,
++        fn_1_AF2C(&node->callbackWork, node,
++                  fn_1_4F18, fn_1_4F6C, fn_1_5010,
+@@ -2063,3 +2060,3 @@
+-void fn_1_4F18(M631SceneListNode *callbackNode)
+-{
+-    M631SceneListNode *node = callbackNode;
++void fn_1_4F18(void *callbackData)
++{
++    M631SceneListNode *node = (M631SceneListNode *)callbackData;
+@@ -2073 +2070 @@
+-s32 fn_1_4F6C(M631SceneListNode *callbackNode) {
++s32 fn_1_4F6C(void *callbackData) {
+@@ -2077 +2074 @@
+-    node = callbackNode;
++    node = (M631SceneListNode *)callbackData;
+@@ -2097 +2094,5 @@
+-void fn_1_5010(void) { }
++void fn_1_5010(M631MotionPairNode *callback,
++               M631MotionPairNode *context, f32 distance)
++{
++    (void)callback; (void)context; (void)distance;
++}

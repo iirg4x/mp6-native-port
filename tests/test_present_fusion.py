@@ -10,31 +10,45 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 class PresentFusion(unittest.TestCase):
-    def test_only_exact_full_surface_uses_direct_resampling(self):
-        patch=(ROOT/'compat/aurora/base/0031-fused-present-resample.patch').read_text()
-        added='\n'.join(line[1:] for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
-        gate=re.search(r'bool can_resample_present_direct\(.*?\n}',added,re.S).group(0)
+    def test_whole_pixel_viewports_inside_the_surface_use_direct_resampling(self):
+        source_gpu=(ROOT/'third_party/aurora/lib/webgpu/gpu.cpp').read_text()
+        added=source_gpu+(ROOT/'third_party/aurora/lib/aurora.cpp').read_text()
+        gate=re.search(r'bool can_resample_present_direct\(.*?\n}',source_gpu,re.S).group(0)
         source='''
 #include <cassert>
+#include <cmath>
 #include <limits>
 struct Viewport {float left,top,width,height;};
 struct Surface {unsigned width,height;int format;};
 struct Config {Surface surfaceConfiguration;};
 Config g_graphicsConfig{{2960,1848,1}};
-struct Source {int format;};
-Source input{1};
+struct Size {unsigned width,height;};
+struct Source {int format;Size size;};
+Source input{1,{2960,1848}};
 const Source& present_source(){return input;}
 '''+gate+'''
 int main(){
     assert(can_resample_present_direct({0,0,2960,1848}));
+    // Whole-pixel letterbox offsets (content width rounded to 16) draw
+    // directly when the source is the viewport's size.
+    input.size={2948,1848};
+    assert(can_resample_present_direct({6,0,2948,1848}));
+    assert(can_resample_present_direct({0,0,2948,1848}));
+    assert(!can_resample_present_direct({6,0,2948,1847}));
+    input.size={2960,1648};
+    assert(can_resample_present_direct({0,100,2960,1648}));
+    input.size={5896,3696}; // SSAA source: rescaled, two passes
+    assert(!can_resample_present_direct({6,0,2948,1848}));
+    assert(can_resample_present_direct({0,0,2960,1848}));
+    input.size={2960,1848};
+    // Anything outside the surface, fractional or not finite keeps two passes.
     assert(!can_resample_present_direct({1,0,2960,1848}));
     assert(!can_resample_present_direct({0,1,2960,1848}));
-    assert(!can_resample_present_direct({0,0,2959,1848}));
-    assert(!can_resample_present_direct({0,0,2960,1847}));
-    assert(!can_resample_present_direct({0,100,2960,1648}));
-    assert(!can_resample_present_direct({0.5f,0,2960,1848}));
+    assert(!can_resample_present_direct({-1,0,2959,1848}));
+    assert(!can_resample_present_direct({0.5f,0,2959,1848}));
     assert(!can_resample_present_direct({0,0,2959.5f,1848}));
     assert(!can_resample_present_direct({0,0,std::numeric_limits<float>::quiet_NaN(),1848}));
+    assert(!can_resample_present_direct({std::numeric_limits<float>::infinity(),0,2960,1848}));
     input.format=2;
     assert(!can_resample_present_direct({0,0,2960,1848}));
 }

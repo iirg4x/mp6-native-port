@@ -1,9 +1,11 @@
 --- a/src/game/hsfanim.c
 +++ b/src/game/hsfanim.c
-@@ -10,0 +11,2 @@
+@@ -7,0 +8 @@ double cos(double x);
++#include "mp6_widescreen.h"
+@@ -13,0 +15,2 @@ double cos(double x);
 +#include "mp6_anim_native.h"
 +
-@@ -89 +91,20 @@
+@@ -104 +107,20 @@ ANIMDATA *Hu3DAnimAnimSet(HU3D_ANIMID animId, ANIMDATA *newAnim)
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* This function already treats "not a live anim slot"
 +     * (texAnimP->modelId==HU3D_MODELID_NONE) as a safe no-op one line
@@ -25,21 +27,12 @@
 +        return NULL;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
-@@ -165 +186,12 @@
--    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
-+    /* Same bug shape and fix as Hu3DAnimAnimSet above: indexes
-+     * Hu3DTexAnimData[animId] before checking for HU3D_ANIMID_NONE. Caught
-+     * directly the first time this port's boot flow reached OpeningKill(),
-+     * whose Hu3DAnimKill(BookFrameBufAnimId[0]) call panics here because
-+     * that anim id was never actually created (its own Hu3DAnimCreate call
-+     * failed the same way, under the HSF loader stub). Fixed the same way:
-+     * treat a NONE id as the safe no-op it already conceptually is. */
-+    HU3D_TEXANIM *texAnimP;
-+    if (animId == HU3D_ANIMID_NONE) {
-+        return;
-+    }
-+    texAnimP = &Hu3DTexAnimData[animId];
-@@ -185,0 +218,21 @@
+@@ -188 +210,3 @@ void Hu3DAnimKill(HU3D_ANIMID animId)
+-    HU3D_TEXANIM *texAnimEntry = &Hu3DTexAnimData[animId];
++    HU3D_TEXANIM *texAnimEntry;
++    if (animId == HU3D_ANIMID_NONE) return;
++    texAnimEntry = &Hu3DTexAnimData[animId];
+@@ -209,0 +234,21 @@ void Hu3DAnimKill(HU3D_ANIMID animId)
 +    /* texAnimP->anim is an ANIMDATA graph that this file obtained from
 +     * HuSprAnimRead (Hu3DAnimCreate, above) -- and under this port that
 +     * function is mp6_anim_read(), which REGISTERS the graph with the
@@ -61,12 +54,12 @@
 +     * Fixed identically: unregister first (which hands back the distinct
 +     * owned packed backing, or NULL when the graph and its bytes are one
 +     * allocation), free that backing, then free the graph itself. */
-@@ -186,0 +240,4 @@
-+        void *packedBacking = mp6_anim_unregister_for_free(texAnimP->anim);
+@@ -210,0 +256,4 @@ void Hu3DAnimKill(HU3D_ANIMID animId)
++        void *packedBacking = mp6_anim_unregister_for_free(texAnimEntry->anim);
 +        if(packedBacking) {
 +            HuMemDirectFree(packedBacking);
 +        }
-@@ -216 +273,12 @@
+@@ -245 +294,12 @@ void Hu3DAnimAttrSet(HU3D_ANIMID animId, u16 attr)
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* Same bug shape and fix as Hu3DAnimAnimSet/Hu3DAnimKill above -- see
 +     * those for the full root-cause story (the HSF loader stub makes
@@ -80,7 +73,7 @@
 +        return;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
-@@ -222 +290,6 @@
+@@ -252 +312,6 @@ void Hu3DAnimAttrReset(HU3D_ANIMID animId, u16 attr)
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
@@ -88,7 +81,7 @@
 +        return;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
-@@ -228 +301,6 @@
+@@ -259 +324,6 @@ void Hu3DAnimSpeedSet(HU3D_ANIMID animId, float speed)
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
@@ -96,7 +89,7 @@
 +        return;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
-@@ -235 +313,6 @@
+@@ -267 +337,6 @@ void Hu3DAnimBankSet(HU3D_ANIMID animId, u16 bank)
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
@@ -104,7 +97,7 @@
 +        return;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
-@@ -246 +329,6 @@
+@@ -279 +354,6 @@ void Hu3DAnmNoSet(HU3D_ANIMID animId, u16 anmNo)
 -    HU3D_TEXANIM *texAnimP = &Hu3DTexAnimData[animId];
 +    /* Same fix as Hu3DAnimAttrSet above. */
 +    HU3D_TEXANIM *texAnimP;
@@ -112,64 +105,39 @@
 +        return;
 +    }
 +    texAnimP = &Hu3DTexAnimData[animId];
-@@ -248,0 +337,20 @@
-+}
-+
-+/* Texture-anim frame/region census, gated by the same MP6_DRAW_CENSUS_OBJ
-+ * env var and tick window as hsfdraw.c's own object census. One line per
-+ * Hu3DAnimSet evaluation: which anim slot picked which pattern/bitmap and
-+ * the sheet sub-region (layer start/size vs bitmap dims -> the texture
-+ * matrix scale/translate hsfdraw will apply). Diagnostic only: prints
-+ * state, never changes behavior. */
+@@ -284 +364,6 @@ void Hu3DAnmNoSet(HU3D_ANIMID animId, u16 anmNo)
+-/* Called while drawing an HSF attribute to load its current animated texture layer. */
++/* Texture-anim frame/region census (MP6_DRAW_CENSUS_OBJ, the same tick
++ * window as hsfdraw.c's object census): one line per Hu3DAnimSet
++ * evaluation. Diagnostic only. */
 +#include <stdio.h>
-+#include <stdlib.h>
-+extern long mp6_tick_count;
-+static long mp6AnimCensusTick = -2; /* -2 = env not parsed yet, -1 = disabled */
-+static int mp6AnimCensusActive(void)
-+{
-+    if (mp6AnimCensusTick == -2) {
-+        const char *e = getenv("MP6_DRAW_CENSUS_OBJ");
-+        mp6AnimCensusTick = (e && atol(e) > 0) ? atol(e) : -1;
-+    }
-+    return mp6AnimCensusTick > 0 && mp6_tick_count >= mp6AnimCensusTick &&
-+           mp6_tick_count < mp6AnimCensusTick + 2;
-@@ -260,0 +369,4 @@
-+        if (mp6AnimCensusActive()) {
++#include "mp6_draw_census.h"
++
+@@ -294,0 +380,4 @@ s32 Hu3DAnimSet(HU3D_MODEL *model, HSF_ATTRIBUTE *attribute, s16 textureSlot)
++        if (mp6_draw_census_obj_active()) {
 +            printf("[CENSUS-ANIM] animId=%d anim=%p bank=%d anmNo=%d patNo=-1 (no draw)\n",
-+                   attrAnimP->animId, (void *)anim, texAnimP->bank, texAnimP->anmNo);
++                   attributeAnim->animId, (void *)animData, texAnimEntry->bank, texAnimEntry->anmNo);
 +        }
-@@ -267,0 +380,10 @@
-+        if (mp6AnimCensusActive()) {
+@@ -301,0 +391,10 @@ s32 Hu3DAnimSet(HU3D_MODEL *model, HSF_ATTRIBUTE *attribute, s16 textureSlot)
++        if (mp6_draw_census_obj_active()) {
 +            printf("[CENSUS-ANIM] animId=%d anim=%p bank=%d anmNo=%d patNo=%d layerNum=%d bmpNo=%d "
 +                   "bmp=%dx%d fmt=%d layer start=(%d,%d) size=(%d,%d) -> scale=(%.3f,%.3f) trans=(%.3f,%.3f) slot=%d\n",
-+                   attrAnimP->animId, (void *)anim, texAnimP->bank, texAnimP->anmNo, patNo,
-+                   pat->layerNum, layer->bmpNo, bmp->sizeX, bmp->sizeY, bmp->dataFmt,
-+                   layer->startX, layer->startY, layer->sizeX, layer->sizeY,
-+                   (float)layer->sizeX/bmp->sizeX, (float)layer->sizeY/bmp->sizeY,
-+                   (float)layer->startX/bmp->sizeX, (float)layer->startY/bmp->sizeY, texSlotNo);
++                   attributeAnim->animId, (void *)animData, texAnimEntry->bank, texAnimEntry->anmNo, patternNo,
++                   pattern->layerNum, patternLayer->bmpNo, bitmap->sizeX, bitmap->sizeY, bitmap->dataFmt,
++                   patternLayer->startX, patternLayer->startY, patternLayer->sizeX, patternLayer->sizeY,
++                   (float)patternLayer->sizeX/bitmap->sizeX, (float)patternLayer->sizeY/bitmap->sizeY,
++                   (float)patternLayer->startX/bitmap->sizeX, (float)patternLayer->startY/bitmap->sizeY, textureSlot);
 +            fflush(stdout);
 +        }
-@@ -273 +395 @@
--        
-+
-@@ -497,0 +620,3 @@
+@@ -559,0 +659,3 @@ static void particleFunc(HU3D_MODEL *modelP, Mtx *mtx);
 +/* Defined after baseST below (it needs sizeof(baseST)); called from
 + * Hu3DParticleCreate. */
 +static void mp6ParticleArraysRegister(HU3D_PARTICLE *particleP);
-@@ -537,0 +663,11 @@
-+    /* Tells the port's GXSetArray bridge the real byte sizes of this
-+     * particle system's three indexed vertex arrays (all allocated/set up
-+     * by this function), same as src/hsf/hsf_load_native.c already
-+     * does for every HSF model buffer. Without this, the per-frame
-+     * GXSetArray binds fall through to the bridge's learned-size path,
-+     * which only ever grows from an immediate-mode GXBegin -- and this
-+     * particle draw has none (its one GXBegin ran during the display-list
-+     * recording below, which ignores it) -- so the arrays upload 0 bytes
-+     * and the replayed display list's indexed fetches read out of range:
-+     * sparkle quads drew as garbage streaks or nothing at all. */
-+    mp6ParticleArraysRegister(particleP);
-@@ -671,0 +808,35 @@
-+
+@@ -605,0 +708 @@ HU3D_MODELID Hu3DParticleCreate(ANIMDATA *animationData, s16 maxParticleCount)
++    mp6ParticleArraysRegister(particle);
+@@ -757,2 +860,35 @@ static HuVec2f baseST[] = {
+-/* Model hook builds and draws particle quads. Its counter increments on each non-shadow draw
+-* while unpaused and STOPCNT is clear; NOPAUSE does not override this counter pause check. */
 +/* Registers the three arrays particleFunc binds with GXSetArray right
 + * before its GXCallDisplayList replay, so the port's bridge
 + * (src/gx/aurora_bridge.c's mp6_GXSetArray3) takes the authoritative
@@ -204,3 +172,13 @@
 +                             + (uint32_t)sizeof(GXColor));
 +    mp6_gxarray_register(baseST, (uint32_t)sizeof(baseST));
 +}
++
+@@ -1684 +1820 @@ static void CopyWaterFb(s16 layerNo)
+-    GXSetTexCopySrc(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT);
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
+@@ -1717 +1853 @@ static void WaterLayerHook(s16 layerNo)
+-    Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, GX_FALSE, waterP->fbDisp);
++    mp6_widescreen_copy_view(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, GX_FALSE, waterP->fbDisp);
+@@ -1742 +1878 @@ static void WaterLayerHook(s16 layerNo)
+-    Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, waterP->mipMapF, waterP->fbWater);
++    mp6_widescreen_copy_view(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565, waterP->mipMapF, waterP->fbWater);

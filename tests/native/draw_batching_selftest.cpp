@@ -36,8 +36,11 @@ static unsigned bufferWrites;
 namespace gfx {
 using PipelineRef=u32;
 struct Range { u32 offset=0,size=0; };
+struct IndexReservation { Range range; u8* data=nullptr; };
 static ByteBuffer verts,indices;
 static u32 g_mergedDrawCallCount,uploads;
+static bool recording=true;
+static u32 reserveWrites;
 static Range push(ByteBuffer& buffer,const u8* data,size_t size,size_t alignment) {
     if(alignment && buffer.size()%alignment)buffer.append_zeroes(alignment-buffer.size()%alignment);
     Range r{static_cast<u32>(buffer.size()),static_cast<u32>(size)};
@@ -45,6 +48,13 @@ static Range push(ByteBuffer& buffer,const u8* data,size_t size,size_t alignment
 }
 static Range push_verts(const u8* data,size_t size,size_t alignment) { return push(verts,data,size,alignment); }
 static Range push_indices(const u8* data,size_t size,size_t alignment) { return push(indices,data,size,alignment); }
+static IndexReservation reserve_indices(size_t size,size_t alignment) {
+    if(!recording)return {};
+    if(alignment && indices.size()%alignment)indices.append_zeroes(alignment-indices.size()%alignment);
+    Range r{static_cast<u32>(indices.size()),static_cast<u32>(size)};
+    u8* data=indices.append_uninitialized(size);++reserveWrites;
+    return {r,data};
+}
 static Range push_storage(const u8*,size_t) { std::abort(); }
 }
 struct GXBindGroups {};
@@ -58,16 +68,26 @@ struct State {
     struct { gfx::Range cachedRange;const void* data;size_t size; } arrays[GX_VA_TEX7+1]{};
 } g_gxState;
 struct BindGroupRanges { gfx::Range vaRanges[GX_VA_TEX7-GX_VA_POS+1]; };
-struct PipelineConfig {};struct ShaderInfo {};
+struct ShaderConfig {};struct PipelineConfig { ShaderConfig shaderConfig; };struct ShaderInfo {};
 static void populate_pipeline_config(PipelineConfig&,GXPrimitive,GXVtxFmt) {}
+// Only draw batching is under test here; the dedicated config-reuse fixture
+// compiles the real memo helper. Keep this boundary stub fresh and value-only.
+static const PipelineConfig& get_pipeline_config(GXPrimitive prim,GXVtxFmt fmt) {
+    static PipelineConfig config;
+    populate_pipeline_config(config,prim,fmt);
+    return config;
+}
 namespace gfx {
-static PipelineRef find_gx_pipeline(PipelineConfig&,ShaderInfo&) { return 1; }
+// Pipelines are always ready here; the ubershader fallback is out of scope.
+static PipelineRef find_gx_pipeline(const PipelineConfig&,ShaderInfo&,bool& uber) { uber=false;return 1; }
 template<class T>static T* get_last_draw_command() { return commands.empty()?nullptr:&commands.back(); }
 static void push_draw_command(DrawData d) { commands.push_back(d); }
 }
+static gfx::PipelineRef find_draw_pipeline(const PipelineConfig& c,ShaderInfo& i,bool& uber) { return gfx::find_gx_pipeline(c,i,uber); }
 static void resolve_sampled_textures(const ShaderInfo&) {}
 static GXBindGroups build_bind_groups(const ShaderInfo&) { return {}; }
 static gfx::Range build_uniform(const ShaderInfo&,u32,BindGroupRanges&) { g_gxState.stateDirty=false;return {}; }
+static gfx::Range build_uber_uniform(const ShaderConfig&,const ShaderInfo&,u32,BindGroupRanges&) { g_gxState.stateDirty=false;return {}; }
 static void note_efb_depth_write() {}
 static u32 calculate_last_vtx_size(GXVtxFmt fmt) { g_gxState.lastVtxFmt=fmt;return g_gxState.lastVtxSize=(fmt==GX_VTXFMT0?4:8); }
 [[noreturn]] static void handle_draw_overrun(uint64_t,const u8*,const u32&,u32) { throw std::runtime_error("overrun"); }
@@ -84,7 +104,7 @@ static u32 read_u32(const u8* p,bool be) { u32 n;std::memcpy(&n,p,4);return be?(
 
 static void reset() {
     commands.clear();gfx::verts.clear();gfx::indices.clear();gfx::uploads=0;
-    gfx::g_mergedDrawCallCount=0;g_gxState=State{};
+    gfx::g_mergedDrawCallCount=0;gfx::recording=true;gfx::reserveWrites=0;g_gxState=State{};
     handle_draw_idx_buf.clear();handle_draw_unmerged_idxBuf.clear();
 }
 static std::vector<u16> expected(GXPrimitive prim,u32 count,u32 base) {

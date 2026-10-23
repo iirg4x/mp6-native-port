@@ -7,6 +7,7 @@
 
 namespace wgpu {
 enum class IndexFormat { Uint16, Uint32 };
+constexpr uint64_t kWholeSize = UINT64_MAX;
 struct Color { double r, g, b, a; };
 struct Draw {
   bool indexed;
@@ -34,6 +35,7 @@ struct RenderPassEncoder {
     }
   }
   void SetIndexBuffer(uint32_t buffer, IndexFormat fmt, uint64_t start, uint64_t length) const {
+    if (length == kWholeSize) length = 1048576 - start;
     assert(buffer == 17 && start + length <= 1048576);
     format = fmt; offset = start; size = length; ++indexCalls;
   }

@@ -37,6 +37,7 @@ typedef struct {
  * future divergence degrades to "no deferred identity" rather than a write
  * past the table. */
 #define FI_DEFER_MAX 512
+_Static_assert(FI_DEFER_MAX < 0x4000, "deferred ranks overlap authored object identities");
 /* `sub` value for a matrix emitted inside the model bracket itself (the
  * immediate pass). Deferred draws use their per-model push rank, which the
  * push counter is clamped below, so the two namespaces cannot collide. */
@@ -53,6 +54,8 @@ static int s_contextHook = -1;
 static uint32_t s_contextHookGen;
 static uint16_t s_contextSub = FI_SUB_IMMEDIATE;
 static uint16_t s_contextOrdinal;
+static int s_objectHintPending;
+static int s_objectHintIndex = -1;
 
 /* Deferred-draw identity reserved at push time (see mp6_fi_model.h). */
 static int16_t s_deferModel[FI_DEFER_MAX];
@@ -80,6 +83,7 @@ void mp6_fi_model_identity_new(int model_id)
 
 void mp6_fi_capture_context_reset(void)
 {
+    s_objectHintPending = 0;
     s_contextCamera = -1;
     s_contextModel = -1;
     s_contextHook = -1;
@@ -89,6 +93,7 @@ void mp6_fi_capture_context_reset(void)
 
 void mp6_fi_capture_camera(int camera_id)
 {
+    s_objectHintPending = 0;
     s_contextCamera = (camera_id >= 0 && camera_id < HU3D_CAM_MAX) ? camera_id : -1;
     s_contextModel = -1;
     s_contextHook = -1;
@@ -98,6 +103,7 @@ void mp6_fi_capture_camera(int camera_id)
 
 void mp6_fi_capture_model_begin(int model_id)
 {
+    s_objectHintPending = 0;
     if (model_id < 0 || model_id >= HU3D_MODEL_MAX) {
         s_contextModel = -1;
     } else {
@@ -113,6 +119,7 @@ void mp6_fi_capture_model_begin(int model_id)
 
 void mp6_fi_capture_layer_hook_begin(int hook_slot, const void *hook_fn)
 {
+    s_objectHintPending = 0;
     s_contextModel = -1;
     s_contextSub = FI_SUB_IMMEDIATE;
     s_contextOrdinal = 0;
@@ -127,6 +134,38 @@ void mp6_fi_capture_layer_hook_begin(int hook_slot, const void *hook_fn)
     s_contextHookGen = (uint32_t)((uintptr_t)hook_fn >> 4) | 1u;
 }
 
+int mp6_fi_object_index(int model_id, const void *object)
+{
+    const HSF_DATA *hsf;
+    uintptr_t base, address, offset;
+    if (!Hu3DData || model_id < 0 || model_id >= HU3D_MODEL_MAX || !object ||
+        (Hu3DData[model_id].attr & HU3D_ATTR_HOOKFUNC)) return -1;
+    hsf = Hu3DData[model_id].hsf;
+    if (!hsf || !hsf->object || hsf->objectNum <= 0) return -1;
+    base = (uintptr_t)hsf->object;
+    address = (uintptr_t)object;
+    if (address < base) return -1;
+    offset = address - base;
+    if (offset % sizeof(HSF_OBJECT)) return -1;
+    offset /= sizeof(HSF_OBJECT);
+    if (offset >= (uintptr_t)hsf->objectNum || offset >= 0x4000u) return -1;
+    return (int)offset;
+}
+
+void mp6_fi_capture_object_matrix(int model_id, int object_index)
+{
+    const HSF_DATA *hsf = NULL;
+    s_objectHintPending = 1;
+    s_objectHintIndex = -1;
+    if (!Hu3DData || s_contextCamera < 0 || s_contextModel != model_id ||
+        model_id < 0 || model_id >= HU3D_MODEL_MAX ||
+        (Hu3DData[model_id].attr & HU3D_ATTR_HOOKFUNC)) return;
+    hsf = Hu3DData[model_id].hsf;
+    if (!hsf || !hsf->object || object_index < 0 ||
+        object_index >= hsf->objectNum || object_index >= 0x4000) return;
+    s_objectHintIndex = object_index;
+}
+
 void mp6_fi_capture_auxiliary_begin(int model_id, int object_index)
 {
     mp6_fi_capture_model_begin(model_id);
@@ -137,6 +176,7 @@ void mp6_fi_capture_auxiliary_begin(int model_id, int object_index)
 
 void mp6_fi_capture_model_end(void)
 {
+    s_objectHintPending = 0;
     s_contextModel = -1;
     s_contextHook = -1;
     s_contextSub = FI_SUB_IMMEDIATE;
@@ -146,6 +186,7 @@ void mp6_fi_capture_model_end(void)
 void mp6_fi_capture_defer_reset(void)
 {
     int i;
+    s_objectHintPending = 0;
     for (i = 0; i < FI_DEFER_MAX; ++i) s_deferModel[i] = -1;
     memset(s_deferRank, 0, sizeof(s_deferRank));
 }
@@ -164,13 +205,14 @@ void mp6_fi_capture_defer_push(int draw_obj_index)
     }
     s_deferModel[draw_obj_index] = (int16_t)model;
     s_deferSub[draw_obj_index] = s_deferRank[model];
-    /* Clamp one below FI_SUB_IMMEDIATE so a pathological model can never
-     * manufacture an immediate-pass `sub` and alias a bracketed matrix. */
-    if (s_deferRank[model] < (uint16_t)(FI_SUB_IMMEDIATE - 1u)) s_deferRank[model]++;
+    /* Never enter the authored-object namespace, even under malformed pushes.
+     * A saturated rank creates duplicates, which the pairer rejects. */
+    if (s_deferRank[model] < 0x3FFFu) s_deferRank[model]++;
 }
 
 void mp6_fi_capture_defer_begin(int draw_obj_index)
 {
+    s_objectHintPending = 0;
     s_contextOrdinal = 0;
     s_contextHook = -1;
     if (draw_obj_index < 0 || draw_obj_index >= FI_DEFER_MAX ||
@@ -194,6 +236,10 @@ int mp6_fi_capture_context_next(int *camera_id, int *model_id,
 {
     int slot;
     uint32_t gen;
+    int objectHint = s_objectHintPending;
+    int objectIndex = s_objectHintIndex;
+    s_objectHintPending = 0;
+    if (objectHint && objectIndex < 0) return 0;
     if (s_contextCamera < 0) return 0;
     if (s_contextModel >= 0) {
         slot = s_contextModel;
@@ -207,9 +253,9 @@ int mp6_fi_capture_context_next(int *camera_id, int *model_id,
     if (camera_id) *camera_id = s_contextCamera;
     if (model_id) *model_id = slot;
     if (generation) *generation = gen;
-    if (sub) *sub = s_contextSub;
-    if (ordinal) *ordinal = s_contextOrdinal;
-    if (s_contextOrdinal != UINT16_MAX) s_contextOrdinal++;
+    if (sub) *sub = objectHint ? (uint16_t)(0x4000u + (unsigned)objectIndex) : s_contextSub;
+    if (ordinal) *ordinal = objectHint ? 0 : s_contextOrdinal;
+    if (!objectHint && s_contextOrdinal != UINT16_MAX) s_contextOrdinal++;
     return 1;
 }
 
@@ -281,6 +327,84 @@ int mp6_fi_model_camera_stable(int camera_id)
     if (!s_camStable[camera_id])
         s_camStable[camera_id] = 1 + fi_camera_stable_uncached(camera_id);
     return s_camStable[camera_id] == 2;
+}
+
+/* ---- CPU-deformed vertex buffers (include/mp6_fi_model.h) ---- */
+#define MP6_FI_DEFORMED_MAX 1024
+static Mp6FiDeformed s_deformed[MP6_FI_DEFORMED_MAX];
+static int s_deformedCount;
+
+/* Open-addressed index of s_deformed by data pointer, so registering a
+ * tick's buffers stays linear in their number. A slot belongs to the
+ * current tick only while its stamp equals s_deformedStamp. */
+#define MP6_FI_DEFORMED_SLOTS (MP6_FI_DEFORMED_MAX * 2)
+static struct {
+    uint32_t stamp;
+    int index;
+} s_deformedSlot[MP6_FI_DEFORMED_SLOTS];
+static uint32_t s_deformedStamp = 1;
+
+static void fi_deformed_add(void *data, uint32_t bytes)
+{
+    uint32_t h;
+    if (data == NULL || bytes == 0) return;
+    h = (uint32_t)(((uintptr_t)data >> 4) * 2654435761u) & (MP6_FI_DEFORMED_SLOTS - 1);
+    while (s_deformedSlot[h].stamp == s_deformedStamp) {
+        Mp6FiDeformed *e = &s_deformed[s_deformedSlot[h].index];
+        if (e->data == data) {
+            if (bytes > e->bytes) e->bytes = bytes;
+            return;
+        }
+        h = (h + 1) & (MP6_FI_DEFORMED_SLOTS - 1);
+    }
+    if (s_deformedCount < MP6_FI_DEFORMED_MAX) {
+        s_deformedSlot[h].stamp = s_deformedStamp;
+        s_deformedSlot[h].index = s_deformedCount;
+        s_deformed[s_deformedCount].data = data;
+        s_deformed[s_deformedCount].bytes = bytes;
+        s_deformedCount++;
+    }
+}
+
+void mp6_fi_note_deformed(void *hsfp)
+{
+    HSF_DATA *hsf = (HSF_DATA *)hsfp;
+    int i;
+    if (hsf == NULL) return;
+    /* Deformers write each mesh object's own buffers (EnvelopeExec.c uses
+     * object->mesh.vertex/normal); register those first. */
+    for (i = 0; i < hsf->objectNum && hsf->object != NULL; ++i) {
+        const HSF_OBJECT *obj = &hsf->object[i];
+        if (obj->type != HSF_OBJ_MESH) continue;
+        if (obj->mesh.vertex != NULL && obj->mesh.vertex->count > 0)
+            fi_deformed_add(obj->mesh.vertex->data, (uint32_t)obj->mesh.vertex->count * (uint32_t)sizeof(HuVecF));
+        if (obj->mesh.cenvNum && obj->mesh.normal != NULL && obj->mesh.normal->count > 0)
+            fi_deformed_add(obj->mesh.normal->data, (uint32_t)obj->mesh.normal->count * (uint32_t)sizeof(HuVecF));
+    }
+    for (i = 0; i < hsf->vertexNum && hsf->vertex != NULL; ++i)
+        if (hsf->vertex[i].count > 0)
+            fi_deformed_add(hsf->vertex[i].data, (uint32_t)hsf->vertex[i].count * (uint32_t)sizeof(HuVecF));
+    /* Envelope skinning also rewrites normals; hsfdraw.c switches them to
+     * float for exactly these models. Other normals stay packed and static. */
+    if (hsf->cenvNum)
+        for (i = 0; i < hsf->normalNum && hsf->normal != NULL; ++i)
+            if (hsf->normal[i].count > 0)
+                fi_deformed_add(hsf->normal[i].data, (uint32_t)hsf->normal[i].count * (uint32_t)sizeof(HuVecF));
+}
+
+int mp6_fi_deformed_list(const Mp6FiDeformed **out)
+{
+    *out = s_deformed;
+    return s_deformedCount;
+}
+
+void mp6_fi_deformed_reset(void)
+{
+    s_deformedCount = 0;
+    if (++s_deformedStamp == 0) { /* wrapped: no old slot may look current */
+        memset(s_deformedSlot, 0, sizeof(s_deformedSlot));
+        s_deformedStamp = 1;
+    }
 }
 
 void mp6_fi_model_reset(void)

@@ -26,11 +26,21 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import apply_patches  # noqa: E402 -- surgical patch queue, see its own docstring
 import fetch_nod  # noqa: E402 -- pinned nod artifact verification
+import native_minigames  # noqa: E402 -- explicit complete recovered overlays
+import native_mdmini  # noqa: E402 -- recovered entrance and native data owners
+import native_mgmfree  # noqa: E402 -- recovered Mini-game Tour menu
+import native_modes  # noqa: E402 -- explicit recovered mode inventories
+import native_boards  # noqa: E402 -- explicit recovered board inventories
+import native_support  # noqa: E402 -- explicit recovered system/support inventories
+import native_inst  # noqa: E402 -- recovered minigame instruction screen
+import host_cpus  # noqa: E402 -- MP6_CPU_EXCLUDE affinity + default job count
+import native_namespace  # noqa: E402 -- shared REL-local namespace scanner
 
 NATIVE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # .../mp6-native
 PORT_ROOT = os.path.dirname(NATIVE_ROOT)                                    # .../port
@@ -169,12 +179,27 @@ def mp6_port_version():
             _MP6_PORT_VERSION = "dev"
     return _MP6_PORT_VERSION
 
+
+def mp6_port_release_defines():
+    """VERSION and VERSION_CODE for the same line, which reads
+    "0.5.0-rc7 (40160, <commit>)": the code is what Android compares when a
+    dev APK updates itself, so it is the number to read off the screen."""
+    out = []
+    try:
+        with open(os.path.join(NATIVE_ROOT, "VERSION"), encoding="utf-8") as f:
+            out.append(f'-DMP6_PORT_RELEASE="{f.read().strip()}"')
+        with open(os.path.join(NATIVE_ROOT, "VERSION_CODE"), encoding="utf-8") as f:
+            out.append(f"-DMP6_PORT_VERSION_CODE={int(f.read().strip())}")
+    except (OSError, ValueError):
+        pass
+    return out
+
 # game/decode.c's HuDecodeZlib needs REAL zlib -- see src/null/
 # shims_manual.c's own comment for why a fake inflate() (never actually
 # decompressing anything) is not an option once real disc data is in play.
 # Reuses the exact zlib-ng build
-# Aurora's own CMake already fetches+builds (external_refs/repos/aurora/
-# build/_deps/zlib-build/) for BOTH build modes now, not just aurora's --
+# Aurora's own CMake already fetches+builds (build/aurora-debug/
+# _deps/zlib-build/) for BOTH build modes now, not just aurora's --
 # zlib-ng is plain C with no Aurora/C++ dependency of its own, so linking
 # its already-built DLL into --headless too is far simpler than hand-
 # building zlib-ng's own SIMD-dispatch machinery from source a second time
@@ -184,15 +209,25 @@ def mp6_port_version():
 # above -- see MP6_ZLIB_LIB_ITEM/MP6_ZLIB_DLL usage further down.)
 
 # ---------------------------------------------------------------------------
-# Aurora (external_refs/repos/aurora), built standalone with the project's
-# own zig toolchain into aurora/build/ (a CMake+Ninja tree; NOT reused here
+# Aurora (third_party/aurora), built standalone with the project's
+# own zig toolchain into build/aurora-debug/ (a CMake+Ninja tree; NOT reused here
 # as a build system -- this driver only reads its already-built artifacts:
 # the `simple` example's own `build.ninja` link line was inspected directly
 # to get the exact archive list/order and INCLUDES/DEFINES below, since
 # that's the one already proven to open a real window and render).
-AURORA_ROOT = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "aurora"))
-AURORA_INCLUDE = os.path.join(AURORA_ROOT, "include")
-AURORA_BUILD = os.path.join(AURORA_ROOT, "build")
+#
+# Aurora's source is vendored, already carrying every port change
+# (third_party/aurora, see its MP6_PROVENANCE.md); there is no patch series.
+# Its CMake build trees live under build/: the Debug pair below, the optimized
+# Windows tree (configure_windows) and the Android tree further down.
+# AURORA_LEGACY_CHECKOUT is the former shared, in-place-patched checkout; it is
+# only read as a cache of already-fetched third-party sources (_deps) when
+# this workspace has no Debug tree of its own yet.
+AURORA_SOURCE = os.path.join(NATIVE_ROOT, "third_party", "aurora")
+AURORA_ROOT = AURORA_SOURCE
+AURORA_INCLUDE = os.path.join(AURORA_SOURCE, "include")
+AURORA_LEGACY_CHECKOUT = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "aurora"))
+AURORA_BUILD = os.path.join(BUILD_DIR, "aurora-debug")
 AURORA_DEPS = os.path.join(AURORA_BUILD, "_deps")
 
 # ---------------------------------------------------------------------------
@@ -206,7 +241,7 @@ AURORA_DEPS = os.path.join(AURORA_BUILD, "_deps")
 # -DAURORA_ENABLE_RMLUI=ON (same source checkout and pin -- the module is
 # simply not enabled in the plain tree):
 #
-#   cmake -S external_refs/repos/aurora -B .../aurora/build-rmlui -G Ninja
+#   cmake -S third_party/aurora -B build/aurora-debug-rmlui -G Ninja
 #     -DCMAKE_BUILD_TYPE=Debug
 #     -DCMAKE_C_COMPILER/<etc>=port/toolchain/zig-cc-wrappers/...
 #     -DCMAKE_EXE_LINKER_FLAGS=-L<wrappers>/stub-libs
@@ -214,7 +249,7 @@ AURORA_DEPS = os.path.join(AURORA_BUILD, "_deps")
 #     -DAURORA_ENABLE_RMLUI=ON
 #     -DCMAKE_CXX_FLAGS="-include <NATIVE_ROOT>/include/mp6_host_section.h"
 #     -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
-#   (then apply compat/aurora/base/0001-abseil-*.patch to
+#   (then apply compat/aurora/deps/abseil-*.patch to
 #    build-rmlui/_deps/abseil-cpp-src)
 #   cmake --build .../build-rmlui --target aurora_core aurora_gx aurora_main
 #     aurora_vi aurora_pad aurora_si aurora_card aurora_mtx
@@ -246,8 +281,42 @@ AURORA_DEPS = os.path.join(AURORA_BUILD, "_deps")
 #
 # The WINDOWED link + its runtime DLLs consume THIS tree; --headless keeps
 # consuming aurora/build (its zlib import lib/DLL) byte-for-byte as before.
-AURORA_BUILD_RMLUI = os.path.join(AURORA_ROOT, "build-rmlui")
+AURORA_BUILD_RMLUI = os.path.join(BUILD_DIR, "aurora-debug-rmlui")
 AURORA_DEPS_RMLUI = os.path.join(AURORA_BUILD_RMLUI, "_deps")
+
+
+def main_checkout_root():
+    """The repository's primary checkout (this one unless this is a git
+    worktree), or None. Worktrees reuse its fetched dependency sources."""
+    try:
+        common = subprocess.run(["git", "-C", NATIVE_ROOT, "rev-parse", "--path-format=absolute",
+                                 "--git-common-dir"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    path = common.stdout.strip()
+    if common.returncode != 0 or os.path.basename(path) != ".git":
+        return None
+    return os.path.dirname(path)
+
+
+def aurora_deps_cache(android=False):
+    """Fetched third-party sources (FetchContent *-src dirs) to configure a
+    new Aurora tree from without downloading: this workspace's own tree first,
+    then the primary checkout's (for a git worktree), then the legacy shared
+    checkout's. tools/aurora_deps.py applies the compat/aurora/deps/ patches
+    to the copy it makes."""
+    if android:
+        main = main_checkout_root()
+        candidates = [os.path.join(BUILD_DIR, "android-aurora", "_deps")]
+        if main:
+            candidates.append(os.path.join(main, "build", "android-aurora", "_deps"))
+        candidates.append(os.path.join(AURORA_LEGACY_CHECKOUT, "build-android-rmlui", "_deps"))
+    else:
+        candidates = [AURORA_DEPS_RMLUI, os.path.join(AURORA_LEGACY_CHECKOUT, "build-rmlui", "_deps")]
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return candidates[0]
 
 # See the zlib comment further up -- resolved here (not as a flat constant
 # next to MP6_DVD_FILES_ROOT) simply because AURORA_DEPS has to exist
@@ -302,6 +371,57 @@ AURORA_FLAGS = [
     "-I", HOST_INCLUDE,
 ] + [x for pair in AURORA_COMPILE_INCLUDES for x in pair] + AURORA_DEFINES
 
+# abseil archives RmlUi pulls in, in the order Aurora's CMake link line emits
+# them (static-archive order matters). Shared verbatim by the Windows and
+# Android Aurora link lists; Windows alone inserts -ladvapi32 between the
+# two halves, exactly where CMake places it.
+_RMLUI_ABSEIL_LINK_HEAD = [
+    "_deps/abseil-cpp-build/absl/strings/libabsl_cord.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_info.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_cord_internal.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_functions.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_handle.a",
+    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_cord_state.a",
+    "_deps/abseil-cpp-build/absl/crc/libabsl_crc32c.a",
+    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_internal.a",
+    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_cpu_detect.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_str_format_internal.a",
+    "_deps/abseil-cpp-build/absl/container/libabsl_raw_hash_set.a",
+    "_deps/abseil-cpp-build/absl/hash/libabsl_hash.a",
+    "_deps/abseil-cpp-build/absl/types/libabsl_bad_optional_access.a",
+    "_deps/abseil-cpp-build/absl/hash/libabsl_city.a",
+    "_deps/abseil-cpp-build/absl/types/libabsl_bad_variant_access.a",
+    "_deps/abseil-cpp-build/absl/hash/libabsl_low_level_hash.a",
+    "_deps/abseil-cpp-build/absl/container/libabsl_hashtablez_sampler.a",
+    "_deps/abseil-cpp-build/absl/profiling/libabsl_exponential_biased.a",
+    "_deps/abseil-cpp-build/absl/synchronization/libabsl_synchronization.a",
+    "_deps/abseil-cpp-build/absl/debugging/libabsl_stacktrace.a",
+    "_deps/abseil-cpp-build/absl/synchronization/libabsl_graphcycles_internal.a",
+    "_deps/abseil-cpp-build/absl/synchronization/libabsl_kernel_timeout_internal.a",
+    "_deps/abseil-cpp-build/absl/time/libabsl_time.a",
+    "_deps/abseil-cpp-build/absl/time/libabsl_civil_time.a",
+    "_deps/abseil-cpp-build/absl/time/libabsl_time_zone.a",
+    "_deps/abseil-cpp-build/absl/debugging/libabsl_symbolize.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_strings.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_strings_internal.a",
+    "_deps/abseil-cpp-build/absl/strings/libabsl_string_view.a",
+    "_deps/abseil-cpp-build/absl/base/libabsl_throw_delegate.a",
+    "_deps/abseil-cpp-build/absl/numeric/libabsl_int128.a",
+    "_deps/abseil-cpp-build/absl/debugging/libabsl_debugging_internal.a",
+    "_deps/abseil-cpp-build/absl/base/libabsl_malloc_internal.a",
+    "_deps/abseil-cpp-build/absl/base/libabsl_base.a",
+    "_deps/abseil-cpp-build/absl/base/libabsl_raw_logging_internal.a",
+    "_deps/abseil-cpp-build/absl/base/libabsl_log_severity.a",
+    "_deps/abseil-cpp-build/absl/base/libabsl_spinlock_wait.a",
+]
+_RMLUI_ABSEIL_LINK_TAIL = [
+    "_deps/abseil-cpp-build/absl/debugging/libabsl_demangle_internal.a",
+    "_deps/abseil-cpp-build/absl/debugging/libabsl_demangle_rust.a",
+    "_deps/abseil-cpp-build/absl/debugging/libabsl_decode_rust_punycode.a",
+    "_deps/abseil-cpp-build/absl/debugging/libabsl_utf8_for_code_point.a",
+]
+
+
 # Exact archive list + order from aurora/build/build.ninja's own link line
 # for `examples/simple.exe` (`grep -n "simple.exe:" build.ninja`, the
 # `LINK_LIBRARIES =` value) -- static-archive link order matters here
@@ -347,48 +467,9 @@ AURORA_LINK_ITEMS = [
     "librmlui.a",
     "_deps/fmt-build/libfmtd.a",
     "_deps/xxhash-build/libxxhash.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cord.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_info.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cord_internal.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_functions.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_handle.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_cord_state.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc32c.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_internal.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_cpu_detect.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_str_format_internal.a",
-    "_deps/abseil-cpp-build/absl/container/libabsl_raw_hash_set.a",
-    "_deps/abseil-cpp-build/absl/hash/libabsl_hash.a",
-    "_deps/abseil-cpp-build/absl/types/libabsl_bad_optional_access.a",
-    "_deps/abseil-cpp-build/absl/hash/libabsl_city.a",
-    "_deps/abseil-cpp-build/absl/types/libabsl_bad_variant_access.a",
-    "_deps/abseil-cpp-build/absl/hash/libabsl_low_level_hash.a",
-    "_deps/abseil-cpp-build/absl/container/libabsl_hashtablez_sampler.a",
-    "_deps/abseil-cpp-build/absl/profiling/libabsl_exponential_biased.a",
-    "_deps/abseil-cpp-build/absl/synchronization/libabsl_synchronization.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_stacktrace.a",
-    "_deps/abseil-cpp-build/absl/synchronization/libabsl_graphcycles_internal.a",
-    "_deps/abseil-cpp-build/absl/synchronization/libabsl_kernel_timeout_internal.a",
-    "_deps/abseil-cpp-build/absl/time/libabsl_time.a",
-    "_deps/abseil-cpp-build/absl/time/libabsl_civil_time.a",
-    "_deps/abseil-cpp-build/absl/time/libabsl_time_zone.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_symbolize.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_strings.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_strings_internal.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_string_view.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_throw_delegate.a",
-    "_deps/abseil-cpp-build/absl/numeric/libabsl_int128.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_debugging_internal.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_malloc_internal.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_base.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_raw_logging_internal.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_log_severity.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_spinlock_wait.a",
+    *_RMLUI_ABSEIL_LINK_HEAD,
     "-ladvapi32",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_demangle_internal.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_demangle_rust.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_decode_rust_punycode.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_utf8_for_code_point.a",
+    *_RMLUI_ABSEIL_LINK_TAIL,
     "-ldbghelp",
     "extern/libsqlite3.a",
     "_deps/tracy-build/libTracyClient.a",
@@ -441,7 +522,7 @@ AURORA_RUNTIME_DLLS = [
 # driver only reads the already-built artifacts), pointed at the
 # build-android/ sibling of the Windows build/ tree:
 #
-#   cmake -S external_refs/repos/aurora -B .../aurora/build-android -G Ninja
+#   cmake -S third_party/aurora -B build/android-aurora-plain -G Ninja
 #     -DCMAKE_BUILD_TYPE=RelWithDebInfo
 #     -DCMAKE_TOOLCHAIN_FILE=<NDK>/build/cmake/android.toolchain.cmake
 #     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28
@@ -465,7 +546,7 @@ AURORA_RUNTIME_DLLS = [
 # so the APK bootstrap (src/android/mp6shell.c, libmain.so) chain-calls
 # it after android_dlopen_ext -- see that file's header for the full story.
 # Dawn/aurora/fmt/etc are static archives exactly like the Windows exe.
-AURORA_BUILD_ANDROID = os.path.join(AURORA_ROOT, "build-android")
+AURORA_BUILD_ANDROID = os.path.join(BUILD_DIR, "android-aurora-plain")
 AURORA_DEPS_ANDROID = os.path.join(AURORA_BUILD_ANDROID, "_deps")
 ANDROID_AURORA_OUT_DIR = os.path.join(ANDROID_BUILD_DIR, "aurora")  # libmp6game.so + libmain.so
 
@@ -478,7 +559,7 @@ ANDROID_AURORA_OUT_DIR = os.path.join(ANDROID_BUILD_DIR, "aurora")  # libmp6game
 # be an ODR hazard) while build-android stays byte-untouched for future
 # re-runs. Same recipe + the one flag:
 #
-#   cmake -S external_refs/repos/aurora -B .../aurora/build-android-rmlui -G Ninja
+#   cmake -S third_party/aurora -B build/android-aurora -G Ninja  (tools/build_android_aurora.py)
 #     -DCMAKE_BUILD_TYPE=RelWithDebInfo
 #     -DCMAKE_TOOLCHAIN_FILE=<NDK>/build/cmake/android.toolchain.cmake
 #     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28
@@ -490,7 +571,7 @@ ANDROID_AURORA_OUT_DIR = os.path.join(ANDROID_BUILD_DIR, "aurora")  # libmp6game
 #     aurora_core aurora_gx aurora_vi aurora_pad aurora_si aurora_card aurora_mtx
 #   (rmlui/rmlui_backends/freetype build as aurora_core dependencies; the
 #    ninja target names differ from the CMake ones, so they are not listed.)
-AURORA_BUILD_ANDROID_RMLUI = os.path.join(AURORA_ROOT, "build-android-rmlui")
+AURORA_BUILD_ANDROID_RMLUI = os.path.join(BUILD_DIR, "android-aurora")
 AURORA_DEPS_ANDROID_RMLUI = os.path.join(AURORA_BUILD_ANDROID_RMLUI, "_deps")
 
 # nod (encounter/nod v2.0.0-alpha.10 -- the exact version aurora's own
@@ -574,47 +655,8 @@ ANDROID_AURORA_LINK_ITEMS = [
     "librmlui.a",
     "_deps/fmt-build/libfmt.a",
     "_deps/xxhash-build/libxxhash.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cord.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_info.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cord_internal.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_functions.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_cordz_handle.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_cord_state.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc32c.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_internal.a",
-    "_deps/abseil-cpp-build/absl/crc/libabsl_crc_cpu_detect.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_str_format_internal.a",
-    "_deps/abseil-cpp-build/absl/container/libabsl_raw_hash_set.a",
-    "_deps/abseil-cpp-build/absl/hash/libabsl_hash.a",
-    "_deps/abseil-cpp-build/absl/types/libabsl_bad_optional_access.a",
-    "_deps/abseil-cpp-build/absl/hash/libabsl_city.a",
-    "_deps/abseil-cpp-build/absl/types/libabsl_bad_variant_access.a",
-    "_deps/abseil-cpp-build/absl/hash/libabsl_low_level_hash.a",
-    "_deps/abseil-cpp-build/absl/container/libabsl_hashtablez_sampler.a",
-    "_deps/abseil-cpp-build/absl/profiling/libabsl_exponential_biased.a",
-    "_deps/abseil-cpp-build/absl/synchronization/libabsl_synchronization.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_stacktrace.a",
-    "_deps/abseil-cpp-build/absl/synchronization/libabsl_graphcycles_internal.a",
-    "_deps/abseil-cpp-build/absl/synchronization/libabsl_kernel_timeout_internal.a",
-    "_deps/abseil-cpp-build/absl/time/libabsl_time.a",
-    "_deps/abseil-cpp-build/absl/time/libabsl_civil_time.a",
-    "_deps/abseil-cpp-build/absl/time/libabsl_time_zone.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_symbolize.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_strings.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_strings_internal.a",
-    "_deps/abseil-cpp-build/absl/strings/libabsl_string_view.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_throw_delegate.a",
-    "_deps/abseil-cpp-build/absl/numeric/libabsl_int128.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_debugging_internal.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_malloc_internal.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_base.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_raw_logging_internal.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_log_severity.a",
-    "_deps/abseil-cpp-build/absl/base/libabsl_spinlock_wait.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_demangle_internal.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_demangle_rust.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_decode_rust_punycode.a",
-    "_deps/abseil-cpp-build/absl/debugging/libabsl_utf8_for_code_point.a",
+    *_RMLUI_ABSEIL_LINK_HEAD,
+    *_RMLUI_ABSEIL_LINK_TAIL,
     "extern/libsqlite3.a",
     "_deps/tracy-build/libTracyClient.a",
     "_deps/zstd-build/lib/libzstd.a",
@@ -623,7 +665,8 @@ ANDROID_AURORA_LINK_ITEMS = [
     "extern/libimgui.a",
     "extern/libimgui_backends.a",
     "_deps/freetype-build/libfreetype.a",
-    "-lz",
+    # zlib-ng with NEON (tools/build_android_aurora.py), not the system libz.
+    "_deps/zlibng-build/libz.a",
     "_deps/sdl-build/libSDL3.a",
     "-lm", "-lOpenSLES", "-lGLESv1_CM", "-lGLESv2",
     "_deps/dawn_prebuilt-src/lib/libwebgpu_dawn.a",
@@ -1166,8 +1209,13 @@ COMMON_FLAGS = [
     "-Wno-error=int-conversion",
     "-Wno-error=incompatible-pointer-types",
     "-Wno-error=incompatible-function-pointer-types",
-    "-Wno-error=return-type",
+    # No -Wno-error=return-type: a valueless `return;` in a non-void function
+    # stays the compiler's default error even under -w. Recovered code relied
+    # on r3 still holding a useful value there; native code returns 0 or
+    # garbage instead (Stamp By Me's players never reached their win poses).
+    # missing_return_check() covers non-void functions that fall off the end.
     "-I", MSL_OVERRIDE,
+    "-I", os.path.join(PATCHED_SRC_DIR, "include"),
     "-I", PATCHED_INCLUDE,
     "-I", DECOMP_INCLUDE,
     "-I", DECOMP_INC_DATA,
@@ -1216,8 +1264,8 @@ def android_common_flags():
         "-Wno-error=int-conversion",
         "-Wno-error=incompatible-pointer-types",
         "-Wno-error=incompatible-function-pointer-types",
-        "-Wno-error=return-type",
         "-I", ANDROID_MSL_OVERRIDE,
+        "-I", os.path.join(PATCHED_SRC_DIR, "include"),
         "-I", ANDROID_PATCHED_INCLUDE,
         "-I", DECOMP_INCLUDE,
         "-I", DECOMP_INC_DATA,
@@ -1239,6 +1287,7 @@ def android_common_flags():
 
 # (relative-to-DECOMP source path, extra per-file -D flags)
 GAME_SKIP_LIST = {
+    "src/game/THPSimple.c": "native streaming/codec adapter in src/video",
     "src/game/kerent.c":  "100% MWCC PPC inline asm (REL<->DOL kernel jump table); "
                             "meaningless for a monolithic native link, fake `void NAME(void)` "
                             "prototypes would conflict with real signatures elsewhere.",
@@ -1276,8 +1325,11 @@ def resolve_source(rel):
     )
     # build/patched-src is an output cache and may retain a file after its
     # owning patch is removed. Never let such stale output shadow the pinned
-    # checkout: a generated copy is eligible only while an active patch owns it.
-    if os.path.exists(patched) and os.path.exists(base_patch):
+    # checkout: a generated copy is eligible only while an active patch or a
+    # src/rel_state block (apply_patches.with_rel_state) owns it.
+    if os.path.exists(patched) and (os.path.exists(base_patch) or
+                                    os.path.exists(os.path.join(NATIVE_ROOT, "src", "rel_state",
+                                                                *rel.split("/")[1:]) + ".inc")):
         return patched
     return os.path.join(DECOMP, rel.replace("/", os.sep))
 
@@ -1407,6 +1459,20 @@ BOARD_NATIVE_ABI_FLAGS = {
     # sixth hardware-cast site, and the one an extended board drive reaches
     # after the five projection sites. See audio.c's entry above.
     "src/board/star.c": ["-include", "string.h", "-include", "mp6_hwcast.h"],
+    # mgcall.c is the real board minigame flow (roulette, battle/duel/DK/
+    # Bowser calls, instruction overlay hand-off). Two of its exports were
+    # recovered with signatures their callers disagree with: single.c calls
+    # mbMgCallSingleOnCheck(u16 ovl) and w10Dll calls `void
+    # mbMgCallVsEffCreate(void)`. Harmless on PPC/x86-64, but wasm-ld turns a
+    # mismatched direct call into a trap. Rename the definitions here and
+    # export caller-typed adapters from src/os/board_mgcall_abi.c.
+    # It also calls float-taking mbObj* setters and a few jump-table
+    # routines with no declaration in scope; see include/mp6_board_mgcall.h.
+    "src/board/mgcall.c": [
+        "-include", "mp6_board_mgcall.h",
+        "-DmbMgCallSingleOnCheck=mp6_mgcall_single_on_check",
+        "-DmbMgCallVsEffCreate=mp6_mgcall_vs_eff_create",
+    ],
 }
 
 
@@ -1417,7 +1483,7 @@ def board_sources():
          ["-DMP6_NATIVE_PORT=1", "-include", "mp6_board_compat.h"]
          + list(BOARD_NATIVE_ABI_FLAGS.get(f"src/board/{filename}", ())))
         for filename in sorted(os.listdir(board_dir))
-        if filename.endswith(".c") and filename != "mgcall.c"
+        if filename.endswith(".c")
     ]
 
 
@@ -1437,6 +1503,33 @@ MDPRESULT_NATIVE_FLAGS = [
     for name in ("fn_1_0", "fn_1_2CC", "lbl_1_data_C0", "lbl_1_data_15C",
                  "lbl_1_data_0", "fn_1_12D7C", "lbl_1_data_5F4")
 ]
+
+# m616/m670 are split across several C units that share REL-local labels.
+# Keep the source closure declarative here, but scan it only when a build
+# collection is requested.  Importing this driver must not require the decomp
+# checkout to exist; collect_units() still fails loudly when the checkout is
+# unavailable.  The output is sorted by original symbol name; the old m616
+# list was hand-ordered, but its mappings are unchanged.
+_NATIVE_REL_SOURCE_NAMES = {
+    "m616": ("prolog", "m616", "init", "utility", "cpu"),
+    "m670": ("prolog", "sequence", "seqparam", "init", "pattern",
+             "actor", "pillar", "cpu"),
+}
+
+
+def _native_rel_namespace_flags(module):
+    """Scan one recovered REL namespace at collection time.
+
+    This deliberately has no cache: callers may import/reload the build
+    driver with a different MP6_DECOMP_DIR, and each collection must bind its
+    flags to that invocation's source tree rather than a stale module-global
+    scan.
+    """
+    names = _NATIVE_REL_SOURCE_NAMES[module]
+    paths = [os.path.join(DECOMP, "src", "REL", module + "dll", name + ".c")
+             for name in names]
+    paths.append(os.path.join(DECOMP, "include", "REL", module + "dll.h"))
+    return native_namespace.namespace_flags(paths, module)
 
 REL_SOURCES = [
     ("src/REL/bootDll/boot.c", ["-D_prolog=bootDll_prolog", "-D_epilog=bootDll_epilog",
@@ -1543,6 +1636,21 @@ REL_SOURCES = [
                                         "-D_ctors=mdpresultDll_ctors", "-D_dtors=mdpresultDll_dtors"]
                                        + MDPRESULT_NATIVE_FLAGS),
     ("src/REL/mdpresultdll/utility.c", MDPRESULT_NATIVE_FLAGS),
+    ("src/REL/m616dll/prolog.c", ["-D_prolog=m616Dll_prolog", "-D_epilog=m616Dll_epilog",
+                                  "-D_ctors=m616Dll_ctors", "-D_dtors=m616Dll_dtors"]),
+    ("src/REL/m616dll/m616.c", []),
+    ("src/REL/m616dll/init.c", []),
+    ("src/REL/m616dll/utility.c", []),
+    ("src/REL/m616dll/cpu.c", []),
+    ("src/REL/m670dll/prolog.c", ["-D_prolog=m670Dll_prolog", "-D_epilog=m670Dll_epilog",
+                                  "-D_ctors=m670Dll_ctors", "-D_dtors=m670Dll_dtors"]),
+    ("src/REL/m670dll/sequence.c", ["-include", "game/hsfex.h"]),
+    ("src/REL/m670dll/seqparam.c", []),
+    ("src/REL/m670dll/init.c", ["-include", "game/hsfex.h"]),
+    ("src/REL/m670dll/pattern.c", []),
+    ("src/REL/m670dll/actor.c", []),
+    ("src/REL/m670dll/pillar.c", []),
+    ("src/REL/m670dll/cpu.c", []),
     # w01Dll (Towering Treetop, board 1). world01.c is recovered/matching at
     # the pinned decomp revision. Its runtime.c is the same one-line include
     # of Runtime.PPCEABI.H/runtime.c as the menu REL wrappers above; the
@@ -1580,6 +1688,31 @@ REL_SOURCES = [
 
 MAIN_C_FLAGS = ["-Dmain=GameMain"]
 
+# The ripped RmlUi framework TUs under src/gx/ui/ (see PLATFORM_AURORA_ONLY
+# for their provenance). Windowed-only C++, and every one of them is in the
+# savestate carve-out below, so both lists share this one definition.
+RMLUI_UI_SOURCES = [
+    "src/gx/ui/event.cpp",
+    "src/gx/ui/component.cpp",
+    "src/gx/ui/document.cpp",
+    "src/gx/ui/button.cpp",
+    "src/gx/ui/select_button.cpp",
+    "src/gx/ui/bool_button.cpp",
+    "src/gx/ui/number_button.cpp",
+    "src/gx/ui/string_button.cpp",
+    "src/gx/ui/pane.cpp",
+    "src/gx/ui/tab_bar.cpp",
+    "src/gx/ui/window.cpp",
+    "src/gx/ui/modal.cpp",
+    "src/gx/ui/input.cpp",
+    "src/gx/ui/overlay.cpp",
+    "src/gx/ui/menu_bar.cpp",
+    "src/gx/ui/graphics_tuner.cpp",
+    "src/gx/ui/prelaunch.cpp",
+    "src/gx/ui/settings.cpp",
+]
+
+
 # Compiled with COMMON_FLAGS (decomp -I's + -include dolphin_compat.h), same
 # as every game/REL source, in BOTH build modes.
 # Savestate carve-out (include/mp6_host_section.h).
@@ -1598,6 +1731,17 @@ MAIN_C_FLAGS = ["-Dmain=GameMain"]
 # game-owned, never port vs decomp.
 HOST_STATE_SECTION_SOURCES = {
     "src/os/savestate.c",
+    # The Android host backend (the android row's swap for host_win32.c).
+    "src/host/host_android.c",
+    # The browser host (the web build's swap for host_android.c) and its
+    # content provider: caches, paths and the savestate layout table.
+    "src/host/host_emscripten.c",
+    "src/web/web_content.c",
+    # The Unlock All mod's published setting (include/mp6_unlock_all.h): a
+    # restored state must not flip the running process's setting.
+    "src/os/unlock_all.c",
+    # The Quick Party mod's setting and hold window (include/mp6_quick_play.h).
+    "src/os/quick_play.c",
     # The Expanded-heaps scale latch (include/mp6_heap_scale.h). Same
     # category as savestate.c's own statics: it must describe the RUNNING
     # process, not the captured one. mp6_arena_size() reads through it, and
@@ -1606,7 +1750,19 @@ HOST_STATE_SECTION_SOURCES = {
     # of a foreign scale would let a state misstate its own arena, which is
     # the one thing a memory-image format may never do.
     "src/os/heap_scale.c",
+    # MP6_LOAD_TRACE per-tick totals describe the running process.
+    "src/os/load_trace.c",
+    # MP6_GAMEPLAY_TRACE's flags and overlay tick counter.
+    "src/os/gameplay_trace.c",
+    # Decode-ahead worker pool and decoded-archive cache (host memory).
+    "src/os/decode_ahead.c",
+    # The msm audio engine (src/audio/msm_internal.h): mixer/API, sound
+    # bank, opt-in diagnostics and savestate shadow. All four share the
+    # mixer and group state the SDL callback thread owns.
     "src/audio/msm_bridge.c",
+    "src/audio/msm_bank.c",
+    "src/audio/msm_diag.c",
+    "src/audio/msm_savestate.c",
     "src/audio/audio_out_sdl.c",
     "src/gx/aurora_bridge.c",
     # SDL mouse/touch accumulators and finger/down-edge latches describe the
@@ -1616,9 +1772,20 @@ HOST_STATE_SECTION_SOURCES = {
     "src/gx/freecam_input.c",
     "src/android/touch_pad.cpp",
     "src/content/content_import.cpp",
+    # The GameCube Microphone's process-owned half and its backends: setting,
+    # talk button, recognizer sessions, COM/SDL/JNI handles.
+    "src/mic/mic_host.c",
+    "src/mic/mic_pcm_sdl.c",
+    "src/mic/speech_sapi.c",
+    "src/mic/speech_android.c",
+    "src/mic/speech_web.c",
     # Android SAF bridge owns JNI global refs and pending picker state. Those
     # handles belong to the running VM/process and must never be restored.
     "src/android/saf_bridge.c",
+    # Test-build frame telemetry: a FILE* and its write batch (host-owned).
+    "src/android/fi_telemetry.c",
+    # Android performance-hint session handle (process-owned).
+    "src/android/adpf_hint.c",
     # The DVD layer's whole statics set is host-owned
     # -- the FST blob and its string pool are CRT-heap pointers, g_entryPaths
     # is a heap array of heap strings, and g_resolvedFilesRoot/_FstPath are
@@ -1651,24 +1818,7 @@ HOST_STATE_SECTION_SOURCES = {
     # framescope.c additionally holds env-latched arming state and
     # dumped-pointer dedupe tables that must describe the RUNNING process.
     "src/gx/framescope.c",
-    "src/gx/ui/event.cpp",
-    "src/gx/ui/component.cpp",
-    "src/gx/ui/document.cpp",
-    "src/gx/ui/button.cpp",
-    "src/gx/ui/select_button.cpp",
-    "src/gx/ui/bool_button.cpp",
-    "src/gx/ui/number_button.cpp",
-    "src/gx/ui/string_button.cpp",
-    "src/gx/ui/pane.cpp",
-    "src/gx/ui/tab_bar.cpp",
-    "src/gx/ui/window.cpp",
-    "src/gx/ui/modal.cpp",
-    "src/gx/ui/input.cpp",
-    "src/gx/ui/overlay.cpp",
-    "src/gx/ui/menu_bar.cpp",
-    "src/gx/ui/graphics_tuner.cpp",
-    "src/gx/ui/prelaunch.cpp",
-    "src/gx/ui/settings.cpp",
+    *RMLUI_UI_SOURCES,
     # The dev console's RmlUi view (include/mp6_console.h). Same category
     # as its ui/ neighbours -- an R"RML" document source in a namespace-scope
     # std::string plus live element pointers -- and additionally holds the
@@ -1796,6 +1946,8 @@ def verify_host_section_sources():
 
 
 PLATFORM_SOURCES_COMMON = [
+    "src/video/thp_player.c",
+    "src/video/thp_jpeg.c",
     # The Enhancements seam (include/mp6_enhancements.h): the pure preset
     # table + derivation, and the published settings store every consumer
     # reads. In COMMON -- not with the aurora-only launcher -- for the same
@@ -1804,6 +1956,11 @@ PLATFORM_SOURCES_COMMON = [
     # its own by tools/enh_preset_selftest.c, which has no aurora/decomp
     # universe available. Dependency-light by contract: stdlib + string only.
     "src/enh/mp6_enhancements.c",
+    "src/os/unlock_all.c",  # Unlock All mod store (include/mp6_unlock_all.h);
+                            # game/gamework.c reads it in both modes. Carved out.
+    "src/os/quick_play.c",  # Quick Party mod (include/mp6_quick_play.h): store,
+                            # scene test and per-tick speed. Patched game/board
+                            # code calls it in both modes. Carved out.
     "src/os/arena.c",
     "src/os/heap_scale.c",  # Enhancements "Expanded heaps" (include/
                                    # mp6_heap_scale.h): the process-wide scale latch
@@ -1826,11 +1983,19 @@ PLATFORM_SOURCES_COMMON = [
                                   # capture/restore regression gate runs, since
                                   # it is the mode with a byte-identical log.
     "src/os/dll_bridge.c",
+    "src/os/test_capsule_sweep.c",  # MP6_TEST_CAPSULE_SWEEP: computer players use every capsule
     "src/os/overlay_fallback.c",
+    "src/os/board_mgcall_abi.c",  # caller-typed mgcall.c exports (see
+                                  # BOARD_NATIVE_ABI_FLAGS["src/board/mgcall.c"])
     "src/os/board_runtime.c",  # board lifecycle marker/state bridge used by W01
     "src/os/board_placeholders.c",  # stable empty board-seam diagnostic ABI;
                                           # latest pinned decomp owns the routines
     "src/os/log.c",
+    "src/os/load_trace.c",  # MP6_LOAD_TRACE (include/mp6_load_trace.h)
+    "src/os/gameplay_trace.c",  # MP6_GAMEPLAY_TRACE (include/mp6_gameplay_trace.h)
+    "src/os/decode_ahead.c",  # include/mp6_decode_ahead.h
+    "src/os/heap_index.c",  # include/mp6_heap_index.h
+    "src/hsf/name_index.c",  # include/mp6_name_index.h
     "src/os/hwcast.c",  # the rate-limited saturation report behind
                                # include/mp6_hwcast.h's inline fctiwz
                                # conversion. BOTH modes: the patched decomp
@@ -1877,6 +2042,8 @@ PLATFORM_SOURCES_COMMON = [
                                     # (see include/mp6_save_endian.h)
     "src/dvd/dvd_files.c",  # real FST + host-file serving, see dll_bridge.c's own header
     "src/hsf/hsf_load_native.c",  # real HSF (3D scene) deserializer
+    "src/hsf/mp6_hsf_dl_dump.c",  # MP6_DL_DUMP diagnostics for game/hsfdraw.c DL builds
+    "src/hsf/mp6_draw_census.c",  # MP6_DRAW_CENSUS diagnostics for game/hsfman.c
     "src/sprite/anim_native.c",  # bounded 32-bit-BE ANM -> native graph + ownership cache
     "src/hsf/mp6_freecam.c",  # freecam camera override (include/mp6_freecam.h):
                                      # needs game/hu3d.h (COMMON_FLAGS' decomp -I's) like its
@@ -1890,6 +2057,11 @@ PLATFORM_SOURCES_COMMON = [
                                       # Needs game/hu3d.h (COMMON_FLAGS' decomp -I's) like mp6_freecam.c;
                                       # BOTH modes because shared hsfman.c records the same real-draw
                                       # identity context even when headless never captures a GX stream.
+    "src/hsf/mp6_widescreen_camera.c",  # Native camera coordinates -> live on-screen aspect.
+    "src/hsf/mp6_widescreen_sprite.c",  # Native-density tiled screen bands.
+    "src/hsf/mp6_widescreen_motion.c",  # Aspect-aware decorative motion, applied only on resize.
+    "src/hsf/mp6_widescreen_tile.c",  # Native-density repeating parallax scenery.
+    "src/hsf/mp6_garage_conveyor.c",  # Garage: the conveyors' path strip is drawn solid.
     "src/hsf/mp6_widescreen_extrude.c",  # The shared backdrop-extrude helpers:
                                                  # shared backdrop-extrude helper, hoisted out of
                                                  # mdpartydll/mdparty.c's own file-local static so every
@@ -1968,6 +2140,16 @@ PLATFORM_SOURCES_COMMON = [
     "src/audio/dspadpcm.c",
     "src/audio/wav_writer.c",
     "src/audio/msm_bridge.c",
+    "src/audio/msm_bank.c",
+    "src/audio/msm_diag.c",
+    "src/audio/msm_savestate.c",
+    # The GameCube Microphone (include/mp6_mic.h): the MIC/M2S/gsapi engine
+    # game/mic.c drives (game state, decomp flags for the SDK types) and the
+    # process-owned host half (setting, talk button, backend queue, pump).
+    # BOTH modes: headless links the weak no-recognizer backend, and
+    # MP6_MIC_SCRIPT drives the engine there for automated runs.
+    "src/mic/mic_engine.c",
+    "src/mic/mic_host.c",
 ]
 
 # Compiled with AURORA_FLAGS instead of
@@ -1995,6 +2177,8 @@ PLATFORM_AURORA_ONLY = [
     # src/audio/msm_bridge.c's msmSysRegularProc for its own
     # from-the-tick-pump verification path instead).
     "src/audio/audio_out_sdl.c",
+    # Read-only linked-disc shuffle for the launcher and in-game settings.
+    "src/audio/menu_music.cpp",
     # The pre-boot launcher menu: partyboard's own RmlUi launcher
     # implementation, ripped at explicit user direction
     # (docs/PARTYBOARD_PROVENANCE.md) into src/gx/ui/ and adapted to
@@ -2008,24 +2192,7 @@ PLATFORM_AURORA_ONLY = [
     # rows).
     "src/gx/ui/launcher_core.cpp",
     "src/gx/ui/ui.cpp",
-    "src/gx/ui/event.cpp",
-    "src/gx/ui/component.cpp",
-    "src/gx/ui/document.cpp",
-    "src/gx/ui/button.cpp",
-    "src/gx/ui/select_button.cpp",
-    "src/gx/ui/bool_button.cpp",
-    "src/gx/ui/number_button.cpp",
-    "src/gx/ui/string_button.cpp",
-    "src/gx/ui/pane.cpp",
-    "src/gx/ui/tab_bar.cpp",
-    "src/gx/ui/window.cpp",
-    "src/gx/ui/modal.cpp",
-    "src/gx/ui/input.cpp",
-    "src/gx/ui/overlay.cpp",
-    "src/gx/ui/menu_bar.cpp",
-    "src/gx/ui/graphics_tuner.cpp",
-    "src/gx/ui/prelaunch.cpp",
-    "src/gx/ui/settings.cpp",
+    *RMLUI_UI_SOURCES,
     "src/gx/ui/console.cpp",
     # first-run content onboarding -- the
     # ContentSetup dialog (ripped-framework idiom, ours) + the nod-backed
@@ -2035,6 +2202,14 @@ PLATFORM_AURORA_ONLY = [
     # "windows-windowed only" rule this lane retires).
     "src/gx/ui/content_setup.cpp",
     "src/content/content_import.cpp",
+    # GameCube Microphone backends (include/mp6_mic.h): SDL recording for the
+    # volume meter everywhere, and each platform's speech recognizer. Every
+    # recognizer TU is guarded by its own platform test, so each windowed
+    # target links exactly one and the rest compile to nothing.
+    "src/mic/mic_pcm_sdl.c",
+    "src/mic/speech_sapi.c",
+    "src/mic/speech_android.c",
+    "src/mic/speech_web.c",
 ]
 
 
@@ -2122,6 +2297,47 @@ def verify_aurora_carveout():
         raise SystemExit(1)
 
 
+def rel_object_names(sources):
+    """Keep legacy unique names, but isolate shared filenames by overlay.
+
+    Two utility.c files must not race to overwrite one rel_utility.o in a
+    parallel build. Compare names case-insensitively for Windows as well.
+    """
+    basenames = [os.path.basename(rel).removesuffix(".c") for rel, _ in sources]
+    counts = {}
+    for name in basenames:
+        counts[name.casefold()] = counts.get(name.casefold(), 0) + 1
+    names = []
+    for (rel, _), name in zip(sources, basenames):
+        if counts[name.casefold()] > 1:
+            name = os.path.basename(os.path.dirname(rel)) + "_" + name
+        names.append("rel_" + name + ".o")
+    if len(set(name.casefold() for name in names)) != len(names):
+        raise RuntimeError("REL sources have colliding object filenames")
+    return names
+
+
+def native_rel_sources():
+    """Single lazy REL source inventory for compilation and coverage audits."""
+    m616_native_flags = _native_rel_namespace_flags("m616")
+    m670_native_flags = _native_rel_namespace_flags("m670")
+    sources = []
+    for rel, flags in REL_SOURCES:
+        local_flags = list(flags)
+        if rel.startswith("src/REL/m616dll/"):
+            local_flags.extend(m616_native_flags)
+        elif rel.startswith("src/REL/m670dll/"):
+            if rel.endswith("/prolog.c"):
+                local_flags.extend(m670_native_flags)
+            else:
+                local_flags = m670_native_flags + local_flags
+        sources.append((rel, local_flags))
+    for inventory in (native_minigames, native_mdmini, native_mgmfree,
+                      native_modes, native_boards, native_inst, native_support):
+        sources.extend(inventory.sources(DECOMP))
+    return sources
+
+
 def collect_units(headless, coro_fibers=False, android=False):
     """Returns a list of (abs_src_path, extra_flags, obj_name, flavor) --
     `flavor` picks the BASE flag set in compile_one(): "common" ->
@@ -2144,15 +2360,13 @@ def collect_units(headless, coro_fibers=False, android=False):
             f = f + MAIN_C_FLAGS
         obj_name = "game_" + os.path.basename(abs_path).replace(".c", ".o")
         units.append((abs_path, f, obj_name, "common"))
-    units.append((os.path.join(NATIVE_ROOT, "src", "os", "minigame_stub.c"),
-                  [], "board_mgcall.o", "common"))
     for rel, flags in board_sources():
         abs_path = resolve_source(rel)
         obj_name = "board_" + os.path.basename(abs_path).replace(".c", ".o")
         units.append((abs_path, flags, obj_name, "common"))
-    for rel, flags in REL_SOURCES:
+    rel_sources = native_rel_sources()
+    for (rel, flags), obj_name in zip(rel_sources, rel_object_names(rel_sources)):
         abs_path = resolve_source(rel)
-        obj_name = "rel_" + os.path.basename(abs_path).replace(".c", ".o")
         units.append((abs_path, flags, obj_name, "common"))
 
     # Platform sources: mode-suffixed obj names (NOT shared with the other
@@ -2322,6 +2536,13 @@ def _command_record(cmd):
         "contract": _COMPILE_CONTRACT_VERSION,
         "command": cmd,
         "compiler": _compiler_identity(cmd[0]),
+        # A newly added header shadow changes include resolution even though
+        # the old depfile still names the unchanged upstream header.
+        "compat_headers": [
+            [os.path.relpath(path, NATIVE_ROOT).replace("\\", "/"), _content_hash(path)]
+            for path in sorted(glob.glob(os.path.join(
+                NATIVE_ROOT, "compat", "decomp", "include", "**", "*.patch"), recursive=True))
+        ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     payload["fingerprint"] = hashlib.sha256(encoded).hexdigest()
@@ -2532,6 +2753,145 @@ def _write_if_changed(path, content):
 _ANDROID_CC = None
 
 
+# Zig re-spawns clang with its own arguments added, so a response file does
+# not avoid Windows' 32767-character limit for compiles. Every existing unit
+# stays below this bound and keeps its exact command line.
+LONG_DEFINES_LIMIT = 22000
+_ALIAS_DEFINE_RE = re.compile(r"-D([A-Za-z_]\w*)=([A-Za-z_]\w*)\Z")
+
+
+def transport_long_defines(cmd, obj):
+    """Move identifier aliases from an overlong command into a forced include.
+
+    Large overlays carry hundreds of REL-local namespace aliases. Command-line
+    macros are defined before any -include file is read, so the generated
+    header goes ahead of the first existing -include to keep that order.
+    """
+    if len(subprocess.list2cmdline(cmd)) <= LONG_DEFINES_LIMIT:
+        return cmd
+    aliases = [arg for arg in cmd if _ALIAS_DEFINE_RE.match(arg)]
+    if not aliases:
+        return cmd
+    header = obj + ".defines.h"
+    _write_if_changed(header, "".join(
+        "#define {} {}\n".format(*_ALIAS_DEFINE_RE.match(arg).groups()) for arg in aliases))
+    kept = [arg for arg in cmd if not _ALIAS_DEFINE_RE.match(arg)]
+    position = kept.index("-include") if "-include" in kept else len(kept) - 4
+    return kept[:position] + ["-include", header] + kept[position:]
+
+
+# ---------------------------------------------------------------------------
+# Savestate layout table. On Windows the game's statics are the exe's own
+# writable sections (its libraries are DLLs or carved-out Aurora). The
+# Android .so and the wasm module link their libraries -- libc's allocator,
+# SDL, Aurora, libc++ -- statically into one image, so their savestate
+# regions are the data and bss of the port's own objects instead, read from
+# the link map and written into the host's table (g_stateRanges in
+# src/host/host_android.c and host_emscripten.c) in the linked binary.
+STATE_RANGES_KEY = bytes.fromhex("4d36535341424c45")  # "M6SSABLE", the table's first two words
+STATE_RANGES_MAX = 32
+STATE_RANGES_OK = 0x7AB1E000
+
+
+def state_ranges(link_map, obj_dir):
+    """The game's own statics as [start, end) addresses (image-relative for
+    an ELF .so) from a wasm-ld or lld -Map file: data/bss chunks of objects
+    in obj_dir, minus the savestate carve-out (include/mp6_host_section.h:
+    an unnamed wasm segment, or its own ELF output section), plus common
+    symbols (decomp globals). Archive members are libraries and left out."""
+    obj_dir = os.path.abspath(obj_dir).replace("\\", "/").lower() + "/"
+    cols = None
+    section, chunks = None, []
+    with open(link_map, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if cols is None:
+                if " Out " in line and " In " in line:
+                    cols = (line.index(" Out ") + 1, line.index(" In ") + 1)
+                continue
+            if len(line) <= cols[0]:
+                continue
+            fields = line.split()
+            if line[cols[0]] != " ":  # an output section
+                section = fields[-1]
+                continue
+            if line[cols[1]] == " " or ":(" not in line or section not in (".data", ".bss", ".tdata", ".tbss"):
+                continue
+            try:
+                start, size = int(fields[0], 16), int(fields[2], 16)
+            except ValueError:
+                continue
+            owner, _, rest = line[cols[1]:].strip().rpartition(":(")
+            chunks.append((start, size, re.sub(r"[\\/]+", "/", owner), rest[:-1]))
+    ranges = []
+    for start, size, owner, sec in sorted(chunks):
+        if size == 0:
+            continue
+        if owner == "<internal>":
+            game = sec in (".bss.common", "COMMON")
+        else:
+            game = owner.lower().startswith(obj_dir) and "(" not in owner and sec not in ("", ".mp6hbss", ".mp6hdat")
+        if ranges and ranges[-1][2] == game:
+            ranges[-1][1] = max(ranges[-1][1], start + size)  # only alignment padding between
+        else:
+            ranges.append([start, start + size, game])
+    return [(a, b) for a, b, game in ranges if game]
+
+
+def patch_state_ranges(binary, ranges):
+    """Write `ranges` into the host's g_stateRanges table in a linked binary."""
+    import struct
+    if not ranges or len(ranges) > STATE_RANGES_MAX:
+        raise SystemExit(f"[FATAL] savestate layout: {len(ranges)} ranges (1..{STATE_RANGES_MAX} supported)")
+    with open(binary, "rb") as f:
+        data = bytearray(f.read())
+    at = data.find(STATE_RANGES_KEY)
+    if at < 0 or data.find(STATE_RANGES_KEY, at + 1) >= 0:
+        raise SystemExit("[FATAL] savestate layout: table not found exactly once in " + binary)
+    table = struct.pack("<II", len(ranges), STATE_RANGES_OK)
+    table += b"".join(struct.pack("<II", a, b) for a, b in ranges)
+    data[at + 8:at + 8 + len(table)] = table
+    with open(binary, "wb") as f:
+        f.write(data)
+
+
+
+
+def is_recovered_source(src):
+    """Decomp sources, patched or as pinned."""
+    path = os.path.normcase(os.path.abspath(src))
+    return any(path.startswith(os.path.normcase(os.path.abspath(root)) + os.sep)
+               for root in (DECOMP, PATCHED_SRC_DIR))
+
+
+def missing_return_check(cmd, src):
+    """Front-end-only pass that fails a recovered C source when a non-void
+    function can reach its end without a result. -w hides that warning in
+    the real compile and cannot be overridden there, so this re-parses the
+    unit with every other warning off. `cmd` is the compile command up to
+    its trailing `-c src -o obj`. Returns the diagnostics, or None.
+
+    Unoptimized IR to a scratch file, not -fsyntax-only: `zig cc` fails
+    every -fsyntax-only run that has no errors, reading a dependency file
+    clang never wrote, and given os.devnull it writes a real file "nul"."""
+    if src.endswith(".cpp") or not is_recovered_source(src):
+        return None
+    handle, scratch = tempfile.mkstemp(suffix=".ll")
+    os.close(handle)
+    lint = [arg for arg in cmd if arg != "-w"]
+    lint += ["-Wno-everything", "-Werror=return-type",
+             "-O0", "-g0", "-S", "-emit-llvm", "-o", scratch, src]
+    try:
+        proc = subprocess.run(lint, capture_output=True, text=True)
+    finally:
+        os.remove(scratch)
+    if proc.returncode == 0:
+        return None
+    return (proc.stdout + proc.stderr
+            + "\nA non-void function can end without a result. Give it an explicit "
+              "return in its compat/decomp patch (hardware returned whatever r3 held).\n")
+
+
 def compile_one(unit):
     src, flags, obj_name, flavor = unit
     obj = os.path.join(OBJ_DIR, obj_name)
@@ -2565,7 +2925,7 @@ def compile_one(unit):
             cxx = _ANDROID_CC["clang"].replace("clang.exe", "clang++.exe")
             cxxflags = ["-std=c++20" if f == "-std=gnu11" else f
                         for f in _ANDROID_CC["aurora_flags"]]
-            cxxflags = cxxflags + [f'-DMP6_PORT_VERSION="{mp6_port_version()}"',
+            cxxflags = cxxflags + [f'-DMP6_PORT_VERSION="{mp6_port_version()}"', *mp6_port_release_defines(),
                                    "-DAURORA_ENABLE_RMLUI",
                                    "-DRMLUI_STATIC_LIB",
                                    "-I", os.path.join(AURORA_DEPS_ANDROID_RMLUI, "rmlui-src", "Include"),
@@ -2602,19 +2962,28 @@ def compile_one(unit):
             #     aurora-internal includes.
             base_flags = base_flags + ["-I", os.path.join(AURORA_DEPS_RMLUI, "zlib-build"),
                                        f'-DMP6_PORT_VERSION="{mp6_port_version()}"',
+                                       *mp6_port_release_defines(),
                                        "-DAURORA_ENABLE_RMLUI",
                                        "-DRMLUI_STATIC_LIB",
                                        "-I", os.path.join(AURORA_DEPS_RMLUI, "rmlui-src", "Include"),
                                        "-I", os.path.join(AURORA_DEPS_RMLUI, "abseil-cpp-src"),
-                                       "-I", AURORA_ROOT]
+                                       # Internal inline methods and class layouts must
+                                       # match the selected backend archive, including
+                                       # the isolated, patched release source tree.
+                                       "-I", os.path.dirname(AURORA_INCLUDE)]
             zig_lang = "c++"
         cmd = [ZIG, zig_lang] + base_flags + flags + ["-c", src, "-o", obj]
+    cmd = transport_long_defines(cmd, obj)
     depfile = obj + ".d"
+    plain_cmd = cmd
     # Keep the compile tail intact while asking the compiler for the exact
     # transitive header graph, including toolchain/system headers.
     cmd = cmd[:-4] + ["-MD", "-MF", depfile, "-MT", obj] + cmd[-4:]
     if not needs_rebuild(src, obj, cmd):
         return (src, obj, True, "", True)  # skipped=True
+    missing_return = missing_return_check(plain_cmd[:-4], src)
+    if missing_return:
+        return (src, obj, False, missing_return, False)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     ok = proc.returncode == 0 and os.path.exists(obj)
     if ok:
@@ -2637,7 +3006,7 @@ def configure_windows(configuration):
     """
     global WINDOWS_CONFIGURATION, OBJ_DIR, COMMON_FLAGS, AURORA_FLAGS
     global AURORA_BUILD_RMLUI, AURORA_DEPS_RMLUI, AURORA_RUNTIME_DLLS
-    global AURORA_LINK_ITEMS, AURORA_ARTIFACT_STAMP, AURORA_INCLUDE
+    global AURORA_LINK_ITEMS, AURORA_ARTIFACT_STAMP, MP6_ZLIB_LIB_ITEM, MP6_ZLIB_DLL
     if configuration not in ("debug", "release"):
         raise ValueError(f"unknown Windows configuration: {configuration}")
     if WINDOWS_CONFIGURATION != "debug":
@@ -2650,20 +3019,40 @@ def configure_windows(configuration):
     AURORA_BUILD_RMLUI = os.path.join(BUILD_DIR, "aurora-release")
     AURORA_DEPS_RMLUI = os.path.join(AURORA_BUILD_RMLUI, "_deps")
     AURORA_ARTIFACT_STAMP = os.path.join(AURORA_BUILD_RMLUI, "mp6-artifact-stamp.json")
-    old_include = AURORA_INCLUDE
-    AURORA_INCLUDE = os.path.join(BUILD_DIR, "aurora-release-source", "include")
+    # Every third-party header and the zlib runtime come from the optimized
+    # tree too, so a release build never needs the Debug trees.
+    old_plain_deps = AURORA_DEPS
 
     def release_path(value):
-        return (value.replace(old_tree, AURORA_BUILD_RMLUI).replace(old_include, AURORA_INCLUDE)
+        return (value.replace(old_tree, AURORA_BUILD_RMLUI).replace(old_plain_deps, AURORA_DEPS_RMLUI)
                 .replace("libpng16d.", "libpng16.")
                 .replace("libfmtd.a", "libfmt.a")
                 .replace("libfreetyped.a", "libfreetype.a"))
 
-    flags = ["-O2", "-fno-strict-aliasing", "-DNDEBUG", "-DMP6_AURORA_LIVE_AA=1"]
+    # MP6_AURORA_RETAINED_REPLAY: Aurora's retained replay
+    # (aurora_gx_replay_stream); other configurations replay through the FIFO.
+    flags = ["-O2", "-fno-strict-aliasing", "-DNDEBUG", "-DMP6_AURORA_LIVE_AA=1",
+             "-DMP6_AURORA_RETAINED_REPLAY=1"]
     COMMON_FLAGS = [release_path(f) for f in COMMON_FLAGS] + flags
     AURORA_FLAGS = [release_path(f) for f in AURORA_FLAGS] + flags
     AURORA_RUNTIME_DLLS = [release_path(p) for p in AURORA_RUNTIME_DLLS]
     AURORA_LINK_ITEMS = [release_path(p) for p in AURORA_LINK_ITEMS]
+    MP6_ZLIB_LIB_ITEM = release_path(MP6_ZLIB_LIB_ITEM)
+    MP6_ZLIB_DLL = release_path(MP6_ZLIB_DLL)
+
+
+def run_link_command(command, response_path, driver_args=1):
+    """Clang/Zig response files avoid Windows' 32767-character argv limit.
+
+    Keep the expanded command for provenance; only transport uses a response
+    file. Quote every argument with LLVM's GNU response-file escaping, including
+    backslashes, so spaces in a workspace or toolchain path remain literal.
+    """
+    _write_if_changed(response_path, '\n'.join(
+        '"' + arg.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        for arg in command[driver_args:]) + '\n')
+    return subprocess.run(command[:driver_args] + ['@' + response_path],
+                          capture_output=True, text=True)
 
 
 def windows_subsystem_flags(headless):
@@ -2798,6 +3187,40 @@ def android_link_stamp(driver, objects, flags, items):
     return digest.hexdigest()
 
 
+def compile_units(units, args, objs):
+    """Compile `units` with compile_one() on args.j workers (or, with
+    --link-only, just name their existing objects) and append every object
+    path to `objs` in unit order. Prints the summary and any compiler logs;
+    returns False when a unit failed, so the caller stops before linking.
+    Shared by the Windows and Android build rows."""
+    failures = []
+    skipped = 0
+    compiled = 0
+    if not args.link_only:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.j) as ex:
+            results = list(ex.map(compile_one, units))
+        for src, obj, ok, log, was_skipped in results:
+            objs.append(obj)
+            if not ok:
+                failures.append((src, log))
+            elif was_skipped:
+                skipped += 1
+            else:
+                compiled += 1
+    else:
+        objs.extend(os.path.join(OBJ_DIR, u[2]) for u in units)
+
+    print(f"Compiled: {compiled}  Skipped(up-to-date): {skipped}  Failed: {len(failures)}")
+    if failures:
+        print("\n===== COMPILE FAILURES =====")
+        for src, log in failures:
+            print(f"\n--- {os.path.relpath(src, DECOMP if src.startswith(DECOMP) else NATIVE_ROOT)} ---")
+            print(log.strip())
+        print(f"\n{len(failures)} file(s) failed to compile. Not linking.")
+        return False
+    return True
+
+
 def build_android(args):
     """the whole `--target
     aarch64-android` flow, kept as its own function (ending in its own
@@ -2826,6 +3249,10 @@ def build_android(args):
     configuration_flags = [optimization]
     if configuration == "release":
         configuration_flags += list(ANDROID_RELEASE_SAFETY_FLAGS)
+        # Unlocked FPS replays through Aurora's retained replay
+        # (aurora_gx_replay_stream), as the Windows release does; without it
+        # every replay re-decodes the whole FIFO on the phone's CPU.
+        configuration_flags.append("-DMP6_AURORA_RETAINED_REPLAY=1")
     print(f"Mode: --target aarch64-android (headless .so + launcher; NDK {os.path.basename(ndk_root)})")
     print(f"Android configuration: {configuration} (all game/platform TUs: "
           f"{' '.join(configuration_flags)})")
@@ -2905,33 +3332,17 @@ def build_android(args):
         # construction, like the touch overlay.
         units.append((os.path.join(NATIVE_ROOT, "src", "android", "saf_bridge.c"),
                       [], "plat_saf_bridge_aurora.o", "aurora"))
+        # Unlocked FPS frame telemetry; empty unless a test build defines
+        # MP6_FI_TELEMETRY (src/android/fi_telemetry.c).
+        units.append((os.path.join(NATIVE_ROOT, "src", "android", "fi_telemetry.c"),
+                      [], "plat_fi_telemetry_aurora.o", "aurora"))
+        # Android performance hints (ADPF) for the game thread.
+        units.append((os.path.join(NATIVE_ROOT, "src", "android", "adpf_hint.c"),
+                      [], "plat_adpf_hint_aurora.o", "aurora"))
     print(f"Total translation units: {len(units)}")
 
     objs = []
-    failures = []
-    skipped = 0
-    compiled = 0
-    if not args.link_only:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.j) as ex:
-            results = list(ex.map(compile_one, units))
-        for src, obj, ok, log, was_skipped in results:
-            objs.append(obj)
-            if not ok:
-                failures.append((src, log))
-            elif was_skipped:
-                skipped += 1
-            else:
-                compiled += 1
-    else:
-        objs = [os.path.join(OBJ_DIR, u[2]) for u in units]
-
-    print(f"Compiled: {compiled}  Skipped(up-to-date): {skipped}  Failed: {len(failures)}")
-    if failures:
-        print("\n===== COMPILE FAILURES =====")
-        for src, log in failures:
-            print(f"\n--- {os.path.relpath(src, DECOMP if src.startswith(DECOMP) else NATIVE_ROOT)} ---")
-            print(log.strip())
-        print(f"\n{len(failures)} file(s) failed to compile. Not linking.")
+    if not compile_units(units, args, objs):
         return 1
 
     try:
@@ -3005,16 +3416,20 @@ def build_android(args):
     else:
         so_path = os.path.join(ANDROID_BUILD_DIR, "libmp6game.so")
     # Use exactly the policy hashed into the save-state identity above.
+    link_map = os.path.join(OBJ_DIR, "game-link.map")
     link_cmd = [link_driver, "-target", ANDROID_TRIPLE, "-shared"] + objs + [
         "-o", so_path,
-    ] + link_flags + link_items
+    ] + link_flags + link_items + ["-Wl,-Map=" + link_map]
     print(f"\nLinking {so_path}...")
-    proc = subprocess.run(link_cmd, capture_output=True, text=True)
+    proc = run_link_command(link_cmd, os.path.join(OBJ_DIR, "game-link.rsp"))
     print(proc.stdout)
     print(proc.stderr)
     if proc.returncode != 0:
         print("LINK FAILED")
         return 1
+    state_layout = state_ranges(link_map, OBJ_DIR)
+    patch_state_ranges(so_path, state_layout)
+    print(f"Savestate layout: {len(state_layout)} game data range(s)")
 
     if windowed:
         # ---- libmain.so (the APK bootstrap shell) + staging ----------------
@@ -3186,6 +3601,7 @@ def build_android(args):
 
 def main():
     global _VERIFIED_ZIG_TREE_IDENTITY
+    host_cpus.apply_cpu_exclusion()
     ap = argparse.ArgumentParser()
     ap.add_argument("--clean", action="store_true")
     ap.add_argument("--link-only", action="store_true")
@@ -3201,7 +3617,7 @@ def main():
         help="Explicit development-only override for a decomp checkout that differs from the "
              "documented pin. Default builds fail closed for reproducibility.",
     )
-    ap.add_argument("-j", type=int, default=os.cpu_count() or 4)
+    ap.add_argument("-j", type=int, default=host_cpus.allowed_cpu_count())
     # the design's own target-row table.
     # Default = today's Windows behavior, byte-for-byte (the whole Windows
     # flow below is untouched; the android row branches out immediately).
@@ -3313,31 +3729,7 @@ def main():
     print(f"Total translation units: {len(units)}")
 
     objs = []
-    failures = []
-    skipped = 0
-    compiled = 0
-
-    if not args.link_only:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.j) as ex:
-            results = list(ex.map(compile_one, units))
-        for src, obj, ok, log, was_skipped in results:
-            objs.append(obj)
-            if not ok:
-                failures.append((src, log))
-            elif was_skipped:
-                skipped += 1
-            else:
-                compiled += 1
-    else:
-        objs = [os.path.join(OBJ_DIR, u[2]) for u in units]
-
-    print(f"Compiled: {compiled}  Skipped(up-to-date): {skipped}  Failed: {len(failures)}")
-    if failures:
-        print("\n===== COMPILE FAILURES =====")
-        for src, log in failures:
-            print(f"\n--- {os.path.relpath(src, DECOMP if src.startswith(DECOMP) else NATIVE_ROOT)} ---")
-            print(log.strip())
-        print(f"\n{len(failures)} file(s) failed to compile. Not linking.")
+    if not compile_units(units, args, objs):
         return 1
 
     # ------------------------------------------------------------------
@@ -3418,11 +3810,13 @@ def main():
             # SDL3.lib/webgpu_dawn.lib already on this line; nod.dll rides
             # AURORA_RUNTIME_DLLS next to the exe.
             NOD_WIN_LIB.replace("\\", "/"),
+            # App icon (Explorer/taskbar/window); zig compiles the .rc itself.
+            os.path.join(NATIVE_ROOT, "packaging", "windows", "mp6.rc").replace("\\", "/"),
         ]
 
     print("\nLinking...")
     link_cmd += windows_subsystem_flags(args.headless)
-    proc = subprocess.run(link_cmd, capture_output=True, text=True)
+    proc = run_link_command(link_cmd, os.path.join(OBJ_DIR, "game-link.rsp"), driver_args=2)
     print(proc.stdout)
     print(proc.stderr)
     if proc.returncode != 0:

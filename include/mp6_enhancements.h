@@ -79,6 +79,31 @@ int mp6_enh_shadow_quality(void);  /* shadow-map linear scale: 1 (retail), 2, 4,
 int mp6_enh_aa_mode(void);         /* Mp6EnhAaMode; live with MP6_AURORA_LIVE_AA. */
 int mp6_enh_ambient_occlusion(void); /* 0 Off, 1 Subtle, 2 Strong. LIVE; opt-in. */
 
+/* Device measurement aid. MP6_AO_AB=1|2 alternates AO between the configured
+ * level and Off at every [MP6-TICKRATE] window (src/gx/aurora_bridge.c), so a
+ * single session on a phone yields matched AO-on/AO-off windows. AO stays off
+ * while the setting is Off, so the tester chooses when the A/B starts.
+ * Returns the level in force, or -1 when the A/B is not active. */
+int mp6_enh_ao_ab_level(void);
+void mp6_enh_ao_ab_flip(void);
+
+/* MP6_AO_AB_PARTS=1 extends the A/B to a knockout cycle: full AO, Off, then
+ * AO with one component removed per window, so whole-frame timings price each
+ * component on devices without usable GPU timestamps. Variants other than
+ * FULL/OFF are measurement-only and may look wrong. */
+enum Mp6AoAbVariant {
+    MP6_AO_AB_FULL, MP6_AO_AB_OFF, MP6_AO_AB_NO_FOLIAGE, MP6_AO_AB_NO_DECALS,
+    MP6_AO_AB_NO_BLUR, MP6_AO_AB_CAP960, MP6_AO_AB_NO_APPLY,
+    MP6_AO_AB_NO_PASSES,    /* apply queued, but no depth/GTAO/blur passes */
+    MP6_AO_AB_NO_COMPOSITE, /* apply queued and encoded, no composite draw */
+    MP6_AO_AB_EVERY_FRAME,  /* recompute AO on interpolated frames too */
+    MP6_AO_AB_VARIANTS
+};
+int mp6_enh_ao_ab_variant(void); /* Mp6AoAbVariant, or -1 when inactive */
+const char *mp6_enh_ao_ab_variant_name(int variant);
+/* MP6_AO_AB_GPU=1: also arm GPU pass timestamps for the A/B windows. */
+int mp6_enh_ao_ab_gpu_timing(void);
+
 /* 16 (retail) or 32. Applied under the mixer lock. Shrinking retires voices
  * in removed slots; surviving voice handles and slot indices do not move. */
 int mp6_enh_sfx_voices(void);

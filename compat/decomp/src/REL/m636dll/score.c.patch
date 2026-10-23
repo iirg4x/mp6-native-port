@@ -1,0 +1,19 @@
+--- a/src/REL/m636dll/score.c
++++ b/src/REL/m636dll/score.c
+@@ -71,5 +70,0 @@
+-/* Byte positions of the two team scores and their sprite groups. */
+-#define PIXEL_TEAM_POINTS_OFFSET 252
+-#define PIXEL_SCORE_BOXES_OFFSET 610
+-#define PIXEL_SCORE_GROUPS_OFFSET 614
+-
+@@ -194 +189 @@
+-        HUSPR_GROUPID scoreBox = *(s16 *)((s8 *)&lbl_1_bss_0 + PIXEL_SCORE_BOXES_OFFSET + side * 2);
++        HUSPR_GROUPID scoreBox = lbl_1_bss_0.scoreBoxes[side];
+@@ -207,2 +202 @@
+-        scoreGroup = (*(s16 *) ((s8 *) ((s32 *) ((u8 *) &lbl_1_bss_0 + (side * 2))) +
+-                                (PIXEL_SCORE_GROUPS_OFFSET)));
++        scoreGroup = (lbl_1_bss_0.scoreGroups[side]);
+@@ -210,2 +204 @@
+-        while (pointIndex < (s32) (*(s32 *) ((s8 *) ((s32 *) ((u8 *) &lbl_1_bss_0 + (side * 4))) +
+-                                             (PIXEL_TEAM_POINTS_OFFSET)))) {
++        while (pointIndex < (s32) (lbl_1_bss_0.points[side])) {

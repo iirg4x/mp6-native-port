@@ -6,7 +6,7 @@ import unittest
 from tools import build
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT/'build/android-aurora-source'
+SOURCE = ROOT/'third_party/aurora'
 
 
 class VertexCacheInvalidation(unittest.TestCase):

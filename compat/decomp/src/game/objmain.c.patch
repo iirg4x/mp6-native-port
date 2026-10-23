@@ -1,10 +1,10 @@
 --- a/src/game/objmain.c
 +++ b/src/game/objmain.c
-@@ -16,0 +17,3 @@
+@@ -17,0 +18,3 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
-@@ -17,0 +21,114 @@
+@@ -18,0 +22,114 @@
 +
 +/* The om-object execution census. An earlier census proved that at least
 + * one om object (bootDll's OutViewObj) is CREATED but never EXECUTED on
@@ -119,92 +119,97 @@
 +}
 +
 +long mp6_diag_om_passes(void) { return mp6OmcPassNo; }
-@@ -202,0 +320,6 @@
+@@ -216 +332,0 @@
+-    // Reserve five extra object slots beyond the count requested by the caller.
+@@ -217,0 +334,6 @@
 +    if (mp6OmCensusOn()) { /* om census -- new obj manager, reset the verdict cache */
 +        memset(mp6OmcVerdict, 0, sizeof(mp6OmcVerdict));
 +        memset(mp6OmcStat, 0, sizeof(mp6OmcStat));
 +        printf("[OM-CENSUS] tick=%ld ovl=%d omInitObjMan objMax=%d prio=%d\n",
-+               mp6_tick_count, (int)omcurovl, (int)objMax, (int)objManPrio);
++               mp6_tick_count, (int)omcurovl, (int)maxObjectCount, (int)objectManagerPriority);
 +    }
-@@ -262,0 +386,7 @@
+@@ -285,0 +408,7 @@
 +        if (mp6OmCensusOn()) { /* om census -- a silent NULL here loses a whole objFunc */
 +            char sym[256];
-+            mp6OmcSym((void *)objFunc, sym, sizeof(sym));
++            mp6OmcSym((void *)objectCallback, sym, sizeof(sym));
 +            printf("[OM-CENSUS] tick=%ld ovl=%d ADD-FAILED (ObjMax %d over) prio=%04x func=%s\n",
-+                   mp6_tick_count, (int)omcurovl, (int)objWork->objMax,
-+                   (unsigned)(u16)prio, sym);
++                   mp6_tick_count, (int)omcurovl, (int)objectWork->objMax,
++                   (unsigned)(u16)priority, sym);
 +        }
-@@ -301,0 +432,11 @@
+@@ -326,0 +456,11 @@
 +    if (mp6OmCensusOn()) { /* om census -- record every creation */
 +        char sym[256];
-+        mp6OmcSym((void *)objFunc, sym, sizeof(sym));
++        mp6OmcSym((void *)objectCallback, sym, sizeof(sym));
 +        printf("[OM-CENSUS] tick=%ld ovl=%d ADD obj=%d prio=%04x stat=%04x mdl=%u mtn=%u grp=%d func=%s\n",
-+               mp6_tick_count, (int)omcurovl, (int)objNext, (unsigned)(u16)prio,
-+               (unsigned)obj->stat, (unsigned)mdlcnt, (unsigned)mtncnt, (int)grpNo, sym);
-+        if (objNext >= 0 && objNext < MP6_OMC_MAX) {
-+            mp6OmcVerdict[objNext] = MP6_OMC_UNSEEN; /* slot reuse: forget stale verdict */
-+            mp6OmcStat[objNext] = obj->stat;
++               mp6_tick_count, (int)omcurovl, (int)nextObjectIndex, (unsigned)(u16)priority,
++               (unsigned)object->stat, (unsigned)modelCount, (unsigned)motionCount, (int)groupNumber, sym);
++        if (nextObjectIndex >= 0 && nextObjectIndex < MP6_OMC_MAX) {
++            mp6OmcVerdict[nextObjectIndex] = MP6_OMC_UNSEEN; /* slot reuse: forget stale verdict */
++            mp6OmcStat[nextObjectIndex] = object->stat;
 +        }
 +    }
-@@ -365,0 +507,7 @@
+@@ -394,0 +535,7 @@
 +    if (mp6OmCensusOn()) { /* om census -- record every deletion */
 +        char sym[256];
-+        mp6OmcSym((void *)obj->objFunc, sym, sizeof(sym));
++        mp6OmcSym((void *)object->objFunc, sym, sizeof(sym));
 +        printf("[OM-CENSUS] tick=%ld ovl=%d DEL obj=%d prio=%04x stat=%04x func=%s\n",
-+               mp6_tick_count, (int)omcurovl, (int)objNext, (unsigned)(u16)obj->prio,
-+               (unsigned)obj->stat, sym);
++               mp6_tick_count, (int)omcurovl, (int)objectIndex, (unsigned)(u16)object->prio,
++               (unsigned)object->stat, sym);
 +    }
-@@ -446,0 +595,8 @@
-+    if (mp6OmCensusOn() && (u16)(obj->stat | bit) != obj->stat) {
+@@ -482,0 +630,8 @@
++    if (mp6OmCensusOn() && (u16)(object->stat | statusBits) != object->stat) {
 +        /* om census -- who set which gate bit on which object */
 +        char sym[256];
 +        mp6OmcSym(__builtin_return_address(0), sym, sizeof(sym));
 +        printf("[OM-CENSUS] tick=%ld ovl=%d STAT+ obj=%d %04x->%04x (+%04x) by %s\n",
-+               mp6_tick_count, (int)omcurovl, (int)obj->objNext, (unsigned)obj->stat,
-+               (unsigned)(u16)(obj->stat | bit), (unsigned)bit, sym);
++               mp6_tick_count, (int)omcurovl, (int)object->objNext, (unsigned)object->stat,
++               (unsigned)(u16)(object->stat | statusBits), (unsigned)statusBits, sym);
 +    }
-@@ -451,0 +608,8 @@
-+    if (mp6OmCensusOn() && (u16)(obj->stat & ~bit) != obj->stat) {
+@@ -488,0 +644,8 @@
++    if (mp6OmCensusOn() && (u16)(object->stat & ~statusBits) != object->stat) {
 +        /* om census -- who cleared which gate bit on which object */
 +        char sym[256];
 +        mp6OmcSym(__builtin_return_address(0), sym, sizeof(sym));
 +        printf("[OM-CENSUS] tick=%ld ovl=%d STAT- obj=%d %04x->%04x (-%04x) by %s\n",
-+               mp6_tick_count, (int)omcurovl, (int)obj->objNext, (unsigned)obj->stat,
-+               (unsigned)(u16)(obj->stat & ~bit), (unsigned)bit, sym);
++               mp6_tick_count, (int)omcurovl, (int)object->objNext, (unsigned)object->stat,
++               (unsigned)(u16)(object->stat & ~statusBits), (unsigned)statusBits, sym);
 +    }
-@@ -502,0 +667,5 @@
+@@ -550,0 +714,5 @@
 +            if (mp6OmCensusOn() && !mp6OmcLoadGateOn) { /* om census -- whole-walk gate */
 +                mp6OmcLoadGateOn = 1;
 +                printf("[OM-CENSUS] tick=%ld ovl=%d omMain GATED by HuLoadProcMode\n",
 +                       mp6_tick_count, (int)omcurovl);
 +            }
-@@ -505,0 +675,6 @@
+@@ -553,0 +722,6 @@
 +        if (mp6OmCensusOn() && mp6OmcLoadGateOn) { /* om census */
 +            mp6OmcLoadGateOn = 0;
 +            printf("[OM-CENSUS] tick=%ld ovl=%d omMain UNGATED (HuLoadProcMode off)\n",
 +                   mp6_tick_count, (int)omcurovl);
 +        }
 +        mp6OmcRan = mp6OmcFuncNull = mp6OmcGated = mp6OmcDead = 0;
-@@ -511,0 +687,6 @@
+@@ -559,2 +733,7 @@
+-                if (object->objFunc != NULL &&
+-                    (object->stat & (OM_STAT_40 | 0x8 | OM_STAT_PAUSED)) == 0) {
++                if(object->objFunc != NULL && (object->stat & (OM_STAT_40|0x8|OM_STAT_PAUSED)) == 0) {
 +                    /* om census -- verdict BEFORE the call: the objFunc may
 +                     * delete its own object or null its own func (the one-shot
 +                     * creator idiom). The TALLY is unconditional so it can be
 +                     * read without arming the log; only the line is gated. */
 +                    mp6OmcRan++;
-+                    if (mp6OmCensusOn()) mp6OmcNote(obj, MP6_OMC_RUN);
-@@ -512,0 +694,8 @@
++                    if (mp6OmCensusOn()) mp6OmcNote(object, MP6_OMC_RUN);
+@@ -561,0 +741,8 @@
 +                } else {
-+                    if (obj->objFunc == NULL) {
++                    if (object->objFunc == NULL) {
 +                        mp6OmcFuncNull++;
-+                        if (mp6OmCensusOn()) mp6OmcNote(obj, MP6_OMC_FUNCNULL);
++                        if (mp6OmCensusOn()) mp6OmcNote(object, MP6_OMC_FUNCNULL);
 +                    } else {
 +                        mp6OmcGated++;
-+                        if (mp6OmCensusOn()) mp6OmcNote(obj, MP6_OMC_GATED);
++                        if (mp6OmCensusOn()) mp6OmcNote(object, MP6_OMC_GATED);
 +                    }
-@@ -526,0 +716,21 @@
+@@ -581,0 +769,21 @@
 +            } else {
 +                mp6OmcDead++;
-+                if (mp6OmCensusOn()) mp6OmcNote(obj, MP6_OMC_DEADLISTED);
++                if (mp6OmCensusOn()) mp6OmcNote(object, MP6_OMC_DEADLISTED);
 +            }
 +        }
 +        /* Publish the completed walk before anything is printed, so the probe
@@ -223,3 +228,9 @@
 +                       mp6_tick_count, (int)omcurovl, mp6OmcPassNo, mp6OmcRan,
 +                       mp6OmcFuncNull, mp6OmcGated, mp6OmcDead);
 +                mp6OmcLastKey = key;
+@@ -667,0 +870,5 @@
++
++/* The live object manager, for the gameplay trace (src/os/gameplay_trace.c). */
++OMOBJMAN *mp6_om_objman_get(void) {
++    return omObjManProc;
++}

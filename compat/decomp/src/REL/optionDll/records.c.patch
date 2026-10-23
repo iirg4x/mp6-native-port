@@ -1,0 +1,44 @@
+--- a/src/REL/optionDll/records.c
++++ b/src/REL/optionDll/records.c
+@@ -0,0 +1,2 @@
++#include "game/hsfex.h"
++#include "mp6_window.h"
+@@ -233 +235 @@
+-    HuWinInsertMesSet(countWindow, (u32)countText, 0);
++    mp6_window_insert_text(countWindow, countText, 0);
+@@ -331 +333 @@
+-            HuWinInsertMesSet(countWindow, (u32)countText, 0);
++            mp6_window_insert_text(countWindow, countText, 0);
+@@ -607 +609 @@
+-            HuWinMesSet(lbl_1_bss_9EC[i][1], (u32)OPTION_RECORD_TEXT(i));
++            mp6_window_set_text(lbl_1_bss_9EC[i][1], OPTION_RECORD_TEXT(i));
+@@ -624 +626 @@
+-            HuWinMesSet(lbl_1_bss_9EC[i][1], (u32)OPTION_RECORD_TEXT(i));
++            mp6_window_set_text(lbl_1_bss_9EC[i][1], OPTION_RECORD_TEXT(i));
+@@ -859,2 +861 @@
+-                HuWinInsertMesSet(lbl_1_bss_9EC[row][1],
+-                    (u32)OPTION_RECORD_TEXT(row), 0);
++                mp6_window_insert_text(lbl_1_bss_9EC[row][1], OPTION_RECORD_TEXT(row), 0);
+@@ -864,2 +865 @@
+-                HuWinInsertMesSet(lbl_1_bss_9EC[row][1],
+-                    (u32)&OPTION_RECORD_TEXT(row)[10], 1);
++                mp6_window_insert_text(lbl_1_bss_9EC[row][1], &OPTION_RECORD_TEXT(row)[10], 1);
+@@ -869,2 +869 @@
+-                HuWinInsertMesSet(lbl_1_bss_9EC[row][1],
+-                    (u32)&OPTION_RECORD_TEXT(row)[20], 2);
++                mp6_window_insert_text(lbl_1_bss_9EC[row][1], &OPTION_RECORD_TEXT(row)[20], 2);
+@@ -874,2 +873 @@
+-                HuWinInsertMesSet(lbl_1_bss_9EC[row][1],
+-                    (u32)OPTION_RECORD_TEXT(row), 0);
++                mp6_window_insert_text(lbl_1_bss_9EC[row][1], OPTION_RECORD_TEXT(row), 0);
+@@ -1494 +1492 @@
+-    HuWinInsertMesSet(summaryWindow, (u32)countText, 0);
++    mp6_window_insert_text(summaryWindow, countText, 0);
+@@ -1705,2 +1703 @@
+-            HuWinInsertMesSet(lbl_1_bss_9EC[i][0],
+-                (u32)lbl_1_bss_9D8[i], 0);
++            mp6_window_insert_text(lbl_1_bss_9EC[i][0], lbl_1_bss_9D8[i], 0);
+@@ -2019,0 +2017,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

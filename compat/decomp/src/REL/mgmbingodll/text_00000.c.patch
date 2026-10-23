@@ -1,0 +1,51 @@
+--- a/src/REL/mgmbingodll/text_00000.c
++++ b/src/REL/mgmbingodll/text_00000.c
+@@ -1,0 +2 @@
++#include "mp6_widescreen.h"
+@@ -69,3 +70,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, (128.0f), (128.0f));
++        if (movieSprite != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, (128.0f), (128.0f));
++        }
+@@ -87,0 +91,4 @@
++    /* The order array needs one slot for its terminator. */
++    if (minigameCount < 0 || minigameOrder == NULL) minigameCount = 0;
++    if (minigameCount >= (s16)sizeof(lbl_1_bss_2))
++        minigameCount = (s16)sizeof(lbl_1_bss_2) - 1;
+@@ -90,0 +98,4 @@
++    lbl_1_bss_84 = lbl_1_bss_98;
++    lbl_1_bss_2[0] = 255;
++    lbl_1_bss_8C = NULL;
++    if (minigameCount == 0) return;
+@@ -92,0 +104,4 @@
++    if (lbl_1_bss_8C == NULL) {
++        lbl_1_bss_0 = 0;
++        return;
++    }
+@@ -107 +121,0 @@
+-    lbl_1_bss_84 = lbl_1_bss_98;
+@@ -112,0 +127 @@
++    if (lbl_1_bss_0 <= 0 || lbl_1_bss_8C == NULL) return;
+@@ -176,3 +191,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, (128.0f), (128.0f));
++        if (movieSprite != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, (128.0f), (128.0f));
++        }
+@@ -196 +213,4 @@
+-    Hu3DFbCopyExec(0, 0, 284, 256, GX_TF_RGB565, 0, lbl_1_bss_94);
++    if (HuTHPStartCheck() != 0) {
++        Hu3DFbCopyExec((s16)((mp6_widescreen_render_width() - 640) / 2), 0,
++                       284, 256, GX_TF_RGB565, 0, lbl_1_bss_94);
++    }
+@@ -239,0 +260 @@
++    GXEnd();
+@@ -258,0 +280 @@
++    GXEnd();

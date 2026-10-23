@@ -12,6 +12,11 @@ Windows build relies on the fixed image base + the PDB next to the exe;
 addresses in any log can also be resolved after the fact with
 `mp6_symbolize_addr`'s recipe. `[MP6-CRASH]` lines are the marker.
 
+A fault on a coroutine stack (game processes run on them) never reaches the
+Windows unhandled-exception filter: the process exits silently. Run with
+`MP6_CRASH_VEH=1` to report it from a vectored handler instead. It is opt-in
+because a vectored handler also sees exceptions drivers raise and handle.
+
 Windows **release** builds are GUI applications: double-clicking the game does
 not create a console. Ordinary launches write diagnostics, including crash
 stderr, to `logs/mp6.log` under the working directory; the preceding session is
@@ -171,6 +176,7 @@ Boot/game behavior:
 | `MP6_HSF_STUB` | `1` | inert HSF loader stub (isolate deserializer vs consumer bugs) |
 | `MP6_FREE_ASPECT` | `1` | disable the 4:3 resize constraint + letterboxed present |
 | `MP6_RSS_CAP_MB` | MB | RSS watchdog abort cap (default 4096) |
+| `MP6_LOAD_STATE` | path | load this savestate once booted (at tick 60, or `MP6_SAVESTATE_LOAD_AT_TICK`) |
 
 Diagnostics (all default-off):
 
@@ -183,6 +189,11 @@ Diagnostics (all default-off):
 | `MP6_SKIP_DRAWS` | `lo-hi` | hide that per-frame draw-index range |
 | `MP6_ARRAYPROBE` | `1` | GXSetArray bind/grow/DL-recording probe |
 | `MP6_DL_DUMP` | any / object name | HSF face-index validation sweep; a name additionally dumps that object's DL-build data |
+| `MP6_HSF_VERBOSE` | any | per-model HSF load census lines (`[HSF] loaded ...`, deform sections, bound shape meshes, matrix palette and mapAttr sizes) |
+| `MP6_HEAP_CHECK` | `1` | walk the five HuMem heaps after every tick and report the first broken block header (`[MP6-HEAP] heap N broken after tick T: ...`), naming the block before it -- the allocation that overran. Slow. `tools/minigame_exit_sweep.py` plays every recovered minigame to its exit with it on |
+| `MP6_DECODE_AHEAD_DEBUG` | set | per tick: decode-ahead hits and misses with each miss's reason; on the web also the idle-time line every 60 ticks (`idle calls= jobs= pending= queued= held= rate=decode/copy ns per KB`) |
+| `MP6_HSF_AHEAD_VERIFY` | `1` | re-run the model input check on the game thread whenever the loader reuses the one decode-ahead's worker ran, and report any difference (`[HSF] decode-ahead preflight MISMATCH`) |
+| `MP6_HSF_PROFILE` | `1` | with `MP6_LOAD_TRACE=1`: model-loader time per stage (`[MP6-HSF] stages ...`) after each `[MP6-LOAD]` line |
 | `MP6_DRAW_CENSUS` | tick | per-model Hu3DExec routing/skip census |
 | `MP6_DRAW_CENSUS_OBJ` | tick | per-object Hu3DDraw tree-walk census |
 | `MP6_DECODE_GUARD` | `1` | HuDecodeData overrun/checksum guard |

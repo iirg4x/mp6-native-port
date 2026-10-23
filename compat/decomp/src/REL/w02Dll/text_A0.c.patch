@@ -1,0 +1,702 @@
+--- a/src/REL/w02Dll/text_A0.c
++++ b/src/REL/w02Dll/text_A0.c
+@@ -0,0 +1,4 @@
++#include "mp6_gxarray_registry.h" /* sprite arrays: real sizes for Aurora */
++#include "mp6_widescreen.h"
++#include "mp6_board_compat.h"
++#include "mp6_board_window.h"
+@@ -234 +238 @@
+-    u32 callbackAddress;
++    void *callbackAddress;
+@@ -237 +241 @@
+-    u32 linkedModelAddress;
++    HU3D_MODEL *linkedModelAddress;
+@@ -241 +245 @@
+-    int boardModelId;
++    union { int boardModelId; int state; };
+@@ -251,2 +255,4 @@
+-    int spaceIds[32];
+-    int spaceTypes[32];
++    union {
++        struct { int spaceIds[32], spaceTypes[32]; };
++        int allSpaceIds[64];
++    };
+@@ -266,0 +273,2 @@
++/* One native owner replaces the recovered PPC-offset partial work views.
++ * Pointer growth must move every consumer together, including sprite headers. */
+@@ -288,3 +296,4 @@
+-    int linkedSpaceBaseModel;
+-    int linkedSpaceBodyModel;
+-    int eyeModel;
++    union {
++        struct { int linkedSpaceBaseModel, linkedSpaceBodyModel, eyeModel; };
++        int machineModels[3];
++    };
+@@ -319 +328 @@
+-    SpriteEffect *effects;
++    FlyingEffect *effects;
+@@ -415,0 +425,4 @@
++/* [MP6] The capsule station's view of the board work (lbl_1_bss_8, a
++ * PositionModel). The skipped spans hold pointers, so they are sized from
++ * PositionModel itself: fixed byte counts only lined up with 4-byte
++ * pointers, and natively put every field below on the wrong member. */
+@@ -417 +430 @@
+-    u8 boardState[4584];
++    u8 boardState[offsetof(PositionModel, attachedModel)];
+@@ -419 +432 @@
+-    u8 attachmentState[184];
++    u8 attachmentState[offsetof(PositionModel, parentModel) - offsetof(PositionModel, restorePlayer)];
+@@ -429 +442 @@
+-    u8 mapState[168];
++    u8 mapState[offsetof(PositionModel, particlesDisabled) - offsetof(PositionModel, starModel)];
+@@ -431,0 +445,14 @@
++#define MP6_CAPSULE_VIEW(field, owner) \
++    _Static_assert(offsetof(CapsuleStation, field) == offsetof(PositionModel, owner), #field)
++MP6_CAPSULE_VIEW(stationModel, attachedModel);
++MP6_CAPSULE_VIEW(launchBaseModel, parentModel);
++MP6_CAPSULE_VIEW(cannonModel, pairedModel);
++MP6_CAPSULE_VIEW(shotIndex, throwPathIndex);
++MP6_CAPSULE_VIEW(shotCount, throwPathCount);
++MP6_CAPSULE_VIEW(shots, throwPaths);
++MP6_CAPSULE_VIEW(shotsStopped, throwStopped);
++MP6_CAPSULE_VIEW(spaceModels, spaceModels);
++MP6_CAPSULE_VIEW(eventModel, eventModel);
++MP6_CAPSULE_VIEW(mapDisplayModel, mapDisplayModel);
++MP6_CAPSULE_VIEW(mapEffectsHidden, particlesDisabled);
++#undef MP6_CAPSULE_VIEW
+@@ -469,49 +496,7 @@
+-typedef struct EventModelEntry {
+-    s32 modelId;
+-    s32 entryIndex;
+-    s32 flightStage;
+-    s32 age;
+-    s32 travelFrames;
+-    float jumpHeight;
+-    float rotationSpeed;
+-    HuVecF start;
+-    HuVecF end;
+-    HuVecF bend;
+-    HuVecF rotation;
+-} EventModelEntry;
+-
+-typedef struct EventMapMarker {
+-    s32 modelId;
+-    s32 spaceId;
+-    s32 linkedSpace;
+-} EventMapMarker;
+-
+-typedef struct EventSpriteEffect {
+-    s32 objectId;
+-    s32 flightSlot;
+-    u8 stateData[16];
+-    BOOL active;
+-    u8 trajectoryData[140];
+-} EventSpriteEffect;
+-
+-typedef struct EventFlyingEffect {
+-    s32 objectId;
+-    s32 state;
+-    s32 age;
+-    s32 travelFrames;
+-    s32 remainingFrames;
+-    s32 mode;
+-    BOOL active;
+-    HuVecF position;
+-    HuVecF previousPosition;
+-    HuVecF rotation;
+-    HuVecF positionHistory[4];
+-    HuVecF start;
+-    HuVecF control;
+-    HuVecF end;
+-    float spinAngle;
+-    float spinSpeedSlope;
+-    float startDrift;
+-    float spiralRadius;
+-    float spinRateScale;
+-} EventFlyingEffect;
++typedef ModelEntry EventModelEntry;
++
++typedef MapMarker EventMapMarker;
++
++typedef FlyingEffect EventSpriteEffect;
++
++typedef FlyingEffect EventFlyingEffect;
+@@ -562 +547 @@
+-    u32 callbackAddress;
++    void *callbackAddress;
+@@ -565 +550 @@
+-    u32 linkedModelAddress;
++    HU3D_MODEL *linkedModelAddress;
+@@ -568,91 +553,5 @@
+-typedef struct EventPathSpaces {
+-    s32 state;
+-    s32 modelId;
+-    s32 spaceCount;
+-    s32 modelSpaceCount;
+-    float length;
+-    float travelDistance;
+-    HuVecF end;
+-    HuVecF start;
+-    HuVecF markerStart;
+-    HuVecF positions[32];
+-    s32 spaceIds[32];
+-    s32 spaceTypes[32];
+-} EventPathSpaces;
+-
+-typedef struct EventThrowPath {
+-    BOOL ready;
+-    s32 state;
+-    s32 age;
+-    s32 travelFrames;
+-    HuVecF start;
+-    HuVecF bend;
+-    HuVecF end;
+-    HuVecF trailStart;
+-    HuVecF trailEnd;
+-} EventThrowPath;
+-
+-typedef struct BoardModels {
+-    s32 primaryModel;
+-    s32 secondaryModel;
+-    s32 spaceCount;
+-    s32 spaceState;
+-    ModelTransform transforms[14];
+-    SpaceBinding bindings[32];
+-    EventPathSpaces paths[5];
+-    u8 earlierState[8];
+-    s32 particleModels[4];
+-    s32 coinRewardCount;
+-    EventMapMarker markers[3];
+-    s32 markerCount;
+-    s32 markerEffectModels[5];
+-    s32 models[3];
+-    s32 attachedModel;
+-    s32 restorePlayer;
+-    HSF_MATERIAL *materialBackup;
+-    HSF_PALETTE *paletteBackup;
+-    s32 *objectData;
+-    s32 linkedSpaceBaseModel;
+-    s32 linkedSpaceBodyModel;
+-    s32 eyeModel;
+-    s32 attachmentModel;
+-    s32 subAttachmentModel;
+-    u8 laterState[4];
+-    OMOBJ *entryObject;
+-    EventModelEntry *entryData;
+-    u8 positionState[8];
+-    s32 positionModel;
+-    s32 hookedModel;
+-    s32 displayModels[4];
+-    s32 hiddenModel;
+-    u8 spaceData[20];
+-    HuVecF flightOrigin;
+-    HuVecF flightDestination;
+-    OMOBJ *modelObject;
+-    EventFlyingEffect *flyingModels;
+-    BOOL modelsEnabled;
+-    OMOBJ *coinObject;
+-    EventFlyingEffect *flyingCoins;
+-    BOOL coinsEnabled;
+-    s32 leverObjectId;
+-    s32 liftObjectId;
+-    s32 characterObjectId;
+-    OMOBJ *effectObject;
+-    EventSpriteEffect *effects;
+-    ANIMDATA *effectAnimation;
+-    s32 effectModel;
+-    float effectScale;
+-    s32 parentModel;
+-    s32 pairedModel;
+-    s32 throwPathIndex;
+-    s32 throwPathCount;
+-    EventThrowPath *throwPaths;
+-    BOOL throwStopped;
+-    s32 spaceModels[3];
+-    s32 eventModel;
+-    s32 mapDisplayModel;
+-    s32 starModel;
+-    s32 mapModels[5];
+-    u8 laterEventState[144];
+-    BOOL mapView;
+-} BoardModels;
++typedef PathSpaces EventPathSpaces;
++
++typedef ThrowPath EventThrowPath;
++
++typedef PositionModel BoardModels;
+@@ -735,9 +634 @@
+-typedef struct BoardEffects {
+-    u8 earlierState[4716];
+-    OMOBJ *modelObject;
+-    EventFlyingEffect *models;
+-    BOOL modelsEnabled;
+-    OMOBJ *coinObject;
+-    EventFlyingEffect *coins;
+-    BOOL coinsEnabled;
+-} BoardEffects;
++typedef PositionModel BoardEffects;
+@@ -753,8 +644 @@
+-typedef struct TransferWork {
+-    u8 earlierState[4512];
+-    EventMapMarker markers[3];
+-    s32 markerCount;
+-    s32 markerEffectModels[5];
+-    s32 models[3];
+-    s32 attachedModel;
+-} TransferWork;
++typedef PositionModel TransferWork;
+@@ -772,12 +656,3 @@
+-typedef struct SpaceGroup {
+-    s32 state;
+-    s32 modelId;
+-    s32 spaceCount;
+-    u8 displayData[432];
+-    s32 spaceIds[64];
+-} SpaceGroup;
+-
+-typedef struct SpaceEffectWork {
+-    u8 earlierState[984];
+-    SpaceGroup groups[5];
+-} SpaceEffectWork;
++typedef PathSpaces SpaceGroup;
++
++typedef PositionModel SpaceEffectWork;
+@@ -792 +667,2 @@
+-    u8 renderingData[60];
++    u8 renderingData[56];
++    ANIMDATA *animation;
+@@ -800,14 +676,3 @@
+-typedef struct SpacePathSpaces {
+-    s32 state;
+-    s32 modelId;
+-    s32 spaceCount;
+-    s32 modelSpaceCount;
+-    u8 pathData[428];
+-    s32 spaceIds[32];
+-    s32 spaceTypes[32];
+-} SpacePathSpaces;
+-
+-typedef struct BoardPaths {
+-    u8 earlierData[984];
+-    SpacePathSpaces paths[5];
+-} BoardPaths;
++typedef PathSpaces SpacePathSpaces;
++
++typedef PositionModel BoardPaths;
+@@ -859 +724,2 @@
+-    u8 renderParameters[20];
++    u8 renderParameters[16];
++    ANIMDATA *animation;
+@@ -863,4 +729 @@
+-typedef struct BoardSpriteModels {
+-    u8 earlierState[4492];
+-    s32 models[4];
+-} BoardSpriteModels;
++typedef PositionModel BoardSpriteModels;
+@@ -920,4 +783 @@
+-typedef struct StarDisplayWork {
+-    u8 earlierState[4816];
+-    s32 starModel;
+-} StarDisplayWork;
++typedef PositionModel StarDisplayWork;
+@@ -935,10 +795 @@
+-typedef struct StationWork {
+-    u8 boardState[4584];
+-    int stationModel;
+-    u8 restoreState[16];
+-    int machineModels[3];
+-    int capsuleGateModel;
+-    u8 cameraState[16];
+-    int liftBaseModel;
+-    int liftBodyModel;
+-} StationWork;
++typedef PositionModel StationWork;
+@@ -980 +831,2 @@
+-    u8 renderingData[60];
++    u8 renderingData[56];
++    ANIMDATA *animation;
+@@ -984,19 +836 @@
+-typedef struct BoardSpriteWork {
+-    u8 earlierState[4692];
+-    HuVecF origin;
+-    HuVecF destination;
+-    OMOBJ *modelObject;
+-    EventFlyingEffect *models;
+-    BOOL modelsEnabled;
+-    OMOBJ *coinObject;
+-    EventFlyingEffect *coins;
+-    BOOL coinsEnabled;
+-    s32 leverObjectId;
+-    s32 liftObjectId;
+-    s32 characterObjectId;
+-    OMOBJ *effectObject;
+-    EventFlyingEffect *effects;
+-    ANIMDATA *effectAnimation;
+-    s32 effectModel;
+-    float effectScale;
+-} BoardSpriteWork;
++typedef PositionModel BoardSpriteWork;
+@@ -1010,90 +844,3 @@
+-typedef struct PathPathSpaces {
+-    s32 boardModelId;
+-    s32 modelId;
+-    s32 spaceCount;
+-    s32 modelSpaceCount;
+-    float length;
+-    float travelDistance;
+-    HuVecF end;
+-    HuVecF start;
+-    HuVecF markerStart;
+-    HuVecF positions[32];
+-    s32 spaceIds[32];
+-    s32 spaceTypes[32];
+-} PathPathSpaces;
+-
+-typedef struct PathBoardModels {
+-    s32 primaryModel;
+-    s32 secondaryModel;
+-    s32 spaceCount;
+-    s32 spaceState;
+-    ModelTransform transforms[14];
+-    SpaceBinding bindings[32];
+-    PathPathSpaces paths[5];
+-    u8 earlierState[4];
+-    s32 pathEffectModel;
+-    s32 particleModels[4];
+-    s32 coinRewardCount;
+-    EventMapMarker markers[3];
+-    s32 markerCount;
+-    s32 markerEffectModels[5];
+-    s32 models[3];
+-    s32 attachedModel;
+-    s32 restorePlayer;
+-    HSF_MATERIAL *materialBackup;
+-    HSF_PALETTE *paletteBackup;
+-    s32 *objectData;
+-    s32 linkedSpaceBaseModel;
+-    s32 linkedSpaceBodyModel;
+-    s32 eyeModel;
+-    s32 attachmentModel;
+-    s32 subAttachmentModel;
+-    s32 transitionModel;
+-    OMOBJ *entryObject;
+-    EventModelEntry *entryData;
+-    u8 positionState[8];
+-    s32 positionModel;
+-    s32 hookedModel;
+-    s32 displayModels[4];
+-    s32 hiddenModel;
+-    s32 emissionFrame;
+-    u8 spaceData[12];
+-    s32 eventStage;
+-    HuVecF flightOrigin;
+-    HuVecF flightDestination;
+-    OMOBJ *modelObject;
+-    EventFlyingEffect *flyingModels;
+-    BOOL modelsEnabled;
+-    OMOBJ *coinObject;
+-    EventFlyingEffect *flyingCoins;
+-    BOOL coinsEnabled;
+-    s32 leverObjectId;
+-    s32 liftObjectId;
+-    s32 characterObjectId;
+-    OMOBJ *effectObject;
+-    EventSpriteEffect *effects;
+-    ANIMDATA *effectAnimation;
+-    s32 effectModel;
+-    float effectScale;
+-    s32 parentModel;
+-    s32 pairedModel;
+-    s32 throwPathIndex;
+-    s32 throwPathCount;
+-    EventThrowPath *throwPaths;
+-    BOOL throwStopped;
+-    s32 spaceModels[3];
+-    s32 eventModel;
+-    s32 mapDisplayModel;
+-    s32 starModel;
+-    s32 mapModels[5];
+-    float orbitAngles[5];
+-    float orbitRadii[5];
+-    float bobAngles[5];
+-    float orbitSpeed;
+-    HuVecF particleOrigins[4];
+-    s32 emissionDelays[4];
+-    s32 burstFrames[4];
+-    BOOL particlesDisabled;
+-    BOOL mapView;
+-    BOOL transitionActive;
+-} PathBoardModels;
++typedef PathSpaces PathPathSpaces;
++
++typedef PositionModel PathBoardModels;
+@@ -1163 +910 @@
+-    u8 earlierState[4692];
++    u8 earlierState[offsetof(PositionModel, flightOrigin)]; /* [MP6] GameCube offset 4692 */
+@@ -1166 +913,3 @@
+-} BoardFlightWork;
++} BoardFlightWork;
++_Static_assert(offsetof(BoardFlightWork, destination) == offsetof(PositionModel, flightDestination),
++               "the flight view follows the native board work");
+@@ -1185 +934 @@
+-    u8 earlierState[4780];
++    u8 earlierState[offsetof(PositionModel, throwPathIndex)]; /* [MP6] GameCube offset 4780 */
+@@ -1189 +938,3 @@
+-} ThrowPathWork;
++} ThrowPathWork;
++_Static_assert(offsetof(ThrowPathWork, paths) == offsetof(PositionModel, throwPaths), "throw path view");
++_Static_assert(sizeof(throwpathsThrowPath) == sizeof(ThrowPath), "throw path stride");
+@@ -1218 +965,2 @@
+-    u8 renderParameters[20];
++    u8 renderParameters[16];
++    ANIMDATA *animation;
+@@ -1223 +971 @@
+-    u32 callbackAddress;
++    void *callbackAddress;
+@@ -1708,0 +1457,5 @@
++    /* Raise only the finite room walls into the newly exposed upper corners. */
++    /* Continue the lower, front apron in both X and Z, beneath the side walls. */
++    mp6_widescreen_extend_floor_at(mbObjModelIDGet(backgroundModel), "yukas2", 0, 0, 0, 250, 2);
++    mp6_widescreen_extend_edge_span(mbObjModelIDGet(backgroundModel), "kabeL", 1, 3500, 7500);
++    mp6_widescreen_extend_edge_span(mbObjModelIDGet(backgroundModel), "kabeR", 1, 3500, 7500);
+@@ -2453,2 +2206,3 @@
+-    mbObjDispSet((s16) (*(s32 *)((s8 *)(work) + 4812)), 1);
+-    (*(s32 *)((s8 *)(work) + 4984)) = 0;
++    /* [MP6] GameCube offsets 4812 and 4984; named so they follow the native layout. */
++    mbObjDispSet((s16)((PositionModel *)work)->mapDisplayModel, 1);
++    ((PositionModel *)work)->particlesDisabled = 0;
+@@ -2479 +2233 @@
+-        work->mapView = TRUE;
++        work->particlesDisabled = TRUE;
+@@ -2491 +2245 @@
+-        work->mapView = FALSE;
++        work->particlesDisabled = FALSE;
+@@ -2756,0 +2511,4 @@
++    { /* [MP6] the conveyors' path strip is drawn solid (src/hsf/mp6_garage_conveyor.c) */
++        extern void mp6_garage_conveyor_strip_solid(void);
++        mp6_garage_conveyor_strip_solid();
++    }
+@@ -3538,2 +3296,2 @@
+-    *(HUPROCESS **) ((u8 *) &lbl_1_bss_18 + (processSlot * 4)) =
+-        HuPrcChildCreate(*(void (**)(void))((u8 *) &lbl_1_data_874 + (processSlot * 4)), 8196U,
++    lbl_1_bss_18[processSlot] = /* [MP6] index, not GameCube 4-byte pointer offsets */
++        HuPrcChildCreate(lbl_1_data_874[processSlot], 8196U,
+@@ -3549 +3307 @@
+-            if (*(void **)((u8 *)&lbl_1_bss_18 + index * 4) != NULL) {
++            if (lbl_1_bss_18[index] != NULL) {
+@@ -3722 +3480 @@
+-    group = &work->groups[object->work[0]];
++    group = &work->paths[object->work[0]];
+@@ -3738 +3496 @@
+-            if (mbCapMasuDispTypeGet(group->spaceIds[particleIndex]) == 1) {
++            if (mbCapMasuDispTypeGet(group->allSpaceIds[particleIndex]) == 1) {
+@@ -3784 +3542 @@
+-        work->models[index] = fn_1_15E30(
++        work->particleModels[index] = fn_1_15E30(
+@@ -3787,3 +3545,3 @@
+-        fn_1_16E44(work->models[index], lbl_1_data_930, lbl_1_data_960);
+-        Hu3DModelLayerSet(work->models[index], 2);
+-        model = &Hu3DData[work->models[index]];
++        fn_1_16E44(work->particleModels[index], lbl_1_data_930, lbl_1_data_960);
++        Hu3DModelLayerSet(work->particleModels[index], 2);
++        model = &Hu3DData[work->particleModels[index]];
+@@ -3826 +3584 @@
+-        *(s32 *) ((u8 *) &lbl_1_bss_4C + (playerIndex * 4)) = 0;
++        lbl_1_bss_4C[playerIndex] = NULL; /* [MP6] whole 8-byte pointers */
+@@ -4016 +3774 @@
+-        if (*(void **)((u8 *)&lbl_1_bss_4C + index * 4) != NULL) {
++        if (lbl_1_bss_4C[index] != NULL) {
+@@ -4109 +3867 @@
+-    entryData = (*(s32 * *)((s8 *)(lbl_1_bss_10) + (92)));
++    entryData = (s32 *)lbl_1_bss_10->data; /* [MP6] GameCube offset 92 */
+@@ -5052,3 +4810,3 @@
+-        work->stationModel = mbObjCreate(DATANUM(DATA_capsulechar3, 0), motionData, 0);
+-        mbObjMotionSet((s16) work->stationModel, 2, HU3D_MOTATTR_LOOP);
+-        mbObjLayerSet((s16) work->stationModel, 3U);
++        work->attachedModel = mbObjCreate(DATANUM(DATA_capsulechar3, 0), motionData, 0);
++        mbObjMotionSet((s16) work->attachedModel, 2, HU3D_MOTATTR_LOOP);
++        mbObjLayerSet((s16) work->attachedModel, 3U);
+@@ -5056,3 +4814,3 @@
+-        mbObjHookSet((s16) work->liftBodyModel, "oyamahook", (s16) work->stationModel);
+-        mbObjMotionTimeSet((s16) work->liftBodyModel, 0.0f);
+-        mbObjDispSet((s16) work->liftBaseModel, 1);
++        mbObjHookSet((s16) work->motionReferenceModel, "oyamahook", (s16) work->attachedModel);
++        mbObjMotionTimeSet((s16) work->motionReferenceModel, 0.0f);
++        mbObjDispSet((s16) work->stationLiftBaseModel, 1);
+@@ -5062,2 +4820,2 @@
+-        mbObjPosSetV((s16) work->liftBaseModel, &position);
+-        mbObjRotSet((s16) work->liftBaseModel, 0.0f, -90.0f, 0.0f);
++        mbObjPosSetV((s16) work->stationLiftBaseModel, &position);
++        mbObjRotSet((s16) work->stationLiftBaseModel, 0.0f, -90.0f, 0.0f);
+@@ -5072 +4830 @@
+-            mbObjPosSetV((s16) work->liftBaseModel, &position);
++            mbObjPosSetV((s16) work->stationLiftBaseModel, &position);
+@@ -5075,2 +4833,2 @@
+-        mbObjMotionSpeedSet((s16) work->liftBodyModel, 0.0f);
+-        mbObjMotionShiftSet((s16) work->stationModel, 3, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
++        mbObjMotionSpeedSet((s16) work->motionReferenceModel, 0.0f);
++        mbObjMotionShiftSet((s16) work->attachedModel, 3, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
+@@ -5087,2 +4845,2 @@
+-        mbObjMotionShiftSet((s16) work->stationModel, 1, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
+-        model = work->capsuleGateModel;
++        mbObjMotionShiftSet((s16) work->attachedModel, 1, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
++        model = work->attachmentModel;
+@@ -5117 +4875 @@
+-        model = work->capsuleGateModel;
++        model = work->attachmentModel;
+@@ -5167,3 +4925,3 @@
+-        mbObjMotionShiftSet((s16) work->stationModel, 2,
+-                            mbObjMotionTimeGet((s16) work->liftBodyModel), 8.0f, HU3D_MOTATTR_LOOP);
+-        while (mbObjMotionShiftIDGet((s16) work->stationModel) != -1) {
++        mbObjMotionShiftSet((s16) work->attachedModel, 2,
++                            mbObjMotionTimeGet((s16) work->motionReferenceModel), 8.0f, HU3D_MOTATTR_LOOP);
++        while (mbObjMotionShiftIDGet((s16) work->attachedModel) != -1) {
+@@ -5172,2 +4930,2 @@
+-        mbObjMotionSpeedSet((s16) work->liftBodyModel, 1.0f);
+-        mbObjMotionTimeSet((s16) work->liftBodyModel, mbObjMotionTimeGet((s16) work->stationModel));
++        mbObjMotionSpeedSet((s16) work->motionReferenceModel, 1.0f);
++        mbObjMotionTimeSet((s16) work->motionReferenceModel, mbObjMotionTimeGet((s16) work->attachedModel));
+@@ -5212,2 +4970,2 @@
+-        mbObjMotionSpeedSet((s16) work->liftBodyModel, 0.0f);
+-        mbObjMotionShiftSet((s16) work->stationModel, 1, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
++        mbObjMotionSpeedSet((s16) work->motionReferenceModel, 0.0f);
++        mbObjMotionShiftSet((s16) work->attachedModel, 1, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
+@@ -5338 +5096 @@
+-        mbObjMotionShiftSet((s16) work->stationModel, 4, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
++        mbObjMotionShiftSet((s16) work->attachedModel, 4, 0.0f, 8.0f, HU3D_MOTATTR_LOOP);
+@@ -5345 +5103 @@
+-            mbObjPosSetV((s16) work->liftBaseModel, &position);
++            mbObjPosSetV((s16) work->stationLiftBaseModel, &position);
+@@ -5357,4 +5115,4 @@
+-        mbObjHookReset((s16) work->liftBodyModel);
+-        mbObjKill((s16) work->stationModel);
+-        work->stationModel = -1;
+-        mbObjDispSet((s16) work->liftBaseModel, 0);
++        mbObjHookReset((s16) work->motionReferenceModel);
++        mbObjKill((s16) work->attachedModel);
++        work->attachedModel = -1;
++        mbObjDispSet((s16) work->stationLiftBaseModel, 0);
+@@ -5555 +5313 @@
+-    work->positionModel = primaryModel;
++    work->modelId = primaryModel;
+@@ -6094 +5852 @@
+-    modelId = mbObjModelIDGet(modelWork->positionModel);
++    modelId = mbObjModelIDGet(modelWork->modelId);
+@@ -6177 +5935 @@
+-    work->models = models = HuMemDirectMallocNum(HEAP_HEAP,
++    work->flyingModels = models = HuMemDirectMallocNum(HEAP_HEAP,
+@@ -6180 +5938 @@
+-    memset(work->models, 0, sizeof(EventFlyingEffect) * 32);
++    memset(work->flyingModels, 0, sizeof(EventFlyingEffect) * 32);
+@@ -6210 +5968 @@
+-    effect = work->models;
++    effect = work->flyingModels;
+@@ -6212 +5970 @@
+-    effect = &work->models[index];
++    effect = &work->flyingModels[index];
+@@ -6220 +5978 @@
+-        effect = work->models;
++        effect = work->flyingModels;
+@@ -6312 +6070 @@
+-    effect = work->models;
++    effect = work->flyingModels;
+@@ -6404 +6162 @@
+-    modelEntries = work->models;
++    modelEntries = work->flyingModels;
+@@ -6428,2 +6186,2 @@
+-    objectList = manager->models;
+-    if (manager->models != NULL) {
++    objectList = manager->flyingModels;
++    if (manager->flyingModels != NULL) {
+@@ -6436 +6194 @@
+-        allocationToFree = manager->models;
++        allocationToFree = manager->flyingModels;
+@@ -6439 +6197 @@
+-    manager->models = NULL;
++    manager->flyingModels = NULL;
+@@ -6462 +6220 @@
+-        effect->flightSlot = -1;
++        effect->state = -1;
+@@ -6614 +6372 @@
+-        PSVECSubtract(&work->origin, position, &direction);
++        PSVECSubtract(&work->flightOrigin, position, &direction);
+@@ -6642 +6400 @@
+-    work->coins = coinAllocation;
++    work->flyingCoins = coinAllocation;
+@@ -6644 +6402 @@
+-    memset(work->coins, 0, sizeof(EventFlyingEffect) * 32);
++    memset(work->flyingCoins, 0, sizeof(EventFlyingEffect) * 32);
+@@ -6697 +6455 @@
+-    effect = work->coins;
++    effect = work->flyingCoins;
+@@ -6726 +6484 @@
+-    record = manager->coins;
++    record = manager->flyingCoins;
+@@ -6747,2 +6505,2 @@
+-    coinObjectList = manager->coins;
+-    if (manager->coins != NULL) {
++    coinObjectList = manager->flyingCoins;
++    if (manager->flyingCoins != NULL) {
+@@ -6755 +6513 @@
+-        allocationToFree = manager->coins;
++        allocationToFree = manager->flyingCoins;
+@@ -6758 +6516 @@
+-    manager->coins = NULL;
++    manager->flyingCoins = NULL;
+@@ -7066 +6824 @@
+-            mbWinTopInsertMesSet((u32) numberText, 0);
++            mp6_board_window_top_insert_text(numberText, 0);
+@@ -7069 +6827 @@
+-                mbWinTopInsertMesSet((u32) costText[0], 1);
++                mp6_board_window_top_insert_text(costText[0], 1);
+@@ -7071 +6829 @@
+-                mbWinTopInsertMesSet((u32) costText[1], 2);
++                mp6_board_window_top_insert_text(costText[1], 2);
+@@ -7073 +6831 @@
+-                mbWinTopInsertMesSet((u32) costText[2], 3);
++                mp6_board_window_top_insert_text(costText[2], 3);
+@@ -7075 +6833 @@
+-                mbWinTopInsertMesSet((u32) costText[3], 4);
++                mp6_board_window_top_insert_text(costText[3], 4);
+@@ -7077 +6835 @@
+-                mbWinTopInsertMesSet((u32) costText[4], 5);
++                mp6_board_window_top_insert_text(costText[4], 5);
+@@ -7080 +6838 @@
+-                mbWinTopInsertMesSet((u32) costText[0], 1);
++                mp6_board_window_top_insert_text(costText[0], 1);
+@@ -7082 +6840 @@
+-                mbWinTopInsertMesSet((u32) costText[1], 2);
++                mp6_board_window_top_insert_text(costText[1], 2);
+@@ -7084 +6842 @@
+-                mbWinTopInsertMesSet((u32) costText[2], 3);
++                mp6_board_window_top_insert_text(costText[2], 3);
+@@ -7086 +6844 @@
+-                mbWinTopInsertMesSet((u32) costText[3], 4);
++                mp6_board_window_top_insert_text(costText[3], 4);
+@@ -7088 +6846 @@
+-                mbWinTopInsertMesSet((u32) costText[4], 5);
++                mp6_board_window_top_insert_text(costText[4], 5);
+@@ -7219 +6977 @@
+-            mbWinTopInsertMesSet((u32) numberText, 0);
++            mp6_board_window_top_insert_text(numberText, 0);
+@@ -7370 +7128 @@
+-            mbWinTopInsertMesSet((u32) numberText, 0);
++            mp6_board_window_top_insert_text(numberText, 0);
+@@ -7965 +7723,4 @@
+-        GXSetArray(GX_VA_POS, hook->positions, sizeof(HuVecF));
++        /* [MP6] Real array sizes: Aurora uploads exactly this many bytes, and an
++         * unsized array drew the conveyor spaces as faint purple ghosts. */
++        mp6_gxarray_bind_span(GX_VA_POS, hook->positions,
++            hook->particleCount * 4 * sizeof(HuVecF), sizeof(HuVecF));
+@@ -7968 +7729,3 @@
+-        GXSetArray(GX_VA_CLR0, &hook->particles->color, sizeof(spriterenderSpriteParticle));
++        mp6_gxarray_bind_span(GX_VA_CLR0, &hook->particles->color,
++            hook->particleCount ? (hook->particleCount - 1) * sizeof(spriterenderSpriteParticle) + sizeof(GXColor) : 0,
++            sizeof(spriterenderSpriteParticle));
+@@ -7971 +7734,2 @@
+-        GXSetArray(GX_VA_TEX0, hook->textureCoordinates, sizeof(HuVec2f));
++        mp6_gxarray_bind_span(GX_VA_TEX0, hook->textureCoordinates,
++            hook->particleCount * 4 * sizeof(HuVec2f), sizeof(HuVec2f));
+@@ -8249,0 +8014,2 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */

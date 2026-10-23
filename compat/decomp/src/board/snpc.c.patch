@@ -1,9 +1,26 @@
 --- a/src/board/snpc.c
 +++ b/src/board/snpc.c
-@@ -2,0 +3 @@
+@@ -4,0 +5 @@
 +#include "game/board/branch.h"
-@@ -405 +406,3 @@
--    float zoom, float fov, int maxTime);
-+    /* Native ABI: match game/board/camera.h and the camera.c definition.
-+     * Keep the recovered SNPC behavior; only the caller prototype changes. */
-+    float zoom, float fov, s16 maxTime);
+@@ -31,4 +32 @@
+-    asm {
+-        fabs value, value
+-    }
+-    return value;
++    return fabsf(value);
+@@ -2150,8 +2148,2 @@
+-    register __vec2x32float__ xy;
+-    register float z;
+-    asm {
+-        psq_l xy, 0(src), 0, 0
+-        lfs z, 8(src)
+-        psq_st xy, 0(dst), 0, 0
+-        stfs z, 8(dst)
+-    }
++    const HuVecF value = *src;
++    *dst = value;
+@@ -1101 +1101,3 @@
+-        return;
++        /* Native builds have always returned FALSE here: the hook stays armed and only
++         * the last player's end of turn runs the event. */
++        return FALSE;

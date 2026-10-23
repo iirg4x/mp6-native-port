@@ -67,7 +67,7 @@ void mp6_arena_init(void);
  * success, keeping the boot log byte-stable for the log-diff gates; the
  * seam function returns 0 on query failure too, treated as "cannot prove
  * the invariant" (fail closed). */
-static void mp6_assert_image_low(void)
+static void mp6_prepare_low_memory(void)
 {
     if (!mp6_host_image_below_4gb()) {
         fprintf(stderr,
@@ -79,6 +79,13 @@ static void mp6_assert_image_low(void)
         fflush(stderr);
         exit(1);
     }
+#ifdef _WIN32
+    if (!mp6_host_memory_prepare()) {
+        fprintf(stderr, "[FATAL] mp6 boot: could not reserve low-address game memory before graphics startup\n");
+        fflush(stderr);
+        exit(1);
+    }
+#endif
 }
 
 #ifdef MP6_HEADLESS_BUILD
@@ -104,7 +111,7 @@ int mp6_headless_main(int ticks)
      * line survives even if the process is killed instead of exiting. */
     setvbuf(stdout, NULL, _IOLBF, 4096);
     mp6_host_crash_install();
-    mp6_assert_image_low(); /* whole-image-below-4GB invariant */
+    mp6_prepare_low_memory(); /* claim game address space before host allocations */
 
     if (ticks > 0) mp6_max_ticks = ticks;
     mp6_enh_cache_environment();
@@ -162,6 +169,9 @@ int main(int argc, char **argv)
 #include <aurora/aurora.h>
 #include <aurora/event.h>
 #include <aurora/main.h> /* #define main aurora_main -- see file header comment */
+#ifdef _WIN32
+#include <SDL3/SDL_hints.h> /* SDL_HINT_WINDOWS_INTRESOURCE_ICON */
+#endif
 
 #include <string.h> /* memset, strcmp */
 
@@ -276,6 +286,46 @@ static void mp6_aurora_log_callback(AuroraLogLevel level, const char *module, co
     }
 }
 
+/* The first-launch shader build (Aurora's pipeline cache does the work and
+ * draws the progress; this runs the frames). Returns 1 if the window was
+ * closed meanwhile. Declared here: aurora/gfx.h's C half needs <stdbool.h>. */
+extern int aurora_pipeline_warmup_needed(void);
+extern void aurora_pipeline_warmup_begin(void);
+extern int aurora_pipeline_warmup_poll(uint32_t *done, uint32_t *total);
+extern void aurora_pipeline_warmup_draw(uint32_t done, uint32_t total);
+extern void mp6_ao_register_pipeline_type(void); /* AO pipelines are in the build */
+
+static int mp6_shader_warmup(int launcherMode)
+{
+    const char *env = getenv("MP6_SHADER_WARMUP");
+    const int enabled = (env != NULL && *env != '\0') ? (*env != '0') : launcherMode;
+    uint32_t done = 0, total = 0;
+    uint64_t start;
+
+    if (!enabled) return 0;
+    mp6_ao_register_pipeline_type();
+    if (!aurora_pipeline_warmup_needed()) return 0;
+    start = mp6_host_monotonic_ns();
+    aurora_pipeline_warmup_begin();
+    while (aurora_pipeline_warmup_poll(&done, &total)) {
+        const AuroraEvent *event = aurora_update();
+        while (event != NULL && event->type != AURORA_NONE) {
+            if (event->type == AURORA_EXIT) return 1;
+            ++event;
+        }
+        if (aurora_begin_frame()) {
+            aurora_pipeline_warmup_draw(done, total);
+            aurora_end_frame();
+        }
+        /* Leave the cores to the compile threads (presents may be unsynced). */
+        mp6_host_sleep_ns(4000000ull);
+    }
+    fprintf(stderr, "[MP6-PIPE] first-launch build: %u pipelines in %.0f ms\n", total,
+            (double)(mp6_host_monotonic_ns() - start) / 1e6);
+    fflush(stderr);
+    return 0;
+}
+
 int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
 {
 #if defined(_WIN32) && defined(NDEBUG)
@@ -283,7 +333,7 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
 #endif
     setvbuf(stdout, NULL, _IOLBF, 4096);
     mp6_host_crash_install();
-    mp6_assert_image_low(); /* whole-image-below-4GB invariant */
+    mp6_prepare_low_memory(); /* claim game address space before graphics/launcher */
 
     /* A plain double-click (no CLI arg) runs unlimited: without this it
      * would inherit the shared 60-tick (~1s) default and immediately
@@ -412,6 +462,30 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     if (launcherMode) {
         config.desiredBackend = (AuroraBackend)mp6_launcher_cfg_backend();
         config.vsync = mp6_launcher_cfg_vsync() ? true : false;
+#ifdef __EMSCRIPTEN__
+        /* The web has no tearing present mode: a canvas reaches the screen only in
+         * the browser's rendering update, once per display refresh. "VSync off"
+         * there only stopped the frame yield from waiting for that refresh, so
+         * the game drew several frames per refresh and the browser showed
+         * whichever came last: wasted work and motion sampled at uneven times
+         * (measured: 37% of refreshes received 2+ frames with VSync off, none
+         * with it on). Every user-facing present on the web waits for the
+         * display. Fast play's decoupled ticks call aurora_enable_vsync(false)
+         * directly and are unaffected. */
+        config.vsync = true;
+#endif
+#ifdef __ANDROID__
+        /* Android composites every surface (SurfaceFlinger), so nothing tears
+         * with either present mode, and the VSync setting looked like it did
+         * nothing. What it did change was pacing, for the worse: FIFO blocks the
+         * render worker on every present, and on a Galaxy S22+ at 120 Hz
+         * (Treetop, 1-minute runs) FIFO left 42% of refreshes without a new
+         * frame against 18% with MAILBOX (present gaps p90 13.1 vs 11.2 ms) at
+         * the same 119 frames/s. Frames never exceed the panel's rate either way
+         * (Unlocked FPS caps replays per tick from the refresh rate). So Android
+         * always presents MAILBOX and the Settings row is hidden. */
+        config.vsync = false;
+#endif
     } else {
         /* Automation/straight-boot: default vsync OFF. A drive that only needs
          * to REACH a screen shouldn't be paced down to the display refresh
@@ -527,6 +601,13 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * (mp6_display_resolve_launch_pos's own first guard), so a harness run's
      * placement, and its log, are bit-for-bit what they were before this
      * existed. */
+#ifdef _WIN32
+    /* Window/taskbar icon = the exe's embedded app icon (packaging/windows/
+     * mp6.rc). Read when SDL registers its window class, so it must be set
+     * before the first SDL video init, which the resolver below may do. */
+    SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "101");
+    SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "101");
+#endif
     {
         int posX = -1, posY = -1;
         if (mp6_display_resolve_launch_pos(launcherMode, config.windowWidth,
@@ -540,6 +621,17 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
     fflush(stdout);
     AuroraInfo info = aurora_initialize(argc, argv, &config);
     free(gpuCachePath); /* Aurora duplicates config.cachePath during initialization. */
+    {
+        /* The bundled shader seed (res/initial_pipeline_cache.db) must load on
+         * every platform, offline too; a missing one means first visits compile
+         * shaders mid-game. One line either way (the web page reports it).
+         * Declared here: aurora/gfx.h's C half needs <stdbool.h>. */
+        extern int aurora_pipeline_seed_ok(void);
+        extern const char *aurora_pipeline_seed_status(void);
+        fprintf(stderr, "[MP6-PIPE] seed %s: %s\n", aurora_pipeline_seed_ok() ? "ok" : "MISSING",
+                aurora_pipeline_seed_status());
+        fflush(stderr);
+    }
     /* Apply the single AA decision's live post-process projection after Aurora
      * starts. The init-time projections above are guaranteed to be native when
      * bootFxaaOn is true, so FXAA can never stack with MSAA or SSAA. Report the
@@ -592,6 +684,17 @@ int main(int argc, char **argv) /* expands to aurora_main via aurora/main.h */
      * it exists -- see mp6_boot.h and src/gx/aurora_bridge.c. AFTER the
      * placement above so it is measured against the window's final position. */
     mp6_bridge_post_window_init((void *)info.window);
+
+    /* First launch on this GPU/driver, or with a new shader seed: build every
+     * shader the game is known to use behind one progress screen, so nothing
+     * compiles from scratch mid-game (docs/SHADER_CACHE.md). Interactive
+     * launches only unless MP6_SHADER_WARMUP=1; MP6_SHADER_WARMUP=0 skips it. */
+    if (mp6_shader_warmup(launcherMode)) {
+        printf("[BOOT] closed while preparing shaders -- shutting down Aurora, exiting 0\n");
+        fflush(stdout);
+        aurora_shutdown();
+        return 0;
+    }
 
     /* The launcher menu, interactive launches only. Runs the exact
      * aurora frame cycle the game itself uses, BEFORE any game state

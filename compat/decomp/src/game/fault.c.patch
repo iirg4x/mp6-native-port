@@ -1,5 +1,8 @@
 --- a/src/game/fault.c
 +++ b/src/game/fault.c
-@@ -257 +257 @@
--                        if (bits & 0xF != 0) {
-+                        if ((bits & 0xF) != 0) {
+@@ -278,3 +278,2 @@
+-                        // The comparison binds before &: test bit 0 and duplicate it into two
+-                        // horizontal pixels.
+-                        if (glyphBits & 0xF != 0) {
++                        // Duplicate a nonzero glyph nibble into two horizontal pixels.
++                        if ((glyphBits & 0xF) != 0) {

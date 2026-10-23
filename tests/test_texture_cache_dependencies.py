@@ -8,13 +8,16 @@ import unittest
 from tools import build
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / 'build/android-aurora-source'
+SOURCE = ROOT / 'third_party/aurora'
 CASES = ('palette_version', 'palette_selection', 'palette_pointer', 'palette_format',
          'palette_count', 'palette_missing', 'image_pointer', 'image_size',
          'image_format', 'image_mips', 'null_retry', 'static_clear', 'anonymous_palette',
          'dynamic_zero', 'dynamic_pointer', 'dynamic_format', 'dynamic_count', 'dynamic_version',
          'dynamic_uncached', 'dynamic_anonymous', 'palette_removed', 'palette_empty',
-         'palette_invalid_slot', 'retained_destroy', 'unchanged_reuse', 'shared_palette_upload')
+         'palette_invalid_slot', 'retained_destroy', 'unchanged_reuse', 'shared_palette_upload',
+         'content_reload', 'source_released', 'rewrite_in_place', 'written_in_place',
+         'written_unchanged', 'copy_released',
+         'copy_after_release')
 
 def compile_subject(folder, source=SOURCE):
     gx = (source/'lib/gx/gx.cpp').read_text()

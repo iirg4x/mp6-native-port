@@ -1,0 +1,29 @@
+--- a/src/REL/m676Dll/effects.c
++++ b/src/REL/m676Dll/effects.c
+@@ -11,0 +12,2 @@
++#include "mp6_widescreen.h"
++#include "mp6_gxarray_registry.h"
+@@ -81 +83 @@
+-    effectWork = HuMemDirectMallocNum(HEAP_HEAP, 248, HU_MEMNUM_OVL);
++    effectWork = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M676EffectWork), HU_MEMNUM_OVL);
+@@ -83 +85 @@
+-    memset(effectWork, 0, 248);
++    memset(effectWork, 0, sizeof(M676EffectWork));
+@@ -240,0 +243 @@
++            GXEnd();
+@@ -380 +383 @@
+-    GXSetTexCopySrc(0, 0, 640, 480);
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
+@@ -395 +398 @@
+-    C_MTXLightPerspective(perspectiveMatrix, fov, 1.2f,
++    C_MTXLightPerspective(perspectiveMatrix, fov, 1.2f * mp6_widescreen_scale_factor(),
+@@ -428 +431 @@
+-    GXSetTexCopySrc(0, 0, 640, 480);
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
+@@ -576,3 +579,3 @@
+-    GXSetArray(GX_VA_POS, (void *)lbl_1_rodata_800, 6U);
+-    GXSetArray(GX_VA_CLR0, (void *)lbl_1_rodata_6E0, 2U);
+-    GXSetArray(GX_VA_TEX0, (void *)lbl_1_rodata_8C0, 4U);
++    mp6_gxarray_bind_span(GX_VA_POS, lbl_1_rodata_800, sizeof(lbl_1_rodata_800), 6);
++    mp6_gxarray_bind_span(GX_VA_CLR0, lbl_1_rodata_6E0, sizeof(lbl_1_rodata_6E0), 2);
++    mp6_gxarray_bind_span(GX_VA_TEX0, lbl_1_rodata_8C0, sizeof(lbl_1_rodata_8C0), 4);

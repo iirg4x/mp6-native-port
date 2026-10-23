@@ -1,0 +1,8 @@
+--- a/src/REL/m647dll/text_064B8.c
++++ b/src/REL/m647dll/text_064B8.c
+@@ -3,0 +4,2 @@
++s16 fn_1_3468(s16 index);
++s16 fn_1_3484(s16 index);
+@@ -83 +85 @@
+-extern s16 fn_1_34A0(s16 index);
++extern s32 fn_1_34A0(s16 activityIndex);

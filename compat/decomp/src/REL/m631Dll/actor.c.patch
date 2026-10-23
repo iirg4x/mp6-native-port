@@ -1,0 +1,137 @@
+--- a/src/REL/m631Dll/actor.c
++++ b/src/REL/m631Dll/actor.c
+@@ -3 +3,2 @@
+-#include "REL/m631Dll/utilities.h"
++#include "mp6_m631_native.h"
++#include "game/audio.h"
+@@ -52,23 +52,0 @@
+-extern f32 fn_1_2528(void);
+-extern void fn_1_AFF8(void *, f32, s32);
+-extern void fn_1_AF2C(void *, u32, u32, u32, u32, const HuVecF *);
+-extern void *fn_1_B0B8(s32 (*)(void *), void *);
+-extern M631AnimationNode *fn_1_31D8(M631AnimationQueue *);
+-extern void fn_1_32C8(M631AnimationNode *);
+-extern s32 fn_1_37FC(void *);
+-extern void fn_1_38E8(M631MotionPairNode *, M631MotionPairNode *);
+-extern void fn_1_228C(HU3D_MODELID *);
+-extern M631AnimationQueue *fn_1_2E9C(void);
+-extern void fn_1_3B44(M631ActorWork *);
+-extern void fn_1_3B7C(HuVecF *);
+-extern void fn_1_3BC4(void);
+-extern void fn_1_3BF4(M631ActorMotionState *);
+-extern s32 fn_1_51D0(f32);
+-extern void fn_1_5014(HuVecF *);
+-extern s32 fn_1_AAD8(void *);
+-extern M631ActorWork *fn_1_469C(const HuVecF *);
+-extern s16 fn_1_50B4(void);
+-extern void fn_1_5054(void);
+-extern void fn_1_5084(void);
+-extern void fn_1_50DC(HuVecF *, f32);
+-
+@@ -87,2 +65,2 @@
+-void fn_1_6724(M631ActorWork *state);
+-s32 fn_1_674C(M631ActorWork *callbackActor);
++void fn_1_6724(void *callbackData);
++s32 fn_1_674C(void *callbackData);
+@@ -91 +69 @@
+-void fn_1_6C2C(s32 callbackToken);
++void fn_1_6C2C(void *callbackData);
+@@ -104,3 +82,3 @@
+-void fn_1_A2F4(M631MotionController *state);
+-s32 fn_1_A334(M631MotionController *state);
+-s32 fn_1_A418(M631MotionController *state);
++void fn_1_A2F4(void *callbackData);
++s32 fn_1_A334(void *callbackData);
++s32 fn_1_A418(void *callbackData);
+@@ -108 +86 @@
+-               M631MotionPairNode *context, f64 distance);
++               M631MotionPairNode *context, f32 distance);
+@@ -115,5 +92,0 @@
+-/* Returns an angle in radians for the horizontal movement calculations. */
+-static inline float atan2f(float y, float x)
+-{
+-    return (float)atan2((double)y, (double)x);
+-}
+@@ -305,2 +278,2 @@
+-        fn_1_AF2C(&actor->callbackWork, (u32)actor, (u32)fn_1_6C2C,
+-                  (u32)fn_1_6C3C, (u32)fn_1_6D80, &actor->position);
++        fn_1_AF2C(&actor->callbackWork, actor, fn_1_6C2C,
++                  fn_1_6C3C, fn_1_6D80, &actor->position);
+@@ -311,2 +284,2 @@
+-        fn_1_AF2C(&actor->callbackWork, (u32)actor, (u32)fn_1_6724,
+-                  (u32)fn_1_674C, (u32)fn_1_6A14, &actor->position);
++        fn_1_AF2C(&actor->callbackWork, actor, fn_1_6724,
++                  fn_1_674C, fn_1_6A14, &actor->position);
+@@ -366,3 +339,3 @@
+-                    fn_1_AF2C(&node->callbackWork, (u32)node,
+-                              (u32)fn_1_32C8, (u32)fn_1_37FC,
+-                              (u32)fn_1_38E8, &node->position);
++                    fn_1_AF2C(&node->callbackWork, node,
++                              fn_1_32C8, fn_1_37FC,
++                              fn_1_38E8, &node->position);
+@@ -532,3 +505,3 @@
+-void fn_1_6724(M631ActorWork *state)
+-{
+-    M631ActorWork *callbackState = state;
++void fn_1_6724(void *callbackData)
++{
++    M631ActorWork *callbackState = (M631ActorWork *)callbackData;
+@@ -541 +514 @@
+-s32 fn_1_674C(M631ActorWork *callbackActor) {
++s32 fn_1_674C(void *callbackData) {
+@@ -544 +517 @@
+-    actor = callbackActor;
++    actor = (M631ActorWork *)callbackData;
+@@ -635,4 +608,2 @@
+-void fn_1_6C2C(s32 callbackToken) {
+-    s32 ignoredToken;
+-
+-    ignoredToken = callbackToken;
++void fn_1_6C2C(void *callbackData) {
++    (void)callbackData;
+@@ -860 +831 @@
+-        fn_1_AFF8(node, 150.0f, 6);
++        fn_1_AFF8(&node->callback, 150.0f, 6);
+@@ -862,2 +833,2 @@
+-            fn_1_AF2C(node, (u32)node, (u32)fn_1_A2F4, (u32)fn_1_A418,
+-                      (u32)fn_1_A730, &node->sourcePosition);
++            fn_1_AF2C(&node->callback, node, fn_1_A2F4, fn_1_A418,
++                      fn_1_A730, &node->sourcePosition);
+@@ -867,2 +838,2 @@
+-            fn_1_AF2C(node, (u32)node, (u32)fn_1_A2A4, (u32)fn_1_A334,
+-                      (u32)fn_1_A4FC, &node->sourcePosition);
++            fn_1_AF2C(&node->callback, node, fn_1_A2A4, fn_1_A334,
++                      fn_1_A4FC, &node->sourcePosition);
+@@ -1807,3 +1778,3 @@
+-void fn_1_A2F4(M631MotionController *state)
+-{
+-    M631MotionController *motion = state;
++void fn_1_A2F4(void *callbackData)
++{
++    M631MotionController *motion = (M631MotionController *)callbackData;
+@@ -1817,3 +1788,3 @@
+-s32 fn_1_A334(M631MotionController *state)
+-{
+-    M631MotionController *motion = state;
++s32 fn_1_A334(void *callbackData)
++{
++    M631MotionController *motion = (M631MotionController *)callbackData;
+@@ -1836,3 +1807,3 @@
+-s32 fn_1_A418(M631MotionController *state)
+-{
+-    M631MotionController *motion = state;
++s32 fn_1_A418(void *callbackData)
++{
++    M631MotionController *motion = (M631MotionController *)callbackData;
+@@ -1856,3 +1827,3 @@
+-               M631MotionPairNode *context, f64 distance)
+-{
+-    M631MotionController *node = callback->owner;
++               M631MotionPairNode *context, f32 distance)
++{
++    M631MotionController *node = (M631MotionController *)callback->owner;
+@@ -1975,2 +1946,2 @@
+-            fn_1_AF2C(&node->callbackWork, (u32)node,
+-                      (u32)fn_1_32C8, (u32)fn_1_37FC, (u32)fn_1_38E8,
++            fn_1_AF2C(&node->callbackWork, node,
++                      fn_1_32C8, fn_1_37FC, fn_1_38E8,

@@ -1,8 +1,11 @@
 --- a/src/REL/mdseldll/mdsel.c
 +++ b/src/REL/mdseldll/mdsel.c
-@@ -16,0 +17 @@
+@@ -20,0 +21 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -21,0 +22,2 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -521,2 +522,14 @@
++#include "mp6_ambient_occlusion.h"
+@@ -581,2 +583,14 @@
 -    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f, 10000.0f, 1.2f);
 -    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
 +    /* Mode-select's own 3D camera has the same native-640, left-anchored
@@ -19,7 +22,17 @@
 +     * Perspective/ViewportSet, so this camera stayed frozen at scene-load
 +     * size without this. Same literals, same effect on this call. */
 +    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
-@@ -773,0 +787,10 @@
+@@ -852 +866,8 @@
+-/* Layer 15 draw hook installed by fn_1_30FC; draws the tinted menu backdrop. */
++static void mp6_mdsel_capture(void *image)
++{
++    /* The source is the live screen; storage and sampling remain 640x480. */
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
++    GXSetTexCopyDst(640, 480, GX_TF_RGBA8, GX_FALSE);
++    GXCopyTex(image, GX_FALSE);
++}
++
+@@ -860,0 +882,10 @@
 +    /* fn_1_2A78 is the board-preview transition: layer-15 hook (installed
 +     * by fn_1_30FC) that re-photographs the whole frame into lbl_1_bss_28
 +     * every tick and redraws it a touch larger and a touch more rotated,
@@ -30,8 +43,12 @@
 +     * left 640 of a wider one. These two carry the live frame's width. */
 +    float mp6MdselW;
 +    float mp6MdselMargin;
-@@ -776 +799,11 @@
+@@ -863 +894,15 @@
 -        MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f, 10.0f);
++        /* Finish 3D lighting before this photographed 2D feedback overlay.
++         * Its copy must include AO once, never receive it again afterward. */
++        mp6_ao_camera_end(Hu3DCameraNo);
++        mp6_ao_camera_exclude(Hu3DCameraNo);
 +        /* MTXOrtho(m, top, bottom, left, right, near, far): the right edge
 +         * is the frame width, so this hook's own 2D space has to span the
 +         * live render width or everything below is laid out in a 640-wide
@@ -43,50 +60,34 @@
 +        mp6MdselW = (float)mp6_widescreen_render_width();
 +        mp6MdselMargin = 50.0f * (mp6MdselW / 640.0f);
 +        MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6MdselW, 0.0f, 10.0f);
-@@ -779 +812,6 @@
--            &texObj, lbl_1_bss_28, 640, 480, GX_TF_RGBA8, GX_CLAMP,
-+            /* The declared size of a copy-destination texture is only a
-+             * lookup key under this port (aurora resolves GXCopyTex
-+             * GPU-side and binds it by destination POINTER), but it is kept
-+             * truthful here so the two sides of this effect never disagree
-+             * about how wide the photograph is. */
-+            &texObj, lbl_1_bss_28, (u16)mp6_widescreen_render_width(), 480, GX_TF_RGBA8, GX_CLAMP,
-@@ -819 +857 @@
+@@ -906 +951 @@
 -        MTXTrans(trans, -320.0f, -240.0f, 0.0f);
 +        MTXTrans(trans, -0.5f * mp6MdselW, -240.0f, 0.0f);
-@@ -822 +860,4 @@
+@@ -909 +954,4 @@
 -        mtxTransCat(model, 320.0f, 240.0f, 0.0f);
 +        /* Translate-to-origin / rotate / translate-back: the pivot is the
 +         * frame's centre, so it moves with the frame. Left at 320 the whole
 +         * stack would spin about a point left of centre. */
 +        mtxTransCat(model, 0.5f * mp6MdselW, 240.0f, 0.0f);
-@@ -827 +868 @@
+@@ -915 +963 @@
 -        GXPosition3f32(-50.0f, -50.0f, 0.0f);
 +        GXPosition3f32(-mp6MdselMargin, -50.0f, 0.0f);
-@@ -830 +871 @@
+@@ -918 +966 @@
 -        GXPosition3f32(690.0f, -50.0f, 0.0f);
 +        GXPosition3f32(mp6MdselW + mp6MdselMargin, -50.0f, 0.0f);
-@@ -833 +874 @@
+@@ -921 +969 @@
 -        GXPosition3f32(690.0f, 530.0f, 0.0f);
 +        GXPosition3f32(mp6MdselW + mp6MdselMargin, 530.0f, 0.0f);
-@@ -836 +877 @@
+@@ -924 +972 @@
 -        GXPosition3f32(-50.0f, 530.0f, 0.0f);
 +        GXPosition3f32(-mp6MdselMargin, 530.0f, 0.0f);
-@@ -838,0 +880,4 @@
-+        /* Closes the GXBegin(GX_QUADS, 4) twelve lines up; anchors to the
-+         * last of its four position/colour/texcoord triples, before the
-+         * Hu3DFbCopyExec below. Empty inline on hardware (GXVert.h). */
+@@ -926,0 +975 @@
 +        GXEnd();
-@@ -842 +887,7 @@
+@@ -929,2 +978 @@
+-            Hu3DFbCopyExec(
 -                0, 0, 640, 480, GX_TF_RGBA8, GX_FALSE, lbl_1_bss_28);
-+                /* The photograph this effect feeds back on itself next tick.
-+                 * Captured at the native 640 it held only the frame's left
-+                 * 640 while the quad above spans the whole width, so the
-+                 * feedback stack pumped a stretched copy of the left portion
-+                 * across the frame and never showed the right of the board
-+                 * preview at all. 640 (byte-identical) when disabled. */
-+                0, 0, mp6_widescreen_render_width(), 480, GX_TF_RGBA8, GX_FALSE, lbl_1_bss_28);
-@@ -1352 +1403,7 @@
++            mp6_mdsel_capture(lbl_1_bss_28);
+@@ -1465 +1513,7 @@
 -        pan = 64.0f + (screenPos.x * panRange);
 +        /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
 +         * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
@@ -95,9 +96,10 @@
 +         * ordinary, well-defined narrowing hardware also performed.
 +         */
 +        pan = (s16)MP6_FCTIWZ_S32(64.0f + (screenPos.x * panRange));
-@@ -1378 +1434,0 @@
--            i == 0;
-@@ -1540,0 +1597,19 @@
+@@ -1491 +1544,0 @@
+-            i == 0; /* This comparison has no effect on the active sound. */
+@@ -1667 +1720,19 @@
+-/* Creates the three models and looping motions for the first mode-choice display. */
 +/* Matches every decoration sub-object that must REPOSITION (never resize)
 + * alongside "sora"'s own widening -- all 6 "cloud*" and 7 "star*" objects
 + * (name-prefix match; confirmed against the model's full per-object
@@ -117,7 +119,7 @@
 +    return strncmp(name, "star", 4) == 0;
 +}
 +
-@@ -1550,0 +1626,103 @@
+@@ -1677,0 +1749,103 @@
 +    }
 +    /* Mode-select's plaza scene is 3 models from one data block, the same
 +     * shape as mdpartydll's own terrain/floor/props trio but different
@@ -221,7 +223,12 @@
 +        mp6_widescreen_extrude_model_selective_reposition_x(obj->mdlId[2], mp6_mdsel_sky_is_star, 1.0f, skyCenterX);
 +        mp6_widescreen_extrude_model_reposition_x_clamped(obj->mdlId[2], mp6_mdsel_sky_is_cloud, 2.0f, skyCenterX, skyCenterX + 350.0f);
 +        mp6_widescreen_extend_tiles(obj->mdlId[2], "sora", 3000.0f, 512, 93, 95, 4.0f);
-@@ -2724 +2902,7 @@
+@@ -2368,0 +2544,2 @@
++        /* [MP6] Quick Party: no host greeting; the menu is ready at once. */
++        if (!mp6_quick_play_skip_intro()) {
+@@ -2372,0 +2550 @@
++        }
+@@ -2932 +3106,7 @@
 -    pan = 64.0f + (16.0f * screenPos.x);
 +    /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
 +     * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,
@@ -230,7 +237,7 @@
 +     * ordinary, well-defined narrowing hardware also performed.
 +     */
 +    pan = (s16)MP6_FCTIWZ_S32(64.0f + (16.0f * screenPos.x));
-@@ -2745 +2929,7 @@
+@@ -2955 +3135,7 @@
 -        pan = 64.0f + (screenPos.x * panRange);
 +        /* MP6_NATIVE_PORT: same trap class as src/board/audio.c's
 +         * mbAudFXPosPanGet -- project, derive a pan, convert to an integer,

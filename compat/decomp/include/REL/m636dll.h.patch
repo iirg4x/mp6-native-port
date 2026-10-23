@@ -1,0 +1,125 @@
+--- a/include/REL/m636dll.h
++++ b/include/REL/m636dll.h
+@@ -55 +55 @@
+-void fn_1_2F10(MGACTOR *actor, int playerSlot);
++void fn_1_2F10(MGACTOR *actor, intptr_t playerSlot);
+@@ -65,0 +66 @@
++void fn_1_3BA0(void);
+@@ -84,10 +85,2 @@
+-/* Byte spans used by the sequence, camera and CPU state. */
+-#define PIXEL_SEQUENCE_STATE_BYTES 16
+-#define PIXEL_CAMERA_TIMER_STATE_BYTES 52
+-#define PIXEL_CPU_STATE_BYTES 52
+-#define PIXEL_STEERING_SCORES_BYTES 60
+-#define PIXEL_PATTERN_STATE_BYTES 88
+-#define PIXEL_PLAYER_RECORDS_OFFSET 120
+-#define PIXEL_TIMER_RECORD_OFFSET 68
+-
+-/* State shared by the scene, round sequence and CPU player routines. */
++/* Native state is shared by all six owners. Pointers and arrays follow
++ * their host types; original REL byte offsets must never be used here. */
+@@ -95,42 +88,50 @@
+-    u8 sequenceState[PIXEL_SEQUENCE_STATE_BYTES]; /* Object manager, round state, frame counter and
+-                                                   * camera object. */
+-    s16 cameraMotions[2]; /* Opening and play-view camera motion IDs. */
+-    u8 cameraAndTimerState[PIXEL_CAMERA_TIMER_STATE_BYTES]; /* Camera model/time values and
+-                                                             * countdown timer pointer. */
+-    s32 charNo[4]; /* Character IDs for the four player slots. */
+-    s32 padNo[4]; /* Controller ports for the four player slots. */
+-    s32 teamSide[4]; /* Team side for each player: 0 is left, 1 is right. */
+-    MGPLAYER *players[4]; /* Player records owned by the actor manager. */
+-    u8 aiState[PIXEL_CPU_STATE_BYTES]; /* Landing counters, CPU enable state, CPU modes and mode
+-                                        * timers. */
+-    s32 targetCell[4]; /* CPU target panel, 0-15; -1 means no panel selected. */
+-    u8 steeringAndScores[PIXEL_STEERING_SCORES_BYTES]; /* CPU direction vectors, team points and
+-                                                        * round index. */
+-    s32 mode; /* Round/result outcome: 1 left, 2 right, 3 timeout or draw. */
+-    u8 referenceModelPrefix[2]; /* Storage immediately before the reference display model. */
+-    s16 referenceModel; /* Reference display model hidden when a cell is shown. */
+-    u8 pictureModelPrefix[2]; /* Storage immediately before the picture model arrays. */
+-    s16 pictureIntroModels[3]; /* Opening animation model for each picture. */
+-    s16 pictureResultModels[3]; /* Result animation model for each picture. */
+-    s16 pictureCellModels[3][16]; /* Animated cell model for each of the three pictures. */
+-    s16 pictureFinishModels[3]; /* Picture model shown when play finishes. */
+-    s16 roundIndicatorModel; /* Model with idle, reset and team-result motions. */
+-    s16 roundIndicatorMotions[4]; /* Idle, reset, left-result and right-result motion IDs. */
+-    s16 panelBaseModel; /* Model shared by the two teams' floor panels. */
+-    s16 panelMotions[4]; /* Off, on, turn-on and turn-off panel motions. */
+-    s16 panelModels[2][16]; /* Floor panel models, indexed by team and cell. */
+-    u8 roundIndicatorState[4]; /* Marks whether the round indicator has returned to idle. */
+-    s16 model; /* Scene model with idle and team-result motions. */
+-    s16 motion[3]; /* Idle, left-result and right-result scene motion IDs. */
+-    s16 finishModel; /* Model animated when the final round finishes. */
+-    s16 finishMotions[2]; /* Initial and game-finish motion IDs. */
+-    u8 patternState[PIXEL_PATTERN_STATE_BYTES]; /* Picture selection, five cell choices and
+-                                                 * team/target pixel grids. */
+-    s16 referenceCellModels[16]; /* Reference display models for the sixteen picture cells. */
+-    HUSPR_GROUPID scoreBoxes[2]; /* Background sprite group for each team's score. */
+-    HUSPR_GROUPID scoreGroups[2]; /* Two earned markers and two empty markers per team. */
+-    ANIMDATA *earnedPointAnim; /* Animation data for an earned round point. */
+-    ANIMDATA *emptyPointAnim; /* Animation data for an unearned round point. */
+-    s32 musicHandle; /* Background music handle; -1 before playback starts. */
+-    s16 extraSceneModel; /* Additional scene model loaded during setup. */
+-    s16 extraSceneMotion; /* Motion attached to the additional scene model. */
++    HUPROCESS *actorManager;
++    s16 sequenceMode;
++    u32 tick;
++    OMOBJ *cameraObject;
++    s16 cameraMotions[2];
++    s16 cameraModel;
++    f32 cameraFrame;
++    f32 cameraLastFrame;
++    MGTIMER *timer;
++    s32 charNo[4];
++    s32 padNo[4];
++    s32 teamSide[4];
++    MGPLAYER *players[4];
++    s32 landingCounter[4];
++    s32 cpuActive;
++    s32 cpuMode[4];
++    s32 cpuFrameCounter[4];
++    s32 targetCell[4];
++    Point3d stickDirection[4];
++    s32 points[2];
++    s32 roundIndex;
++    s32 mode;
++    s16 referenceModel;
++    s16 pictureIntroModels[3];
++    s16 pictureResultModels[3];
++    s16 pictureCellModels[3][16];
++    s16 pictureFinishModels[3];
++    s16 roundIndicatorModel;
++    s16 roundIndicatorMotions[4];
++    s16 panelBaseModel;
++    s16 panelMotions[4];
++    s16 panelModels[2][16];
++    s32 roundIndicatorIdle;
++    s16 model;
++    s16 motion[3];
++    s16 finishModel;
++    s16 finishMotions[2];
++    s32 selectedPicture;
++    s32 roundCellChoices[5];
++    s16 floorDrawHook;
++    u8 teamPixels[2][16];
++    u8 targetPixels[16];
++    s16 referenceCellModels[16];
++    HUSPR_GROUPID scoreBoxes[2];
++    HUSPR_GROUPID scoreGroups[2];
++    ANIMDATA *earnedPointAnim;
++    ANIMDATA *emptyPointAnim;
++    s32 musicHandle;
++    s16 extraSceneModel;
++    s16 extraSceneMotion;
+@@ -154,8 +155,3 @@
+-#define BSS16(offset) (*(s16 *)((u8 *)&lbl_1_bss_0 + (offset)))
+-#define BSS32(offset) (*(s32 *)((u8 *)&lbl_1_bss_0 + (offset)))
+-#define BSS_ARRAY32(offset) ((s32 *)((u8 *)&lbl_1_bss_0 + (offset)))
+-#define PLAYER(index)                                                                              \
+-    (*(MGPLAYER **) ((u8 *) &lbl_1_bss_0 + (index) * sizeof(MGPLAYER *) +                          \
+-                     PIXEL_PLAYER_RECORDS_OFFSET))
+-#define TIMER (*(MGTIMER **)((u8 *)&lbl_1_bss_0 + PIXEL_TIMER_RECORD_OFFSET))
+-#define TICK (*(u32 *)((u8 *)&lbl_1_bss_0 + 8))
++#define PLAYER(index) (lbl_1_bss_0.players[index])
++#define TIMER (lbl_1_bss_0.timer)
++#define TICK (lbl_1_bss_0.tick)

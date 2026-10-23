@@ -1,11 +1,17 @@
 --- a/src/board/effect.c
 +++ b/src/board/effect.c
-@@ -13,0 +14,2 @@
+@@ -14,0 +15,2 @@
 +#include "mp6_widescreen.h" /* widescreen support -- FadeDraw below */
 +
-@@ -51,2 +53,20 @@
--    unsigned killF : 1;
--    unsigned pauseF : 1;
+@@ -54,8 +56,26 @@
+-    unsigned killF : 1; // Fade task should remove itself on its next update.
+-    unsigned pauseF : 1; // Fade reached its target alpha and stopped changing.
+-    u8 targetAlpha; // Requested overlay alpha when a fade-in completes.
+-    s16 time; // Remaining initial delay in object updates.
+-    s16 maxTime; // Initial fade duration in object updates.
+-    HU3D_MODELID modelId; // Hu3D hook model that draws the overlay.
+-    GXColor color; // Full-screen overlay color; alpha is animated.
+-    float alphaStep; // Alpha change applied on each object update.
 +    /* HOST ABI -- bit-field storage unit, not a behaviour change.
 +     *
 +     * This struct is never allocated: FadeOMExec and friends reach it
@@ -26,7 +32,13 @@
 +     * makes the constraint explicit instead of implicit. */
 +    u8 killF : 1;
 +    u8 pauseF : 1;
-@@ -59,0 +80,7 @@
++    u8 targetAlpha;
++    s16 time;
++    s16 maxTime;
++    HU3D_MODELID modelId;
++    GXColor color;
++    float alphaStep;
+@@ -62,0 +83,7 @@
 +
 +/* omObjGetWork() aliases FADEEFFWORK onto OMOBJ::work[4] and OMOBJ::data
 + * sits immediately after it, so overflowing work[] silently turns a
@@ -34,7 +46,7 @@
 +_Static_assert(sizeof(FADEEFFWORK) <= sizeof(((OMOBJ *)0)->work),
 +               "FADEEFFWORK overflows OMOBJ::work[4] -- omObjGetWork aliases "
 +               "it there and the next member is the pointer omDelObjEx frees");
-@@ -179 +206,13 @@
+@@ -189 +216,13 @@
 -	x2 = HU_FB_WIDTH;
 +	/* FadeDraw is the board's own full-screen colour fade (the flash/
 +	 * blackout the board throws up over everything). x2 is the ONLY place
@@ -49,7 +61,8 @@
 +	 * mp6_widescreen_render_width() can return (it is clamped to the GPU's
 +	 * own max 2D texture dimension). */
 +	x2 = (float)mp6_widescreen_render_width();
-@@ -442,0 +482,66 @@
+@@ -461 +500,66 @@
+-// Create a hook model with one animated quad and texture coordinates per particle slot.
 +/* Tells the port's GXSetArray bridge the real byte sizes of the three
 + * indexed vertex arrays ParticleDraw() binds, exactly as
 + * game/hsfanim.c's own mp6ParticleArraysRegister() already does for the
@@ -116,7 +129,7 @@
 +    }
 +}
 +
-@@ -526,0 +632,20 @@
+@@ -550,0 +655,20 @@
 +    /* Closes mbParticleCreate's own GXBegin(GX_QUADS, maxCnt*4) fourteen
 +     * lines up; anchors to the closing brace of that GXBegin's quad-index
 +     * loop, the last statement inside the GXBeginDisplayList/
@@ -137,11 +150,100 @@
 +     * compat/decomp/src/game/hsfdraw.c.patch's explicit GXEnd() after
 +     * each of MDFaceDraw's three vertex loops. */
 +    GXEnd();
-@@ -527,0 +653,3 @@
+@@ -551,0 +676,3 @@
 +    /* See mp6ParticleArraysRegister above -- without this the display
 +     * list recorded just now fetches from zero-length uploads. */
 +    mp6ParticleArraysRegister(particleP);
-@@ -547,0 +676,3 @@
+@@ -574,0 +702,3 @@
 +    /* The per-particle colour array only exists from here on, and it is
 +     * what ParticleDraw() binds for GX_VA_CLR0 once colorF is set. */
 +    mp6ParticleArraysRegister(particleP);
+@@ -694,32 +824,13 @@
+-    float scalePair[2];
+-    float translation[4];
+-    register const float *scalePairPtr = scalePair;
+-    register const float *translationPtr = translation;
+-    register float posXY, posZX, posYZ, scaleXY, v0, v1, v2;
+-    translation[0] = translation[3] = pos->x;
+-    translation[1] = pos->y;
+-    translation[2] = pos->z;
+-    scalePair[0] = scalePair[1] = scale;
+-    asm {
+-        psq_l scaleXY, 0(scalePairPtr), 0, 0
+-        psq_l posXY, 0(translationPtr), 0, 0
+-        psq_l posZX, 8(translationPtr), 0, 0
+-        psq_l posYZ, 4(translationPtr), 0, 0
+-        psq_l v0, 0(src), 0, 0
+-        psq_l v1, 8(src), 0, 0
+-        psq_l v2, 16(src), 0, 0
+-        ps_madd v0, v0, scaleXY, posXY
+-        ps_madd v1, v1, scaleXY, posZX
+-        ps_madd v2, v2, scaleXY, posYZ
+-        psq_st v0, 0(dst), 0, 0
+-        psq_st v1, 8(dst), 0, 0
+-        psq_st v2, 16(dst), 0, 0
+-        psq_l v0, 24(src), 0, 0
+-        psq_l v1, 32(src), 0, 0
+-        psq_l v2, 40(src), 0, 0
+-        ps_madd v0, v0, scaleXY, posXY
+-        ps_madd v1, v1, scaleXY, posZX
+-        ps_madd v2, v2, scaleXY, posYZ
+-        psq_st v0, 24(dst), 0, 0
+-        psq_st v1, 32(dst), 0, 0
+-        psq_st v2, 40(dst), 0, 0
++    const Vec translation = *pos;
++    int pair;
++    /* Paired-single madd rounds once; preserve its fused arithmetic. Each
++     * source pair is loaded before its stores, including in-place updates. */
++    for (pair = 0; pair < 4; pair += 2) {
++        const Vec a = src[pair];
++        const Vec b = src[pair + 1];
++        dst[pair].x = fmaf(a.x, scale, translation.x);
++        dst[pair].y = fmaf(a.y, scale, translation.y);
++        dst[pair].z = fmaf(a.z, scale, translation.z);
++        dst[pair + 1].x = fmaf(b.x, scale, translation.x);
++        dst[pair + 1].y = fmaf(b.y, scale, translation.y);
++        dst[pair + 1].z = fmaf(b.z, scale, translation.z);
+@@ -732,8 +843,9 @@
+-    asm {
+-        psq_l fp0, 0(zero), 0, 0
+-        psq_st fp0, 0(dst), 0, 0
+-        psq_st fp0, 8(dst), 0, 0
+-        psq_st fp0, 16(dst), 0, 0
+-        psq_st fp0, 24(dst), 0, 0
+-        psq_st fp0, 32(dst), 0, 0
+-        psq_st fp0, 40(dst), 0, 0
++    const HuVec2f value = *zero;
++    int pair;
++    for (pair = 0; pair < 4; pair += 2) {
++        dst[pair].x = value.x;
++        dst[pair].y = value.y;
++        dst[pair].z = value.x;
++        dst[pair + 1].x = value.y;
++        dst[pair + 1].y = value.x;
++        dst[pair + 1].z = value.y;
+@@ -746,10 +858,3 @@
+-    asm {
+-        psq_l fp0, 0(src), 0, 0
+-        psq_l fp1, 8(src), 0, 0
+-        psq_l fp2, 16(src), 0, 0
+-        psq_l fp3, 24(src), 0, 0
+-        psq_st fp0, 0(dst), 0, 0
+-        psq_st fp1, 8(dst), 0, 0
+-        psq_st fp2, 16(dst), 0, 0
+-        psq_st fp3, 24(dst), 0, 0
+-    }
++    const HuVec2f values[4] = {src[0], src[1], src[2], src[3]};
++    int i;
++    for (i = 0; i < 4; ++i) dst[i] = values[i];
+@@ -1178,8 +1283,2 @@
+-    register __vec2x32float__ xy;
+-    register float z;
+-    asm {
+-        psq_l xy, 0(src), 0, 0
+-        lfs z, 8(src)
+-        psq_st xy, 0(dst), 0, 0
+-        stfs z, 8(dst)
+-    }
++    const HuVecF value = *src;
++    *dst = value;

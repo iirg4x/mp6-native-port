@@ -1,6 +1,6 @@
 --- a/src/board/audio.c
 +++ b/src/board/audio.c
-@@ -1058 +1058,10 @@
+@@ -1117 +1117,10 @@
 -    pan = (int)((pos2D.x * (1.0f / HU_DISP_WIDTH)) * MSM_PAN_WIDTH) + MSM_PAN_LEFT;
 +    /* MP6_NATIVE_PORT: on Gekko this cast is `fctiwz`, which SATURATES; on
 +     * the host it is undefined behaviour and this build's

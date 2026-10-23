@@ -29,17 +29,21 @@ parser.add_argument('--gpu-profile',action='store_true',
     help='Read the final completed GPU timing window in an isolated executable')
 parser.add_argument('--frame-profile',action='store_true',
     help='Isolated renderer CPU waits/workload inventory plus GPU pass timings')
+parser.add_argument('--inline-ao-gpu-profile',action='store_true',
+    help='Separate diagnostic binary: time AO draws inside their existing passes')
 args=parser.parse_args()
 if sum((args.math_profile,args.gpu_profile,args.frame_profile))>1:
     parser.error('choose one profiling mode per run')
 if args.frame_profile and (args.renderer_checkpoint or args.reference_source):
     parser.error('frame profiling requires current verified sources')
+if args.inline_ao_gpu_profile and (not args.frame_profile or args.name != 'current'):
+    parser.error('--inline-ao-gpu-profile requires --name current --frame-profile')
 reference=None
 if args.reference_source:
     reference=(ROOT/args.reference_source).resolve(strict=True)
     if not reference.is_relative_to((ROOT/'build').resolve()):
         parser.error('reference must be a frozen source directory under build/')
-OUTPUT=ROOT/'build/engine-benchmark'/(args.name+('-math' if args.math_profile else '-gpu' if args.gpu_profile else '-frame' if args.frame_profile else ''))
+OUTPUT=ROOT/'build/engine-benchmark'/(args.name+('-frame-inline-ao' if args.inline_ao_gpu_profile else '-math' if args.math_profile else '-gpu' if args.gpu_profile else '-frame' if args.frame_profile else ''))
 OUTPUT.mkdir(parents=True,exist_ok=True)
 original_configure=build.configure_windows
 original_collect=build.collect_units
@@ -65,7 +69,11 @@ def resolve_renderer():
         if profile_renderer is None:
             original_require('windows',items)
             from frame_profile_source import build_renderer
-            profile_renderer=build_renderer(ROOT,OUTPUT,build.ZIG)
+            extra_transforms = None
+            if args.inline_ao_gpu_profile:
+                from inline_ao_profile_source import instrument_gpu
+                extra_transforms = {'lib/webgpu/gpu.cpp': ('libaurora_core.a', instrument_gpu)}
+            profile_renderer=build_renderer(ROOT,OUTPUT,build.ZIG,extra_transforms=extra_transforms)
         return [profile_renderer.get(Path(item).name,item) for item in items]
     if not checkpoint:
         return items
@@ -203,8 +211,23 @@ def collect(*a,**kw):
             text=Path(source).read_text(encoding='utf-8')
             manifest[relative]=hashlib.sha256(text.encode()).hexdigest()
             target=OUTPUT/'ambient_occlusion.cpp'
-            target.write_text(instrument_ao(text),encoding='utf-8')
+            text=instrument_ao(text)
+            if args.inline_ao_gpu_profile:
+                from inline_ao_profile_source import instrument_ao as instrument_inline_ao
+                text=instrument_inline_ao(text)
+            target.write_text(text,encoding='utf-8')
             flags=[*flags,'-iquote',str(Path(source).parent),'-I',str(OUTPUT/'frame-profile-renderer')]
+            source=str(target)
+            obj=OUTPUT/'obj'/name
+        if args.frame_profile and name=='game_hsfdraw.o':
+            from frame_profile_source import instrument_hsfdraw
+            text=Path(source).read_text(encoding='utf-8')
+            manifest[relative]=hashlib.sha256(text.encode()).hexdigest()
+            foliage_header=ROOT/'include/mp6_ao_foliage_draw.h'
+            manifest['include/mp6_ao_foliage_draw.h']=hashlib.sha256(foliage_header.read_bytes()).hexdigest()
+            target=OUTPUT/'hsfdraw.c'
+            target.write_text(instrument_hsfdraw(text),encoding='utf-8')
+            flags=[*flags,'-iquote',str(Path(source).parent)]
             source=str(target)
             obj=OUTPUT/'obj'/name
         units.append((source,flags,str(obj),flavor))

@@ -1,0 +1,11 @@
+--- a/src/REL/m638Dll/scheduler.c
++++ b/src/REL/m638Dll/scheduler.c
+@@ -33,2 +33 @@
+-/* Add a callback to the active list and return nonzero when a free slot was available. */
+-s32 fn_1_7660(s32 (*callback)(void *), void *data)
++M638Job *fn_1_7660(s32 (*callback)(void *), void *data)
+@@ -50,2 +49,2 @@
+-    /* Callers use a nonzero result to tell whether the callback was scheduled. */
+-    return (s32)node;
++    /* The 32-bit target API exposes an opaque scalar token; consumers test it. */
++    return node;

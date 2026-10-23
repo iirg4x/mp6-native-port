@@ -1,0 +1,19 @@
+--- a/src/REL/m630dll/game.c
++++ b/src/REL/m630dll/game.c
+@@ -2,0 +3 @@
++#include "mp6_widescreen.h"
+@@ -571,0 +573,11 @@
++        if (i == 1) {
++            /* The 30%-opaque tint needs its opaque floor underneath.
++             * Extend only that material, not the decorative tiled paths. */
++            mp6_widescreen_extend_material_sides(model, "m630_yuka01_jimen", 7, 1);
++            /* The decorative path ends at an oblique cap, not at constant X.
++             * Reflect only its open ten-panel strip; preserve the closed rings. */
++            mp6_widescreen_extend_reflected_face_range(
++                model, "m630_yuka01_jimen", 160, 169, 148, 140);
++            mp6_widescreen_extend_color_rim(model, "m630_yuka01_orange",
++                                            1, 0.0f, 0.0f);
++        }
+@@ -590,0 +603,2 @@
++        if (i == 1)
++            mp6_widescreen_extend_backdrop_strip(model, "m630_ushiro", 2.0f);

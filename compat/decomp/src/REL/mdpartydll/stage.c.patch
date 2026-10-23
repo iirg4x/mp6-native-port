@@ -1,11 +1,12 @@
 --- a/src/REL/mdpartydll/stage.c
 +++ b/src/REL/mdpartydll/stage.c
-@@ -14,0 +15 @@
+@@ -15,0 +16,2 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -116 +117 @@
++#include "mp6_ambient_occlusion.h"
+@@ -117 +119 @@
 -        GXSetTexCopySrc(0, 0, 640, 480);
 +        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
-@@ -147,0 +149,22 @@
+@@ -149,0 +152,22 @@
 +    /* This is the OTHER half of the board-confirm transition: fn_1_3F580
 +     * (widened just above) photographs the frame, and this material hook
 +     * re-projects that photograph back onto the warp plane the confirm
@@ -28,12 +29,16 @@
 +     *
 +     * scale_factor() is exactly 1.0f when widescreen is disabled, so this
 +     * is the byte-identical 1.2f in that case. */
-@@ -149 +172,2 @@
+@@ -151 +175,2 @@
 -        lightMtx, camera->fov, 1.2f, 0.5f, -0.5f, 0.5f, 0.5f);
 +        lightMtx, camera->fov, 1.2f * mp6_widescreen_scale_factor(),
 +        0.5f, -0.5f, 0.5f, 0.5f);
-@@ -323 +347,23 @@
+@@ -337 +362,27 @@
 -    MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 640.0f, 0.0f, 10.0f);
++    /* Shade the live 3D scene before the flat feedback photograph replaces it.
++     * Hu3DZClear below reopens eligibility for subsequent scene geometry. */
++    mp6_ao_camera_end(Hu3DCameraNo);
++    mp6_ao_camera_exclude(Hu3DCameraNo);
 +    /* fn_1_400E0 is a full-screen fade/dissolve overlay (a low-res,
 +     * previous-frame screenshot cross-faded in over ~90 frames, the
 +     * "heat-haze"-looking transition this file's own board-preview stage
@@ -57,13 +62,13 @@
 +     * source into the same fixed-width destination is exactly undone when
 +     * that texture is stretched back across the (equally wider) quad. */
 +    MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f, 10.0f);
-@@ -381 +427 @@
+@@ -395 +446 @@
 -        GXPosition3f32(640 + i, i * -1, 0.0f);
 +        GXPosition3f32(mp6_widescreen_render_width() + i, i * -1, 0.0f);
-@@ -387 +433 @@
+@@ -401 +452 @@
 -        GXPosition3f32(640 + i, 480 + i, 0.0f);
 +        GXPosition3f32(mp6_widescreen_render_width() + i, 480 + i, 0.0f);
-@@ -399,2 +445,10 @@
+@@ -413,2 +464,10 @@
 -
 -    GXSetTexCopySrc(0, 0, 640, 480);
 +    /* Closes the GXBegin(GX_QUADS, 16) twenty-five lines up; anchors to

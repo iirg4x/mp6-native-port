@@ -1,0 +1,19 @@
+--- a/src/REL/mgmbingodll/text_11410.c
++++ b/src/REL/mgmbingodll/text_11410.c
+@@ -1,0 +2,2 @@
++extern void fn_1_C168(void);
++extern void fn_1_EE74(void);
+@@ -44 +46 @@
+-extern HU3D_MODELID fn_1_0(s32 modeNo, s32 timeNo, Point3d *position);
++extern HU3D_MODELID fn_1_0(s16 modeNo, s16 timeNo, Point3d *position);
+@@ -107 +109 @@
+-        memset(MgModeScore, 0, 8);
++        memset(MgModeScore, 0, sizeof(MgModeScore));
+@@ -109 +111 @@
+-        memset(MgModeWork, BINGO_UNUSED_MINIGAME, 256);
++        memset(MgModeWork, BINGO_UNUSED_MINIGAME, sizeof(MgModeWork));
+@@ -115,2 +117,2 @@
+-        memset(MgModeWorkInt, 0, 64);
+-        memset(MgModeWorkFloat, 0, 64);
++        memset(MgModeWorkInt, 0, sizeof(MgModeWorkInt));
++        memset(MgModeWorkFloat, 0, sizeof(MgModeWorkFloat));

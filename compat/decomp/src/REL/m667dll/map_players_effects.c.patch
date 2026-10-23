@@ -1,0 +1,188 @@
+--- a/src/REL/m667dll/map_players_effects.c
++++ b/src/REL/m667dll/map_players_effects.c
+@@ -40,8 +39,0 @@
+-
+-/* Each model-effect type supplies draw and update callbacks plus its pool sizing. */
+-typedef struct M667RegistryDescriptorView {
+-    void (*render)(void);
+-    void (*update)(M667ModelEffectView *item, s32 event);
+-    s32 itemBytes;
+-    s32 count;
+-} M667RegistryDescriptorView;
+@@ -160,3 +152,2 @@
+-s32 lbl_1_data_3C4[4] = {
+-    M667_PLAYER_RED_RGBA_BIT_PATTERN, M667_PLAYER_BLUE_RGBA_BIT_PATTERN,
+-    M667_PLAYER_YELLOW_RGBA_BIT_PATTERN, M667_PLAYER_GREEN_RGBA_BIT_PATTERN
++GXColor lbl_1_data_3C4[4] = {
++    {255, 0, 0, 255}, {0, 0, 255, 255}, {255, 255, 0, 255}, {0, 255, 0, 255}
+@@ -180,7 +171,7 @@
+-    {0, fn_1_67D8, 80, 15},
+-    {0, fn_1_6844, 80, 15},
+-    {0, fn_1_68B0, 80, 15},
+-    {0, fn_1_691C, 80, 15},
+-    {0, fn_1_6060, 80, 1},
+-    {0, fn_1_6064, 80, 10},
+-    {fn_1_5D78, fn_1_61A8, 80, 64},
++    {0, fn_1_67D8, sizeof(M667ModelEffectView), 15},
++    {0, fn_1_6844, sizeof(M667ModelEffectView), 15},
++    {0, fn_1_68B0, sizeof(M667ModelEffectView), 15},
++    {0, fn_1_691C, sizeof(M667ModelEffectView), 15},
++    {0, fn_1_6060, sizeof(M667ModelEffectView), 1},
++    {0, fn_1_6064, sizeof(M667ModelEffectView), 10},
++    {fn_1_5D78, fn_1_61A8, sizeof(M667ModelEffectView), 64},
+@@ -194 +185 @@
+-void *lbl_1_bss_14;
++LightSetupView *lbl_1_bss_14;
+@@ -324 +315 @@
+-        return;
++        return 0;
+@@ -333 +324 @@
+-    lbl_1_bss_2C = fn_1_A0(100, 104, fn_1_2B68);
++    lbl_1_bss_2C = fn_1_A0(100, sizeof(M667SceneView), fn_1_2B68);
+@@ -350 +340,0 @@
+-void fn_1_78F8(OMOBJ *object);
+@@ -352 +341,0 @@
+-void *fn_1_8F58(s32 index);
+@@ -468,9 +456,0 @@
+-/* The scene object table supplies model groups used to position players and map props. */
+-typedef struct SceneObjectsView {
+-    s16 modeTimer;
+-    s16 mode;
+-    s16 modePhase;
+-    s16 outcome;
+-    OMOBJ *objects[7];
+-} SceneObjectsView;
+-
+@@ -490,2 +470 @@
+-        model = ((SceneObjectsView *) lbl_1_bss_2C)
+-                    ->objects[lbl_1_data_364[index][1]]
++        model = lbl_1_bss_2C->objects[lbl_1_data_364[index][1]]
+@@ -527,2 +505,0 @@
+-extern f32 fn_1_7FA0(f32 start, f32 end, f32 t);
+-void fn_1_8CBC(HuVecF *position, s32 sound);
+@@ -530 +506,0 @@
+-extern f32 fn_1_7F48(HuVecF *direction);
+@@ -663 +639 @@
+-            t, &position);
++            &position, t);
+@@ -704 +679,0 @@
+-void fn_1_8AE4(s32 model, u8 *data, f32 red, f32 green, f32 blue);
+@@ -748 +723 @@
+-        return;
++        return 0;
+@@ -806 +781 @@
+-        return;
++        return 0;
+@@ -810 +785 @@
+-        return;
++        return 0;
+@@ -867 +842 @@
+-void fn_1_1DB8(MGACTOR *actor, int param)
++void fn_1_1DB8(MGACTOR *actor, intptr_t param)
+@@ -1171 +1145,0 @@
+-void fn_1_8CBC(HuVecF *position, s32 sound);
+@@ -1247 +1220,0 @@
+-void *fn_1_8F58(s32 index);
+@@ -1274,3 +1247,3 @@
+-    lbl_1_bss_10 = fn_1_A0(10, 100, fn_1_38E4);
+-    lbl_1_bss_14 = fn_1_A0(10, 16, fn_1_378C);
+-    lbl_1_bss_18 = fn_1_A0(10, 196, fn_1_3ACC);
++    lbl_1_bss_10 = fn_1_A0(10, sizeof(M667CameraView), fn_1_38E4);
++    lbl_1_bss_14 = fn_1_A0(10, sizeof(LightSetupView), fn_1_378C);
++    lbl_1_bss_18 = fn_1_A0(10, sizeof(M667MapView), fn_1_3ACC);
+@@ -1278 +1251 @@
+-        lbl_1_bss_1C[index] = fn_1_A0(20, 160, fn_1_3D74);
++        lbl_1_bss_1C[index] = fn_1_A0(20, sizeof(M667PlayerView), fn_1_3D74);
+@@ -1281,2 +1254,2 @@
+-    lbl_1_bss_C = fn_1_A0(30, 108, fn_1_5AF8);
+-    lbl_1_bss_8 = fn_1_A0(30, 820, fn_1_6988);
++    lbl_1_bss_C = fn_1_A0(30, sizeof(M667RegistryView), fn_1_5AF8);
++    lbl_1_bss_8 = fn_1_A0(30, sizeof(M667Entries), fn_1_6988);
+@@ -1316 +1288,0 @@
+-extern s32 fn_1_8E5C(s32 soundId);
+@@ -1444,5 +1415,0 @@
+-typedef struct ResultPhaseView {
+-    s16 timer;
+-    s16 sceneMode;
+-    s16 phase;
+-} ResultPhaseView;
+@@ -1457 +1424 @@
+-    ResultPhaseView *work;
++    M667SceneView *work;
+@@ -1465 +1432 @@
+-    switch (work->phase) {
++    switch (work->modePhase) {
+@@ -1470,2 +1437,2 @@
+-        work->timer = lbl_1_data_42C[lbl_1_bss_2C->outcome - 1];
+-        work->phase++;
++        work->modeTimer = lbl_1_data_42C[lbl_1_bss_2C->outcome - 1];
++        work->modePhase++;
+@@ -1474,2 +1441,2 @@
+-        work->timer--;
+-        if (work->timer <= 0) {
++        work->modeTimer--;
++        if (work->modeTimer <= 0) {
+@@ -1477 +1444 @@
+-            work->timer = 60;
++            work->modeTimer = 60;
+@@ -1487 +1454 @@
+-            work->phase++;
++            work->modePhase++;
+@@ -1491,2 +1458,2 @@
+-        work->timer--;
+-        if (work->timer <= 0) {
++        work->modeTimer--;
++        if (work->modeTimer <= 0) {
+@@ -1500 +1466,0 @@
+-s32 fn_1_8E5C(s32 soundId);
+@@ -1569,6 +1534,0 @@
+-typedef struct LightSetupView {
+-    s16 reservedWord; /* Reserved word in the light object's setup work. */
+-    s16 phase;
+-    u8 reservedBytes[4]; /* Reserved bytes in the light object's setup work. */
+-    s32 lightId;
+-} LightSetupView;
+@@ -1725 +1685 @@
+-void fn_1_1DB8(MGACTOR *actor, int context);
++void fn_1_1DB8(MGACTOR *actor, intptr_t context);
+@@ -1754 +1714 @@
+-    param.correctHookParam = (int)work;
++    param.correctHookParam = (intptr_t)work;
+@@ -1804 +1763,0 @@
+-void fn_1_8C30(s32 model, char *name, s32 target);
+@@ -1854 +1812,0 @@
+-extern f32 fn_1_7F48(HuVecF *direction);
+@@ -2018 +1975,0 @@
+-f32 fn_1_7F48(HuVecF *vector);
+@@ -2450,0 +2408 @@
++    s32 movementDue;
+@@ -2457 +2415,2 @@
+-    if (player->aiMoveTimer <= 0)
++    movementDue = player->aiMoveTimer <= 0;
++    if (movementDue)
+@@ -2504,2 +2463,6 @@
+-        /* When only the attack timer expires, these local deltas have not been assigned this
+-         * update. */
++        /* Attack-only ticks use the current direct target distance. */
++        if (!movementDue) {
++            currentSlot = fn_1_1934(player->mapSlotIndex);
++            deltaX = lbl_1_bss_18->currentPlayer->mapX - currentSlot->x;
++            deltaZ = lbl_1_bss_18->currentPlayer->mapZ - currentSlot->z;
++        }
+@@ -2566 +2529 @@
+-        bufferBytes = (descriptor->itemBytes + 8) * descriptor->count + 16;
++        bufferBytes = (descriptor->itemBytes + sizeof(M667PoolNode)) * descriptor->count + sizeof(M667Pool);
+@@ -2715,4 +2677,0 @@
+-typedef struct M667ParticlePointView {
+-    HuVecF position;
+-    GXColor color;
+-} M667ParticlePointView;
+@@ -2793 +2752 @@
+-            HEAP_HEAP, item->pointCount * 16, HU_MEMNUM_OVL);
++            HEAP_HEAP, item->pointCount * sizeof(*item->points), HU_MEMNUM_OVL);
+@@ -2825 +2784 @@
+-            (item->pointCount - 2) * 16);
++            (item->pointCount - 2) * sizeof(*item->points));
+@@ -3006 +2965 @@
+-            param.correctHookParam = (int)entry;
++            param.correctHookParam = (intptr_t)entry;

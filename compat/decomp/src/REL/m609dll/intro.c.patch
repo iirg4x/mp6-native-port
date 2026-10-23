@@ -1,0 +1,13 @@
+--- a/src/REL/m609dll/intro.c
++++ b/src/REL/m609dll/intro.c
+@@ -13,0 +14 @@
++void fn_1_4E90(void);
+@@ -26 +27 @@
+-extern void fn_1_46F8(s16, s16, void *);
++extern void fn_1_46F8(s16 voiceSlot, s16 panMode, Vec *position);
+@@ -41 +42 @@
+-extern s32 fn_1_126F0(M609Player *player, s16 advanceAfterChase);
++extern s16 fn_1_126F0(M609Player *movement, s16 advanceAfterChase);
+@@ -65 +66 @@
+-void fn_1_45EC(s32,s32);
++void fn_1_45EC(s16 streamSlot, s16 fadeFrames);

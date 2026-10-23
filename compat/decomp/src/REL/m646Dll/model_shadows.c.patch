@@ -1,0 +1,11 @@
+--- a/src/REL/m646Dll/model_shadows.c
++++ b/src/REL/m646Dll/model_shadows.c
+@@ -30,3 +29,0 @@
+-void fn_1_8158(OMOBJMAN *objman);
+-void fn_1_8980(void);
+-void fn_1_B4BC(s32 effect);
+@@ -36 +32,0 @@
+-void fn_1_4E28(OMOBJMAN *objman);
+@@ -197,0 +194,2 @@
++
++/* Storage only; runtime allocations are freed by normal overlay teardown. */

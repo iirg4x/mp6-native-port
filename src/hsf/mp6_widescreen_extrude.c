@@ -32,24 +32,21 @@
  * src/gx/aurora_bridge.c's VIWaitForRetrace, so a continuous
  * drag-resize converges every frame.
  *
- * Model-ID-reuse safety: HU3D_MODELID slots ARE reused across a play
- * session (Hu3DModelCreate scans for the first NULL-hsf slot), so a
- * registry entry is only trusted by the per-frame walker while
- * Hu3DData[modelId].hsf still equals the EXACT hsf pointer captured at
- * registration -- a dead/reused slot is silently skipped and its registry
- * slot recycled by the next call that needs one. A repeat registration on
+ * Model lifetime: Hu3DModelKill explicitly invalidates owned registrations
+ * and frees their host-side native snapshots. Pointer equality alone is
+ * insufficient: the arena can reuse both the model ID and every HSF address.
+ * The per-frame walker additionally checks for a non-null, live HSF owner.
+ * Dead slots are recycled by the next registration. A repeat registration on
  * the SAME live instance just refreshes center/mode and re-applies from
  * the already-cached native values, never re-reading (by then
  * already-extruded) live pos/scale as if it were native.
  *
- * Default-off contract: every registration path is gated on
- * mp6_widescreen_enabled(), NOT on scale_factor() > 1.0f -- gating on the
- * current scale would skip registering a model whose scene loads while
- * the window happens to be native-shaped, which would then never track a
- * later resize-up. When the feature is off every registry stays
- * permanently empty and mp6_widescreen_reapply() is a for-loop over zero
- * entries, matching every accessor's byte-identical-when-disabled
- * contract.
+ * Registration is independent of the current preference and aspect. Cache
+ * native baselines even when the scene starts with widescreen OFF, otherwise
+ * enabling it later widens the camera but leaves the backdrop unextended.
+ * At scale 1 the native geometry is restored exactly and appended panels
+ * collapse to zero area. Disabling the feature must run this restore once,
+ * not return early with the previous wide geometry still in place.
  *
  * ==========================================================================
  * THE MECHANISM
@@ -96,12 +93,9 @@
  * `PGObjCalc`'s own transform composition exactly, starting from
  * `hsf->root` with an IDENTITY parent matrix (the goal is the bbox center
  * relative to the model's own origin, the same frame Hu3DModelPosGet/
- * ScaleGet read/write). Every mesh leaf's own min/max corners are
- * transformed by its own fully-accumulated matrix before being merged into
- * the running bbox -- exact for any depth of hierarchy and rotation, not
- * an approximation. Re-verified against Party Mode's own near-identity
- * base transforms: the computed center is unchanged from the flat-union
- * result there, so this is a strict superset of correctness. This walk
+ * ScaleGet read/write). Every mesh vertex is transformed by its accumulated
+ * matrix before being merged into the running bounds. Retail culling bounds
+ * can be cumulative and cannot be used as exact geometry bounds. This walk
  * runs once per model instance (at first registration); the per-frame
  * reapply reuses the cached center, never re-walks.
  *
@@ -126,12 +120,19 @@
  * site this project has needed so far was confirmed unrotated at the top
  * level by direct evidence. */
 #include "game/hu3d.h"
+#include "game/EnvelopeExec.h"
 #include "mp6_widescreen.h"
 #include "mp6_savestate.h" /* mp6_widescreen_savestate_rehydrate() */
 #include "mp6_gxarray_registry.h" /* grown vertex/ST buffers re-register their real byte size */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static BOOL mp6_ws_model_live(HU3D_MODELID modelId, const HSF_DATA *hsf)
+{
+    return hsf != NULL && Hu3DData != NULL && modelId >= 0
+        && modelId < HU3D_MODEL_MAX && Hu3DData[modelId].hsf == hsf;
+}
 
 /* Investigative diagnostic: dumps a model's own HSF_OBJ_MESH sub-objects
  * (name/vertex-buffer count/bbox/base transform) and its attribute pool
@@ -178,14 +179,20 @@ static void mp6_ws_accum_bbox_r(HSF_OBJECT *object, Mtx parentMtx, HuVecF *bmin,
     mtxTransCat(mtx, t->pos.x, t->pos.y, t->pos.z);
     PSMTXConcat(parentMtx, mtx, mtx); /* mtx: this object's own model-local accumulated transform */
 
-    if (object->type == HSF_OBJ_MESH && object->mesh.vertex != NULL) {
-        HuVecF p;
-        PSMTXMultVec(mtx, &object->mesh.mesh.min, &p);
-        if (!*any) {
-            *bmin = p;
-            *bmax = p;
-            *any = TRUE;
-        } else {
+    if (object->type == HSF_OBJ_MESH && object->mesh.vertex != NULL &&
+        object->mesh.vertex->data != NULL) {
+        /* Retail cull boxes can include earlier objects in the same asset;
+         * they are not reliable geometry bounds. Transform actual vertices,
+         * not just min/max corners (also incorrect under rotation). This is
+         * a registration-time walk, never part of the per-frame reapply. */
+        HuVecF *vertices = object->mesh.vertex->data;
+        for (s32 vertex = 0; vertex < object->mesh.vertex->count; ++vertex) {
+            HuVecF p;
+            PSMTXMultVec(mtx, &vertices[vertex], &p);
+            if (!*any) {
+                *bmin = *bmax = p;
+                *any = TRUE;
+            }
             if (p.x < bmin->x) bmin->x = p.x;
             if (p.y < bmin->y) bmin->y = p.y;
             if (p.z < bmin->z) bmin->z = p.z;
@@ -193,13 +200,6 @@ static void mp6_ws_accum_bbox_r(HSF_OBJECT *object, Mtx parentMtx, HuVecF *bmin,
             if (p.y > bmax->y) bmax->y = p.y;
             if (p.z > bmax->z) bmax->z = p.z;
         }
-        PSMTXMultVec(mtx, &object->mesh.mesh.max, &p);
-        if (p.x < bmin->x) bmin->x = p.x;
-        if (p.y < bmin->y) bmin->y = p.y;
-        if (p.z < bmin->z) bmin->z = p.z;
-        if (p.x > bmax->x) bmax->x = p.x;
-        if (p.y > bmax->y) bmax->y = p.y;
-        if (p.z > bmax->z) bmax->z = p.z;
     }
     if (object->type != HSF_OBJ_REPLICA) {
         for (i = 0; i < object->mesh.childNum; i++) {
@@ -289,7 +289,7 @@ static MP6WSModelEntry *mp6_ws_model_alloc(void)
      * registry bounded across a long session instead of only ever
      * growing. */
     for (i = 0; i < g_mp6WsModelNum; i++) {
-        if (Hu3DData[g_mp6WsModels[i].modelId].hsf != g_mp6WsModels[i].hsf) {
+        if (!mp6_ws_model_live(g_mp6WsModels[i].modelId, g_mp6WsModels[i].hsf)) {
             return &g_mp6WsModels[i];
         }
     }
@@ -305,7 +305,7 @@ static void mp6_ws_apply_model_from_native(MP6WSModelEntry *e, float k)
     HuVecF pos = e->nativePos;
     HuVecF scale = e->nativeScale;
 
-    switch (e->mode) {
+    if (k != 1.0f) switch (e->mode) {
         case MP6_WS_MODE_ISO:
             pos.x += (1.0f - k) * scale.x * e->center.x;
             pos.y += (1.0f - k) * scale.y * e->center.y;
@@ -343,7 +343,7 @@ static void mp6_ws_extrude_generic(HU3D_MODELID modelId, MP6WSExtrudeMode mode)
     BOOL freshInstance;
     float k;
 
-    if (!mp6_widescreen_enabled() || modelId < 0) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX) {
         return;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -514,145 +514,11 @@ void mp6_widescreen_extrude_model_xz(HU3D_MODELID modelId)
  * mix X/Y on screen); confirmed true for boot.c's title camera specifically
  * -- not asserted generically for a future caller.
  *
- * Same no-op contract as mp6_widescreen_extrude_model(): returns
- * immediately (zero calls) when widescreen is disabled, or modelId/its hsf
- * is invalid. */
+ * Same native-baseline registration contract as mp6_widescreen_extrude_model().
+ * Invalid models are ignored. */
 void mp6_widescreen_extrude_model_horizontal(HU3D_MODELID modelId)
 {
     mp6_ws_extrude_generic(modelId, MP6_WS_MODE_HORIZONTAL);
-}
-
-/* ==========================================================================
- * Camera registry -- every scene's own 3D camera setup (Party's
- * fn_1_33A0, mode-select's fn_1_1734, boot's ObjectSetup/BootTitleExec,
- * file-select's ObjectSetup) calls Hu3DCameraPerspectiveSet+ViewportSet
- * EXACTLY ONCE too, same "frozen at scene load" defect as the models
- * above. Hu3DCameraPerspectiveSet/ViewportSet (game/hsfman.c) are plain
- * ABSOLUTE-value struct writes -- not relative/multiplicative like the
- * model pos/scale mechanism -- so re-issuing them is safe with NO
- * compounding risk and NO native-baseline caching needed: the registry
- * here just remembers each camera bit's own literal (fov, near, far,
- * aspectBase, vpH) arguments so mp6_widescreen_reapply() can recompute
- * `aspectBase * scale_factor()` / render_width() fresh every frame.
- *
- * Camera bits are reused across scenes exactly like model IDs (every scene
- * calls Hu3DCameraCreate(1) or (2), i.e. the SAME bit values 1 and 2, for
- * its own unrelated camera) -- registering "by bit" and always overwriting
- * on a fresh mp6_widescreen_camera_widen() call handles this the same way
- * the model registry's "always refresh on a genuinely new instance" does:
- * whichever scene most recently called it owns that bit's registry entry.
- * Liveness for the PER-FRAME walker is checked via HU3D_CAMERA's own kill
- * sentinel (Hu3DCameraKill sets cameraP->fov = -1 -- game/hsfman.c) so a
- * camera bit killed by its own scene's teardown is never resurrected by a
- * stale registry entry.
- * ========================================================================== */
-typedef struct {
-    int bit;
-    float fov, nearZ, farZ, aspectBase, vpH;
-} MP6WSCameraEntry;
-
-/* Only bit values 1 and 2 are used by any call site this project has
- * (Party/mode-select/boot each use bit 1 only; file-select uses both 1 and
- * 2) -- 8 slots is generous headroom, matching HU3D_CAM_MAX's own low bit
- * count (16) without needing to size this to the full camera-bit space. */
-#define MP6_WS_CAMERA_MAX 8
-static MP6WSCameraEntry g_mp6WsCameras[MP6_WS_CAMERA_MAX];
-static s16 g_mp6WsCameraNum = 0;
-
-/* HU3D_CAMERA/Hu3DCamera[]/Hu3DCameraKill all index by BIT POSITION (i.e.
- * bit value 1<<i lives at Hu3DCamera[i]), matching Hu3DCameraPerspectiveSet
- * /ViewportSet/Kill's own `for(i=0,bit=1;i<HU3D_CAM_MAX;i++,bit<<=1)` loop
- * -- every call site in this project passes a single-bit value (1 or 2,
- * never a combined mask), so a plain right-shift recovers that index. */
-static int mp6_ws_camera_bit_index(int bit)
-{
-    int idx = 0;
-    while (bit > 1) {
-        bit >>= 1;
-        idx++;
-    }
-    return idx;
-}
-
-static void mp6_ws_apply_camera(MP6WSCameraEntry *e, float k)
-{
-    int rw = mp6_widescreen_render_width();
-    Hu3DCameraPerspectiveSet(e->bit, e->fov, e->nearZ, e->farZ, e->aspectBase * k);
-    Hu3DCameraViewportSet(e->bit, 0.0f, 0.0f, (float)rw, e->vpH, 0.0f, 1.0f);
-    /* The SCISSOR rect is a SEPARATE camera field from the viewport
-     * (game/hsfman.c's HU3D_CAMERA has independent viewportW/H and
-     * scissorW/H, written by two DIFFERENT setters -- Hu3DCameraViewportSet
-     * above only ever touches the former). Hu3DCameraCreate's own
-     * defCamera template sets BOTH viewportW and scissorW from
-     * RenderMode->fbWidth, but only ONCE, at creation time -- and every
-     * frame, Hu3DExec's real draw call re-issues a live
-     * GXSetScissor(cameraP->scissorX,...,cameraP->scissorW,...) using
-     * whatever was cached there, the same "frozen at scene load" shape as
-     * the viewport bug fixed above, just on the scissor field that fix
-     * never touched. Confirmed to be the actual cause of a black-bar/
-     * boxing symptom that survived the viewport-only fix: the viewport was
-     * already tracking the live render_width every tick, but GXSetScissor
-     * was clipping the frame to the STALE, creation-time scissor rect
-     * regardless, producing exactly the observed cutoff. Keeping scissor
-     * identical to viewport (both (0,0,renderWidth,vpH), the same
-     * relationship Hu3DCameraCreate's own defCamera establishes at native)
-     * closes that gap with no behavior change for a NATIVE/disabled camera
-     * (renderWidth==640==the original literal, vpH unchanged). */
-    Hu3DCameraScissorSet(e->bit, 0, 0, (unsigned int)rw, (unsigned int)e->vpH);
-}
-
-void mp6_widescreen_camera_widen(int cameraBit, float fov, float nearZ, float farZ, float aspectBase, float vpH)
-{
-    float k = mp6_widescreen_scale_factor();
-    int rw = mp6_widescreen_render_width();
-
-    /* Apply directly first, unconditionally -- byte-identical to the
-     * original two-call pair (Hu3DCameraPerspectiveSet + ViewportSet) this
-     * replaces at every call site, including when widescreen is disabled
-     * (k==1.0f, render_width()==640 exactly -- the original unwidened
-     * literal call). This ALSO means the very first frame of every scene
-     * is correct even before mp6_widescreen_reapply() ever runs. The
-     * matching Hu3DCameraScissorSet call (see mp6_ws_apply_camera's own
-     * comment) is redundant with Hu3DCameraCreate's own defCamera copy on a
-     * genuinely fresh camera (both already agree, since RenderMode->fbWidth
-     * is already live by the time any scene creates its camera), but not
-     * redundant -- and load-bearing -- for camera bit REUSE across scenes
-     * (Hu3DCameraCreate is NOT called again when a new scene reuses an
-     * existing bit via this same widen() call, so without this, a reused
-     * bit's scissor would carry over the PREVIOUS scene's stale rect). */
-    Hu3DCameraPerspectiveSet(cameraBit, fov, nearZ, farZ, aspectBase * k);
-    Hu3DCameraViewportSet(cameraBit, 0.0f, 0.0f, (float)rw, vpH, 0.0f, 1.0f);
-    Hu3DCameraScissorSet(cameraBit, 0, 0, (unsigned int)rw, (unsigned int)vpH);
-
-    if (!mp6_widescreen_enabled()) {
-        return; /* zero registry churn when the feature is off -- see file header */
-    }
-    {
-        s16 i;
-        MP6WSCameraEntry *e = NULL;
-        for (i = 0; i < g_mp6WsCameraNum; i++) {
-            if (g_mp6WsCameras[i].bit == cameraBit) {
-                e = &g_mp6WsCameras[i];
-                break;
-            }
-        }
-        if (e == NULL && g_mp6WsCameraNum < MP6_WS_CAMERA_MAX) {
-            e = &g_mp6WsCameras[g_mp6WsCameraNum++];
-        }
-        if (e != NULL) {
-            e->bit = cameraBit;
-            e->fov = fov;
-            e->nearZ = nearZ;
-            e->farZ = farZ;
-            e->aspectBase = aspectBase;
-            e->vpH = vpH;
-        }
-        /* e == NULL (registry exhausted) is not expected given this
-         * project's real camera-bit count (1 and 2 only) -- if it ever
-         * happens, this camera just stays at whatever the direct apply
-         * above set, un-tracked for a later resize, same graceful
-         * degradation as the model registry's own exhaustion path. */
-    }
 }
 
 /* ==========================================================================
@@ -761,7 +627,7 @@ static MP6WSRepeatEntry *mp6_ws_repeat_find(void *ptr)
 {
     s16 i;
     for (i = 0; i < g_mp6WsRepeatNum; i++) {
-        if (g_mp6WsRepeat[i].ptr == ptr && Hu3DData[g_mp6WsRepeat[i].modelId].hsf == g_mp6WsRepeat[i].hsf) {
+        if (g_mp6WsRepeat[i].ptr == ptr && mp6_ws_model_live(g_mp6WsRepeat[i].modelId, g_mp6WsRepeat[i].hsf)) {
             return &g_mp6WsRepeat[i];
         }
     }
@@ -772,7 +638,7 @@ static MP6WSRepeatEntry *mp6_ws_repeat_alloc(void)
 {
     s16 i;
     for (i = 0; i < g_mp6WsRepeatNum; i++) {
-        if (Hu3DData[g_mp6WsRepeat[i].modelId].hsf != g_mp6WsRepeat[i].hsf) {
+        if (!mp6_ws_model_live(g_mp6WsRepeat[i].modelId, g_mp6WsRepeat[i].hsf)) {
             return &g_mp6WsRepeat[i]; /* recycle a dead slot -- see MP6WSRepeatEntry's own comment */
         }
     }
@@ -795,6 +661,10 @@ static void mp6_ws_repeat_apply(MP6WSRepeatEntry *e, float k)
      * what was captured), and the next register call re-takes the
      * snapshot. */
     if (e->native == NULL || e->count <= 0) {
+        return;
+    }
+    if (k == 1.0f) {
+        memcpy(e->ptr, e->native, (size_t)e->count * e->stride * sizeof(float));
         return;
     }
     s32 j;
@@ -932,7 +802,7 @@ void mp6_widescreen_extrude_model_repeat(HU3D_MODELID modelId)
     stcenter.x = 0.0f;
     stcenter.y = 0.0f;
 
-    if (!mp6_widescreen_enabled() || modelId < 0) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX) {
         return;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -1080,6 +950,9 @@ void mp6_widescreen_extrude_model_repeat(HU3D_MODELID modelId)
  * scaled directly here) so a cull test against it stays correct. */
 typedef int (*MP6WSNameMatchFn)(const char *name);
 
+#define MP6_WS_COMPONENT_VERTICES 1024
+#define MP6_WS_COMPONENT_LIMIT 16
+#define MP6_WS_RIGID_LIMIT 8
 typedef struct {
     void *ptr;              /* live target: the sub-object's vertex buffer data */
     float *native;          /* malloc'd once: pristine native (x,y,z) snapshot */
@@ -1089,8 +962,14 @@ typedef struct {
     Mtx invMtx;              /* cached PSMTXInverse(fwdMtx) */
     HuVecF *liveMin;         /* &object->mesh.mesh.min -- kept in step for culling */
     HuVecF *liveMax;         /* &object->mesh.mesh.max */
+    HuVecF nativeMin, nativeMax; /* authored cull bounds, restored at scale 1 */
     HU3D_MODELID modelId;
     HSF_DATA *hsf;
+    float outerRadiusSq;    /* optional validated component split in local XZ */
+    u8 rigidPart[MP6_WS_COMPONENT_VERTICES]; /* 0: scale, otherwise rigidCenterX index+1 */
+    float rigidCenterX[MP6_WS_RIGID_LIMIT];
+    u8 uniform;             /* also scale model-space Y about pivotY (no distortion) */
+    float pivotY;
 } MP6WSSelectiveEntry;
 
 /* Title's own "grid*"/"hikari" set is 12 vertex buffers this session (see
@@ -1105,7 +984,7 @@ static MP6WSSelectiveEntry *mp6_ws_selective_find(void *ptr)
 {
     s16 i;
     for (i = 0; i < g_mp6WsSelectiveNum; i++) {
-        if (g_mp6WsSelective[i].ptr == ptr && Hu3DData[g_mp6WsSelective[i].modelId].hsf == g_mp6WsSelective[i].hsf) {
+        if (g_mp6WsSelective[i].ptr == ptr && mp6_ws_model_live(g_mp6WsSelective[i].modelId, g_mp6WsSelective[i].hsf)) {
             return &g_mp6WsSelective[i];
         }
     }
@@ -1116,7 +995,7 @@ static MP6WSSelectiveEntry *mp6_ws_selective_alloc(void)
 {
     s16 i;
     for (i = 0; i < g_mp6WsSelectiveNum; i++) {
-        if (Hu3DData[g_mp6WsSelective[i].modelId].hsf != g_mp6WsSelective[i].hsf) {
+        if (!mp6_ws_model_live(g_mp6WsSelective[i].modelId, g_mp6WsSelective[i].hsf)) {
             return &g_mp6WsSelective[i]; /* recycle a dead slot */
         }
     }
@@ -1141,6 +1020,12 @@ static void mp6_ws_selective_apply(MP6WSSelectiveEntry *e, float k)
     if (e->native == NULL || e->count <= 0) {
         return;
     }
+    if (k == 1.0f) {
+        memcpy(e->ptr, e->native, (size_t)e->count * sizeof(HuVecF));
+        *e->liveMin = e->nativeMin;
+        *e->liveMax = e->nativeMax;
+        return;
+    }
     HuVecF *dst = (HuVecF *)e->ptr;
     HuVecF *src = (HuVecF *)e->native;
     HuVecF newMin, newMax;
@@ -1151,9 +1036,26 @@ static void mp6_ws_selective_apply(MP6WSSelectiveEntry *e, float k)
         HuVecF world, grown, back;
         PSMTXMultVec(e->fwdMtx, &src[j], &world);
         grown.x = e->center.x + k * (world.x - e->center.x);
-        grown.y = world.y; /* vertical framing byte-identical to native */
+        if (e->uniform) {
+            /* Cover the exact frame edge despite rasterization rounding. */
+            float cover = k * 1.01f;
+            grown.x = e->center.x + cover * (world.x - e->center.x);
+            grown.y = e->pivotY + cover * (world.y - e->pivotY);
+        }
+        if (j < MP6_WS_COMPONENT_VERTICES && e->rigidPart[j]) {
+            float center = e->rigidCenterX[e->rigidPart[j] - 1];
+            grown.x = world.x + (k - 1) * (center - e->center.x);
+        }
+        /* Horizontal-only entries keep vertical framing byte-identical to
+         * native; uniform backdrop entries keep their art's proportions. */
+        if (!e->uniform) grown.y = world.y;
         grown.z = world.z; /* depth byte-identical to native */
-        PSMTXMultVec(e->invMtx, &grown, &back);
+        if (k == 1.0f || (e->outerRadiusSq > 0.0f &&
+            src[j].x * src[j].x + src[j].z * src[j].z <= e->outerRadiusSq)) {
+            back = src[j]; /* native geometry remains bit-exact */
+        } else {
+            PSMTXMultVec(e->invMtx, &grown, &back);
+        }
         dst[j] = back;
         if (!any) {
             newMin = newMax = back;
@@ -1173,6 +1075,42 @@ static void mp6_ws_selective_apply(MP6WSSelectiveEntry *e, float k)
     }
 }
 
+static MP6WSSelectiveEntry *mp6_ws_selective_register(HU3D_MODELID modelId,
+    HSF_DATA *hsf, HSF_OBJECT *o, HuVecF center, float outerRadiusSq)
+{
+    MP6WSSelectiveEntry *e = mp6_ws_selective_find(o->mesh.vertex->data);
+    if (e) return e; /* Never re-read already widened bounds/vertices. */
+    HSF_TRANSFORM *t = &o->mesh.base;
+    Mtx rotMtx, scaleMtx, mtx, inverse;
+    mtxRot(rotMtx, t->rot.x, t->rot.y, t->rot.z);
+    PSMTXScale(scaleMtx, t->scale.x, t->scale.y, t->scale.z);
+    PSMTXConcat(rotMtx, scaleMtx, mtx);
+    mtxTransCat(mtx, t->pos.x, t->pos.y, t->pos.z);
+    if (!PSMTXInverse(mtx, inverse)) return NULL;
+    size_t bytes = (size_t)o->mesh.vertex->count * sizeof(HuVecF);
+    float *native = malloc(bytes);
+    if (!native) return NULL;
+    e = mp6_ws_selective_alloc();
+    if (!e) { free(native); return NULL; }
+    free(e->native);
+    memset(e, 0, sizeof(*e));
+    memcpy(native, o->mesh.vertex->data, bytes);
+    e->native = native;
+    e->ptr = o->mesh.vertex->data;
+    e->count = o->mesh.vertex->count;
+    e->center = center;
+    e->modelId = modelId;
+    e->hsf = hsf;
+    e->liveMin = &o->mesh.mesh.min;
+    e->liveMax = &o->mesh.mesh.max;
+    e->outerRadiusSq = outerRadiusSq;
+    e->nativeMin = o->mesh.mesh.min;
+    e->nativeMax = o->mesh.mesh.max;
+    PSMTXCopy(mtx, e->fwdMtx);
+    PSMTXCopy(inverse, e->invMtx);
+    return e;
+}
+
 void mp6_widescreen_extrude_model_selective_horizontal(int16_t modelId, MP6WSNameMatchFn match)
 {
     HSF_DATA *hsf;
@@ -1180,7 +1118,7 @@ void mp6_widescreen_extrude_model_selective_horizontal(int16_t modelId, MP6WSNam
     s16 i;
     float k;
 
-    if (!mp6_widescreen_enabled() || modelId < 0 || match == NULL) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX || match == NULL) {
         return;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -1193,10 +1131,7 @@ void mp6_widescreen_extrude_model_selective_horizontal(int16_t modelId, MP6WSNam
     k = mp6_widescreen_scale_factor();
     for (i = 0; i < hsf->objectNum; i++) {
         HSF_OBJECT *o = &hsf->object[i];
-        HSF_TRANSFORM *t;
         MP6WSSelectiveEntry *e;
-        BOOL freshInstance;
-        Mtx rotMtx, scaleMtx, mtx;
 
         if (o->type != HSF_OBJ_MESH || o->name == NULL || !match(o->name)) {
             continue;
@@ -1204,41 +1139,60 @@ void mp6_widescreen_extrude_model_selective_horizontal(int16_t modelId, MP6WSNam
         if (o->mesh.vertex == NULL || o->mesh.vertex->data == NULL || o->mesh.vertex->count <= 0) {
             continue;
         }
-        e = mp6_ws_selective_find(o->mesh.vertex->data);
-        freshInstance = (e == NULL) || (e->hsf != hsf);
-        if (e == NULL) {
-            e = mp6_ws_selective_alloc();
-        }
+        e = mp6_ws_selective_register(modelId, hsf, o, center, 0.0f);
         if (e == NULL) {
             continue; /* registry exhausted -- degrade to "not tracked", same graceful path every other registry here uses */
-        }
-        t = &o->mesh.base;
-        mtxRot(rotMtx, t->rot.x, t->rot.y, t->rot.z);
-        PSMTXScale(scaleMtx, t->scale.x, t->scale.y, t->scale.z);
-        PSMTXConcat(rotMtx, scaleMtx, mtx);
-        mtxTransCat(mtx, t->pos.x, t->pos.y, t->pos.z);
-        PSMTXCopy(mtx, e->fwdMtx);
-        PSMTXInverse(e->fwdMtx, e->invMtx);
-        e->center = center;
-        e->modelId = modelId;
-        e->hsf = hsf;
-        e->liveMin = &o->mesh.mesh.min;
-        e->liveMax = &o->mesh.mesh.max;
-        if (freshInstance) {
-            size_t bytes = (size_t)o->mesh.vertex->count * sizeof(HuVecF);
-            float *native = (float *)malloc(bytes);
-            if (native == NULL) {
-                continue; /* OOM on a tiny alloc -- extremely unlikely; degrade to "not tracked" */
-            }
-            free(e->native);
-            e->native = native;
-            memcpy(e->native, o->mesh.vertex->data, bytes);
-            e->ptr = o->mesh.vertex->data;
-            e->count = o->mesh.vertex->count;
         }
         mp6_ws_selective_apply(e, k);
     }
     GXInvalidateVtxCache();
+}
+
+void mp6_widescreen_scale_backdrop(int16_t modelId, const char *objName, int anchor)
+{
+    HSF_DATA *hsf;
+    HuVecF center;
+    s16 i;
+
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX || objName == NULL) {
+        return;
+    }
+    hsf = Hu3DData[modelId].hsf;
+    if (hsf == NULL || !mp6_ws_model_center(hsf, &center)) {
+        return;
+    }
+    for (i = 0; i < hsf->objectNum; i++) {
+        HSF_OBJECT *o = &hsf->object[i];
+        MP6WSSelectiveEntry *e;
+        float low = 0.0f, high = 0.0f, left = 0.0f, right = 0.0f;
+        s32 j;
+
+        if (o->type != HSF_OBJ_MESH || o->name == NULL || strcmp(o->name, objName) != 0 ||
+            o->mesh.vertex == NULL || o->mesh.vertex->data == NULL || o->mesh.vertex->count <= 0) {
+            continue;
+        }
+        e = mp6_ws_selective_register(modelId, hsf, o, center, 0.0f);
+        if (e == NULL || e->native == NULL) {
+            return;
+        }
+        if (!e->uniform) {
+            /* The pivot comes from the native snapshot, never widened data. */
+            for (j = 0; j < e->count; j++) {
+                HuVecF world;
+                PSMTXMultVec(e->fwdMtx, &((HuVecF *)e->native)[j], &world);
+                if (j == 0 || world.y < low) low = world.y;
+                if (j == 0 || world.y > high) high = world.y;
+                if (j == 0 || world.x < left) left = world.x;
+                if (j == 0 || world.x > right) right = world.x;
+            }
+            e->uniform = 1;
+            e->center.x = (left + right) * 0.5f;
+            e->pivotY = anchor < 0 ? low : anchor > 0 ? high : (low + high) * 0.5f;
+        }
+        mp6_ws_selective_apply(e, mp6_widescreen_scale_factor());
+        GXInvalidateVtxCache();
+        return;
+    }
 }
 
 /* ==========================================================================
@@ -1321,10 +1275,10 @@ typedef struct {
  * it did before this clamp existed. */
 #define MP6_WS_NO_CLAMP (-1.0e30f)
 
-/* Mode-select's own "cloud1".."cloud6"/"star1".."star7" is 13 objects -- 16
- * gives the same headroom-for-re-entry margin as MP6_WS_SELECTIVE_MAX above,
- * matching this file's own established sizing rationale. */
-#define MP6_WS_REPOSITION_MAX 16
+/* Mode-select's own "cloud1".."cloud6"/"star1".."star7" is 13 objects;
+ * Tally Me Banana's framing fronds and their shadows are 18. 32 keeps
+ * headroom for re-entry, matching this file's sizing rationale. */
+#define MP6_WS_REPOSITION_MAX 32
 static MP6WSRepositionEntry g_mp6WsReposition[MP6_WS_REPOSITION_MAX];
 static s16 g_mp6WsRepositionNum = 0;
 
@@ -1332,7 +1286,7 @@ static MP6WSRepositionEntry *mp6_ws_reposition_find(HSF_OBJECT *obj)
 {
     s16 i;
     for (i = 0; i < g_mp6WsRepositionNum; i++) {
-        if (g_mp6WsReposition[i].obj == obj && Hu3DData[g_mp6WsReposition[i].modelId].hsf == g_mp6WsReposition[i].hsf) {
+        if (g_mp6WsReposition[i].obj == obj && mp6_ws_model_live(g_mp6WsReposition[i].modelId, g_mp6WsReposition[i].hsf)) {
             return &g_mp6WsReposition[i];
         }
     }
@@ -1343,7 +1297,7 @@ static MP6WSRepositionEntry *mp6_ws_reposition_alloc(void)
 {
     s16 i;
     for (i = 0; i < g_mp6WsRepositionNum; i++) {
-        if (Hu3DData[g_mp6WsReposition[i].modelId].hsf != g_mp6WsReposition[i].hsf) {
+        if (!mp6_ws_model_live(g_mp6WsReposition[i].modelId, g_mp6WsReposition[i].hsf)) {
             return &g_mp6WsReposition[i]; /* recycle a dead slot */
         }
     }
@@ -1368,7 +1322,8 @@ static void mp6_ws_reposition_apply(MP6WSRepositionEntry *e, float k)
      * (k-1) factor is zero), so a caller that never opts in (bias=1.0f,
      * e.g. mode-select's own stars) is byte-for-byte unchanged from before
      * this existed. */
-    e->obj->mesh.base.pos.x = e->nativeBaseX + e->bias * (k - 1.0f) * (e->nativeBaseX - e->centerX);
+    e->obj->mesh.base.pos.x = k == 1.0f ? e->nativeBaseX
+        : e->nativeBaseX + e->bias * (k - 1.0f) * (e->nativeBaseX - e->centerX);
 
     /* The formula above scales an object's own offset FROM the divide, so
      * an object that starts NEAR the divide has a (nativeBaseX - centerX)
@@ -1398,16 +1353,14 @@ static void mp6_ws_reposition_apply(MP6WSRepositionEntry *e, float k)
  * CURRENT `mesh.base.pos`, so an earlier reposition call's write is visible
  * to a later call's own center recomputation, silently shifting the
  * reference point the second call's `(nativeBaseX-centerX)` term is measured
- * from). Returns 0.0f (a safe, inert fallback -- byte-identical-when-
- * disabled is preserved since callers only ever use this value when
- * widescreen is enabled to begin with) if widescreen is disabled or the
- * model/hsf isn't valid. */
+ * from). Returns 0.0f if the model/hsf isn't valid. Disabled registrations
+ * still need the actual native center for a later toggle. */
 float mp6_widescreen_model_center_x(int16_t modelId)
 {
     HSF_DATA *hsf;
     HuVecF center;
 
-    if (!mp6_widescreen_enabled() || modelId < 0) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX) {
         return 0.0f;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -1423,7 +1376,7 @@ static void mp6_ws_reposition_x_impl(int16_t modelId, MP6WSNameMatchFn match, fl
     s16 i;
     float k;
 
-    if (!mp6_widescreen_enabled() || modelId < 0 || match == NULL) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX || match == NULL) {
         return;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -1560,7 +1513,7 @@ static MP6WSBorderEntry *mp6_ws_border_find(void *ptr)
 {
     s16 i;
     for (i = 0; i < g_mp6WsBorderNum; i++) {
-        if (g_mp6WsBorder[i].ptr == ptr && Hu3DData[g_mp6WsBorder[i].modelId].hsf == g_mp6WsBorder[i].hsf) {
+        if (g_mp6WsBorder[i].ptr == ptr && mp6_ws_model_live(g_mp6WsBorder[i].modelId, g_mp6WsBorder[i].hsf)) {
             return &g_mp6WsBorder[i];
         }
     }
@@ -1571,7 +1524,7 @@ static MP6WSBorderEntry *mp6_ws_border_alloc(void)
 {
     s16 i;
     for (i = 0; i < g_mp6WsBorderNum; i++) {
-        if (Hu3DData[g_mp6WsBorder[i].modelId].hsf != g_mp6WsBorder[i].hsf) {
+        if (!mp6_ws_model_live(g_mp6WsBorder[i].modelId, g_mp6WsBorder[i].hsf)) {
             return &g_mp6WsBorder[i]; /* recycle a dead slot */
         }
     }
@@ -1594,6 +1547,12 @@ static void mp6_ws_border_apply(MP6WSBorderEntry *e, float k)
      * what was captured), and the next register call re-takes the
      * snapshot. */
     if (e->native == NULL || e->count <= 0) {
+        return;
+    }
+    if (k == 1.0f) {
+        memcpy(e->ptr, e->native, (size_t)e->count * sizeof(HuVecF));
+        *e->liveMin = e->nativeMin;
+        *e->liveMax = e->nativeMax;
         return;
     }
     HuVecF *dst = (HuVecF *)e->ptr;
@@ -1622,7 +1581,7 @@ void mp6_widescreen_extrude_model_border_xz(int16_t modelId, const char *objName
     s16 i;
     float k;
 
-    if (!mp6_widescreen_enabled() || modelId < 0 || objName == NULL) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX || objName == NULL) {
         return;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -1787,7 +1746,7 @@ static MP6WSSplitEntry *mp6_ws_split_find(void *ptr)
 {
     s16 i;
     for (i = 0; i < g_mp6WsSplitNum; i++) {
-        if (g_mp6WsSplit[i].ptr == ptr && Hu3DData[g_mp6WsSplit[i].modelId].hsf == g_mp6WsSplit[i].hsf) {
+        if (g_mp6WsSplit[i].ptr == ptr && mp6_ws_model_live(g_mp6WsSplit[i].modelId, g_mp6WsSplit[i].hsf)) {
             return &g_mp6WsSplit[i];
         }
     }
@@ -1798,7 +1757,7 @@ static MP6WSSplitEntry *mp6_ws_split_alloc(void)
 {
     s16 i;
     for (i = 0; i < g_mp6WsSplitNum; i++) {
-        if (Hu3DData[g_mp6WsSplit[i].modelId].hsf != g_mp6WsSplit[i].hsf) {
+        if (!mp6_ws_model_live(g_mp6WsSplit[i].modelId, g_mp6WsSplit[i].hsf)) {
             return &g_mp6WsSplit[i]; /* recycle a dead slot */
         }
     }
@@ -1843,6 +1802,12 @@ static void mp6_ws_split_apply(MP6WSSplitEntry *e, float k)
      * what was captured), and the next register call re-takes the
      * snapshot. */
     if (e->native == NULL || e->count <= 0) {
+        return;
+    }
+    if (k == 1.0f) {
+        memcpy(e->ptr, e->native, (size_t)e->count * sizeof(HuVecF));
+        *e->liveMin = e->nativeMin;
+        *e->liveMax = e->nativeMax;
         return;
     }
     HuVecF *dst = (HuVecF *)e->ptr;
@@ -1898,13 +1863,13 @@ static void mp6_ws_split_apply(MP6WSSplitEntry *e, float k)
     e->liveMax->z = e->nativeMax.z + zDelta;
 }
 
-static void mp6_ws_split_separate_x_impl(int16_t modelId, float zBackRate)
+static void mp6_ws_split_separate_x_impl(int16_t modelId, const char *objName, float zBackRate)
 {
     HSF_DATA *hsf;
     s16 i;
     float k;
 
-    if (!mp6_widescreen_enabled() || modelId < 0) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX) {
         return;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -1918,6 +1883,9 @@ static void mp6_ws_split_separate_x_impl(int16_t modelId, float zBackRate)
         BOOL freshInstance;
 
         if (o->type != HSF_OBJ_MESH) {
+            continue;
+        }
+        if (objName != NULL && (o->name == NULL || strcmp(o->name, objName) != 0)) {
             continue;
         }
         if (o->mesh.vertex == NULL || o->mesh.vertex->data == NULL || o->mesh.vertex->count <= 0) {
@@ -1959,7 +1927,14 @@ static void mp6_ws_split_separate_x_impl(int16_t modelId, float zBackRate)
 
 void mp6_widescreen_split_separate_x(int16_t modelId)
 {
-    mp6_ws_split_separate_x_impl(modelId, 0.0f);
+    mp6_ws_split_separate_x_impl(modelId, NULL, 0.0f);
+}
+
+void mp6_widescreen_split_object_x(int16_t modelId, const char *objName)
+{
+    if (objName != NULL) {
+        mp6_ws_split_separate_x_impl(modelId, objName, 0.0f);
+    }
 }
 
 void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, float refK)
@@ -1968,7 +1943,7 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
      * all) -- degrade to the plain, zero-Z-shift behavior rather than
      * divide by zero. */
     float zBackRate = (refK != 1.0f) ? (zBackAtRefK / (refK - 1.0f)) : 0.0f;
-    mp6_ws_split_separate_x_impl(modelId, zBackRate);
+    mp6_ws_split_separate_x_impl(modelId, NULL, zBackRate);
 }
 
 /* ==========================================================================
@@ -2084,11 +2059,8 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * Never touches the ORIGINAL model's own top-level transform (position,
  * scale, rotation) at all -- the ONLY change to the ORIGINAL floor
  * instance is that it no longer receives a border_xz call at its own
- * former call site. Same default-off contract as every other mechanism in
- * this file (gated on mp6_widescreen_enabled(); a disabled build never
- * calls Hu3DModelCreateData a second time at all, so the duplicate simply
- * never exists -- byte-identical to the original single-instance
- * behavior). */
+ * former call site. The duplicate is prepared at scene creation and hidden
+ * at native aspect, so enabling widescreen does not require a scene reload. */
 #define MP6_WS_FLOOR_DUP_Y_BIAS (-2.0f)
 
 /* ==========================================================================
@@ -2137,7 +2109,7 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * +-800 world is occluded by the native floor everywhere the two
  * overlap); at k = 1 the duplicate is fully covered by the native floor
  * (Y_BIAS keeps it strictly below), so the rewrite is invisible there,
- * and a disabled build never creates the duplicate at all. STs are
+ * and a disabled view keeps the duplicate hidden. STs are
  * written once (they are k-independent constants; only vertex positions
  * ride the per-frame reapply) and the arrays die with the duplicate model.
  * Validated against the measured "yuka" layout before any write (25
@@ -2177,6 +2149,13 @@ static void mp6_ws_floor_dup_clean_sts(HU3D_MODELID dupId, const char *objName)
         || o->mesh.st == NULL || o->mesh.st->data == NULL
         || o->mesh.face == NULL || o->mesh.face->data == NULL) {
         mp6_ws_extend_refuse(objName, "floor dup: missing buffers");
+        return;
+    }
+    /* These clean bands were measured on the Party floor only. Minigame
+     * Mode's ys80_floor has different artwork and must retain its own UVs. */
+    if (o->mesh.attribute == NULL || o->mesh.attribute->bitmap == NULL
+        || o->mesh.attribute->bitmap->name == NULL
+        || strcmp(o->mesh.attribute->bitmap->name, "ys77_floor") != 0) {
         return;
     }
     verts = (HuVecF *)o->mesh.vertex->data;
@@ -2255,12 +2234,44 @@ typedef struct {
     HSF_DATA *dupHsf; /* liveness snapshot, same pattern as every other registry here */
 } MP6WSFloorDupEntry;
 
-/* This project has exactly one confirmed user (the party floor) -- 4 gives
+/* Party and Minigame Mode use this fill -- 4 gives
  * headroom for re-entering Party Mode many times in a session, matching
  * MP6WSBorderEntry/MP6WSSplitEntry's own identical sizing rationale. */
 #define MP6_WS_FLOOR_DUP_MAX 4
 static MP6WSFloorDupEntry g_mp6WsFloorDup[MP6_WS_FLOOR_DUP_MAX];
 static s16 g_mp6WsFloorDupNum = 0;
+
+/* The Minigame floor's bottom 64 rows contain only repeating planks (the
+ * emblem and baked tree shadows are above them). RGB565's 4x4 tiles make
+ * this an aligned view into the duplicate's existing bitmap, not a new
+ * allocation. Keep texels/world-unit constant as the fill grows; never
+ * change the original floor, its artwork, or its projected shadows. */
+static BOOL mp6_ws_minigame_floor_tile(HSF_DATA *hsf, const char *objName)
+{
+    HSF_OBJECT *o;
+    HSF_ATTRIBUTE *attr;
+    HSF_BITMAP *bmp;
+    HuVec2f *st;
+    s32 i;
+    if (!hsf || hsf->objectNum != 1) return FALSE;
+    o = &hsf->object[0];
+    if (o->type != HSF_OBJ_MESH || !o->name || strcmp(o->name, objName)
+        || !o->mesh.st || !o->mesh.st->data || o->mesh.st->count != 64) return FALSE;
+    attr = o->mesh.attribute;
+    if (!attr || !(bmp = attr->bitmap) || !bmp->name
+        || (strcmp(bmp->name, "ys80_floor") && strcmp(bmp->name, "ys78_floor")) || !bmp->data
+        || bmp->dataFmt != GX_TF_RGB565 || bmp->sizeX != 256 || bmp->sizeY != 256
+        || bmp->maxLod != 0 || (attr->flag & HSF_FLAG_MIPMAP)) return FALSE;
+    /* Both measured atlases have clean vertical planks in rows 192..255.
+     * Solo's upper rows also contain painted ship shadows and its emblem;
+     * only this independent backing copy may use the clean repeating strip. */
+    bmp->data = (u8 *)bmp->data + (192 / 4) * (256 / 4) * 32;
+    bmp->sizeY = 64;
+    attr->wrapS = attr->wrapT = GX_REPEAT;
+    st = o->mesh.st->data;
+    for (i = 0; i < o->mesh.st->count; ++i) st[i].y *= 4.0f;
+    return TRUE;
+}
 
 /* Called once per scene setup (mdpartydll/mdparty.c's fn_1_861C, in place
  * of the direct `mp6_widescreen_extrude_model_border_xz(obj->mdlId[i],
@@ -2271,18 +2282,24 @@ static s16 g_mp6WsFloorDupNum = 0;
  * precedent so this stays callable from a decomp-header-rich REL TU
  * without any type mismatch). `objName` is passed straight through to the
  * unchanged `mp6_widescreen_extrude_model_border_xz()` call this function
- * makes on the NEW duplicate. No-op (creates nothing) when Widescreen is
- * disabled, matching every other mechanism's default-off contract. */
+ * makes on the NEW duplicate. Prepared even while disabled; the live
+ * aspect controls the duplicate's visibility. */
 void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName)
 {
     HU3D_MODELID dupId;
     HU3D_MOTIONID motId;
     HuVecF pos;
+    BOOL tiledMiniFloor;
+    s16 slot;
 
-    if (!mp6_widescreen_enabled() || objName == NULL) {
+    if (objName == NULL) {
         return;
     }
-    if (g_mp6WsFloorDupNum >= MP6_WS_FLOOR_DUP_MAX) {
+    for (slot = 0; slot < g_mp6WsFloorDupNum; ++slot) {
+        if (!mp6_ws_model_live(g_mp6WsFloorDup[slot].dupModelId,
+                               g_mp6WsFloorDup[slot].dupHsf)) break;
+    }
+    if (slot >= MP6_WS_FLOOR_DUP_MAX) {
         return; /* registry exhausted -- degrade to "no fill duplicate this
                   * entry" rather than crash; not expected given this
                   * project's real Party-Mode re-entry count. */
@@ -2291,6 +2308,7 @@ void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName)
     if (dupId < 0 || Hu3DData[dupId].hsf == NULL) {
         return;
     }
+    tiledMiniFloor = mp6_ws_minigame_floor_tile(Hu3DData[dupId].hsf, objName);
     /* Mirrors the ESSENTIAL parts of the same per-sub-model setup
      * mdpartydll's own fn_1_861C already does for every real party
      * sub-model (Hu3DModelLayerSet + motion-shift) -- "yuka" itself has no
@@ -2311,7 +2329,7 @@ void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName)
      * the dynamic-reapply system -- this is a fixed rendering-order
      * safety margin, not a widescreen-scale-dependent quantity). */
     Hu3DModelPosGet(dupId, &pos);
-    Hu3DModelPosSet(dupId, pos.x, pos.y + MP6_WS_FLOOR_DUP_Y_BIAS, pos.z);
+    Hu3DModelPosSet(dupId, pos.x, pos.y + (tiledMiniFloor ? -0.1f : MP6_WS_FLOOR_DUP_Y_BIAS), pos.z);
 
     /* Deliberately NEVER Hu3DModelShadowMapSet(dupId) here -- this instance
      * exists ONLY to provide the border-extended VISUAL fill; it must never
@@ -2324,12 +2342,19 @@ void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName)
      * lattice) -- see mp6_ws_floor_dup_clean_sts' own section comment for
      * the full texel census and rules. The ORIGINAL floor instance is
      * untouched, as ever. */
-    mp6_ws_floor_dup_clean_sts(dupId, objName);
-    mp6_widescreen_extrude_model_border_xz(dupId, objName);
+    if (tiledMiniFloor) {
+        mp6_widescreen_extrude_model_repeat(dupId);
+    } else {
+        mp6_ws_floor_dup_clean_sts(dupId, objName);
+        mp6_widescreen_extrude_model_border_xz(dupId, objName);
+    }
 
-    g_mp6WsFloorDup[g_mp6WsFloorDupNum].dupModelId = dupId;
-    g_mp6WsFloorDup[g_mp6WsFloorDupNum].dupHsf = Hu3DData[dupId].hsf;
-    g_mp6WsFloorDupNum++;
+    g_mp6WsFloorDup[slot].dupModelId = dupId;
+    g_mp6WsFloorDup[slot].dupHsf = Hu3DData[dupId].hsf;
+    if (slot == g_mp6WsFloorDupNum) ++g_mp6WsFloorDupNum;
+    if (mp6_widescreen_scale_factor() <= 1.0f) {
+        Hu3DModelAttrSet(dupId, HU3D_ATTR_DISPOFF);
+    }
 }
 
 /* Companion teardown -- called once per scene teardown (mdpartydll's own
@@ -2339,15 +2364,14 @@ void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName)
  * modelId's CURRENT Hu3DData[].hsf no longer matches what was live at
  * registration time was already killed/recycled elsewhere and must not be
  * resurrected) and resets the registry, so a later Party-Mode re-entry
- * starts from a clean slate. A true no-op when Widescreen was never
- * enabled (the registry stays permanently empty in that case, matching
- * every other mechanism's default-off contract). */
+ * starts from a clean slate. Hidden, cold-disabled companions are owned
+ * and released in exactly the same way. */
 void mp6_widescreen_floor_border_fill_dup_kill_all(void)
 {
     s16 i;
     for (i = 0; i < g_mp6WsFloorDupNum; i++) {
         MP6WSFloorDupEntry *e = &g_mp6WsFloorDup[i];
-        if (Hu3DData[e->dupModelId].hsf == e->dupHsf) {
+        if (mp6_ws_model_live(e->dupModelId, e->dupHsf)) {
             Hu3DModelKill(e->dupModelId);
         }
     }
@@ -2472,10 +2496,10 @@ void mp6_widescreen_floor_border_fill_dup_kill_all(void)
  * THE k=1 ZERO CONTRACT: every appended quad collapses to zero area at
  * k=1 (tiles/mirror: all four corners on the seam edge; ring: outer ==
  * rim verbatim), GX rasterises nothing, and the object's live
- * mesh.min/max are written back EXACTLY native -- and a disabled build
- * never registers (or grows, or re-bakes) anything at all, so default-off
- * stays byte-identical, the same contract every mechanism in this file
- * keeps. The proven counts: k=1.625 -> sora 2+2 strips, k=1.775 -> 3+3
+ * mesh.min/max are written back EXACTLY native. Registration and its one
+ * bake also run while disabled, but the original faces are unchanged and
+ * the appended zero-area faces draw nothing. The proven counts:
+ * k=1.625 -> sora 2+2 strips, k=1.775 -> 3+3
  * (fixed capacity 9+9 covers k <= 4.0, a ~5.3:1 window -- beyond it the
  * strip count saturates and coverage falls short, accepted for aspects
  * no real display has); grids exactly 1+1; ring exactly 16; the pillar
@@ -2510,8 +2534,22 @@ typedef enum {
     MP6_WS_EXTEND_TILES = 0,
     MP6_WS_EXTEND_MIRROR,
     MP6_WS_EXTEND_RING,
+    MP6_WS_EXTEND_RING_REFLECT,
     MP6_WS_EXTEND_PILLAR, /* pillar edge extrusion (see its own section below) */
-    MP6_WS_EXTEND_RESULTS /* four independently transformed theater borders */
+    MP6_WS_EXTEND_RESULTS, /* four independently transformed theater borders */
+    MP6_WS_EXTEND_EDGE,
+    MP6_WS_EXTEND_SIDES,
+    MP6_WS_EXTEND_SOLID_SIDES,
+    MP6_WS_EXTEND_STRIP_RIM,
+    MP6_WS_EXTEND_FLOOR,
+    MP6_WS_EXTEND_COLOR_RIM,
+    MP6_WS_EXTEND_REFLECT_FACES,
+    /* XY silhouette boundary strips: widen only X; retain endpoint Y/Z and
+     * the authored endpoint STs.  This is deliberately separate from the
+     * planar wall continuation above, whose Z slope is useful for validated
+     * tapered walls but unsafe for non-planar backdrop bands. */
+    MP6_WS_EXTEND_WALL_EDGES,
+    MP6_WS_EXTEND_SHAPE_MIRROR
 } MP6WSExtendMode;
 
 /* Fixed per-side strip capacity for the TILE treatment: ceil(halfW*(kCap-1)
@@ -2521,6 +2559,27 @@ typedef enum {
 /* The ring treatment is authored for CP's exact 16-gon fan -- refused
  * (degrade to no extension) for any other chord count. */
 #define MP6_WS_EXTEND_RIM_MAX 16
+#define MP6_WS_EXTEND_RING_ST_MAX (MP6_WS_EXTEND_RIM_MAX * 2)
+/* The M675 curb has 17 profile edges at each end, with eight atlas tiles
+ * per edge. Keep the bounded registry large enough for that real topology. */
+#define MP6_WS_EXTEND_EDGE_MAX 288
+#define MP6_WS_EXTEND_REFLECT_FACE_MAX 16
+#define MP6_WS_EXTEND_REFLECT_CORNER_MAX (MP6_WS_EXTEND_REFLECT_FACE_MAX * 4)
+#define MP6_WS_EXTEND_SHAPE_VERTEX_MAX 128
+#define MP6_WS_SHAPE_SEA_COLS 24
+#define MP6_WS_SHAPE_SEA_ROWS 12
+#define MP6_WS_SHAPE_SEA_FACES (MP6_WS_SHAPE_SEA_COLS * MP6_WS_SHAPE_SEA_ROWS)
+
+typedef struct {
+    s32 face;
+    s16 corner[2];
+    HuVecF pos[2];
+    HuVecF posSlope[2]; /* Sloped rim continuation per local-axis unit. */
+    HuVec2f uv[2], uvSlope[2];
+    HuVec2f tileInnerUV[2]; /* Independent atlas start retains block joints. */
+    float tileOffset[2], tileSpan[2]; /* Per-endpoint clamped-atlas continuation. */
+    HSF_FACE_INDEX sourceIndex[2]; /* Curved strip endpoints can live in its tail. */
+} MP6WSEdge;
 
 typedef struct {
     HU3D_MODELID modelId;
@@ -2554,18 +2613,51 @@ typedef struct {
     float rimX[MP6_WS_EXTEND_RIM_MAX];   /* native rim positions */
     float rimY[MP6_WS_EXTEND_RIM_MAX];
     float rimZ[MP6_WS_EXTEND_RIM_MAX];
+    /* Reflected-UV ring mode snapshots each authored rim/centre ST pair.
+     * A shared rim vertex may carry different per-face ST indices at a
+     * texture seam, so generated ST records are deduplicated by source-index
+     * pair rather than by vertex. The default ring never reads these fields. */
+    s16 ringStCount;
+    s16 ringStSlot[MP6_WS_EXTEND_RIM_MAX * 2];
+    float rimU[MP6_WS_EXTEND_RING_ST_MAX];
+    float rimV[MP6_WS_EXTEND_RING_ST_MAX];
+    float rimCenterU[MP6_WS_EXTEND_RING_ST_MAX];
+    float rimCenterV[MP6_WS_EXTEND_RING_ST_MAX];
     /* cull box bookkeeping: the object's own authored native min/max --
      * written back verbatim at k=1 (byte-identical contract) and extended
      * to the live companion reach otherwise, the same "keep the cull walk
      * honest" duty established by the mechanisms above. */
     HuVecF nativeMin, nativeMax;
+    /* Boundary extensions retain all authored geometry. Only these new
+     * edge strips change length; UV derivatives preserve texture density. */
+    s16 edgeCount, edgeAxis;
+    BOOL edgeSloped;
+    BOOL edgeTiled;
+    BOOL rimApplied;
+    float lastRimScale; /* Static strip-rim vertices change only with aspect. */
+    float edgeReach;
+    float floorCenterX, floorCenterZ;
+    /* Opt-in native-height correction for an XY color plane. Zero/zero
+     * leaves the normal widescreen-only color rim completely unchanged. */
+    float colorNativeBottomY, colorBottomY;
+    MP6WSEdge edges[MP6_WS_EXTEND_EDGE_MAX];
+    /* Explicit authored face-range reflection. The source positions are
+     * snapshotted before growth so re-apply never treats a generated tail as
+     * native. UV/ST indices remain the source indices verbatim. */
+    s32 reflectFirstFace;
+    s16 reflectFaceCount;
+    s16 reflectSeamA, reflectSeamB;
+    HuVecF reflectSeamApos, reflectSeamBpos;
+    float reflectPlaneNx, reflectPlaneNz;
+    HuVecF reflectSourcePos[MP6_WS_EXTEND_REFLECT_CORNER_MAX];
+    s32 shapeFaces;
+    s16 shapeSeam[2][MP6_WS_EXTEND_SHAPE_VERTEX_MAX];
+    float shapeTileX, shapeTileZ, shapePlaneY, shapeCenterX;
 } MP6WSExtendEntry;
 
-/* Five live users exist (sora, grid5, grid14, CP, and the pillar --
- * at most two of them, CP + pillar, even share a scene) and only one
- * scene is ever on-screen -- 8 gives the same re-entry headroom margin as
- * every other registry in this file (dead slots recycled by liveness). */
-#define MP6_WS_EXTEND_MAX 8
+/* Endurance's initial cave has eleven repeated tunnel meshes plus its
+ * entrance rim. Model teardown and liveness checks recycle dead slots. */
+#define MP6_WS_EXTEND_MAX 16
 static MP6WSExtendEntry g_mp6WsExtend[MP6_WS_EXTEND_MAX];
 static s16 g_mp6WsExtendNum = 0;
 
@@ -2573,7 +2665,19 @@ static MP6WSExtendEntry *mp6_ws_extend_find(HSF_OBJECT *obj)
 {
     s16 i;
     for (i = 0; i < g_mp6WsExtendNum; i++) {
-        if (g_mp6WsExtend[i].obj == obj && Hu3DData[g_mp6WsExtend[i].modelId].hsf == g_mp6WsExtend[i].hsf) {
+        if (g_mp6WsExtend[i].obj == obj && mp6_ws_model_live(g_mp6WsExtend[i].modelId, g_mp6WsExtend[i].hsf)) {
+            return &g_mp6WsExtend[i];
+        }
+    }
+    return NULL;
+}
+
+static MP6WSExtendEntry *mp6_ws_extend_find_mode(HSF_OBJECT *obj, MP6WSExtendMode mode)
+{
+    s16 i;
+    for (i = 0; i < g_mp6WsExtendNum; i++) {
+        if (g_mp6WsExtend[i].obj == obj && g_mp6WsExtend[i].mode == mode
+            && mp6_ws_model_live(g_mp6WsExtend[i].modelId, g_mp6WsExtend[i].hsf)) {
             return &g_mp6WsExtend[i];
         }
     }
@@ -2584,7 +2688,7 @@ static MP6WSExtendEntry *mp6_ws_extend_alloc(void)
 {
     s16 i;
     for (i = 0; i < g_mp6WsExtendNum; i++) {
-        if (Hu3DData[g_mp6WsExtend[i].modelId].hsf != g_mp6WsExtend[i].hsf) {
+        if (!mp6_ws_model_live(g_mp6WsExtend[i].modelId, g_mp6WsExtend[i].hsf)) {
             return &g_mp6WsExtend[i]; /* recycle a dead slot */
         }
     }
@@ -2647,17 +2751,19 @@ static BOOL mp6_ws_extend_grow(HU3D_MODELID modelId, HSF_OBJECT *o,
     HSF_FACE *newF;
     s32 i;
 
+    const BOOL hasST = stb && stb->data && stb->count > 0;
+    if (!hasST && addSt != 0) return FALSE;
     newV = (HuVecF *)HuMemDirectMallocNum(HEAP_MODEL, (s32)((vb->count + addVtx) * sizeof(HuVecF)), mallocNo);
-    newSt = (HuVec2f *)HuMemDirectMallocNum(HEAP_MODEL, (s32)((stb->count + addSt) * sizeof(HuVec2f)), mallocNo);
+    newSt = hasST ? (HuVec2f *)HuMemDirectMallocNum(HEAP_MODEL, (s32)((stb->count + addSt) * sizeof(HuVec2f)), mallocNo) : NULL;
     newF = (HSF_FACE *)HuMemDirectMallocNum(HEAP_MODEL, (s32)((fb->count + addQuads) * sizeof(HSF_FACE)), mallocNo);
-    if (newV == NULL || newSt == NULL || newF == NULL) {
+    if (newV == NULL || (hasST && newSt == NULL) || newF == NULL) {
         if (newV != NULL) HuMemDirectFree(newV);
         if (newSt != NULL) HuMemDirectFree(newSt);
         if (newF != NULL) HuMemDirectFree(newF);
         return FALSE;
     }
     memcpy(newV, vb->data, (size_t)vb->count * sizeof(HuVecF));
-    memcpy(newSt, stb->data, (size_t)stb->count * sizeof(HuVec2f));
+    if (hasST) memcpy(newSt, stb->data, (size_t)stb->count * sizeof(HuVec2f));
     memcpy(newF, fb->data, (size_t)fb->count * sizeof(HSF_FACE));
     /* Appended verts/STs start as copies of vertex 0 / ST 0 (any real
      * value works -- the caller's immediate apply overwrites every one;
@@ -2678,17 +2784,16 @@ static BOOL mp6_ws_extend_grow(HU3D_MODELID modelId, HSF_OBJECT *o,
      * LoadVertexArrays/LoadSTArrays/LoadFaceGroups), so freeing them
      * directly is exact, not a heuristic. */
     {
-        void *oldV = vb->data, *oldSt = stb->data, *oldF = fb->data;
+        void *oldV = vb->data, *oldSt = hasST ? stb->data : NULL, *oldF = fb->data;
         vb->data = newV;
         vb->count += addVtx;
-        stb->data = newSt;
-        stb->count += addSt;
+        if (hasST) { stb->data = newSt; stb->count += addSt; }
         fb->data = newF;
         fb->count += addQuads;
         mp6_gxarray_register(newV, (uint32_t)(vb->count * sizeof(HuVecF)));
-        mp6_gxarray_register(newSt, (uint32_t)(stb->count * sizeof(HuVec2f)));
+        if (hasST) mp6_gxarray_register(newSt, (uint32_t)(stb->count * sizeof(HuVec2f)));
         HuMemDirectFree(oldV);
-        HuMemDirectFree(oldSt);
+        if (oldSt) HuMemDirectFree(oldSt);
         HuMemDirectFree(oldF);
     }
 
@@ -2804,13 +2909,14 @@ static int mp6_ws_mesh_is_cluster_target(const HSF_DATA *hsf, const HSF_OBJECT *
  * mechanism here mutates buffers in place -- no OTHER object sharing this
  * object's vertex/ST/face buffer pointers, the exact hazard
  * mp6_widescreen_debug_dump_model()'s vtxBuf census exists to check). */
-static HSF_OBJECT *mp6_ws_extend_locate(HU3D_MODELID modelId, const char *objName)
+static HSF_OBJECT *mp6_ws_extend_locate_mesh_impl(HU3D_MODELID modelId, const char *objName,
+                                                 BOOL needsST, int occurrence, BOOL allowShape)
 {
     HSF_DATA *hsf;
     HSF_OBJECT *o = NULL;
     s16 i;
 
-    if (!mp6_widescreen_enabled() || modelId < 0 || objName == NULL) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX || objName == NULL || occurrence < 0) {
         return NULL;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -2820,6 +2926,7 @@ static HSF_OBJECT *mp6_ws_extend_locate(HU3D_MODELID modelId, const char *objNam
     for (i = 0; i < hsf->objectNum; i++) {
         HSF_OBJECT *cand = &hsf->object[i];
         if (cand->type == HSF_OBJ_MESH && cand->name != NULL && strcmp(cand->name, objName) == 0) {
+            if (occurrence-- != 0) continue;
             o = cand;
             break;
         }
@@ -2829,7 +2936,7 @@ static HSF_OBJECT *mp6_ws_extend_locate(HU3D_MODELID modelId, const char *objNam
         return NULL;
     }
     if (o->mesh.vertex == NULL || o->mesh.vertex->data == NULL || o->mesh.vertex->count <= 0
-        || o->mesh.st == NULL || o->mesh.st->data == NULL || o->mesh.st->count <= 0
+        || (needsST && (o->mesh.st == NULL || o->mesh.st->data == NULL || o->mesh.st->count <= 0))
         || o->mesh.face == NULL || o->mesh.face->data == NULL || o->mesh.face->count <= 0
         || o->mesh.normal == NULL || o->mesh.normal->data == NULL || o->mesh.normal->count <= 0) {
         mp6_ws_extend_refuse(objName, "missing vertex/st/face/normal data");
@@ -2848,7 +2955,7 @@ static HSF_OBJECT *mp6_ws_extend_locate(HU3D_MODELID modelId, const char *objNam
      *     while cluster deform runs off the hsf-level array, so the last
      *     term resolves the model's real cluster targets instead -- see
      *     mp6_ws_mesh_is_cluster_target above (hsf_stub_audit.md D3). */
-    if (o->mesh.cenvNum != 0 || o->mesh.clusterNum != 0 || o->mesh.shapeNum != 0
+    if (o->mesh.cenvNum != 0 || o->mesh.clusterNum != 0 || (!allowShape && o->mesh.shapeNum != 0)
         || mp6_ws_mesh_is_cluster_target(hsf, o)) {
         mp6_ws_extend_refuse(objName, "skinned/cluster/shape mesh -- buffer growth not designed for it");
         return NULL;
@@ -2864,13 +2971,179 @@ static HSF_OBJECT *mp6_ws_extend_locate(HU3D_MODELID modelId, const char *objNam
         if (other == o || other->type != HSF_OBJ_MESH) {
             continue;
         }
-        if (other->mesh.vertex == o->mesh.vertex || other->mesh.st == o->mesh.st
+        if (other->mesh.vertex == o->mesh.vertex || (o->mesh.st && other->mesh.st == o->mesh.st)
             || other->mesh.face == o->mesh.face) {
             mp6_ws_extend_refuse(objName, "buffer shared with another object");
             return NULL;
         }
     }
     return o;
+}
+
+static HSF_OBJECT *mp6_ws_extend_locate_mesh_at(HU3D_MODELID modelId, const char *objName,
+                                               BOOL needsST, int occurrence)
+{
+    return mp6_ws_extend_locate_mesh_impl(modelId, objName, needsST, occurrence, FALSE);
+}
+
+static HSF_OBJECT *mp6_ws_extend_locate_mesh(HU3D_MODELID modelId, const char *objName, BOOL needsST)
+{
+    return mp6_ws_extend_locate_mesh_at(modelId, objName, needsST, 0);
+}
+
+static HSF_OBJECT *mp6_ws_extend_locate(HU3D_MODELID modelId, const char *objName)
+{
+    return mp6_ws_extend_locate_mesh(modelId, objName, TRUE);
+}
+
+/* A radial gap is useful only if it separates entire pieces. Reject a face
+ * crossing it, so a connected shoreline is never partly stretched: unlike
+ * a per-vertex falloff this stays aligned with the coarse cave triangles.
+ * TRI/QUAD only; rigid animation is allowed, deformation is not. */
+void mp6_widescreen_extrude_outer_components(int16_t modelId, const char *objName, float radius)
+{
+    if (!isfinite(radius) || radius <= 0.0f || !isfinite(radius * radius)) return;
+    HSF_OBJECT *o = mp6_ws_extend_locate_mesh(modelId, objName, FALSE);
+    if (!o) return;
+    MP6WSSelectiveEntry *e = mp6_ws_selective_find(o->mesh.vertex->data);
+    if (e) { mp6_ws_selective_apply(e, mp6_widescreen_scale_factor()); return; }
+    HSF_DATA *hsf = Hu3DData[modelId].hsf;
+    /* XZ radial classification and horizontal widening share the model axes.
+     * This caller's root is the mesh. Refuse nested/rotated/scaled layouts. */
+    HSF_TRANSFORM *t = &o->mesh.base;
+    if (hsf->root != o || t->rot.x != 0 || t->rot.y != 0 || t->rot.z != 0 ||
+        t->scale.x != 1 || t->scale.y != 1 || t->scale.z != 1 || t->pos.x != 0 || t->pos.z != 0) return;
+    HuVecF *v = o->mesh.vertex->data;
+    HSF_FACE *faces = o->mesh.face->data;
+    float radiusSq = radius * radius;
+    for (s32 i = 0; i < o->mesh.vertex->count; ++i) {
+        if (!isfinite(v[i].x) || !isfinite(v[i].y) || !isfinite(v[i].z) ||
+            !isfinite(v[i].x*v[i].x + v[i].z*v[i].z)) return;
+    }
+    BOOL anyOuter = FALSE, anyInner = FALSE;
+    for (s32 f = 0; f < o->mesh.face->count; ++f) {
+        int type = faces[f].typeSrc & HSF_FACE_MASK;
+        int count = type == HSF_FACE_TRI ? 3 : type == HSF_FACE_QUAD ? 4 : 0;
+        if (!count) return;
+        int side = -1;
+        for (int c = 0; c < count; ++c) {
+            s16 i = faces[f].index[c].vertex;
+            if (i < 0 || i >= o->mesh.vertex->count) return;
+            int outer = v[i].x*v[i].x + v[i].z*v[i].z > radiusSq;
+            if (side >= 0 && side != outer) return;
+            side = outer;
+        }
+        if (side) anyOuter = TRUE; else anyInner = TRUE;
+    }
+    if (!anyOuter || !anyInner) return;
+    HuVecF center = {0, 0, 0};
+    e = mp6_ws_selective_register(modelId, hsf, o, center, radiusSq);
+    if (e) {
+        mp6_ws_selective_apply(e, mp6_widescreen_scale_factor());
+        GXInvalidateVtxCache();
+    }
+}
+
+typedef struct {
+    s16 part[MP6_WS_COMPONENT_VERTICES];
+    HuVecF lo[MP6_WS_COMPONENT_LIMIT], hi[MP6_WS_COMPONENT_LIMIT];
+    int count;
+} MP6WSComponents;
+
+static s16 mp6_ws_component_root(s16 *parents, s16 n)
+{
+    while (parents[n] != n) { parents[n] = parents[parents[n]]; n = parents[n]; }
+    return n;
+}
+
+/* Registration-only topology walk. Indices are interleaved in the retail
+ * rock asset, so index ranges and screen-space cutoffs are not ownership. */
+static BOOL mp6_ws_components(HSF_OBJECT *o, MP6WSSelectiveEntry *e, MP6WSComponents *out)
+{
+    if (!e || !e->native || e->count <= 0 || e->count > MP6_WS_COMPONENT_VERTICES) return FALSE;
+    /* Paired components must share native model XZ axes. Y offsets are fine. */
+    for (int row = 0; row < 3; row += 2) for (int col = 0; col < 4; ++col)
+        if (e->fwdMtx[row][col] != (row == col ? 1.0f : 0.0f)) return FALSE;
+    s16 parent[MP6_WS_COMPONENT_VERTICES], number[MP6_WS_COMPONENT_VERTICES];
+    HuVecF *v = (HuVecF *)e->native;
+    for (s16 i = 0; i < e->count; ++i) {
+        parent[i] = i; number[i] = -1;
+        if (!isfinite(v[i].x) || !isfinite(v[i].y) || !isfinite(v[i].z)) return FALSE;
+    }
+    HSF_FACE *faces = o->mesh.face->data;
+    for (s32 f = 0; f < o->mesh.face->count; ++f) {
+        int type = faces[f].typeSrc & HSF_FACE_MASK;
+        int count = type == HSF_FACE_TRI ? 3 : type == HSF_FACE_QUAD ? 4 : 0;
+        if (!count) return FALSE;
+        for (int c = 0; c < count; ++c) {
+            s16 i = faces[f].index[c].vertex;
+            if (i < 0 || i >= e->count) return FALSE;
+            if (c) parent[mp6_ws_component_root(parent, i)] = mp6_ws_component_root(parent, faces[f].index[0].vertex);
+        }
+    }
+    out->count = 0;
+    for (s16 i = 0; i < e->count; ++i) {
+        s16 root = mp6_ws_component_root(parent, i), part = number[root];
+        if (part < 0) {
+            if (out->count == MP6_WS_COMPONENT_LIMIT) return FALSE;
+            part = number[root] = out->count++;
+            out->lo[part] = out->hi[part] = v[i];
+        }
+        out->part[i] = part;
+        HuVecF *lo = &out->lo[part], *hi = &out->hi[part];
+        if (v[i].x < lo->x) lo->x = v[i].x;
+        if (v[i].y < lo->y) lo->y = v[i].y;
+        if (v[i].z < lo->z) lo->z = v[i].z;
+        if (v[i].x > hi->x) hi->x = v[i].x;
+        if (v[i].y > hi->y) hi->y = v[i].y;
+        if (v[i].z > hi->z) hi->z = v[i].z;
+    }
+    return TRUE;
+}
+
+void mp6_widescreen_pair_rigid_components(int16_t rockModel, const char *rockName,
+    int16_t rimModel, const char *rimName, float maxSpan)
+{
+    if (!isfinite(maxSpan) || maxSpan <= 0) return;
+    HSF_OBJECT *rock = mp6_ws_extend_locate_mesh(rockModel, rockName, FALSE);
+    HSF_OBJECT *rim = mp6_ws_extend_locate_mesh(rimModel, rimName, FALSE);
+    if (!rock || !rim) return;
+    MP6WSSelectiveEntry *a = mp6_ws_selective_find(rock->mesh.vertex->data);
+    MP6WSSelectiveEntry *b = mp6_ws_selective_find(rim->mesh.vertex->data);
+    MP6WSComponents pa, pb;
+    if (a == b || !mp6_ws_components(rock, a, &pa) || !mp6_ws_components(rim, b, &pb)) return;
+    if (a->center.x != b->center.x) return;
+    u8 rockPart[MP6_WS_COMPONENT_LIMIT] = {0}, rimPart[MP6_WS_COMPONENT_LIMIT] = {0};
+    float anchors[MP6_WS_RIGID_LIMIT] = {0};
+    int paired = 0;
+    for (int p = 0; p < pa.count; ++p) {
+        if (pa.hi[p].x - pa.lo[p].x > maxSpan || pa.hi[p].z - pa.lo[p].z > maxSpan) continue;
+        HuVecF center = {(pa.lo[p].x + pa.hi[p].x)*.5f, 0, (pa.lo[p].z + pa.hi[p].z)*.5f};
+        int match = -1;
+        for (int q = 0; q < pb.count; ++q) {
+            if (pb.hi[q].x - pb.lo[q].x > maxSpan || pb.hi[q].z - pb.lo[q].z > maxSpan ||
+                center.x < pb.lo[q].x || center.x > pb.hi[q].x || center.z < pb.lo[q].z || center.z > pb.hi[q].z) continue;
+            if (match >= 0) return; /* ambiguous contact, no partial registration */
+            match = q;
+        }
+        if (match < 0 || rimPart[match] || paired == MP6_WS_RIGID_LIMIT) return;
+        /* Never turn an inner gameplay contact into movable scenery. */
+        HuVecF *v = (HuVecF *)b->native;
+        for (s32 i = 0; i < b->count; ++i)
+            if (pb.part[i] == match && v[i].x*v[i].x + v[i].z*v[i].z <= b->outerRadiusSq) return;
+        anchors[paired] = center.x;
+        rockPart[p] = rimPart[match] = (u8)++paired;
+    }
+    if (!paired) return;
+    memset(a->rigidPart, 0, sizeof(a->rigidPart));
+    memset(b->rigidPart, 0, sizeof(b->rigidPart));
+    for (s32 i = 0; i < a->count; ++i) a->rigidPart[i] = rockPart[pa.part[i]];
+    for (s32 i = 0; i < b->count; ++i) b->rigidPart[i] = rimPart[pb.part[i]];
+    memcpy(a->rigidCenterX, anchors, sizeof(anchors));
+    memcpy(b->rigidCenterX, anchors, sizeof(anchors));
+    mp6_ws_selective_apply(a, mp6_widescreen_scale_factor());
+    mp6_ws_selective_apply(b, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
 }
 
 /* --------------------------------------------------------------------------
@@ -2967,18 +3240,31 @@ static void mp6_ws_extend_mirror_apply(MP6WSExtendEntry *e, float k)
 }
 
 /* --------------------------------------------------------------------------
- * RING apply -- positions only (each outer vertex = its rim vertex's
- * native position scaled by k about the disc's own local origin; the ring
- * STs are the rim chords' own ST indices, never touched).
+ * RING apply -- each outer vertex is its rim vertex's native position scaled
+ * by k about the disc's own local origin. Pinned rings keep their authored
+ * rim-chord ST indices; reflected rings update their appended ST snapshots
+ * from the same radial scale on every reapplication.
  * -------------------------------------------------------------------------- */
 static void mp6_ws_extend_ring_apply(MP6WSExtendEntry *e, float k)
 {
     s16 i;
+    float reflectedDistance = k > 1.0f ? k - 1.0f : 0.0f;
     for (i = 0; i < e->rimCount; i++) {
         HuVecF *v = e->vtx + e->baseVtx + i;
         v->x = e->rimX[i] * k;
         v->y = e->rimY[i] * k;
         v->z = e->rimZ[i];
+    }
+    if (e->mode == MP6_WS_EXTEND_RING_REFLECT && e->st != NULL) {
+        for (i = 0; i < e->ringStCount; i++) {
+            HuVec2f *st = e->st + e->baseSt + i;
+            /* Mirror the radial UV excursion at the authored rim. At k=1
+             * the companion samples exactly the source rim; as the circular
+             * geometry grows, its outer sample travels inward by k-1 rather
+             * than stretching one edge texel across the whole tail. */
+            st->x = e->rimU[i] - (e->rimU[i] - e->rimCenterU[i]) * reflectedDistance;
+            st->y = e->rimV[i] - (e->rimV[i] - e->rimCenterV[i]) * reflectedDistance;
+        }
     }
     /* The disc is authored about local (0,0): scaling its box about the
      * origin is exact, and collapses to the authored values at k=1. */
@@ -3035,6 +3321,62 @@ static void mp6_ws_extend_results_apply(MP6WSExtendEntry *e, float k)
     }
 }
 
+/* Explicit authored face-range reflection. The seam is an XZ edge extruded
+ * along local Y, so reflecting in its vertical plane preserves the authored
+ * edge exactly and continues the whole selected strip at native density. */
+static void mp6_ws_extend_reflect_faces_apply(MP6WSExtendEntry *e, float k)
+{
+    HuVecF *tail = e->vtx + e->baseVtx;
+    HuVecF priorMin = e->obj->mesh.mesh.min;
+    HuVecF priorMax = e->obj->mesh.mesh.max;
+    HuVecF collapse = {
+        (e->reflectSeamApos.x + e->reflectSeamBpos.x) * 0.5f,
+        (e->reflectSeamApos.y + e->reflectSeamBpos.y) * 0.5f,
+        (e->reflectSeamApos.z + e->reflectSeamBpos.z) * 0.5f
+    };
+    BOOL wide = k > 1.0f;
+    s32 i;
+
+    /* Several authored extensions may share one mesh (m630's material-7
+     * scenery plus this material-6 path tail). `priorMin`/`priorMax` are
+     * already wider when an earlier registration ran this frame (or when
+     * this entry itself was previously applied wide), so retain them while
+     * replacing this entry's own bounds. At native scale the prior box is
+     * native again, making this byte-identical. */
+    e->obj->mesh.mesh.min = e->nativeMin;
+    e->obj->mesh.mesh.max = e->nativeMax;
+    for (i = 0; i < (s32)e->reflectFaceCount * 4; ++i) {
+        HuVecF p = wide ? e->reflectSourcePos[i] : collapse;
+        if (wide) {
+            float dx = p.x - e->reflectSeamApos.x;
+            float dz = p.z - e->reflectSeamApos.z;
+            float distance = dx * e->reflectPlaneNx + dz * e->reflectPlaneNz;
+            p.x -= 2.0f * distance * e->reflectPlaneNx;
+            p.z -= 2.0f * distance * e->reflectPlaneNz;
+            if (p.x < e->obj->mesh.mesh.min.x) e->obj->mesh.mesh.min.x = p.x;
+            if (p.y < e->obj->mesh.mesh.min.y) e->obj->mesh.mesh.min.y = p.y;
+            if (p.z < e->obj->mesh.mesh.min.z) e->obj->mesh.mesh.min.z = p.z;
+            if (p.x > e->obj->mesh.mesh.max.x) e->obj->mesh.mesh.max.x = p.x;
+            if (p.y > e->obj->mesh.mesh.max.y) e->obj->mesh.mesh.max.y = p.y;
+            if (p.z > e->obj->mesh.mesh.max.z) e->obj->mesh.mesh.max.z = p.z;
+        }
+        tail[i] = p;
+    }
+    if (wide && (priorMin.x != e->nativeMin.x || priorMin.y != e->nativeMin.y
+                 || priorMin.z != e->nativeMin.z || priorMax.x != e->nativeMax.x
+                 || priorMax.y != e->nativeMax.y || priorMax.z != e->nativeMax.z)) {
+        if (priorMin.x < e->obj->mesh.mesh.min.x) e->obj->mesh.mesh.min.x = priorMin.x;
+        if (priorMin.y < e->obj->mesh.mesh.min.y) e->obj->mesh.mesh.min.y = priorMin.y;
+        if (priorMin.z < e->obj->mesh.mesh.min.z) e->obj->mesh.mesh.min.z = priorMin.z;
+        if (priorMax.x > e->obj->mesh.mesh.max.x) e->obj->mesh.mesh.max.x = priorMax.x;
+        if (priorMax.y > e->obj->mesh.mesh.max.y) e->obj->mesh.mesh.max.y = priorMax.y;
+        if (priorMax.z > e->obj->mesh.mesh.max.z) e->obj->mesh.mesh.max.z = priorMax.z;
+    }
+}
+
+static void mp6_ws_extend_edge_apply(MP6WSExtendEntry *e, float k);
+static void mp6_ws_extend_shape_apply(MP6WSExtendEntry *e, float k);
+
 static void mp6_ws_extend_apply(MP6WSExtendEntry *e, float k)
 {
     if (e->vtx == NULL || e->obj == NULL || e->obj->mesh.vertex == NULL
@@ -3049,6 +3391,7 @@ static void mp6_ws_extend_apply(MP6WSExtendEntry *e, float k)
             mp6_ws_extend_mirror_apply(e, k);
             break;
         case MP6_WS_EXTEND_RING:
+        case MP6_WS_EXTEND_RING_REFLECT:
             mp6_ws_extend_ring_apply(e, k);
             break;
         case MP6_WS_EXTEND_PILLAR:
@@ -3057,15 +3400,31 @@ static void mp6_ws_extend_apply(MP6WSExtendEntry *e, float k)
         case MP6_WS_EXTEND_RESULTS:
             mp6_ws_extend_results_apply(e, k);
             break;
+        case MP6_WS_EXTEND_EDGE:
+        case MP6_WS_EXTEND_SIDES:
+        case MP6_WS_EXTEND_SOLID_SIDES:
+        case MP6_WS_EXTEND_STRIP_RIM:
+        case MP6_WS_EXTEND_FLOOR:
+        case MP6_WS_EXTEND_COLOR_RIM:
+        case MP6_WS_EXTEND_WALL_EDGES:
+            mp6_ws_extend_edge_apply(e, k);
+            break;
+        case MP6_WS_EXTEND_REFLECT_FACES:
+            mp6_ws_extend_reflect_faces_apply(e, k);
+            break;
+        case MP6_WS_EXTEND_SHAPE_MIRROR:
+            mp6_ws_extend_shape_apply(e, k);
+            break;
     }
 }
 
 /* Face-tail writers, one per treatment (called by mp6_ws_extend_grow with
- * the entry's base counts already final). Every appended face copies the
- * object's own first native face's mat + nbt (same material batch -- the
- * re-bake merges same-material same-type runs into one GXBegin) and a
- * native corner's normal index; color stays -1 (no colour buffer on any
- * of these objects, vtxMode != 5). */
+ * the entry's base counts already final). Every ordinary appended face
+ * copies the object's own first native face's mat + nbt (same material batch
+ * -- the re-bake merges same-material same-type runs into one GXBegin) and a
+ * native corner's normal index; the explicit reflection writer below keeps
+ * each source corner's normal index attached to its reversed corner. Color
+ * stays -1 (no colour buffer on any of these objects, vtxMode != 5). */
 static void mp6_ws_extend_write_faces_quads(MP6WSExtendEntry *e, HSF_FACE *tail, const HSF_FACE *nativeFaces, s32 quadCount)
 {
     s16 nrmIdx = nativeFaces[0].index[0].normal;
@@ -3118,6 +3477,28 @@ static void mp6_ws_extend_write_faces_mirror(MP6WSExtendEntry *e, HSF_FACE *tail
 {
     mp6_ws_extend_write_faces_quads(e, tail, nativeFaces, 2);
     /* STs are live (uExt tracks k) -- the first apply writes them. */
+}
+
+/* HSF QUAD storage is emitted as slots 0,2,3,1. Reflection reverses the
+ * geometric winding, so swap source slots 1 and 2 in the stored tail; the
+ * emitted sequence is then source 0,1,3,2, the reverse of native 0,2,3,1.
+ * ST/normal/color records stay attached to their source corner exactly. */
+static void mp6_ws_extend_write_faces_reflect(MP6WSExtendEntry *e, HSF_FACE *tail,
+                                               const HSF_FACE *nativeFaces)
+{
+    static const s16 reverseSlot[4] = {0, 2, 1, 3};
+    s32 f;
+    for (f = 0; f < e->reflectFaceCount; ++f) {
+        const HSF_FACE *source = &nativeFaces[e->reflectFirstFace + f];
+        HSF_FACE *out = &tail[f];
+        s16 c;
+        *out = *source;
+        out->typeSrc = (source->typeSrc & ~HSF_FACE_MASK) | HSF_FACE_QUAD;
+        for (c = 0; c < 4; ++c) {
+            out->index[c] = source->index[reverseSlot[c]];
+            out->index[c].vertex = (s16)(e->baseVtx + f * 4 + reverseSlot[c]);
+        }
+    }
 }
 
 static void mp6_ws_extend_write_faces_ring(MP6WSExtendEntry *e, HSF_FACE *tail, const HSF_FACE *nativeFaces)
@@ -3174,13 +3555,15 @@ static void mp6_ws_extend_write_faces_ring(MP6WSExtendEntry *e, HSF_FACE *tail, 
         quad->index[0].vertex = (s16)(e->baseVtx + qOut);
         quad->index[0].normal = tri->index[qSlot].normal;
         quad->index[0].color = -1;
-        quad->index[0].st = tri->index[qSlot].st;
+        quad->index[0].st = e->mode == MP6_WS_EXTEND_RING_REFLECT
+            ? (s16)(e->baseSt + e->ringStSlot[f * 2 + 1]) : tri->index[qSlot].st;
         quad->index[1] = tri->index[qSlot];
         quad->index[1].color = -1;
         quad->index[2].vertex = (s16)(e->baseVtx + pOut);
         quad->index[2].normal = tri->index[pSlot].normal;
         quad->index[2].color = -1;
-        quad->index[2].st = tri->index[pSlot].st;
+        quad->index[2].st = e->mode == MP6_WS_EXTEND_RING_REFLECT
+            ? (s16)(e->baseSt + e->ringStSlot[f * 2]) : tri->index[pSlot].st;
         quad->index[3] = tri->index[pSlot];
         quad->index[3].color = -1;
     }
@@ -3386,7 +3769,1704 @@ void mp6_widescreen_extend_mirror(int16_t modelId, const char *objName, float ha
     GXInvalidateVtxCache();
 }
 
-void mp6_widescreen_extend_ring(int16_t modelId, const char *objName)
+/* Append one reflected copy of an explicitly-authored QUAD face range. The
+ * seam vertices define an oblique XZ edge; its vertical plane is the mirror
+ * plane. This is deliberately index/range driven rather than a mesh-wide
+ * boundary heuristic: callers must identify the authored tail themselves. */
+void mp6_widescreen_extend_reflected_face_range(int16_t modelId, const char *objName,
+                                                int32_t firstFace, int32_t lastFace,
+                                                int16_t seamVertexA, int16_t seamVertexB)
+{
+    const float eps = 0.05f;
+    static const int emissionOrder[4] = {0, 2, 3, 1};
+    HSF_OBJECT *o = mp6_ws_extend_locate(modelId, objName);
+    MP6WSExtendEntry *e;
+    MP6WSExtendEntry pending;
+    MP6WSExtendEntry *previous;
+    HuVecF *vertices;
+    HuVec2f *uvs;
+    HSF_FACE *faces;
+    s32 faceCount;
+    s32 f;
+    int sideSign = 0;
+    int capEdges = 0;
+    BOOL foundA = FALSE, foundB = FALSE;
+    float dx, dz, seamLength;
+
+    if (o == NULL) return;
+    e = mp6_ws_extend_find_mode(o, MP6_WS_EXTEND_REFLECT_FACES);
+    if (e != NULL) {
+        mp6_ws_extend_reflect_faces_apply(e, mp6_widescreen_scale_factor());
+        GXInvalidateVtxCache();
+        return;
+    }
+    if (firstFace < 0 || lastFace < firstFace || lastFace >= o->mesh.face->count) {
+        mp6_ws_extend_refuse(objName, "reflected face range out of bounds");
+        return;
+    }
+    faceCount = lastFace - firstFace + 1;
+    if (faceCount <= 0 || faceCount > MP6_WS_EXTEND_REFLECT_FACE_MAX
+        || o->mesh.vertex->count + faceCount * 4 > 32767
+        || o->mesh.face->count + faceCount > 32767) {
+        mp6_ws_extend_refuse(objName, "reflected face range too large");
+        return;
+    }
+    if (seamVertexA < 0 || seamVertexB < 0 || seamVertexA == seamVertexB
+        || seamVertexA >= o->mesh.vertex->count || seamVertexB >= o->mesh.vertex->count) {
+        mp6_ws_extend_refuse(objName, "invalid reflected seam vertices");
+        return;
+    }
+    /* The source is local XZ art. A rotated/scaled base transform would make
+     * an XZ reflection no longer describe the authored end-cap plane. */
+    if (fabsf(o->mesh.base.rot.x) > eps || fabsf(o->mesh.base.rot.y) > eps
+        || fabsf(o->mesh.base.rot.z) > eps || fabsf(o->mesh.base.scale.x - 1.0f) > eps
+        || fabsf(o->mesh.base.scale.y - 1.0f) > eps || fabsf(o->mesh.base.scale.z - 1.0f) > eps) {
+        mp6_ws_extend_refuse(objName, "reflected seam needs identity mesh transform");
+        return;
+    }
+
+    vertices = (HuVecF *)o->mesh.vertex->data;
+    uvs = (HuVec2f *)o->mesh.st->data;
+    faces = (HSF_FACE *)o->mesh.face->data;
+    if (!isfinite(vertices[seamVertexA].x) || !isfinite(vertices[seamVertexA].y)
+        || !isfinite(vertices[seamVertexA].z) || !isfinite(vertices[seamVertexB].x)
+        || !isfinite(vertices[seamVertexB].y) || !isfinite(vertices[seamVertexB].z)
+        || fabsf(vertices[seamVertexA].y - vertices[seamVertexB].y) > eps) {
+        mp6_ws_extend_refuse(objName, "reflected seam is not a finite XZ edge");
+        return;
+    }
+    dx = vertices[seamVertexB].x - vertices[seamVertexA].x;
+    dz = vertices[seamVertexB].z - vertices[seamVertexA].z;
+    seamLength = sqrtf(dx * dx + dz * dz);
+    if (!isfinite(seamLength) || seamLength <= eps) {
+        mp6_ws_extend_refuse(objName, "reflected seam edge is degenerate");
+        return;
+    }
+
+    memset(&pending, 0, sizeof(pending));
+    pending.reflectSeamApos = vertices[seamVertexA];
+    pending.reflectSeamBpos = vertices[seamVertexB];
+    pending.reflectPlaneNx = -dz / seamLength;
+    pending.reflectPlaneNz = dx / seamLength;
+    for (f = 0; f < faceCount; ++f) {
+        HSF_FACE *face = &faces[firstFace + f];
+        int c;
+        if ((face->typeSrc & HSF_FACE_MASK) != HSF_FACE_QUAD) {
+            mp6_ws_extend_refuse(objName, "reflected range contains non-QUAD face");
+            return;
+        }
+        for (c = 0; c < 4; ++c) {
+            HSF_FACE_INDEX id = face->index[c];
+            HuVecF p;
+            float distance;
+            if (id.vertex < 0 || id.vertex >= o->mesh.vertex->count
+                || id.st < 0 || id.st >= o->mesh.st->count
+                || id.normal < 0 || id.normal >= o->mesh.normal->count) {
+                mp6_ws_extend_refuse(objName, "reflected range contains invalid index");
+                return;
+            }
+            p = vertices[id.vertex];
+            if (!isfinite(p.x) || !isfinite(p.y) || !isfinite(p.z)
+                || !isfinite(uvs[id.st].x) || !isfinite(uvs[id.st].y)) {
+                mp6_ws_extend_refuse(objName, "reflected range contains non-finite data");
+                return;
+            }
+            if (fabsf(p.y - pending.reflectSeamApos.y) > eps) {
+                mp6_ws_extend_refuse(objName, "reflected range is not flat XZ art");
+                return;
+            }
+            {
+                HuVecF n;
+                if (Hu3DData[modelId].hsf->cenvNum != 0) {
+                    n = ((HuVecF *)o->mesh.normal->data)[id.normal];
+                } else {
+                    HSF_S8VEC *packed = (HSF_S8VEC *)o->mesh.normal->data;
+                    /* GX's packed normal stream is signed 8-bit fixed point
+                     * (six fractional bits); decode it before applying the
+                     * same vertical-flat-art guard used for F32 normals. */
+                    n.x = (float)packed[id.normal].x / 64.0f;
+                    n.y = (float)packed[id.normal].y / 64.0f;
+                    n.z = (float)packed[id.normal].z / 64.0f;
+                }
+                /* The packed stream may carry a 127 magnitude while F32
+                 * assets usually carry a unit normal; compare direction,
+                 * not length, and reject only a missing Y direction. */
+                if (!isfinite(n.x) || !isfinite(n.y) || !isfinite(n.z)
+                    || fabsf(n.y) <= eps
+                    || fabsf(n.x) > eps * fabsf(n.y)
+                    || fabsf(n.z) > eps * fabsf(n.y)) {
+                    mp6_ws_extend_refuse(objName, "reflected range normal is not vertical");
+                    return;
+                }
+            }
+            pending.reflectSourcePos[f * 4 + c] = p;
+            if (id.vertex == seamVertexA) foundA = TRUE;
+            if (id.vertex == seamVertexB) foundB = TRUE;
+            distance = (p.x - pending.reflectSeamApos.x) * pending.reflectPlaneNx
+                     + (p.z - pending.reflectSeamApos.z) * pending.reflectPlaneNz;
+            if (fabsf(distance) > eps) {
+                int thisSide = distance > 0.0f ? 1 : -1;
+                if (sideSign == 0) sideSign = thisSide;
+                else if (sideSign != thisSide) {
+                    mp6_ws_extend_refuse(objName, "reflected range crosses seam plane");
+                    return;
+                }
+            }
+        }
+        for (c = 0; c < 4; ++c) {
+            int a = emissionOrder[c], b = emissionOrder[(c + 1) % 4];
+            s16 va = face->index[a].vertex, vb = face->index[b].vertex;
+            if ((va == seamVertexA && vb == seamVertexB)
+                || (va == seamVertexB && vb == seamVertexA)) {
+                ++capEdges;
+            }
+        }
+    }
+    if (!foundA || !foundB || capEdges != 1 || sideSign == 0) {
+        mp6_ws_extend_refuse(objName, "reflected range has no unique authored end-cap");
+        return;
+    }
+
+    previous = mp6_ws_extend_find(o);
+    pending.modelId = modelId;
+    pending.hsf = Hu3DData[modelId].hsf;
+    pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_REFLECT_FACES;
+    pending.reflectFirstFace = firstFace;
+    pending.reflectFaceCount = (s16)faceCount;
+    pending.reflectSeamA = seamVertexA;
+    pending.reflectSeamB = seamVertexB;
+    pending.baseVtx = o->mesh.vertex->count;
+    pending.baseSt = o->mesh.st->count;
+    if (previous != NULL) {
+        pending.nativeMin = previous->nativeMin;
+        pending.nativeMax = previous->nativeMax;
+    } else {
+        pending.nativeMin = o->mesh.mesh.min;
+        pending.nativeMax = o->mesh.mesh.max;
+    }
+    e = mp6_ws_extend_alloc();
+    if (e == NULL) return;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, faceCount * 4, 0, faceCount,
+                            mp6_ws_extend_write_faces_reflect, e)) {
+        e->obj = NULL;
+        e->hsf = NULL;
+        return;
+    }
+    e->vtx = (HuVecF *)o->mesh.vertex->data;
+    e->st = (HuVec2f *)o->mesh.st->data;
+    mp6_ws_extend_reflect_faces_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* Reflect a single finite XY billboard at its authored left/right edge.
+ * Unlike extrapolating a sloped rim, reflection preserves both the painted
+ * hill silhouette and its texel density. Non-unit axis scales are harmless;
+ * rotated, nonplanar, skinned or multi-face art is deliberately not accepted. */
+void mp6_widescreen_extend_billboard_mirror(int16_t modelId, const char *objName, int side)
+{
+    const float eps = 0.05f;
+    const int order[4] = {0, 2, 3, 1};
+    HSF_OBJECT *o = mp6_ws_extend_locate(modelId, objName);
+    MP6WSExtendEntry pending = {0}, *e;
+    HuVecF *v;
+    HuVec2f *uv;
+    HSF_FACE *f;
+    float lo, hi;
+    int seam[2], count = 0, edgeCount = 0;
+    if (!o || (side != -1 && side != 1)) return;
+    e = mp6_ws_extend_find_mode(o, MP6_WS_EXTEND_REFLECT_FACES);
+    if (e) {
+        mp6_ws_extend_reflect_faces_apply(e, mp6_widescreen_scale_factor());
+        GXInvalidateVtxCache();
+        return;
+    }
+    if (mp6_ws_extend_find(o) || o->mesh.vertex->count != 4 || o->mesh.face->count != 1
+        || fabsf(o->mesh.base.rot.x) > eps || fabsf(o->mesh.base.rot.y) > eps
+        || fabsf(o->mesh.base.rot.z) > eps) return;
+    v = o->mesh.vertex->data; uv = o->mesh.st->data; f = o->mesh.face->data;
+    if ((f->typeSrc & HSF_FACE_MASK) != HSF_FACE_QUAD) return;
+    lo = hi = v[0].x;
+    for (int i = 0; i < 4; ++i) {
+        HSF_FACE_INDEX id = f->index[i];
+        HuVecF n;
+        if (id.vertex < 0 || id.vertex >= 4 || id.st < 0 || id.st >= o->mesh.st->count
+            || id.normal < 0 || id.normal >= o->mesh.normal->count) return;
+        if (!isfinite(v[i].x) || !isfinite(v[i].y) || !isfinite(v[i].z)
+            || fabsf(v[i].z - v[0].z) > eps
+            || !isfinite(uv[id.st].x) || !isfinite(uv[id.st].y)) return;
+        if (Hu3DData[modelId].hsf->cenvNum) n = ((HuVecF *)o->mesh.normal->data)[id.normal];
+        else {
+            HSF_S8VEC p = ((HSF_S8VEC *)o->mesh.normal->data)[id.normal];
+            n = (HuVecF){p.x / 64.0f, p.y / 64.0f, p.z / 64.0f};
+        }
+        if (!isfinite(n.x) || !isfinite(n.y) || !isfinite(n.z) || fabsf(n.z) <= eps
+            || fabsf(n.x) > eps * fabsf(n.z) || fabsf(n.y) > eps * fabsf(n.z)) return;
+        pending.reflectSourcePos[i] = v[id.vertex];
+        lo = fminf(lo, v[i].x); hi = fmaxf(hi, v[i].x);
+    }
+    if (hi - lo <= eps) return;
+    for (int i = 0; i < 4; ++i) {
+        if (fabsf(v[i].x - (side < 0 ? lo : hi)) <= eps) {
+            if (count == 2) return;
+            seam[count++] = i;
+        }
+        int a = f->index[order[i]].vertex, b = f->index[order[(i+1)%4]].vertex;
+        if (fabsf(v[a].x - (side < 0 ? lo : hi)) <= eps
+            && fabsf(v[b].x - (side < 0 ? lo : hi)) <= eps) ++edgeCount;
+    }
+    if (count != 2 || edgeCount != 1 || fabsf(v[seam[0]].y - v[seam[1]].y) <= eps) return;
+    pending.modelId = modelId; pending.hsf = Hu3DData[modelId].hsf; pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_REFLECT_FACES; pending.reflectFaceCount = 1;
+    pending.reflectSeamApos = v[seam[0]]; pending.reflectSeamBpos = v[seam[1]];
+    pending.reflectPlaneNx = 1.0f;
+    pending.baseVtx = 4; pending.baseSt = o->mesh.st->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, 4, 0, 1, mp6_ws_extend_write_faces_reflect, e)) {
+        e->obj = NULL; e->hsf = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data; e->st = o->mesh.st->data;
+    mp6_ws_extend_reflect_faces_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* Boundary-edge extension: QUAD order is 0,2,3,1 in the engine. Adding
+ * B,A,A',B' outside an A->B boundary keeps the native face's winding.
+ * This only accepts rectangular, axis-aligned boundary edges with real
+ * inward neighbours. Native positions, UVs, materials and collision data
+ * are never changed. Metadata contains only values and arena pointers. */
+static float mp6_ws_edge_coord(HuVecF p, int axis)
+{
+    return axis == 0 ? p.x : axis == 1 ? p.y : p.z;
+}
+
+static void mp6_ws_extend_edge_apply(MP6WSExtendEntry *e, float k)
+{
+    if (e->mode == MP6_WS_EXTEND_STRIP_RIM && e->rimApplied && e->lastRimScale == k) return;
+    float distance = (k > 1 ? k - 1 : 0) * e->edgeReach;
+    e->obj->mesh.mesh.min = e->nativeMin;
+    e->obj->mesh.mesh.max = e->nativeMax;
+    for (int i = 0; i < e->edgeCount; ++i) {
+        MP6WSEdge *edge = &e->edges[i];
+        for (int j = 0; j < 2; ++j) {
+            float move = distance, uvDistance = distance;
+            if (e->edgeTiled) {
+                move = copysignf(fminf(fabsf(distance), edge->tileOffset[j] + edge->tileSpan[j]), distance);
+                uvDistance = fmaxf(0, fminf(fabsf(distance) - edge->tileOffset[j], edge->tileSpan[j]));
+            }
+            HuVecF p = edge->pos[j];
+            if (e->edgeSloped) {
+                p.x += move * edge->posSlope[j].x;
+                p.y += move * edge->posSlope[j].y;
+                p.z += move * edge->posSlope[j].z;
+            }
+            else if (e->mode == MP6_WS_EXTEND_FLOOR) {
+                p.x += (p.x - e->floorCenterX) * distance;
+                p.z += (p.z - e->floorCenterZ) * distance;
+            }
+            else if (e->mode == MP6_WS_EXTEND_COLOR_RIM || e->mode == MP6_WS_EXTEND_SIDES ||
+                     e->mode == MP6_WS_EXTEND_WALL_EDGES ||
+                     e->mode == MP6_WS_EXTEND_SOLID_SIDES)
+                p.x += (p.x - e->floorCenterX) * distance;
+            else if (e->edgeAxis == 0) p.x += distance;
+            else if (e->edgeAxis == 1) p.y += distance;
+            else p.z += distance;
+            if (e->mode == MP6_WS_EXTEND_COLOR_RIM &&
+                e->colorBottomY < e->colorNativeBottomY &&
+                fabsf(p.y - e->colorNativeBottomY) < 0.01f)
+                p.y = e->colorBottomY;
+            e->vtx[e->baseVtx + i * 2 + j] = p;
+            if (e->mode != MP6_WS_EXTEND_COLOR_RIM && e->mode != MP6_WS_EXTEND_SOLID_SIDES) {
+                int stIndex = e->baseSt + i * 2 + j;
+                if (e->edgeTiled) {
+                    e->st[e->baseSt + i * 4 + j] = edge->tileInnerUV[j];
+                    stIndex = e->baseSt + i * 4 + 2 + j;
+                }
+                e->st[stIndex].x = edge->uv[j].x + uvDistance * edge->uvSlope[j].x;
+                e->st[stIndex].y = edge->uv[j].y + uvDistance * edge->uvSlope[j].y;
+            }
+            HuVecF *lo = &e->obj->mesh.mesh.min, *hi = &e->obj->mesh.mesh.max;
+            if (p.x < lo->x) lo->x = p.x;
+            if (p.y < lo->y) lo->y = p.y;
+            if (p.z < lo->z) lo->z = p.z;
+            if (p.x > hi->x) hi->x = p.x;
+            if (p.y > hi->y) hi->y = p.y;
+            if (p.z > hi->z) hi->z = p.z;
+        }
+    }
+    if (e->mode == MP6_WS_EXTEND_STRIP_RIM) {
+        e->lastRimScale = k;
+        e->rimApplied = TRUE;
+    }
+}
+
+static void mp6_ws_extend_write_faces_edge(MP6WSExtendEntry *e, HSF_FACE *tail,
+                                          const HSF_FACE *nativeFaces)
+{
+    for (int i = 0; i < e->edgeCount; ++i) {
+        MP6WSEdge *edge = &e->edges[i];
+        const HSF_FACE *source = &nativeFaces[edge->face];
+        tail[i] = *source;
+        tail[i].typeSrc = (source->typeSrc & ~HSF_FACE_MASK) | HSF_FACE_QUAD;
+        tail[i].index[0] = source->index[edge->corner[1]]; /* B */
+        tail[i].index[2] = source->index[edge->corner[0]]; /* A */
+        if (e->edgeTiled || e->mode == MP6_WS_EXTEND_SOLID_SIDES || e->mode == MP6_WS_EXTEND_STRIP_RIM) {
+            tail[i].index[0] = edge->sourceIndex[1];
+            tail[i].index[2] = edge->sourceIndex[0];
+        }
+        if (e->edgeTiled) {
+            tail[i].index[0].st = (s16)(e->baseSt + i * 4 + 1);
+            tail[i].index[2].st = (s16)(e->baseSt + i * 4);
+        }
+        tail[i].index[3] = tail[i].index[2];              /* A' */
+        tail[i].index[1] = tail[i].index[0];              /* B' */
+        tail[i].index[3].vertex = (s16)(e->baseVtx + i * 2);
+        if (e->mode != MP6_WS_EXTEND_COLOR_RIM && e->mode != MP6_WS_EXTEND_SOLID_SIDES)
+            tail[i].index[3].st = (s16)(e->baseSt + i * (e->edgeTiled ? 4 : 2) + (e->edgeTiled ? 2 : 0));
+        tail[i].index[1].vertex = (s16)(e->baseVtx + i * 2 + 1);
+        if (e->mode != MP6_WS_EXTEND_COLOR_RIM && e->mode != MP6_WS_EXTEND_SOLID_SIDES)
+            tail[i].index[1].st = (s16)(e->baseSt + i * (e->edgeTiled ? 4 : 2) + (e->edgeTiled ? 3 : 1));
+    }
+}
+
+static void mp6_ws_extend_rect_mode(int16_t modelId, const char *objName, int occurrence, int axis,
+                               float boundary, float span, BOOL bothSides, BOOL mirror,
+                               int material, BOOL sloped, float tolerance, BOOL tiled)
+{
+    if (axis < 0 || axis > 2 || !isfinite(boundary) || !isfinite(span) || span < 0) return;
+    if (!isfinite(tolerance) || tolerance < 0.01f || tolerance > 1.0f) return;
+    HSF_OBJECT *o = mp6_ws_extend_locate_mesh_at(modelId, objName, TRUE, occurrence);
+    if (!o) return;
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) {
+        if (e->mode == MP6_WS_EXTEND_EDGE || e->mode == MP6_WS_EXTEND_SIDES)
+            mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+        return;
+    }
+    MP6WSExtendEntry pending = {0};
+    HuVecF *vertices = o->mesh.vertex->data;
+    HuVec2f *uvs = o->mesh.st->data;
+    HSF_FACE *faces = o->mesh.face->data;
+    float lo = mp6_ws_edge_coord(vertices[0], axis), hi = lo;
+    for (s32 i = 0; i < o->mesh.vertex->count; ++i) {
+        if (!isfinite(vertices[i].x) || !isfinite(vertices[i].y) || !isfinite(vertices[i].z)) return;
+        float coord = mp6_ws_edge_coord(vertices[i], axis);
+        if (coord < lo) lo = coord;
+        if (coord > hi) hi = coord;
+    }
+    /* A mixed mesh can contain foreground paths beyond the floor's edge.
+     * Derive the selected surface's bounds from its own face corners only. */
+    if (material >= 0) {
+        BOOL found = FALSE;
+        for (s32 f = 0; f < o->mesh.face->count; ++f) {
+            HSF_FACE *face = &faces[f];
+            if ((face->mat & 0xFFF) != material) continue;
+            if ((face->typeSrc & HSF_FACE_MASK) != HSF_FACE_QUAD) return;
+            for (int c = 0; c < 4; ++c) {
+                s16 index = face->index[c].vertex;
+                if (index < 0 || index >= o->mesh.vertex->count) return;
+                float coord = mp6_ws_edge_coord(vertices[index], axis);
+                if (!found) { lo = hi = coord; found = TRUE; }
+                if (coord < lo) lo = coord;
+                if (coord > hi) hi = coord;
+            }
+        }
+        if (!found) return;
+    }
+    if (hi - lo < 0.01f) return;
+    if (bothSides) { pending.edgeReach = 1; pending.floorCenterX = (hi + lo) * 0.5f; }
+    else if (fabsf(boundary - hi) < tolerance) pending.edgeReach = hi - lo;
+    else if (fabsf(boundary - lo) < tolerance) pending.edgeReach = lo - hi;
+    else { mp6_ws_extend_refuse(objName, "boundary is not an outer plane"); return; }
+    if (span > 0) pending.edgeReach = copysignf(span, pending.edgeReach);
+    const int order[4] = {0, 2, 3, 1};
+    for (s32 f = 0; f < o->mesh.face->count; ++f) {
+        HSF_FACE *face = &faces[f];
+        if (material >= 0 && (face->mat & 0xFFF) != material) continue;
+        if ((face->typeSrc & HSF_FACE_MASK) != HSF_FACE_QUAD) continue;
+        for (int c = 0; c < 4; ++c) {
+            if (face->index[c].vertex < 0 || face->index[c].vertex >= o->mesh.vertex->count ||
+                face->index[c].st < 0 || face->index[c].st >= o->mesh.st->count) {
+                mp6_ws_extend_refuse(objName, "invalid quad indices"); return;
+            }
+        }
+        for (int c = 0; c < 4; ++c) {
+            int a = order[c], b = order[(c + 1) % 4];
+            int inner[2] = {order[(c + 3) % 4], order[(c + 2) % 4]};
+            int outer[2] = {a, b};
+            float plane = boundary, reach = pending.edgeReach;
+            if (bothSides) {
+                float coord = vertices[face->index[a].vertex].x;
+                if (fabsf(coord - lo) < 0.01f) plane = lo;
+                else if (fabsf(coord - hi) < 0.01f) plane = hi;
+                else continue;
+                reach = plane - pending.floorCenterX;
+            }
+            if (fabsf(mp6_ws_edge_coord(vertices[face->index[a].vertex], axis) - plane) > tolerance ||
+                fabsf(mp6_ws_edge_coord(vertices[face->index[b].vertex], axis) - plane) > tolerance) continue;
+            MP6WSEdge edge = {0};
+            HuVec2f insideUV[2];
+            float tileSpan[2] = {0};
+            int valid = 1;
+            edge.face = f;
+            for (int j = 0; j < 2; ++j) {
+                HuVecF p = vertices[face->index[outer[j]].vertex];
+                HuVecF q = vertices[face->index[inner[j]].vertex];
+                float span = mp6_ws_edge_coord(p, axis) - mp6_ws_edge_coord(q, axis);
+                if (span * reach <= 0.01f) { valid = 0; break; }
+                /* The extension stays in the source surface's plane. */
+                if (!sloped && ((axis != 0 && fabsf(p.x - q.x) > 0.01f) ||
+                    (axis != 1 && fabsf(p.y - q.y) > 0.01f) ||
+                    (axis != 2 && fabsf(p.z - q.z) > 0.01f))) { valid = 0; break; }
+                edge.corner[j] = outer[j]; edge.pos[j] = p;
+                if (sloped) {
+                    edge.posSlope[j].x = (p.x - q.x) / span;
+                    edge.posSlope[j].y = (p.y - q.y) / span;
+                    edge.posSlope[j].z = (p.z - q.z) / span;
+                    if (bothSides) {
+                        float direction = copysignf(1.0f, reach);
+                        edge.posSlope[j].x *= direction;
+                        edge.posSlope[j].y *= direction;
+                        edge.posSlope[j].z *= direction;
+                    }
+                }
+                edge.uv[j] = uvs[face->index[outer[j]].st];
+                HuVec2f innerUV = uvs[face->index[inner[j]].st];
+                insideUV[j] = innerUV;
+                tileSpan[j] = fabsf(span);
+                if (!isfinite(edge.uv[j].x) || !isfinite(edge.uv[j].y) ||
+                    !isfinite(innerUV.x) || !isfinite(innerUV.y)) return;
+                edge.uvSlope[j].x = (edge.uv[j].x - innerUV.x) / span;
+                edge.uvSlope[j].y = (edge.uv[j].y - innerUV.y) / span;
+                if (bothSides) {
+                    float rate = reach * (mirror ? -1 : 1);
+                    edge.uvSlope[j].x *= rate; edge.uvSlope[j].y *= rate;
+                }
+                else if (mirror) {
+                    edge.uvSlope[j].x = -edge.uvSlope[j].x;
+                    edge.uvSlope[j].y = -edge.uvSlope[j].y;
+                }
+            }
+            if (!valid) continue;
+            if (tiled) {
+                /* Eight native-density repeated tiles, grown one at a time.
+                 * Each tile stays inside the authored atlas band; extrapolating
+                 * one huge CLAMP quad would smear the brickwork at its edge.
+                 * Independent ST corners retain the source end/start joint:
+                 * reflecting across an atlas endpoint erases concrete seams. */
+                if (pending.edgeCount + 8 > MP6_WS_EXTEND_EDGE_MAX ||
+                    tileSpan[0] < 0.01f || tileSpan[1] < 0.01f) {
+                    mp6_ws_extend_refuse(objName, "tiled boundary exceeds capacity or has a degenerate span");
+                    return;
+                }
+                for (int tile = 0; tile < 8; ++tile) {
+                    MP6WSEdge copy = edge;
+                    for (int j = 0; j < 2; ++j) {
+                        /* Shared source vertices must retain identical tile
+                         * seams even when adjacent profile spans differ. */
+                        copy.tileOffset[j] = tile * tileSpan[j];
+                        copy.tileSpan[j] = tileSpan[j];
+                        copy.sourceIndex[j] = face->index[outer[j]];
+                        if (tile) {
+                            copy.sourceIndex[j].vertex = (s16)(o->mesh.vertex->count + (pending.edgeCount-1)*2+j);
+                        }
+                        copy.tileInnerUV[j] = copy.uv[j] = insideUV[j];
+                        copy.uvSlope[j].x = (edge.uv[j].x-insideUV[j].x) / tileSpan[j];
+                        copy.uvSlope[j].y = (edge.uv[j].y-insideUV[j].y) / tileSpan[j];
+                    }
+                    pending.edges[pending.edgeCount++] = copy;
+                }
+                continue;
+            }
+            if (pending.edgeCount == MP6_WS_EXTEND_EDGE_MAX) {
+                mp6_ws_extend_refuse(objName, "too many boundary edges"); return;
+            }
+            pending.edges[pending.edgeCount++] = edge;
+        }
+    }
+    if (!pending.edgeCount) { mp6_ws_extend_refuse(objName, "no rectangular boundary edges"); return; }
+    if (o->mesh.vertex->count + pending.edgeCount * 2 > 32767 ||
+        o->mesh.st->count + pending.edgeCount * (tiled ? 4 : 2) > 32767) return;
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    pending.modelId = modelId; pending.hsf = Hu3DData[modelId].hsf;
+    pending.obj = o; pending.mode = bothSides ? MP6_WS_EXTEND_SIDES : MP6_WS_EXTEND_EDGE; pending.edgeAxis = axis;
+    pending.edgeSloped = sloped;
+    pending.edgeTiled = tiled;
+    pending.baseVtx = o->mesh.vertex->count; pending.baseSt = o->mesh.st->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, e->edgeCount * 2, e->edgeCount * (tiled ? 4 : 2), e->edgeCount,
+                            mp6_ws_extend_write_faces_edge, e)) {
+        e->obj = NULL; e->hsf = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data; e->st = o->mesh.st->data;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+static void mp6_ws_extend_rect(int16_t modelId, const char *objName, int axis,
+                               float boundary, float span, BOOL bothSides, BOOL mirror,
+                               int material, BOOL sloped)
+{
+    mp6_ws_extend_rect_mode(modelId, objName, 0, axis, boundary, span,
+                            bothSides, mirror, material, sloped, 0.01f, FALSE);
+}
+
+void mp6_widescreen_extend_tiled_sloped_rim(int16_t modelId, const char *objName,
+                                           int axis, float boundary, float reach, float tolerance)
+{
+    mp6_ws_extend_rect_mode(modelId, objName, 0, axis, boundary, reach, FALSE, FALSE,
+                            -1, TRUE, tolerance, TRUE);
+}
+
+void mp6_widescreen_extend_tiled_sloped_rim_at(int16_t modelId, const char *objName,
+                                              int occurrence, int axis, float boundary,
+                                              float reach, float tolerance)
+{
+    if (occurrence < 0) return;
+    mp6_ws_extend_rect_mode(modelId, objName, occurrence, axis, boundary, reach, FALSE, FALSE,
+                            -1, TRUE, tolerance, TRUE);
+}
+
+void mp6_widescreen_extend_tiled_rim_sides(int16_t modelId, const char *objName,
+                                          float reach, float tolerance)
+{
+    mp6_ws_extend_rect_mode(modelId, objName, 0, 0, 0.0f, reach, TRUE, FALSE,
+                            -1, TRUE, tolerance, TRUE);
+}
+
+void mp6_widescreen_extend_sides(int16_t modelId, const char *objName, int mirror)
+{
+    mp6_ws_extend_rect(modelId, objName, 0, 0, 0, TRUE, mirror != 0, -1, FALSE);
+}
+
+void mp6_widescreen_extend_backdrop_frame(int16_t modelId, const char *objName)
+{
+    enum { MP6_WS_FRAME_MAX_FACES = (MP6_WS_EXTEND_EDGE_MAX - 2) / 2 };
+    const float eps = 0.01f;
+    HSF_OBJECT *o = mp6_ws_extend_locate(modelId, objName);
+    if (!o) return;
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) {
+        if (e->mode == MP6_WS_EXTEND_SIDES && e->edgeSloped)
+            mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+        return;
+    }
+    if (o->mesh.face->count <= 0 ||
+        o->mesh.face->count > MP6_WS_FRAME_MAX_FACES) return;
+    if (o->mesh.vertex->count < o->mesh.face->count * 2 + 2 ||
+        o->mesh.vertex->count > o->mesh.face->count * 4 ||
+        o->mesh.st->count <= 0 || o->mesh.normal->count <= 0) return;
+
+    HSF_FACE *faces = o->mesh.face->data;
+    HuVecF *v = o->mesh.vertex->data;
+    HuVec2f *uv = o->mesh.st->data;
+    const int faceCount = o->mesh.face->count;
+    const int vertexCount = o->mesh.vertex->count;
+    const int stCount = o->mesh.st->count;
+    const int normalCount = o->mesh.normal->count;
+    s16 corners[MP6_WS_FRAME_MAX_FACES][2][2];
+    s16 faceOrder[MP6_WS_FRAME_MAX_FACES];
+    float faceLoY[MP6_WS_FRAME_MAX_FACES];
+    float faceHiY[MP6_WS_FRAME_MAX_FACES];
+    unsigned char vertexUsed[MP6_WS_FRAME_MAX_FACES * 4] = {0};
+    float loX = 0, hiX = 0, loY = 0, hiY = 0;
+
+    for (int i = 0; i < vertexCount; ++i) {
+        if (!isfinite(v[i].x) || !isfinite(v[i].y) || !isfinite(v[i].z)) return;
+    }
+    for (int f = 0; f < faceCount; ++f) {
+        HSF_FACE *face = &faces[f];
+        if ((face->typeSrc & HSF_FACE_MASK) != HSF_FACE_QUAD) return;
+        int seen[4] = {-1, -1, -1, -1};
+        float fLoX = 0, fHiX = 0, fLoY = 0, fHiY = 0;
+        unsigned mask = 0;
+        for (int i = 0; i < 4; ++i) {
+            HSF_FACE_INDEX id = face->index[i];
+            if (id.vertex < 0 || id.vertex >= vertexCount ||
+                id.st < 0 || id.st >= stCount ||
+                id.normal < 0 || id.normal >= normalCount) return;
+            for (int j = 0; j < i; ++j) if (seen[j] == id.vertex) return;
+            seen[i] = id.vertex;
+            vertexUsed[id.vertex] = 1;
+            HuVecF p = v[id.vertex];
+            if (i == 0) {
+                fLoX = fHiX = p.x;
+                fLoY = fHiY = p.y;
+            } else {
+                if (p.x < fLoX) fLoX = p.x;
+                if (p.x > fHiX) fHiX = p.x;
+                if (p.y < fLoY) fLoY = p.y;
+                if (p.y > fHiY) fHiY = p.y;
+            }
+            if (!isfinite(uv[id.st].x) || !isfinite(uv[id.st].y)) return;
+        }
+        if (fHiX - fLoX <= eps || fHiY - fLoY <= eps) return;
+        for (int y = 0; y < 2; ++y)
+            for (int x = 0; x < 2; ++x) corners[f][y][x] = -1;
+        for (int i = 0; i < 4; ++i) {
+            HSF_FACE_INDEX id = face->index[i];
+            HuVecF p = v[id.vertex];
+            int x = fabsf(p.x - fHiX) <= eps ? 1 : 0;
+            int y = fabsf(p.y - fHiY) <= eps ? 1 : 0;
+            if (fabsf(p.x - fLoX) > eps && fabsf(p.x - fHiX) > eps) return;
+            if (fabsf(p.y - fLoY) > eps && fabsf(p.y - fHiY) > eps) return;
+            if (corners[f][y][x] >= 0 || (mask & (1u << (y * 2 + x)))) return;
+            corners[f][y][x] = (s16)i;
+            mask |= 1u << (y * 2 + x);
+        }
+        if (mask != 15) return;
+        faceLoY[f] = fLoY; faceHiY[f] = fHiY;
+        faceOrder[f] = (s16)f;
+        if (f == 0) {
+            loX = fLoX; hiX = fHiX; loY = fLoY; hiY = fHiY;
+        } else {
+            if (fabsf(fLoX - loX) > eps || fabsf(fHiX - hiX) > eps) return;
+            if (fLoY < loY) loY = fLoY;
+            if (fHiY > hiY) hiY = fHiY;
+        }
+    }
+    for (int i = 0; i < vertexCount; ++i) if (!vertexUsed[i]) return;
+    for (int i = 1; i < faceCount; ++i) {
+        s16 f = faceOrder[i];
+        int j = i;
+        while (j > 0 && faceLoY[faceOrder[j - 1]] > faceLoY[f]) {
+            faceOrder[j] = faceOrder[j - 1];
+            --j;
+        }
+        faceOrder[j] = f;
+    }
+    for (int i = 1; i < faceCount; ++i) {
+        s16 prev = faceOrder[i - 1], curr = faceOrder[i];
+        if (fabsf(faceLoY[curr] - faceHiY[prev]) > eps) return;
+        for (int x = 0; x < 2; ++x) {
+            HSF_FACE_INDEX a = faces[prev].index[corners[prev][1][x]];
+            HSF_FACE_INDEX b = faces[curr].index[corners[curr][0][x]];
+            HuVecF pa = v[a.vertex], pb = v[b.vertex];
+            if (fabsf(pa.x - pb.x) > eps || fabsf(pa.y - pb.y) > eps ||
+                fabsf(pa.z - pb.z) > eps ||
+                fabsf(uv[a.st].x - uv[b.st].x) > eps ||
+                fabsf(uv[a.st].y - uv[b.st].y) > eps) return;
+        }
+    }
+    for (int i = 0; i < faceCount; ++i) {
+        s16 f = faceOrder[i];
+        HSF_FACE_INDEX lowL = faces[f].index[corners[f][0][0]];
+        HSF_FACE_INDEX lowR = faces[f].index[corners[f][0][1]];
+        HSF_FACE_INDEX highL = faces[f].index[corners[f][1][0]];
+        HSF_FACE_INDEX highR = faces[f].index[corners[f][1][1]];
+        if (fabsf(v[lowL.vertex].z - v[lowR.vertex].z) > eps ||
+            fabsf(v[highL.vertex].z - v[highR.vertex].z) > eps) return;
+    }
+    HuVec2f uvCenter = {0};
+    int uvSamples = 0;
+    float leftU = 0, rightU = 0;
+    if (faceCount == 1) {
+        for (int i = 0; i < 4; ++i) {
+            HSF_FACE_INDEX id = faces[0].index[i];
+            uvCenter.x += uv[id.st].x * 0.25f;
+            uvCenter.y += uv[id.st].y * 0.25f;
+        }
+        uvSamples = 1;
+    }
+    for (int oi = 0; oi < faceCount && faceCount > 1; ++oi) {
+        s16 f = faceOrder[oi];
+        HSF_FACE_INDEX lowL = faces[f].index[corners[f][0][0]];
+        HSF_FACE_INDEX lowR = faces[f].index[corners[f][0][1]];
+        HSF_FACE_INDEX highL = faces[f].index[corners[f][1][0]];
+        HSF_FACE_INDEX highR = faces[f].index[corners[f][1][1]];
+        if (faceCount > 1) {
+            if (fabsf(uv[lowL.st].x - uv[lowR.st].x) <= eps ||
+                fabsf(uv[highL.st].x - uv[highR.st].x) <= eps ||
+                fabsf(uv[lowL.st].y - uv[lowR.st].y) > eps ||
+                fabsf(uv[highL.st].y - uv[highR.st].y) > eps) return;
+            if (oi == 0) { leftU = uv[lowL.st].x; rightU = uv[lowR.st].x; }
+            if (fabsf(uv[lowL.st].x - leftU) > eps ||
+                fabsf(uv[lowR.st].x - rightU) > eps ||
+                fabsf(uv[highL.st].x - leftU) > eps ||
+                fabsf(uv[highR.st].x - rightU) > eps) return;
+        }
+        if (oi == 0) {
+            uvCenter.x += uv[lowL.st].x; uvCenter.y += uv[lowL.st].y; ++uvSamples;
+            uvCenter.x += uv[lowR.st].x; uvCenter.y += uv[lowR.st].y; ++uvSamples;
+        }
+        uvCenter.x += uv[highL.st].x; uvCenter.y += uv[highL.st].y; ++uvSamples;
+        uvCenter.x += uv[highR.st].x; uvCenter.y += uv[highR.st].y; ++uvSamples;
+    }
+    if (!uvSamples) return;
+    if (faceCount > 1) {
+        uvCenter.x /= (float)uvSamples; uvCenter.y /= (float)uvSamples;
+    }
+
+    MP6WSExtendEntry pending = {0};
+    const int order[4] = {0, 2, 3, 1};
+    const float centerX = (loX + hiX) * 0.5f, centerY = (loY + hiY) * 0.5f;
+    for (int oi = 0; oi < faceCount; ++oi) {
+        s16 f = faceOrder[oi];
+        for (int i = 0; i < 4; ++i) {
+            int aSlot = order[i], bSlot = order[(i + 1) % 4];
+            HSF_FACE_INDEX aId = faces[f].index[aSlot], bId = faces[f].index[bSlot];
+            HuVecF a = v[aId.vertex], b = v[bId.vertex];
+            BOOL vertical = fabsf(a.x - b.x) <= eps;
+            BOOL horizontal = fabsf(a.y - b.y) <= eps;
+            if (!vertical && !horizontal) return;
+            BOOL outside = (vertical &&
+                (fabsf(a.x - loX) <= eps || fabsf(a.x - hiX) <= eps)) ||
+                (horizontal && (fabsf(a.y - loY) <= eps || fabsf(a.y - hiY) <= eps));
+            if (!outside) continue;
+            if (horizontal && fabsf(a.y - loY) > eps && fabsf(a.y - hiY) > eps) continue;
+            if (pending.edgeCount >= MP6_WS_EXTEND_EDGE_MAX) return;
+            MP6WSEdge *edge = &pending.edges[pending.edgeCount++];
+            edge->face = f;
+            edge->corner[0] = (s16)aSlot; edge->corner[1] = (s16)bSlot;
+            for (int j = 0; j < 2; ++j) {
+                HSF_FACE_INDEX id = j == 0 ? aId : bId;
+                HuVecF p = v[id.vertex];
+                edge->pos[j] = p;
+                edge->posSlope[j] = (HuVecF){p.x - centerX, p.y - centerY, 0};
+                edge->uv[j] = uv[id.st];
+                edge->uvSlope[j] = (HuVec2f){uvCenter.x - edge->uv[j].x,
+                                              uvCenter.y - edge->uv[j].y};
+            }
+        }
+    }
+    if (pending.edgeCount != faceCount * 2 + 2 || pending.edgeCount <= 0 ||
+        o->mesh.vertex->count + pending.edgeCount * 2 > 32767 ||
+        o->mesh.st->count + pending.edgeCount * 2 > 32767) return;
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    pending.modelId = modelId; pending.hsf = Hu3DData[modelId].hsf; pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_SIDES; pending.edgeSloped = TRUE;
+    pending.edgeReach = 1;
+    pending.baseVtx = o->mesh.vertex->count; pending.baseSt = o->mesh.st->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, e->edgeCount * 2, e->edgeCount * 2,
+                            e->edgeCount, mp6_ws_extend_write_faces_edge, e)) {
+        *e = (MP6WSExtendEntry){0}; return;
+    }
+    e->vtx = o->mesh.vertex->data; e->st = o->mesh.st->data;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+void mp6_widescreen_extend_material_sides(int16_t modelId, const char *objName,
+                                         int material, int mirror)
+{
+    if (material < 0 || material > 0xFFF) return;
+    mp6_ws_extend_rect(modelId, objName, 0, 0, 0, TRUE, mirror != 0, material, FALSE);
+}
+
+void mp6_widescreen_extend_edge_span(int16_t modelId, const char *objName, int axis,
+                                    float boundary, float span)
+{
+    mp6_ws_extend_rect(modelId, objName, axis, boundary, span, FALSE, FALSE, -1, FALSE);
+}
+
+/* Continue the outer ends of sloping QUAD walls along their own side edges.
+ * Flat cap faces and all surfaces below the boundary remain native. */
+void mp6_widescreen_extend_sloped_rim(int16_t modelId, const char *objName, int axis,
+                                    float boundary)
+{
+    mp6_ws_extend_rect(modelId, objName, axis, boundary, 0, FALSE, TRUE, -1, TRUE);
+}
+
+void mp6_widescreen_extend_edge(int16_t modelId, const char *objName, int axis, float boundary)
+{
+    mp6_widescreen_extend_edge_span(modelId, objName, axis, boundary, 0);
+}
+
+void mp6_widescreen_extend_strip_rim(int16_t modelId, const char *objName,
+                                   float minHeight, float reach)
+{
+    if (!isfinite(minHeight) || !isfinite(reach) || reach <= 0) return;
+    HSF_OBJECT *o = mp6_ws_extend_locate(modelId, objName);
+    if (!o) return;
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) {
+        if (e->mode == MP6_WS_EXTEND_STRIP_RIM)
+            mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+        return;
+    }
+    MP6WSExtendEntry pending = {0};
+    HuVecF *vertices = o->mesh.vertex->data;
+    HuVec2f *uvs = o->mesh.st->data;
+    HSF_FACE *faces = o->mesh.face->data;
+    for (s32 f = 0; f < o->mesh.face->count; ++f) {
+        HSF_FACE *face = &faces[f];
+        if ((face->typeSrc & HSF_FACE_MASK) != HSF_FACE_TRISTRIP) continue;
+        if (!face->strip.data || face->strip.count < 1 || face->strip.count > 1021) return;
+        int count = (int)face->strip.count + 3;
+        if (count & 1) return;
+        HSF_FACE_INDEX indices[1024];
+        const int first[3] = {0, 2, 1}; /* hsfdraw.c's actual GX emission order. */
+        for (int i = 0; i < count; ++i) {
+            HSF_FACE_INDEX id = i < 3 ? face->index[first[i]] : face->strip.data[i - 3];
+            if (id.vertex < 0 || id.vertex >= o->mesh.vertex->count ||
+                id.st < 0 || id.st >= o->mesh.st->count ||
+                id.normal < 0 || id.normal >= o->mesh.normal->count) return;
+            HuVecF p = vertices[id.vertex];
+            HuVec2f uv = uvs[id.st];
+            if (!isfinite(p.x) || !isfinite(p.y) || !isfinite(p.z) ||
+                !isfinite(uv.x) || !isfinite(uv.y)) return;
+            indices[i] = id;
+        }
+        float y[2] = {vertices[indices[0].vertex].y, vertices[indices[1].vertex].y};
+        int top = y[0] > y[1] ? 0 : 1, inner = 1 - top;
+        if (y[top] < minHeight || y[inner] >= minHeight) continue;
+        float height = y[top] - y[inner];
+        if (height < 0.01f) return;
+        float firstZ = vertices[indices[top].vertex].z;
+        float lastZ = vertices[indices[count - 2 + top].vertex].z;
+        if (fabsf(lastZ - firstZ) < 0.01f) return;
+        for (int i = 0; i < count; i += 2) {
+            HuVecF p = vertices[indices[i + top].vertex];
+            HuVecF q = vertices[indices[i + inner].vertex];
+            if (fabsf(p.y - y[top]) > 0.01f || fabsf(q.y - y[inner]) > 0.01f ||
+                fabsf(p.z - q.z) > 0.01f || (i &&
+                (p.z - vertices[indices[i - 2 + top].vertex].z) * (lastZ - firstZ) <= 0.01f)) return;
+        }
+        for (int i = 0; i < count - 2; i += 2) {
+            if (pending.edgeCount == MP6_WS_EXTEND_EDGE_MAX) return;
+            MP6WSEdge *edge = &pending.edges[pending.edgeCount++];
+            edge->face = f;
+            for (int j = 0; j < 2; ++j) {
+                /* Reverse the original boundary winding for the new seam. */
+                int pair = i + 2 * (top == 0 ? 1 - j : j);
+                HSF_FACE_INDEX outer = indices[pair + top];
+                HSF_FACE_INDEX inside = indices[pair + inner];
+                HuVecF p = vertices[outer.vertex], q = vertices[inside.vertex];
+                edge->sourceIndex[j] = outer;
+                edge->pos[j] = p;
+                edge->posSlope[j].x = (p.x - q.x) / height;
+                edge->posSlope[j].y = 1;
+                edge->posSlope[j].z = 0;
+                edge->uv[j] = uvs[outer.st];
+                edge->uvSlope[j].x = (uvs[inside.st].x - uvs[outer.st].x) / height;
+                edge->uvSlope[j].y = (uvs[inside.st].y - uvs[outer.st].y) / height;
+            }
+        }
+    }
+    if (!pending.edgeCount || o->mesh.vertex->count + pending.edgeCount * 2 > 32767 ||
+        o->mesh.st->count + pending.edgeCount * 2 > 32767) return;
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    pending.modelId = modelId; pending.hsf = Hu3DData[modelId].hsf; pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_STRIP_RIM; pending.edgeSloped = TRUE; pending.edgeReach = reach;
+    pending.baseVtx = o->mesh.vertex->count; pending.baseSt = o->mesh.st->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, e->edgeCount * 2, e->edgeCount * 2, e->edgeCount,
+                          mp6_ws_extend_write_faces_edge, e)) {
+        e->obj = NULL; e->hsf = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data; e->st = o->mesh.st->data;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* Continue the ends of an untextured vertical curtain. Its native curved
+ * triangle strip, lighting normals and placement stay intact. Refuse anything
+ * other than one monotonic strip of paired bottom/top vertices. */
+void mp6_widescreen_extend_backdrop_strip(int16_t modelId, const char *objName, float reach)
+{
+    if (!isfinite(reach) || reach <= 0) return;
+    HSF_OBJECT *o = mp6_ws_extend_locate_mesh(modelId, objName, FALSE);
+    if (!o) return;
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) {
+        if (e->mode == MP6_WS_EXTEND_SOLID_SIDES) mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+        return;
+    }
+    HSF_DATA *hsf = Hu3DData[modelId].hsf;
+    if (o->mesh.face->count != 1 || (o->mesh.st && o->mesh.st->count) || !o->mesh.material) return;
+    HSF_FACE *face = o->mesh.face->data;
+    int material = face->mat & 0xFFF;
+    if ((face->typeSrc & HSF_FACE_MASK) != HSF_FACE_TRISTRIP || !face->strip.data ||
+        face->strip.count < 1 || face->strip.count > 1021 || material >= hsf->materialNum) return;
+    HSF_MATERIAL *mat = &o->mesh.material[material];
+    if (mat->attrNum || mat->vtxMode == 5 || mat->invAlpha != 0 || (mat->pass & 15)) return;
+    int count = 3 + face->strip.count;
+    if ((count & 1) || count != o->mesh.vertex->count) return;
+    HSF_FACE_INDEX indices[1024];
+    u8 used[1024] = {0};
+    HuVecF *v = o->mesh.vertex->data;
+    const int first[3] = {0, 2, 1}; /* Native GX strip emission order. */
+    for (int i = 0; i < count; ++i) {
+        HSF_FACE_INDEX id = i < 3 ? face->index[first[i]] : face->strip.data[i-3];
+        if (id.vertex < 0 || id.vertex >= count || used[id.vertex] ||
+            id.normal < 0 || id.normal >= o->mesh.normal->count) return;
+        used[id.vertex] = 1;
+        indices[i] = id;
+        HuVecF p = v[id.vertex];
+        if (!isfinite(p.x) || !isfinite(p.y) || !isfinite(p.z)) return;
+    }
+    HuVecF start = v[indices[0].vertex], top = v[indices[1].vertex];
+    HuVecF end = v[indices[count-2].vertex];
+    if (fabsf(top.y-start.y) < 0.01f || fabsf(end.x-start.x) < 0.01f) return;
+    for (int i = 0; i < count; i += 2) {
+        HuVecF a = v[indices[i].vertex], b = v[indices[i+1].vertex];
+        if (fabsf(a.x-b.x) > 0.01f || fabsf(a.z-b.z) > 0.01f ||
+            fabsf(a.y-start.y) > 0.01f || fabsf(b.y-top.y) > 0.01f) return;
+        if (i && (a.x-v[indices[i-2].vertex].x)*(end.x-start.x) <= 0.01f) return;
+    }
+    MP6WSExtendEntry pending = {0};
+    pending.edgeCount = 2;
+    pending.floorCenterX = (start.x + end.x) * 0.5f;
+    pending.edgeReach = reach;
+    for (int side = 0; side < 2; ++side) {
+        MP6WSEdge *edge = &pending.edges[side];
+        for (int j = 0; j < 2; ++j) {
+            edge->sourceIndex[j] = indices[side ? count-1-j : j];
+            edge->pos[j] = v[edge->sourceIndex[j].vertex];
+        }
+    }
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    pending.modelId = modelId; pending.hsf = hsf; pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_SOLID_SIDES;
+    pending.baseVtx = o->mesh.vertex->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, 4, 0, 2, mp6_ws_extend_write_faces_edge, e)) {
+        e->obj = NULL; e->hsf = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* Return the corner count of a validated horizontal TRI/QUAD. The owning object's native
+ * arrays may also contain vertical walls; none of those participate. */
+static int mp6_ws_floor_corners(HSF_OBJECT *o, HSF_FACE *f, float y)
+{
+    int type = f->typeSrc & HSF_FACE_MASK;
+    int count = type == HSF_FACE_TRI ? 3 : type == HSF_FACE_QUAD ? 4 : 0;
+    if (!count) return 0;
+    HuVecF *v = o->mesh.vertex->data;
+    for (int c = 0; c < count; ++c) {
+        HSF_FACE_INDEX id = f->index[c];
+        if (id.vertex < 0 || id.vertex >= o->mesh.vertex->count ||
+            id.st < 0 || id.st >= o->mesh.st->count ||
+            !isfinite(v[id.vertex].x) || !isfinite(v[id.vertex].y) || !isfinite(v[id.vertex].z) ||
+            !isfinite(((HuVec2f *)o->mesh.st->data)[id.st].x) ||
+            !isfinite(((HuVec2f *)o->mesh.st->data)[id.st].y) ||
+            fabsf(v[id.vertex].y - y) > 0.01f) return 0;
+    }
+    return count;
+}
+
+static BOOL mp6_ws_floor_same(HuVecF a, HuVecF b)
+{
+    return fabsf(a.x - b.x) < 0.01f && fabsf(a.z - b.z) < 0.01f;
+}
+
+static int mp6_ws_terrain_corners(const HSF_FACE *face)
+{
+    int type = face->typeSrc & HSF_FACE_MASK;
+    return type == HSF_FACE_TRI ? 3 : type == HSF_FACE_QUAD ? 4 : 0;
+}
+
+static BOOL mp6_ws_terrain_same(HuVecF a, HuVecF b)
+{
+    return mp6_ws_floor_same(a, b) && fabsf(a.y - b.y) < 0.01f;
+}
+
+static void mp6_ws_extend_terrain(int16_t modelId, const char *objName,
+                                  float centerX, float reach, int mirror, BOOL outerOnly,
+                                  int material, int planeAxis, BOOL wallBoundaryStrip)
+{
+    if (!isfinite(centerX) || !isfinite(reach) || reach <= 0) return;
+    HSF_OBJECT *o = mp6_ws_extend_locate(modelId, objName);
+    if (!o) return;
+    if (material < -1 || material >= 0x1000) {
+        mp6_ws_extend_refuse(objName, "invalid terrain material filter");
+        return;
+    }
+    if (material >= 0) {
+        HSF_DATA *hsf = Hu3DData[modelId].hsf;
+        if (hsf == NULL || material >= hsf->materialNum) {
+            mp6_ws_extend_refuse(objName, "terrain material filter out of range");
+            return;
+        }
+    }
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) {
+        if (e->mode == MP6_WS_EXTEND_SIDES || e->mode == MP6_WS_EXTEND_WALL_EDGES)
+            mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+        return;
+    }
+    if (o->mesh.face->count > 2048) return;
+    HuVecF *v = o->mesh.vertex->data;
+    HuVec2f *uv = o->mesh.st->data;
+    HSF_FACE *faces = o->mesh.face->data;
+    float lo = INFINITY, hi = -INFINITY;
+    BOOL anyMaterialFace = material < 0;
+    /* Validate the selected adjacency domain before touching any buffer. */
+    for (int f = 0; f < o->mesh.face->count; ++f) {
+        if (material >= 0 && (faces[f].mat & 0xFFF) != material) continue;
+        anyMaterialFace = TRUE;
+        int count = mp6_ws_terrain_corners(&faces[f]);
+        if (!count) return;
+        for (int c = 0; c < count; ++c) {
+            HSF_FACE_INDEX id = faces[f].index[c];
+            if (id.vertex < 0 || id.vertex >= o->mesh.vertex->count ||
+                id.st < 0 || id.st >= o->mesh.st->count) return;
+            HuVecF p = v[id.vertex]; HuVec2f t = uv[id.st];
+            if (!isfinite(p.x) || !isfinite(p.y) || !isfinite(p.z) ||
+                !isfinite(t.x) || !isfinite(t.y)) return;
+            if (p.x < lo) lo = p.x;
+            if (p.x > hi) hi = p.x;
+        }
+    }
+    if (!anyMaterialFace || !isfinite(lo) || !isfinite(hi)) {
+        mp6_ws_extend_refuse(objName, "terrain material has no valid faces");
+        return;
+    }
+    MP6WSExtendEntry pending = {0};
+    const int order[2][4] = {{0, 2, 1, 0}, {0, 2, 3, 1}};
+    for (int f = 0; f < o->mesh.face->count; ++f) {
+        HSF_FACE *face = &faces[f];
+        if (material >= 0 && (face->mat & 0xFFF) != material) continue;
+        int count = mp6_ws_terrain_corners(face);
+        const int *winding = order[count - 3];
+        for (int c = 0; c < count; ++c) {
+            int ia = winding[c], ib = winding[(c + 1) % count], iq = winding[(c + 2) % count];
+            HuVecF a = v[face->index[ia].vertex], b = v[face->index[ib].vertex];
+            /* Terrain can contain river banks, holes and seams shared with
+             * another object. Restrict it to the two outside X planes; walls
+             * use the height-band silhouette test below for tapered sides. */
+            if (outerOnly && planeAxis != 1 && !((fabsf(a.x-lo) < 0.02f && fabsf(b.x-lo) < 0.02f) ||
+                               (fabsf(a.x-hi) < 0.02f && fabsf(b.x-hi) < 0.02f))) continue;
+            HuVecF q = v[face->index[iq].vertex];
+            float bx = b.x-a.x, bz = mp6_ws_edge_coord(b, planeAxis)-mp6_ws_edge_coord(a, planeAxis);
+            float qx = q.x-a.x, qz = mp6_ws_edge_coord(q, planeAxis)-mp6_ws_edge_coord(a, planeAxis);
+            float det = bx*qz-bz*qx;
+            /* A horizontal extension must point away from the owning face.
+             * Front/back edges and vertical walls add no ground coverage. */
+            if (fabsf(det) < 0.01f || fabsf(bz) < 0.01f ||
+                (a.x-centerX)*(b.x-centerX) < 0 ||
+                det*(-bz*((a.x+b.x)*0.5f-centerX)) >= -0.01f) continue;
+            if (outerOnly && planeAxis == 1) {
+                /* A wall can flare outward with height. Its exposed XY support
+                 * edge need not lie on a constant-X plane (S03's sky shell).
+                 * Keep vertices in this height band on the inward side; never extend
+                 * an interior joint, concave cutout or overlapping layer. */
+                BOOL outside = FALSE;
+                for (int g = 0; g < o->mesh.face->count && !outside; ++g) {
+                    if (material >= 0 && (faces[g].mat & 0xFFF) != material) continue;
+                    int n = mp6_ws_terrain_corners(&faces[g]);
+                    for (int j = 0; j < n; ++j) {
+                        HuVecF p = v[faces[g].index[j].vertex];
+                        if (p.y < fminf(a.y,b.y)-0.01f ||
+                            p.y > fmaxf(a.y,b.y)+0.01f) continue;
+                        float side = bx*(p.y-a.y)-bz*(p.x-a.x);
+                        if (side*det < -0.01f) { outside = TRUE; break; }
+                    }
+                }
+                if (outside) continue;
+            }
+            BOOL shared = FALSE;
+            for (int other = 0; other < o->mesh.face->count && !shared; ++other) {
+                if (other == f) continue;
+                if (material >= 0 && (faces[other].mat & 0xFFF) != material) continue;
+                int n = mp6_ws_terrain_corners(&faces[other]);
+                const int *ow = order[n - 3];
+                for (int k = 0; k < n; ++k) {
+                    HuVecF p0 = v[faces[other].index[ow[k]].vertex];
+                    HuVecF p1 = v[faces[other].index[ow[(k+1)%n]].vertex];
+                    if ((mp6_ws_terrain_same(a,p0) && mp6_ws_terrain_same(b,p1)) ||
+                        (mp6_ws_terrain_same(a,p1) && mp6_ws_terrain_same(b,p0))) shared = TRUE;
+                }
+            }
+            if (shared) continue;
+            if (pending.edgeCount == MP6_WS_EXTEND_EDGE_MAX) return;
+            MP6WSEdge *edge = &pending.edges[pending.edgeCount++];
+            edge->face = f; edge->corner[0] = ia; edge->corner[1] = ib;
+            edge->pos[0] = a; edge->pos[1] = b;
+            if (planeAxis == 1 && !wallBoundaryStrip) {
+                /* XY wall projection: continue its actual 3D plane, including
+                 * walls leaning in Z, rather than leaving a corner wedge. */
+                float depthSlope = ((b.z-a.z)*qz-(q.z-a.z)*bz)/det;
+                if (!isfinite(depthSlope)) return;
+                for (int j = 0; j < 2; ++j) {
+                    float span = edge->pos[j].x - centerX;
+                    edge->posSlope[j] = (HuVecF){span, 0.0f, span * depthSlope};
+                }
+            }
+            HuVec2f ua = uv[face->index[ia].st], ub = uv[face->index[ib].st];
+            HuVec2f uq = uv[face->index[iq].st];
+            edge->uv[0] = ua; edge->uv[1] = ub;
+            HuVec2f dx = {((ub.x-ua.x)*qz-(uq.x-ua.x)*bz)/det,
+                         ((ub.y-ua.y)*qz-(uq.y-ua.y)*bz)/det};
+            HuVec2f dz = {(bx*(uq.x-ua.x)-qx*(ub.x-ua.x))/det,
+                         (bx*(uq.y-ua.y)-qx*(ub.y-ua.y))/det};
+            for (int j = 0; j < 2; ++j) {
+                float x = edge->pos[j].x-centerX, z = 0;
+                if (mirror) {
+                    float across = -x*bz/(bx*bx+bz*bz);
+                    x += 2*across*bz; z -= 2*across*bx;
+                }
+                edge->uvSlope[j].x = dx.x*x + dz.x*z;
+                edge->uvSlope[j].y = dx.y*x + dz.y*z;
+                if (wallBoundaryStrip) {
+                    /* The strip is a boundary cap, not a planar texture
+                     * extrapolation. Pin both loop coordinates to the
+                     * authored endpoint so a near-parallel XY edge cannot
+                     * turn a tiny determinant into UV spikes. */
+                    edge->uvSlope[j].x = 0.0f;
+                    edge->uvSlope[j].y = 0.0f;
+                }
+            }
+        }
+    }
+    if (!pending.edgeCount) { mp6_ws_extend_refuse(objName, "no exposed terrain sides"); return; }
+    if (o->mesh.vertex->count + pending.edgeCount*2 > 32767 ||
+        o->mesh.st->count + pending.edgeCount*2 > 32767) return;
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    pending.modelId = modelId; pending.hsf = Hu3DData[modelId].hsf; pending.obj = o;
+    pending.mode = wallBoundaryStrip ? MP6_WS_EXTEND_WALL_EDGES : MP6_WS_EXTEND_SIDES;
+    pending.edgeReach = reach; pending.floorCenterX = centerX;
+    pending.edgeSloped = planeAxis == 1 && !wallBoundaryStrip;
+    pending.baseVtx = o->mesh.vertex->count; pending.baseSt = o->mesh.st->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, e->edgeCount*2, e->edgeCount*2, e->edgeCount,
+                            mp6_ws_extend_write_faces_edge, e)) {
+        e->obj = NULL; e->hsf = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data; e->st = o->mesh.st->data;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* Reflect a row-structured shape mesh across its ACTUAL animated side edges.
+ * A single rigid mirror plane leaves wedges when the shoreline steps in X
+ * between Z rows. Each original vertex instead follows its own row endpoint.
+ * Only appended positions are written. ShapeProc continues to interpolate its
+ * untouched native shape arrays, whose counts remain the native vertex count.
+ * No envelopes/clusters or shared shape/live buffers are accepted here. */
+static void mp6_ws_extend_shape_apply(MP6WSExtendEntry *e, float k)
+{
+    /* Whole reflected tiles retain the native texel/wave density. They lie
+     * outside the source edge; aspect changes never stretch the native sea. */
+    float amount = k > 1.0f ? 1.0f : 0.0f;
+    HuVecF lo = e->nativeMin, hi = e->nativeMax;
+    for (int side = 0; side < 2; ++side) {
+        for (int i = 0; i < e->baseVtx; ++i) {
+            HuVecF source = e->vtx[i];
+            HuVecF seam = e->vtx[e->shapeSeam[side][i]];
+            HuVecF p = {seam.x + amount * (seam.x - source.x),
+                        seam.y + amount * (source.y - seam.y), source.z};
+            e->vtx[e->baseVtx * (side + 1) + i] = p;
+            if (p.x < lo.x) lo.x = p.x;
+            if (p.y < lo.y) lo.y = p.y;
+            if (p.z < lo.z) lo.z = p.z;
+            if (p.x > hi.x) hi.x = p.x;
+            if (p.y > hi.y) hi.y = p.y;
+            if (p.z > hi.z) hi.z = p.z;
+        }
+    }
+    for (int row = 0; row < MP6_WS_SHAPE_SEA_ROWS; ++row) {
+        for (int col = 0; col < MP6_WS_SHAPE_SEA_COLS; ++col) {
+            int base = e->baseVtx * 3 + (row * MP6_WS_SHAPE_SEA_COLS + col) * 4;
+            float x = e->shapeCenterX + (col - MP6_WS_SHAPE_SEA_COLS / 2) * e->shapeTileX;
+            float z = (row - 10) * e->shapeTileZ;
+            for (int c = 0; c < 4; ++c) {
+                HuVecF p = {x + (c & 1) * e->shapeTileX, e->shapePlaneY,
+                            z + ((c & 2) ? 0.0f : e->shapeTileZ)};
+                if (k <= 1.0f) p = e->vtx[0];
+                e->vtx[base + c] = p;
+                if (p.x < lo.x) lo.x = p.x;
+                if (p.y < lo.y) lo.y = p.y;
+                if (p.z < lo.z) lo.z = p.z;
+                if (p.x > hi.x) hi.x = p.x;
+                if (p.y > hi.y) hi.y = p.y;
+                if (p.z > hi.z) hi.z = p.z;
+            }
+        }
+    }
+    e->obj->mesh.mesh.min = k > 1.0f ? lo : e->nativeMin;
+    e->obj->mesh.mesh.max = k > 1.0f ? hi : e->nativeMax;
+}
+
+static void mp6_ws_extend_shape_faces(MP6WSExtendEntry *e, HSF_FACE *tail,
+                                      const HSF_FACE *nativeFaces)
+{
+    for (int side = 0; side < 2; ++side) {
+        for (int f = 0; f < e->shapeFaces; ++f) {
+            HSF_FACE face = nativeFaces[f];
+            HSF_FACE_INDEX swap = face.index[1];
+            face.index[1] = face.index[2];
+            face.index[2] = swap; /* Reflection reverses winding, not UVs. */
+            int count = (face.type & 7) == HSF_FACE_TRI ? 3 : 4;
+            for (int c = 0; c < count; ++c)
+                face.index[c].vertex += e->baseVtx * (side + 1);
+            tail[side * e->shapeFaces + f] = face;
+        }
+    }
+    /* The shore texture has transparent wave bands. A deep-water sheet under
+     * them supplies real depth-tested ocean, including beyond the finite Z
+     * extent. Reuse only its opaque deep-water interval, not the shore art. */
+    for (int f = 0; f < MP6_WS_SHAPE_SEA_FACES; ++f) {
+        HSF_FACE face = nativeFaces[1];
+        face.type = HSF_FACE_QUAD;
+        for (int c = 0; c < 4; ++c) {
+            face.index[c].vertex = e->baseVtx * 3 + f * 4 + c;
+            face.index[c].st = e->baseSt + f * 4 + c;
+        }
+        tail[e->shapeFaces * 2 + f] = face;
+    }
+}
+
+void mp6_widescreen_extend_shape_mirror(int16_t modelId, const char *objName)
+{
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX ||
+        (Hu3DData[modelId].attr & (HU3D_ATTR_HOOKFUNC | HU3D_ATTR_PARTICLE |
+                                  HU3D_ATTR_CAMERA | HU3D_ATTR_HOOK)) ||
+        Hu3DData[modelId].linkMdlId != HU3D_MODELID_NONE) return;
+    HSF_OBJECT *o = mp6_ws_extend_locate_mesh_impl(modelId, objName, TRUE, 0, TRUE);
+    if (!o) return;
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) return;
+    HSF_DATA *hsf = Hu3DData[modelId].hsf;
+    int count = o->mesh.vertex->count;
+    if (count < 4 || count > MP6_WS_EXTEND_SHAPE_VERTEX_MAX ||
+        !o->mesh.shape || o->mesh.shapeNum <= 0 || hsf->cenvNum ||
+        hsf->clusterNum || o->mesh.cenvNum || o->mesh.vtxtop ||
+        o->mesh.face->count < 2 || o->mesh.face->count > 2000) {
+        mp6_ws_extend_refuse(objName, "unsupported shape-mirror layout"); return;
+    }
+    HuVecF *v = o->mesh.vertex->data;
+    HSF_FACE *faces = o->mesh.face->data;
+    if ((faces[1].type & 7) != HSF_FACE_QUAD) return;
+    MP6WSExtendEntry pending = {0};
+    pending.modelId = modelId; pending.hsf = hsf; pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_SHAPE_MIRROR;
+    pending.baseVtx = count; pending.baseSt = o->mesh.st->count;
+    pending.shapeFaces = o->mesh.face->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    float xMin = v[0].x, xMax = v[0].x, zMin = v[0].z, zMax = v[0].z;
+    for (int i = 1; i < count; ++i) {
+        xMin = fminf(xMin, v[i].x); xMax = fmaxf(xMax, v[i].x);
+        zMin = fminf(zMin, v[i].z); zMax = fmaxf(zMax, v[i].z);
+    }
+    pending.shapeTileX = (xMax - xMin) * 0.2f;
+    pending.shapeTileZ = zMax - zMin;
+    pending.shapeCenterX = (xMax + xMin) * 0.5f;
+    pending.shapePlaneY = v[0].y - 10.0f;
+    if (pending.shapeTileX < 1.0f || pending.shapeTileZ < 1.0f) return;
+    for (int i = 0; i < count; ++i) {
+        int left = i, right = i;
+        for (int j = 0; j < count; ++j) {
+            if (fabsf(v[j].z - v[i].z) > 0.01f) continue;
+            if (v[j].x < v[left].x) left = j;
+            if (v[j].x > v[right].x) right = j;
+        }
+        if (v[right].x - v[left].x < 1.0f) return;
+        pending.shapeSeam[0][i] = left;
+        pending.shapeSeam[1][i] = right;
+    }
+    for (int s = 0; s < o->mesh.shapeNum; ++s) {
+        HSF_BUFFER *shape = o->mesh.shape[s];
+        if (!shape || shape == o->mesh.vertex || shape->count != count ||
+            !shape->data || shape->data == v) {
+            mp6_ws_extend_refuse(objName, "aliased shape source"); return;
+        }
+        HuVecF *points = shape->data;
+        for (int i = 0; i < count; ++i) {
+            if (!isfinite(points[i].x) || !isfinite(points[i].y) ||
+                fabsf(points[i].z - v[i].z) > 0.01f ||
+                points[i].x < points[pending.shapeSeam[0][i]].x - 0.01f ||
+                points[i].x > points[pending.shapeSeam[1][i]].x + 0.01f) {
+                mp6_ws_extend_refuse(objName, "shape rows change topology"); return;
+            }
+        }
+    }
+    for (int f = 0; f < pending.shapeFaces; ++f) {
+        int n = (faces[f].type & 7) == HSF_FACE_TRI ? 3 :
+                (faces[f].type & 7) == HSF_FACE_QUAD ? 4 : 0;
+        if (!n) return;
+        for (int c = 0; c < n; ++c)
+            if (faces[f].index[c].vertex < 0 || faces[f].index[c].vertex >= count)
+                return;
+    }
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, count * 2 + MP6_WS_SHAPE_SEA_FACES * 4,
+                            MP6_WS_SHAPE_SEA_FACES * 4,
+                            pending.shapeFaces * 2 + MP6_WS_SHAPE_SEA_FACES,
+                            mp6_ws_extend_shape_faces, e)) {
+        e->hsf = NULL; e->obj = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data;
+    e->st = o->mesh.st->data;
+    for (int row = 0; row < MP6_WS_SHAPE_SEA_ROWS; ++row)
+        for (int col = 0; col < MP6_WS_SHAPE_SEA_COLS; ++col)
+            for (int c = 0; c < 4; ++c) {
+                /* hama_umi's measured S=.8..1 interval is alpha=255 for
+                 * every row. S=0 is entirely transparent shoreline. */
+                float u = (c & 1) ? 1.0f : 0.8f;
+                float t = (c & 2) ? 1.0f : 0.0f;
+                if (col & 1) u = 1.8f - u;
+                if (row & 1) t = 1.0f - t;
+                e->st[e->baseSt + (row * MP6_WS_SHAPE_SEA_COLS + col) * 4 + c] =
+                    (HuVec2f){u, t};
+            }
+    mp6_ws_extend_shape_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* Called after native shape/cluster/envelope evaluation and before draw.
+ * Usually there are no registered shape extensions: that fast path is empty. */
+void mp6_widescreen_shape_update(int16_t modelId)
+{
+    for (int i = 0; i < g_mp6WsExtendNum; ++i) {
+        MP6WSExtendEntry *e = &g_mp6WsExtend[i];
+        if (e->mode != MP6_WS_EXTEND_SHAPE_MIRROR || e->modelId != modelId ||
+            !mp6_ws_model_live(modelId, e->hsf)) continue;
+        mp6_ws_extend_apply(e, mp6_widescreen_scale_factor());
+    }
+}
+
+void mp6_widescreen_extend_terrain_sides(int16_t modelId, const char *objName,
+                                        float centerX, int mirror)
+{
+    mp6_ws_extend_terrain(modelId, objName, centerX, 1, mirror, FALSE, -1, 2, FALSE);
+}
+
+void mp6_widescreen_extend_terrain_outer_sides(int16_t modelId, const char *objName,
+                                              float centerX, float reach, int mirror)
+{
+    mp6_ws_extend_terrain(modelId, objName, centerX, reach, mirror, TRUE, -1, 2, FALSE);
+}
+
+void mp6_widescreen_extend_terrain_outer_sides_material(int16_t modelId,
+                                                        const char *objName,
+                                                        float centerX, float reach,
+                                                        int mirror, int material)
+{
+    if (material < 0 || material >= 0x1000) return;
+    mp6_ws_extend_terrain(modelId, objName, centerX, reach, mirror, TRUE, material, 2, FALSE);
+}
+
+void mp6_widescreen_extend_wall_outer_sides(int16_t modelId, const char *objName,
+                                           float centerX, float reach, int mirror)
+{
+    mp6_ws_extend_terrain(modelId, objName, centerX, reach, mirror, TRUE, -1, 1, FALSE);
+}
+
+void mp6_widescreen_extend_wall_edges(int16_t modelId, const char *objName,
+                                      float centerX, float reach, int mirror)
+{
+    /* Reuse the wall planner's XY silhouette/adjacency checks, but keep the
+     * appended strip horizontal in X.  In particular, do not infer a Z
+     * plane from a near-parallel edge: source endpoint Y/Z and STs remain
+     * fixed while only the generated X positions follow the live aspect. */
+    mp6_ws_extend_terrain(modelId, objName, centerX, reach, mirror, TRUE, -1, 1, TRUE);
+}
+
+void mp6_widescreen_static_margins(int16_t modelId,
+                                  const MP6WSStaticMargin *surfaces, int count)
+{
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX ||
+        !surfaces || count <= 0 || count > 16) return;
+    HU3D_MODEL *model = &Hu3DData[modelId];
+    HSF_DATA *hsf = model->hsf;
+    if (!hsf || model->linkMdlId != HU3D_MODELID_NONE ||
+        (model->attr & (HU3D_ATTR_HOOKFUNC | HU3D_ATTR_PARTICLE | HU3D_ATTR_CAMERA |
+                        HU3D_ATTR_MOTION_MODEL))) return;
+    for (int i = 0; i < HU3D_MODEL_MAX; ++i) {
+        if (i != modelId && Hu3DData[i].hsf == hsf) return;
+    }
+    for (int s = 0; s < count; ++s) {
+        const MP6WSStaticMargin *surface = &surfaces[s];
+        if (!surface->object || surface->plane < MP6_WS_MARGIN_TERRAIN ||
+            surface->plane > MP6_WS_MARGIN_RECT || surface->material < -1 ||
+            surface->material >= hsf->materialNum || !isfinite(surface->centerX) ||
+            !isfinite(surface->reach) || surface->reach <= 0) return;
+    }
+    /* This operation consumes a fresh companion exactly once. In particular,
+     * a repeated call must not treat appended faces as a new native prefix. */
+    for (int i = 0; i < hsf->objectNum; ++i)
+        if (hsf->object[i].type == HSF_OBJ_MESH &&
+            mp6_ws_extend_find(&hsf->object[i])) return;
+    /* Bake the independent copy's bind-pose positions AND normals before
+     * freezing it. The imported pre-envelope normals are not render-ready. */
+    if (hsf->cenvNum) {
+        InitVtxParm(hsf);
+        EnvelopeProc(hsf);
+    }
+    /* Skinning/cluster execution must stay disabled through the native model
+     * attribute.  Keep the HSF-wide format counts intact: hsfdraw selects
+     * F32 versus packed S8 normal arrays from cenvNum, and changing that
+     * global would reinterpret a valid F32 normal buffer as bytes. */
+    Hu3DModelAttrSet(modelId, HU3D_ATTR_ENVELOPE_OFF);
+    for (int i = 0; i < hsf->objectNum; ++i) {
+        HSF_OBJECT *object = &hsf->object[i];
+        if (object->type != HSF_OBJ_MESH) continue;
+        object->flags |= HSF_MATERIAL_DISPOFF;
+        for (int s = 0; s < count; ++s) {
+            const MP6WSStaticMargin *surface = &surfaces[s];
+            if (!object->name || !surface->object ||
+                strcmp(object->name, surface->object)) continue;
+            if (!object->mesh.face || !object->mesh.face->data) break;
+            /* The owner is now frozen, so the static planner may grow its
+             * buffers. Restore render metadata afterwards: cenvNum selects
+             * the baked mesh matrix as well as the deformation path. */
+            int cenv = object->mesh.cenvNum;
+            int cluster = object->mesh.clusterNum;
+            int shape = object->mesh.shapeNum;
+            object->mesh.cenvNum = object->mesh.clusterNum = object->mesh.shapeNum = 0;
+            int nativeFaces = object->mesh.face->count;
+            if (surface->plane == MP6_WS_MARGIN_RECT)
+                mp6_ws_extend_rect(modelId, object->name, 0, 0, 0, TRUE,
+                                   surface->mirror, surface->material, FALSE);
+            else if (surface->plane == MP6_WS_MARGIN_TERRAIN || surface->plane == MP6_WS_MARGIN_WALL)
+                mp6_ws_extend_terrain(modelId, object->name, surface->centerX,
+                    surface->reach, surface->mirror, TRUE, surface->material,
+                    surface->plane == MP6_WS_MARGIN_WALL ? 1 : 2, FALSE);
+            object->mesh.cenvNum = cenv;
+            object->mesh.clusterNum = cluster;
+            object->mesh.shapeNum = shape;
+            if (object->mesh.face->count == nativeFaces) break;
+            object->flags &= ~HSF_MATERIAL_DISPOFF;
+            HSF_FACE *faces = object->mesh.face->data;
+            /* Degenerate the copied prefix, never alias an allocation base or
+             * overlap the original scenery. Original owner data is untouched. */
+            for (int f = 0; f < nativeFaces; ++f)
+                for (int c = 1; c < 4; ++c) faces[f].index[c] = faces[f].index[0];
+            break;
+        }
+    }
+    MakeDisplayList(modelId, model->mallocNo);
+}
+
+void mp6_widescreen_extend_floor_at(int16_t modelId, const char *objName, int occurrence,
+                                      float y, float centerX, float centerZ, float reach)
+{
+    HSF_OBJECT *o = mp6_ws_extend_locate_mesh_at(modelId, objName, TRUE, occurrence);
+    if (!o || !isfinite(y) || !isfinite(centerX) || !isfinite(centerZ) ||
+        !isfinite(reach) || reach <= 0) return;
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) {
+        if (e->mode == MP6_WS_EXTEND_FLOOR) mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+        return;
+    }
+    /* Registration-time adjacency scan only, never per frame. */
+    if (o->mesh.face->count > 2048) return;
+    HuVecF *v = o->mesh.vertex->data;
+    HuVec2f *uv = o->mesh.st->data;
+    HSF_FACE *faces = o->mesh.face->data;
+    MP6WSExtendEntry pending = {0};
+    for (s32 f = 0; f < o->mesh.face->count; ++f) {
+        HSF_FACE *face = &faces[f];
+        int count = mp6_ws_floor_corners(o, face, y);
+        if (!count) continue;
+        /* MDObjMesh emits native triangles as 0,2,1 (not 0,1,2), while
+         * appended quads emit 0,2,3,1. Follow the actual draw winding. */
+        const int orders[2][4] = {{0, 2, 1, 0}, {0, 2, 3, 1}};
+        const int *order = orders[count == 4];
+        for (int c = 0; c < count; ++c) {
+            int first = order[c], next = order[(c + 1) % count], inner = order[(c + 2) % count];
+            HuVecF a = v[face->index[first].vertex], b = v[face->index[next].vertex];
+            HuVecF q = v[face->index[inner].vertex];
+            float bx = b.x - a.x, bz = b.z - a.z, qx = q.x - a.x, qz = q.z - a.z;
+            float det = bx * qz - bz * qx;
+            float centerSide = bx * (centerZ - a.z) - bz * (centerX - a.x);
+            /* Reject degenerate faces and inward-facing (hole) rims. */
+            if (fabsf(det) < 0.01f || det * centerSide <= 0.01f) continue;
+            BOOL shared = FALSE;
+            for (s32 other = 0; other < o->mesh.face->count && !shared; ++other) {
+                if (other == f) continue;
+                int n = mp6_ws_floor_corners(o, &faces[other], y);
+                if (!n) continue;
+                const int *ow = orders[n == 4];
+                for (int k = 0; k < n; ++k) {
+                    HuVecF p0 = v[faces[other].index[ow[k]].vertex];
+                    HuVecF p1 = v[faces[other].index[ow[(k + 1) % n]].vertex];
+                    if ((mp6_ws_floor_same(a, p0) && mp6_ws_floor_same(b, p1)) ||
+                        (mp6_ws_floor_same(a, p1) && mp6_ws_floor_same(b, p0))) shared = TRUE;
+                }
+            }
+            if (shared) continue;
+            if (pending.edgeCount == MP6_WS_EXTEND_EDGE_MAX) {
+                mp6_ws_extend_refuse(objName, "too many floor boundary edges"); return;
+            }
+            MP6WSEdge *edge = &pending.edges[pending.edgeCount++];
+            edge->face = f; edge->corner[0] = first; edge->corner[1] = next;
+            edge->pos[0] = a; edge->pos[1] = b;
+            HuVec2f ua = uv[face->index[first].st], ub = uv[face->index[next].st];
+            HuVec2f uq = uv[face->index[inner].st];
+            edge->uv[0] = ua; edge->uv[1] = ub;
+            /* Mirror sampling across the border, not the existing floor.
+             * Extrapolating directly outside a CLAMP atlas can hit transparent
+             * padding. Reflection preserves texel density and continuity at
+             * the seam while keeping samples on the authored side. */
+            HuVec2f dx = {((ub.x-ua.x)*qz - (uq.x-ua.x)*bz)/det,
+                         ((ub.y-ua.y)*qz - (uq.y-ua.y)*bz)/det};
+            HuVec2f dz = {(bx*(uq.x-ua.x) - qx*(ub.x-ua.x))/det,
+                         (bx*(uq.y-ua.y) - qx*(ub.y-ua.y))/det};
+            for (int j = 0; j < 2; ++j) {
+                float x = edge->pos[j].x - centerX, z = edge->pos[j].z - centerZ;
+                float across = (x * -bz + z * bx) / (bx * bx + bz * bz);
+                x -= 2 * across * -bz;
+                z -= 2 * across * bx;
+                edge->uvSlope[j].x = dx.x*x + dz.x*z;
+                edge->uvSlope[j].y = dx.y*x + dz.y*z;
+            }
+        }
+    }
+    if (!pending.edgeCount) { mp6_ws_extend_refuse(objName, "no outer floor edges"); return; }
+    if (o->mesh.vertex->count + pending.edgeCount * 2 > 32767 ||
+        o->mesh.st->count + pending.edgeCount * 2 > 32767) return;
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    pending.modelId = modelId; pending.hsf = Hu3DData[modelId].hsf; pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_FLOOR; pending.edgeReach = reach;
+    pending.floorCenterX = centerX; pending.floorCenterZ = centerZ;
+    pending.baseVtx = o->mesh.vertex->count; pending.baseSt = o->mesh.st->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, e->edgeCount * 2, e->edgeCount * 2, e->edgeCount,
+                            mp6_ws_extend_write_faces_edge, e)) {
+        e->obj = NULL; e->hsf = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data; e->st = o->mesh.st->data;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+void mp6_widescreen_extend_floor(int16_t modelId, const char *objName,
+                                float y, float centerX, float centerZ)
+{
+    mp6_widescreen_extend_floor_at(modelId, objName, 0, y, centerX, centerZ, 1);
+}
+
+/* Untextured planar backdrop: preserve the authored gradient and continue
+ * each outer edge's own colors horizontally. Never stretch the source faces,
+ * invent UVs, or extend an internal diagonal/hole. axis is the fixed plane
+ * coordinate (Y for an XZ disc, Z for an XY backdrop). Registration only. */
+void mp6_widescreen_extend_color_rim(int16_t modelId, const char *objName,
+                                    int axis, float centerX, float centerOther)
+{
+    if ((axis != 1 && axis != 2) || !isfinite(centerX) || !isfinite(centerOther)) return;
+    HSF_OBJECT *o = mp6_ws_extend_locate_mesh(modelId, objName, FALSE);
+    if (!o) return;
+    MP6WSExtendEntry *e = mp6_ws_extend_find(o);
+    if (e) {
+        if (e->mode == MP6_WS_EXTEND_COLOR_RIM) mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+        return;
+    }
+    if ((o->mesh.st && o->mesh.st->count > 0) ||
+        !o->mesh.color || !o->mesh.color->data || o->mesh.color->count <= 0 ||
+        o->mesh.face->count > 2048) {
+        mp6_ws_extend_refuse(objName, "color rim requires an untextured colored plane"); return;
+    }
+    HuVecF *v = o->mesh.vertex->data;
+    HSF_FACE *faces = o->mesh.face->data;
+    const int otherAxis = 3 - axis;
+    const float plane = mp6_ws_edge_coord(v[0], axis);
+    for (s32 i = 0; i < o->mesh.vertex->count; ++i) {
+        if (!isfinite(v[i].x) || !isfinite(v[i].y) || !isfinite(v[i].z) ||
+            fabsf(mp6_ws_edge_coord(v[i], axis) - plane) > 0.01f) return;
+    }
+    /* Validate the complete face set before the adjacency walk. */
+    for (s32 f = 0; f < o->mesh.face->count; ++f) {
+        int type = faces[f].typeSrc & HSF_FACE_MASK;
+        if (type != HSF_FACE_TRI && type != HSF_FACE_QUAD) return;
+        for (int c = 0; c < (type == HSF_FACE_TRI ? 3 : 4); ++c) {
+            HSF_FACE_INDEX id = faces[f].index[c];
+            if (id.vertex < 0 || id.vertex >= o->mesh.vertex->count ||
+                id.normal < 0 || id.normal >= o->mesh.normal->count ||
+                id.color < 0 || id.color >= o->mesh.color->count) return;
+        }
+    }
+    MP6WSExtendEntry pending = {0};
+    const int orders[2][4] = {{0,2,1,0}, {0,2,3,1}};
+    for (s32 f = 0; f < o->mesh.face->count; ++f) {
+        HSF_FACE *face = &faces[f];
+        int count = (face->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRI ? 3 : 4;
+        const int *order = orders[count == 4];
+        for (int c = 0; c < count; ++c) {
+            int ca = order[c], cb = order[(c+1)%count], ci = order[(c+2)%count];
+            HuVecF a = v[face->index[ca].vertex], b = v[face->index[cb].vertex];
+            HuVecF inner = v[face->index[ci].vertex];
+            float ax = a.x, ay = mp6_ws_edge_coord(a, otherAxis);
+            float bx = b.x - ax, by = mp6_ws_edge_coord(b, otherAxis) - ay;
+            float det = bx * (mp6_ws_edge_coord(inner, otherAxis)-ay) - by * (inner.x-ax);
+            float side = bx * (centerOther-ay) - by * (centerX-ax);
+            if (fabsf(det) < 0.01f || det * side <= 0.01f) continue;
+            BOOL shared = FALSE;
+            for (s32 g = 0; g < o->mesh.face->count && !shared; ++g) {
+                if (g == f) continue;
+                int n = (faces[g].typeSrc & HSF_FACE_MASK) == HSF_FACE_TRI ? 3 : 4;
+                const int *ord = orders[n == 4];
+                for (int j = 0; j < n; ++j) {
+                    HuVecF p = v[faces[g].index[ord[j]].vertex];
+                    HuVecF q = v[faces[g].index[ord[(j+1)%n]].vertex];
+                    /* Position comparison also recognizes duplicated seam vertices. */
+                    float py = mp6_ws_edge_coord(p, otherAxis), qy = mp6_ws_edge_coord(q, otherAxis);
+                    float byAbs = ay + by;
+                    if ((fabsf(p.x-ax)<0.01f && fabsf(py-ay)<0.01f && fabsf(q.x-b.x)<0.01f && fabsf(qy-byAbs)<0.01f) ||
+                        (fabsf(q.x-ax)<0.01f && fabsf(qy-ay)<0.01f && fabsf(p.x-b.x)<0.01f && fabsf(py-byAbs)<0.01f)) shared = TRUE;
+                }
+            }
+            if (shared) continue;
+            if (pending.edgeCount == MP6_WS_EXTEND_EDGE_MAX) return;
+            MP6WSEdge *edge = &pending.edges[pending.edgeCount++];
+            edge->face = f; edge->corner[0] = ca; edge->corner[1] = cb;
+            edge->pos[0] = a; edge->pos[1] = b;
+        }
+    }
+    if (!pending.edgeCount || o->mesh.vertex->count + pending.edgeCount * 2 > 32767) return;
+    e = mp6_ws_extend_alloc();
+    if (!e) return;
+    pending.modelId = modelId; pending.hsf = Hu3DData[modelId].hsf; pending.obj = o;
+    pending.mode = MP6_WS_EXTEND_COLOR_RIM; pending.edgeReach = 1;
+    pending.floorCenterX = centerX;
+    pending.baseVtx = o->mesh.vertex->count;
+    pending.nativeMin = o->mesh.mesh.min; pending.nativeMax = o->mesh.mesh.max;
+    *e = pending;
+    if (!mp6_ws_extend_grow(modelId, o, e->edgeCount * 2, 0, e->edgeCount,
+                            mp6_ws_extend_write_faces_edge, e)) {
+        e->obj = NULL; e->hsf = NULL; return;
+    }
+    e->vtx = o->mesh.vertex->data;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* Continue only the bottom boundary's own color indices. This is an explicit
+ * native asset repair, not an aspect multiplier: it remains filled at k=1.
+ * All original positions/faces/colors are retained by the shared rim writer. */
+void mp6_widescreen_extend_color_rim_bottom(int16_t modelId, const char *objName,
+                                           float centerX, float centerY, float bottomY)
+{
+    if (!isfinite(bottomY)) return;
+    mp6_widescreen_extend_color_rim(modelId, objName, 2, centerX, centerY);
+    HSF_OBJECT *o = mp6_ws_extend_locate_mesh(modelId, objName, FALSE);
+    MP6WSExtendEntry *e = o ? mp6_ws_extend_find(o) : NULL;
+    if (!e || e->mode != MP6_WS_EXTEND_COLOR_RIM) return;
+    HuVecF *v = o->mesh.vertex->data;
+    float nativeBottom = v[0].y;
+    for (s32 i = 1; i < e->baseVtx; ++i)
+        if (v[i].y < nativeBottom) nativeBottom = v[i].y;
+    if (bottomY >= nativeBottom) return;
+    e->colorNativeBottomY = nativeBottom;
+    e->colorBottomY = bottomY;
+    mp6_ws_extend_edge_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+static void mp6_ws_extend_ring_mode(int16_t modelId, const char *objName, BOOL reflectUv)
 {
     HSF_OBJECT *o = mp6_ws_extend_locate(modelId, objName);
     MP6WSExtendEntry *e;
@@ -3396,14 +5476,32 @@ void mp6_widescreen_extend_ring(int16_t modelId, const char *objName)
         return;
     }
     e = mp6_ws_extend_find(o);
+    if (e != NULL && ((reflectUv && e->mode != MP6_WS_EXTEND_RING_REFLECT) ||
+                      (!reflectUv && e->mode != MP6_WS_EXTEND_RING))) {
+        return;
+    }
     if (e == NULL) {
         HuVecF *verts = (HuVecF *)o->mesh.vertex->data;
+        HuVec2f *uvs = o->mesh.st ? (HuVec2f *)o->mesh.st->data : NULL;
         HSF_FACE *faces = (HSF_FACE *)o->mesh.face->data;
         float maxR2 = 0.0f;
         s32 i;
         s16 c;
         s16 rimCount = 0;
         s16 rimVtx[MP6_WS_EXTEND_RIM_MAX];
+        s16 ringStCount = 0;
+        s16 ringStSlot[MP6_WS_EXTEND_RIM_MAX * 2] = {0};
+        s16 ringRimSt[MP6_WS_EXTEND_RING_ST_MAX] = {0};
+        s16 ringCenterSt[MP6_WS_EXTEND_RING_ST_MAX] = {0};
+        float ringU[MP6_WS_EXTEND_RING_ST_MAX] = {0};
+        float ringV[MP6_WS_EXTEND_RING_ST_MAX] = {0};
+        float ringCenterU[MP6_WS_EXTEND_RING_ST_MAX] = {0};
+        float ringCenterV[MP6_WS_EXTEND_RING_ST_MAX] = {0};
+
+        if (reflectUv && (uvs == NULL || o->mesh.st->count <= 0)) {
+            mp6_ws_extend_refuse(objName, "reflected ring has no ST buffer");
+            return;
+        }
 
         if (o->mesh.face->count != MP6_WS_EXTEND_RIM_MAX) {
             mp6_ws_extend_refuse(objName, "fan is not exactly 16 chords");
@@ -3463,6 +5561,65 @@ void mp6_widescreen_extend_ring(int16_t modelId, const char *objName)
             mp6_ws_extend_refuse(objName, "rim vertex count != 16");
             return;
         }
+        if (reflectUv) {
+            /* Cache each authored fan-centre/rim loop pair. A shared rim
+             * vertex can carry different ST indices in adjacent chords, so
+             * deduplicate by the pair of source ST indices, not by vertex.
+             * This keeps the common 16-record case compact while preserving
+             * texture seams (up to two loops per each of the 16 chords). */
+            for (s32 f = 0; f < o->mesh.face->count; f++) {
+                s16 ci = -1;
+                s16 pSlot, qSlot;
+                for (c = 0; c < 3; c++) {
+                    BOOL isRim = FALSE;
+                    for (s16 m = 0; m < rimCount; m++) {
+                        if (rimVtx[m] == faces[f].index[c].vertex) {
+                            isRim = TRUE;
+                            break;
+                        }
+                    }
+                    if (!isRim) ci = c;
+                }
+                if (ci < 0) {
+                    mp6_ws_extend_refuse(objName, "reflected ring has no fan centre");
+                    return;
+                }
+                pSlot = (s16)((ci + 1) % 3);
+                qSlot = (s16)((ci + 2) % 3);
+                for (s16 pair = 0; pair < 2; pair++) {
+                    HSF_FACE_INDEX rim = faces[f].index[pair == 0 ? pSlot : qSlot];
+                    HSF_FACE_INDEX center = faces[f].index[ci];
+                    s16 slot = -1;
+                    if (rim.st < 0 || rim.st >= o->mesh.st->count ||
+                        center.st < 0 || center.st >= o->mesh.st->count ||
+                        !isfinite(uvs[rim.st].x) || !isfinite(uvs[rim.st].y) ||
+                        !isfinite(uvs[center.st].x) || !isfinite(uvs[center.st].y)) {
+                        mp6_ws_extend_refuse(objName, "reflected ring has invalid ST");
+                        return;
+                    }
+                    for (s16 m = 0; m < ringStCount; m++) {
+                        if (ringRimSt[m] == rim.st && ringCenterSt[m] == center.st) {
+                            slot = m;
+                            break;
+                        }
+                    }
+                    if (slot < 0) {
+                        if (ringStCount >= MP6_WS_EXTEND_RING_ST_MAX) {
+                            mp6_ws_extend_refuse(objName, "reflected ring has too many ST loops");
+                            return;
+                        }
+                        slot = ringStCount++;
+                        ringRimSt[slot] = rim.st;
+                        ringCenterSt[slot] = center.st;
+                        ringU[slot] = uvs[rim.st].x;
+                        ringV[slot] = uvs[rim.st].y;
+                        ringCenterU[slot] = uvs[center.st].x;
+                        ringCenterV[slot] = uvs[center.st].y;
+                    }
+                    ringStSlot[f * 2 + pair] = slot;
+                }
+            }
+        }
         e = mp6_ws_extend_alloc();
         if (e == NULL) {
             return;
@@ -3471,19 +5628,31 @@ void mp6_widescreen_extend_ring(int16_t modelId, const char *objName)
         e->modelId = modelId;
         e->hsf = Hu3DData[modelId].hsf;
         e->obj = o;
-        e->mode = MP6_WS_EXTEND_RING;
+        e->mode = reflectUv ? MP6_WS_EXTEND_RING_REFLECT : MP6_WS_EXTEND_RING;
         e->rimCount = rimCount;
+        e->ringStCount = ringStCount;
+        for (i = 0; i < MP6_WS_EXTEND_RIM_MAX * 2; i++) {
+            e->ringStSlot[i] = ringStSlot[i];
+        }
         for (i = 0; i < rimCount; i++) {
             e->rimVtx[i] = rimVtx[i];
             e->rimX[i] = verts[rimVtx[i]].x;
             e->rimY[i] = verts[rimVtx[i]].y;
             e->rimZ[i] = verts[rimVtx[i]].z;
         }
+        for (i = 0; i < ringStCount; i++) {
+            e->rimU[i] = ringU[i];
+            e->rimV[i] = ringV[i];
+            e->rimCenterU[i] = ringCenterU[i];
+            e->rimCenterV[i] = ringCenterV[i];
+        }
         e->nativeMin = o->mesh.mesh.min;
         e->nativeMax = o->mesh.mesh.max;
         e->baseVtx = o->mesh.vertex->count;
         e->baseSt = o->mesh.st->count;
-        if (!mp6_ws_extend_grow(modelId, o, MP6_WS_EXTEND_RIM_MAX, 0, MP6_WS_EXTEND_RIM_MAX,
+        if (!mp6_ws_extend_grow(modelId, o, MP6_WS_EXTEND_RIM_MAX,
+                                reflectUv ? ringStCount : 0,
+                                MP6_WS_EXTEND_RIM_MAX,
                                 mp6_ws_extend_write_faces_ring, e)) {
             e->obj = NULL;
             e->hsf = NULL;
@@ -3495,6 +5664,16 @@ void mp6_widescreen_extend_ring(int16_t modelId, const char *objName)
     k = mp6_widescreen_scale_factor();
     mp6_ws_extend_apply(e, k);
     GXInvalidateVtxCache();
+}
+
+void mp6_widescreen_extend_ring(int16_t modelId, const char *objName)
+{
+    mp6_ws_extend_ring_mode(modelId, objName, FALSE);
+}
+
+void mp6_widescreen_extend_ring_reflect_uv(int16_t modelId, const char *objName)
+{
+    mp6_ws_extend_ring_mode(modelId, objName, TRUE);
 }
 
 /* ==========================================================================
@@ -4225,26 +6404,12 @@ void mp6_widescreen_extend_results_set(int16_t modelId)
     GXInvalidateVtxCache();
 }
 
-/* The load-bearing cloud/star reference centre, in closed form. The
- * SHIPPED pipeline widened sora's own verts about the sky model's
- * hierarchical centre (which clouds and stars pull to +702.95) and only
- * then snapshotted model_center_x for the star/cloud repositions -- so the
- * value those repositions actually consume is k-DEPENDENT: +702.95 at
- * k=1, -439.35 at k=1.625, -544.79 at k=1.775. Under the tile treatment
- * sora's verts never widen, so that snapshot would silently change and
- * move every cloud by >1000 units. This reproduces the shipped value
- * exactly, without any phantom mutation:
- *     c0         = model_center_x(native model)          (+702.95)
- *     objBox'    = [c0 + k(objMin-c0), c0 + k(objMax-c0)] (widen about c0)
- *     centerX    = midpoint( union(all OTHER meshes' composed boxes, objBox') )
- * Verified bit-equal against the shipped-order phantom widen on the real
- * mdsel[2] data at k=1, 1.625 and 1.775 (-439.3461 / -544.7892).
- * Collapses to the plain hierarchical
- * centre at k=1 (the (k-1) term vanishes and sora's own box dominates
- * neither side), so a caller may use it unconditionally where it used
- * mp6_widescreen_model_center_x() before. Same walk composition as
- * mp6_ws_accum_bbox_r (PGObjCalc's own transform order), split into
- * "named object" vs "everything else" accumulators. */
+/* Decoration placement retains the earlier convention of measuring the
+ * centre after hypothetically widening the named backdrop. Tile extension
+ * leaves its native vertices unchanged, so derive that centre without
+ * mutating the mesh. Both branches use actual transformed vertices, not
+ * the assets' sometimes-cumulative culling boxes. At k=1 this is the
+ * ordinary native model centre. */
 typedef struct {
     const char *name;
     HuVecF otherMin, otherMax;
@@ -4269,12 +6434,14 @@ static void mp6_ws_center_widened_r(HSF_OBJECT *object, Mtx parentMtx, MP6WSCent
     mtxTransCat(mtx, t->pos.x, t->pos.y, t->pos.z);
     PSMTXConcat(parentMtx, mtx, mtx);
 
-    if (object->type == HSF_OBJ_MESH && object->mesh.vertex != NULL) {
+    if (object->type == HSF_OBJ_MESH && object->mesh.vertex != NULL
+        && object->mesh.vertex->data != NULL && object->mesh.vertex->count > 0) {
         BOOL isTarget = (object->name != NULL && strcmp(object->name, ctx->name) == 0);
         HuVecF p;
-        int corner;
-        for (corner = 0; corner < 2; corner++) {
-            PSMTXMultVec(mtx, corner == 0 ? &object->mesh.mesh.min : &object->mesh.mesh.max, &p);
+        HuVecF *vertices = object->mesh.vertex->data;
+        s32 vertex;
+        for (vertex = 0; vertex < object->mesh.vertex->count; vertex++) {
+            PSMTXMultVec(mtx, &vertices[vertex], &p);
             if (isTarget) {
                 if (!ctx->anyObj) {
                     ctx->objMinX = ctx->objMaxX = p.x;
@@ -4314,7 +6481,7 @@ float mp6_widescreen_model_center_x_widened(int16_t modelId, const char *objName
     Mtx identity;
     float k, w0, w1, u0, u1;
 
-    if (!mp6_widescreen_enabled() || modelId < 0 || objName == NULL) {
+    if (!Hu3DData || modelId < 0 || modelId >= HU3D_MODEL_MAX || objName == NULL) {
         return 0.0f;
     }
     hsf = Hu3DData[modelId].hsf;
@@ -4346,9 +6513,10 @@ static void mp6_ws_extend_reapply_all(float k)
     BOOL any = FALSE;
     for (i = 0; i < g_mp6WsExtendNum; i++) {
         MP6WSExtendEntry *e = &g_mp6WsExtend[i];
-        if (Hu3DData[e->modelId].hsf != e->hsf) {
+        if (!mp6_ws_model_live(e->modelId, e->hsf)) {
             continue; /* dead / reused modelId slot -- never resurrect */
         }
+        if (e->mode == MP6_WS_EXTEND_STRIP_RIM && e->rimApplied && e->lastRimScale == k) continue;
         mp6_ws_extend_apply(e, k);
         any = TRUE;
     }
@@ -4362,9 +6530,8 @@ static void mp6_ws_extend_reapply_all(float k)
  * src/gx/aurora_bridge.c's VIWaitForRetrace (the same site the
  * render-width refresh, mp6_widescreen_apply_render_width(), already uses),
  * so a continuous drag-resize converges every frame, not just at the next
- * scene-(re)load event. A true no-op (a for-loop over permanently-empty
- * registries) whenever widescreen is disabled -- see this file's own top
- * comment for the full default-off reasoning.
+ * scene-(re)load event. Returning to native aspect restores the baselines
+ * once; subsequent native frames skip geometry work.
  * ========================================================================== */
 static void mp6_ws_repeat_reapply_all(float k)
 {
@@ -4372,7 +6539,7 @@ static void mp6_ws_repeat_reapply_all(float k)
     BOOL any = FALSE;
     for (i = 0; i < g_mp6WsRepeatNum; i++) {
         MP6WSRepeatEntry *e = &g_mp6WsRepeat[i];
-        if (Hu3DData[e->modelId].hsf != e->hsf) {
+        if (!mp6_ws_model_live(e->modelId, e->hsf)) {
             continue; /* dead / reused modelId slot -- never resurrect */
         }
         mp6_ws_repeat_apply(e, k);
@@ -4383,18 +6550,6 @@ static void mp6_ws_repeat_reapply_all(float k)
     }
 }
 
-static void mp6_ws_camera_reapply_all(float k)
-{
-    s16 i;
-    for (i = 0; i < g_mp6WsCameraNum; i++) {
-        MP6WSCameraEntry *e = &g_mp6WsCameras[i];
-        int idx = mp6_ws_camera_bit_index(e->bit);
-        if (idx < 0 || idx >= HU3D_CAM_MAX || Hu3DCamera[idx].fov == -1.0f) {
-            continue; /* camera bit killed by its own scene's teardown -- never resurrect */
-        }
-        mp6_ws_apply_camera(e, k);
-    }
-}
 
 /* Per-frame re-apply for the two selective/border registries above --
  * same "flat loop over the already-flattened registry, no re-walk"
@@ -4405,7 +6560,7 @@ static void mp6_ws_selective_reapply_all(float k)
     BOOL any = FALSE;
     for (i = 0; i < g_mp6WsSelectiveNum; i++) {
         MP6WSSelectiveEntry *e = &g_mp6WsSelective[i];
-        if (Hu3DData[e->modelId].hsf != e->hsf) {
+        if (!mp6_ws_model_live(e->modelId, e->hsf)) {
             continue; /* dead / reused modelId slot -- never resurrect */
         }
         mp6_ws_selective_apply(e, k);
@@ -4422,7 +6577,7 @@ static void mp6_ws_border_reapply_all(float k)
     BOOL any = FALSE;
     for (i = 0; i < g_mp6WsBorderNum; i++) {
         MP6WSBorderEntry *e = &g_mp6WsBorder[i];
-        if (Hu3DData[e->modelId].hsf != e->hsf) {
+        if (!mp6_ws_model_live(e->modelId, e->hsf)) {
             continue; /* dead / reused modelId slot -- never resurrect */
         }
         mp6_ws_border_apply(e, k);
@@ -4441,7 +6596,7 @@ static void mp6_ws_reposition_reapply_all(float k)
     s16 i;
     for (i = 0; i < g_mp6WsRepositionNum; i++) {
         MP6WSRepositionEntry *e = &g_mp6WsReposition[i];
-        if (Hu3DData[e->modelId].hsf != e->hsf) {
+        if (!mp6_ws_model_live(e->modelId, e->hsf)) {
             continue; /* dead / reused modelId slot -- never resurrect */
         }
         mp6_ws_reposition_apply(e, k);
@@ -4461,7 +6616,7 @@ static void mp6_ws_split_reapply_all(float k)
     BOOL any = FALSE;
     for (i = 0; i < g_mp6WsSplitNum; i++) {
         MP6WSSplitEntry *e = &g_mp6WsSplit[i];
-        if (Hu3DData[e->modelId].hsf != e->hsf) {
+        if (!mp6_ws_model_live(e->modelId, e->hsf)) {
             continue; /* dead / reused modelId slot -- never resurrect */
         }
         mp6_ws_split_apply(e, k);
@@ -4472,31 +6627,707 @@ static void mp6_ws_split_reapply_all(float k)
     }
 }
 
+/* ==========================================================================
+ * Outer-edge X extension of a flat backdrop card, wall strip or bed
+ * ==========================================================================
+ * Only the vertices on a mesh's outermost planes along its model-X axis
+ * move (both, or only the left/right one for a half that meets its twin),
+ * outward by min(reach*(k-1), limit) local units; every interior vertex,
+ * face and texture record stays native. The model-X axis is whichever
+ * local axis the object's rotation turns closest to model X, so a bed
+ * authored lengthwise along Z still grows sideways on screen. Each moved
+ * corner's ST follows its own face's planar texture gradient, so a REPEAT
+ * texture keeps its native texel density and simply continues (no
+ * stretch, no mirror). `tile` also lets a CLAMP mesh continue by switching
+ * its attribute to REPEAT while widened; that is for art whose two ends
+ * nearly meet (small seam) and is restored at 4:3. Without `tile`, CLAMP
+ * end panels stretch instead. Faces lying across the axis (end caps) only
+ * translate. An ST index shared between an outer and an interior corner,
+ * or between faces with different gradients, is refused rather than
+ * guessed. Snapshots are fixed arrays inside the entry, never host-heap
+ * memory, so a savestate restore cannot leave a dangling native copy. */
+#define MP6_WS_OUTER_X_MAX 8
+#define MP6_WS_OUTER_X_VERTS 128
+typedef struct {
+    HU3D_MODELID modelId;
+    HSF_DATA *hsf;
+    HSF_OBJECT *obj;
+    HSF_ATTRIBUTE *attr;   /* switched to REPEAT while widened (tile only) */
+    u32 nativeWrapS;
+    float reach, limit;
+    s32 axis;              /* local axis that maps to model X */
+    s32 vtxCount, stCount;
+    HuVecF *vtx;
+    HuVec2f *st;
+    float nativeC[MP6_WS_OUTER_X_VERTS];   /* native coordinate on `axis` */
+    s8 side[MP6_WS_OUTER_X_VERTS];         /* -1 low plane, +1 high, 0 interior */
+    HuVec2f nativeSt[MP6_WS_OUTER_X_VERTS];
+    HuVec2f stSlope[MP6_WS_OUTER_X_VERTS]; /* ST change per outward unit */
+    HuVecF nativeMin, nativeMax;
+} MP6WSOuterXEntry;
+static MP6WSOuterXEntry g_mp6WsOuterX[MP6_WS_OUTER_X_MAX];
+static s16 g_mp6WsOuterXNum = 0;
+
+static float *mp6_ws_outer_x_coord(HuVecF *v, s32 axis)
+{
+    return axis == 0 ? &v->x : axis == 1 ? &v->y : &v->z;
+}
+
+static void mp6_ws_outer_x_apply(MP6WSOuterXEntry *e, float k)
+{
+    float d = k > 1.0f ? e->reach * (k - 1.0f) : 0.0f;
+    s32 i;
+    if (e->limit > 0.0f && d > e->limit) d = e->limit;
+    for (i = 0; i < e->vtxCount; ++i)
+        *mp6_ws_outer_x_coord(&e->vtx[i], e->axis) = e->nativeC[i] + e->side[i] * d;
+    for (i = 0; i < e->stCount; ++i) {
+        e->st[i].x = e->nativeSt[i].x + e->stSlope[i].x * d;
+        e->st[i].y = e->nativeSt[i].y + e->stSlope[i].y * d;
+    }
+    /* Conservative culling box. */
+    *mp6_ws_outer_x_coord(&e->obj->mesh.mesh.min, e->axis) = *mp6_ws_outer_x_coord(&e->nativeMin, e->axis) - d;
+    *mp6_ws_outer_x_coord(&e->obj->mesh.mesh.max, e->axis) = *mp6_ws_outer_x_coord(&e->nativeMax, e->axis) + d;
+    if (e->attr) e->attr->wrapS = d > 0.0f ? TRUE : e->nativeWrapS;
+}
+
+static void mp6_ws_outer_x_reapply_all(float k)
+{
+    BOOL any = FALSE;
+    s16 i;
+    for (i = 0; i < g_mp6WsOuterXNum; ++i) {
+        MP6WSOuterXEntry *e = &g_mp6WsOuterX[i];
+        if (e->obj == NULL || !mp6_ws_model_live(e->modelId, e->hsf)) continue;
+        mp6_ws_outer_x_apply(e, k);
+        any = TRUE;
+    }
+    if (any) GXInvalidateVtxCache();
+}
+
+/* Planar ST gradient along `axis` for one TRI/QUAD: least squares of
+ * st = a*u + b*w + c, where u is the axis coordinate and w the face's
+ * other in-plane axis. */
+static BOOL mp6_ws_outer_x_face_slope(HuVecF *v, const HuVec2f *st, const HSF_FACE *face,
+                                      int count, s32 axis, HuVec2f *out)
+{
+    HuVecF p0 = v[face->index[0].vertex], p1 = v[face->index[1].vertex], p2 = v[face->index[2].vertex];
+    HuVecF a = {p1.x - p0.x, p1.y - p0.y, p1.z - p0.z}, b = {p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+    HuVecF n = {fabsf(a.y * b.z - a.z * b.y), fabsf(a.z * b.x - a.x * b.z), fabsf(a.x * b.y - a.y * b.x)};
+    s32 other1 = (axis + 1) % 3, other2 = (axis + 2) % 3, w;
+    double m[3][3] = {{0}}, rs[3] = {0}, rt[3] = {0};
+    int c, i, j;
+    out->x = out->y = 0.0f;
+    if (*mp6_ws_outer_x_coord(&n, axis) >= *mp6_ws_outer_x_coord(&n, other1) &&
+        *mp6_ws_outer_x_coord(&n, axis) >= *mp6_ws_outer_x_coord(&n, other2))
+        return TRUE; /* end cap: the axis coordinate is constant, nothing to continue */
+    /* The in-plane partner is the remaining axis the normal leans on least. */
+    w = *mp6_ws_outer_x_coord(&n, other1) >= *mp6_ws_outer_x_coord(&n, other2) ? other2 : other1;
+    for (c = 0; c < count; ++c) {
+        HuVecF p = v[face->index[c].vertex];
+        HuVec2f t = st[face->index[c].st];
+        double r[3] = {*mp6_ws_outer_x_coord(&p, axis), *mp6_ws_outer_x_coord(&p, w), 1.0};
+        for (i = 0; i < 3; ++i) {
+            for (j = 0; j < 3; ++j) m[i][j] += r[i] * r[j];
+            rs[i] += r[i] * t.x;
+            rt[i] += r[i] * t.y;
+        }
+    }
+    /* Cramer's rule for the axis coefficient only. */
+    double det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+               - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+               + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if (fabs(det) < 1e-6) return FALSE;
+    double ds = rs[0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+              - m[0][1] * (rs[1] * m[2][2] - m[1][2] * rs[2])
+              + m[0][2] * (rs[1] * m[2][1] - m[1][1] * rs[2]);
+    double dt = rt[0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+              - m[0][1] * (rt[1] * m[2][2] - m[1][2] * rt[2])
+              + m[0][2] * (rt[1] * m[2][1] - m[1][1] * rt[2]);
+    out->x = (float)(ds / det);
+    out->y = (float)(dt / det);
+    return isfinite(out->x) && isfinite(out->y);
+}
+
+void mp6_widescreen_extend_outer_x(int16_t modelId, const char *objName, int occurrence,
+                                   int sides, float reach, float limit, int tile)
+{
+    MP6WSOuterXEntry pending;
+    MP6WSOuterXEntry *e = NULL;
+    HSF_OBJECT *o;
+    HSF_DATA *hsf;
+    HuVecF *v;
+    HuVec2f *st;
+    HSF_FACE *faces;
+    Mtx rot;
+    float lo = INFINITY, hi = -INFINITY, best = -1.0f;
+    BOOL stSet[MP6_WS_OUTER_X_VERTS] = {0};
+    BOOL stInner[MP6_WS_OUTER_X_VERTS] = {0};
+    s32 i, axis = 0, stCount;
+    s16 n;
+
+    if (!isfinite(reach) || reach <= 0.0f || !isfinite(limit) || limit < 0.0f) return;
+    o = mp6_ws_extend_locate_mesh_at(modelId, objName, FALSE, occurrence);
+    if (o == NULL) return;
+    hsf = Hu3DData[modelId].hsf;
+    for (n = 0; n < g_mp6WsOuterXNum; ++n) {
+        e = &g_mp6WsOuterX[n];
+        if (e->obj == o && mp6_ws_model_live(e->modelId, e->hsf)) {
+            mp6_ws_outer_x_apply(e, mp6_widescreen_scale_factor());
+            return;
+        }
+    }
+    e = NULL;
+    /* An untextured (vertex-coloured) card has no ST buffer; only its
+     * positions move. */
+    stCount = o->mesh.st && o->mesh.st->data ? o->mesh.st->count : 0;
+    if (o->mesh.vertex->count > MP6_WS_OUTER_X_VERTS || stCount > MP6_WS_OUTER_X_VERTS) {
+        mp6_ws_extend_refuse(objName, "outer-x: too many vertices");
+        return;
+    }
+    v = o->mesh.vertex->data;
+    st = stCount > 0 ? o->mesh.st->data : NULL;
+    faces = o->mesh.face->data;
+    memset(&pending, 0, sizeof(pending));
+    /* sides names the model-space side. Pick the local axis the object's
+     * rotation turns closest to model X; a turned-around or mirrored axis
+     * points left, so its sides swap. */
+    mtxRot(rot, o->mesh.base.rot.x, o->mesh.base.rot.y, o->mesh.base.rot.z);
+    for (i = 0; i < 3; ++i) {
+        if (fabsf(rot[0][i]) > best) {
+            best = fabsf(rot[0][i]);
+            axis = i;
+        }
+    }
+    if (best < 0.9f) {
+        mp6_ws_extend_refuse(objName, "outer-x: no local axis along model X");
+        return;
+    }
+    if (rot[0][axis] * *mp6_ws_outer_x_coord(&o->mesh.base.scale, axis) < 0.0f) sides = -sides;
+    for (i = 0; i < o->mesh.vertex->count; ++i) {
+        float c = *mp6_ws_outer_x_coord(&v[i], axis);
+        if (!isfinite(c)) return;
+        if (c < lo) lo = c;
+        if (c > hi) hi = c;
+    }
+    if (!(hi - lo > 1.0f)) return;
+    for (i = 0; i < o->mesh.vertex->count; ++i) {
+        float c = *mp6_ws_outer_x_coord(&v[i], axis);
+        pending.nativeC[i] = c;
+        pending.side[i] = sides >= 0 && fabsf(c - hi) < 0.02f ? 1
+                        : sides <= 0 && fabsf(c - lo) < 0.02f ? -1 : 0;
+    }
+    for (i = 0; i < stCount; ++i) pending.nativeSt[i] = st[i];
+    for (i = 0; i < o->mesh.face->count; ++i) {
+        HSF_FACE *face = &faces[i];
+        HSF_ATTRIBUTE *attr = NULL;
+        int count = mp6_ws_terrain_corners(face), c;
+        HuVec2f slope;
+        if (!count) { mp6_ws_extend_refuse(objName, "outer-x: TRI/QUAD faces only"); return; }
+        for (c = 0; c < count; ++c) {
+            HSF_FACE_INDEX id = face->index[c];
+            if (id.vertex < 0 || id.vertex >= o->mesh.vertex->count ||
+                (stCount > 0 && (id.st < 0 || id.st >= stCount))) return;
+        }
+        if (stCount <= 0) continue;
+        if (!mp6_ws_outer_x_face_slope(v, st, face, count, axis, &slope)) {
+            mp6_ws_extend_refuse(objName, "outer-x: degenerate face");
+            return;
+        }
+        if (o->mesh.material && (face->mat & 0xFFF) < hsf->materialNum) {
+            HSF_MATERIAL *m = &o->mesh.material[face->mat & 0xFFF];
+            if (m->attrNum && m->attr[0] >= 0 && m->attr[0] < hsf->attributeNum)
+                attr = &hsf->attribute[m->attr[0]];
+        }
+        if (!tile && attr && attr->wrapS != TRUE)
+            slope.x = slope.y = 0.0f; /* CLAMP art: stretch the end panel instead */
+        if (tile && attr && pending.attr == NULL) pending.attr = attr;
+        for (c = 0; c < count; ++c) {
+            HSF_FACE_INDEX id = face->index[c];
+            s8 side = pending.side[id.vertex];
+            HuVec2f s = {slope.x * side, slope.y * side};
+            if (side == 0) { stInner[id.st] = TRUE; continue; }
+            if (stSet[id.st] && (fabsf(pending.stSlope[id.st].x - s.x) > 1e-5f ||
+                                 fabsf(pending.stSlope[id.st].y - s.y) > 1e-5f)) {
+                mp6_ws_extend_refuse(objName, "outer-x: ST shared across gradients");
+                return;
+            }
+            stSet[id.st] = TRUE;
+            pending.stSlope[id.st] = s;
+        }
+    }
+    for (i = 0; i < stCount; ++i) {
+        if (stSet[i] && stInner[i] && (pending.stSlope[i].x != 0.0f || pending.stSlope[i].y != 0.0f)) {
+            mp6_ws_extend_refuse(objName, "outer-x: ST shared with an interior corner");
+            return;
+        }
+    }
+    for (n = 0; n < g_mp6WsOuterXNum && !e; ++n)
+        if (g_mp6WsOuterX[n].obj == NULL || !mp6_ws_model_live(g_mp6WsOuterX[n].modelId, g_mp6WsOuterX[n].hsf))
+            e = &g_mp6WsOuterX[n];
+    if (!e && g_mp6WsOuterXNum < MP6_WS_OUTER_X_MAX) e = &g_mp6WsOuterX[g_mp6WsOuterXNum++];
+    if (!e) return;
+    pending.modelId = modelId;
+    pending.hsf = hsf;
+    pending.obj = o;
+    pending.reach = reach;
+    pending.limit = limit;
+    pending.axis = axis;
+    pending.vtxCount = o->mesh.vertex->count;
+    pending.stCount = stCount;
+    pending.vtx = v;
+    pending.st = st;
+    pending.nativeMin = o->mesh.mesh.min;
+    pending.nativeMax = o->mesh.mesh.max;
+    if (pending.attr) pending.nativeWrapS = pending.attr->wrapS;
+    *e = pending;
+    mp6_ws_outer_x_apply(e, mp6_widescreen_scale_factor());
+    GXInvalidateVtxCache();
+}
+
+/* ==========================================================================
+ * Stems for flower heads that only a wide view shows
+ * ==========================================================================
+ * Some scenery gives stems only to the flower heads inside the 4:3 frame;
+ * heads past the native edge float once a wider view reveals them. Each
+ * stem is one connected piece of the stem mesh. For every head face in
+ * `headName` with no stem top within `headRadius` (model X/Z) of its
+ * centre, this appends a copy of the stem whose top height best matches
+ * the head's base, moved in model X/Z to sit under that head. Native
+ * faces, vertices and the heads stay untouched; heads that already have a
+ * stem (including earlier copies) are skipped, so a repeated call is a
+ * no-op. Copies reuse the source faces' normal/colour/ST indices. */
+#define MP6_WS_STEM_VERTS 256
+#define MP6_WS_STEM_PIECES 32
+#define MP6_WS_STEM_NEW 32
+#define MP6_WS_STEM_SEAT 0.4f /* fraction of the head quad's height */
+typedef struct {
+    s32 baseVtx, baseFace;
+    s32 pieces;                         /* copies to append */
+    s32 source[MP6_WS_STEM_NEW];        /* stem piece each copy duplicates */
+    HuVecF localMove[MP6_WS_STEM_NEW];  /* stem-local translation of the copy */
+    HuVecF modelTop[MP6_WS_STEM_NEW];   /* model-space top of the copy */
+    s16 pieceOf[MP6_WS_STEM_VERTS];     /* vertex -> piece */
+    s16 vertexMap[MP6_WS_STEM_NEW][MP6_WS_STEM_VERTS];
+    s32 faceCount[MP6_WS_STEM_PIECES];
+    s32 vtxCount[MP6_WS_STEM_PIECES];
+} MP6WSStemPlan;
+static MP6WSStemPlan g_mp6WsStemPlan;
+
+/* The object's rest transform composed with every parent's, i.e. its
+ * vertices' model-space mapping (same composition as mp6_ws_accum_bbox_r). */
+static BOOL mp6_ws_stem_object_mtx_r(HSF_OBJECT *object, Mtx parentMtx, const HSF_OBJECT *target, Mtx out)
+{
+    Mtx rotMtx, mtx;
+    HSF_TRANSFORM *t;
+    u32 i;
+
+    if (object == NULL || object->type == HSF_OBJ_CAMERA || object->type == HSF_OBJ_LIGHT) return FALSE;
+    t = &object->mesh.base;
+    mtxRot(rotMtx, t->rot.x, t->rot.y, t->rot.z);
+    PSMTXScale(mtx, t->scale.x, t->scale.y, t->scale.z);
+    PSMTXConcat(rotMtx, mtx, mtx);
+    mtxTransCat(mtx, t->pos.x, t->pos.y, t->pos.z);
+    PSMTXConcat(parentMtx, mtx, mtx);
+    if (object == target) {
+        PSMTXCopy(mtx, out);
+        return TRUE;
+    }
+    if (object->type == HSF_OBJ_REPLICA) return FALSE;
+    for (i = 0; i < object->mesh.childNum; i++)
+        if (mp6_ws_stem_object_mtx_r(object->mesh.child[i], mtx, target, out)) return TRUE;
+    return FALSE;
+}
+
+static BOOL mp6_ws_stem_object_mtx(HSF_DATA *hsf, HSF_OBJECT *o, Mtx out)
+{
+    Mtx identity;
+    PSMTXIdentity(identity);
+    return hsf->root != NULL && mp6_ws_stem_object_mtx_r(hsf->root, identity, o, out);
+}
+
+static void mp6_ws_stem_write_faces(MP6WSExtendEntry *unused, HSF_FACE *tail, const HSF_FACE *nativeFaces)
+{
+    MP6WSStemPlan *plan = &g_mp6WsStemPlan;
+    s32 copy, f, c, out = 0;
+    (void)unused;
+    for (copy = 0; copy < plan->pieces; ++copy) {
+        for (f = 0; f < plan->baseFace; ++f) {
+            const HSF_FACE *src = &nativeFaces[f];
+            int count = mp6_ws_terrain_corners(src);
+            if (plan->pieceOf[src->index[0].vertex] != plan->source[copy]) continue;
+            tail[out] = *src;
+            for (c = 0; c < count; ++c)
+                tail[out].index[c].vertex = plan->vertexMap[copy][src->index[c].vertex];
+            ++out;
+        }
+    }
+}
+
+static BOOL mp6_ws_stem_near(HuVecF top, HuVecF centre, float radius)
+{
+    float dx = top.x - centre.x, dz = top.z - centre.z;
+    return dx * dx + dz * dz <= radius * radius;
+}
+
+void mp6_widescreen_add_stems(int16_t modelId, const char *stemName, const char *headName,
+                              float headRadius)
+{
+    MP6WSStemPlan *plan = &g_mp6WsStemPlan;
+    HSF_DATA *hsf;
+    HSF_OBJECT *stem, *head = NULL;
+    HuVecF *sv, *hv;
+    HSF_FACE *faces;
+    Mtx stemMtx, stemInv, headMtx;
+    HuVecF topModel[MP6_WS_STEM_PIECES], topLocal[MP6_WS_STEM_PIECES];
+    s16 remap[MP6_WS_STEM_VERTS];
+    s32 pieceCount = 0, newVtx = 0, newFaces = 0, i, f, c, h, copy, next;
+    BOOL changed = TRUE;
+
+    if (!isfinite(headRadius) || headRadius <= 0.0f || headName == NULL) return;
+    stem = mp6_ws_extend_locate_mesh_at(modelId, stemName, FALSE, 0);
+    if (stem == NULL) return;
+    hsf = Hu3DData[modelId].hsf;
+    for (i = 0; i < hsf->objectNum; ++i) {
+        HSF_OBJECT *o = &hsf->object[i];
+        if (o->type == HSF_OBJ_MESH && o->name && strcmp(o->name, headName) == 0 &&
+            o->mesh.vertex && o->mesh.vertex->data && o->mesh.face && o->mesh.face->data) {
+            head = o;
+            break;
+        }
+    }
+    if (head == NULL || stem->mesh.vertex->count > MP6_WS_STEM_VERTS) return;
+    memset(plan, 0, sizeof(*plan));
+    sv = stem->mesh.vertex->data;
+    faces = stem->mesh.face->data;
+    plan->baseVtx = stem->mesh.vertex->count;
+    plan->baseFace = stem->mesh.face->count;
+    /* Split the stem mesh into connected pieces: every face's corners join
+     * the lowest piece id among them until nothing changes. */
+    for (i = 0; i < plan->baseVtx; ++i) plan->pieceOf[i] = (s16)i;
+    while (changed) {
+        changed = FALSE;
+        for (f = 0; f < plan->baseFace; ++f) {
+            int count = mp6_ws_terrain_corners(&faces[f]);
+            s16 low = 0x7FFF;
+            if (!count) { mp6_ws_extend_refuse(stemName, "stems: TRI/QUAD faces only"); return; }
+            for (c = 0; c < count; ++c) {
+                s16 id = faces[f].index[c].vertex;
+                if (id < 0 || id >= plan->baseVtx) return;
+                if (plan->pieceOf[id] < low) low = plan->pieceOf[id];
+            }
+            for (c = 0; c < count; ++c) {
+                s16 id = faces[f].index[c].vertex;
+                if (plan->pieceOf[id] != low) { plan->pieceOf[id] = low; changed = TRUE; }
+            }
+        }
+    }
+    /* Dense piece ids, and each piece's top (highest model-space vertex). */
+    if (!mp6_ws_stem_object_mtx(hsf, stem, stemMtx) || !PSMTXInverse(stemMtx, stemInv)) return;
+    for (i = 0; i < plan->baseVtx; ++i) remap[i] = -1;
+    for (i = 0; i < plan->baseVtx; ++i) {
+        s16 root = plan->pieceOf[i];
+        HuVecF world;
+        if (remap[root] < 0) {
+            if (pieceCount == MP6_WS_STEM_PIECES) return;
+            remap[root] = (s16)pieceCount;
+            topModel[pieceCount].y = -INFINITY;
+            pieceCount++;
+        }
+        plan->pieceOf[i] = remap[root];
+        PSMTXMultVec(stemMtx, &sv[i], &world);
+        if (world.y > topModel[plan->pieceOf[i]].y) {
+            topModel[plan->pieceOf[i]] = world;
+            topLocal[plan->pieceOf[i]] = sv[i];
+        }
+        plan->vtxCount[plan->pieceOf[i]]++;
+    }
+    for (f = 0; f < plan->baseFace; ++f) plan->faceCount[plan->pieceOf[faces[f].index[0].vertex]]++;
+    /* Every head quad without a stem top under it gets the best-height copy. */
+    hv = head->mesh.vertex->data;
+    if (!mp6_ws_stem_object_mtx(hsf, head, headMtx)) return;
+    for (h = 0; h < head->mesh.face->count; ++h) {
+        const HSF_FACE *face = &((HSF_FACE *)head->mesh.face->data)[h];
+        int corners = mp6_ws_terrain_corners(face);
+        HuVecF centre = {0.0f, INFINITY, 0.0f}, corner, target, local;
+        float headTop = -INFINITY, seat;
+        s32 best = -1;
+        float bestGap = INFINITY;
+        BOOL seated = FALSE;
+        if (!corners) continue;
+        for (c = 0; c < corners; ++c) {
+            s16 id = face->index[c].vertex;
+            if (id < 0 || id >= head->mesh.vertex->count) break;
+            PSMTXMultVec(headMtx, &hv[id], &corner);
+            centre.x += corner.x / corners;
+            centre.z += corner.z / corners;
+            if (corner.y < centre.y) centre.y = corner.y;
+            if (corner.y > headTop) headTop = corner.y;
+        }
+        if (c < corners) continue;
+        /* The bloom's visible petals start a little above its quad's base and
+         * cover its middle; a stem tip there hides behind them. */
+        seat = centre.y + MP6_WS_STEM_SEAT * (headTop - centre.y);
+        for (i = 0; i < pieceCount && !seated; ++i) seated = mp6_ws_stem_near(topModel[i], centre, headRadius);
+        for (i = 0; i < plan->pieces && !seated; ++i) seated = mp6_ws_stem_near(plan->modelTop[i], centre, headRadius);
+        if (seated) continue;
+        for (i = 0; i < pieceCount; ++i) {
+            float gap = fabsf(topModel[i].y - seat);
+            if (gap < bestGap) { bestGap = gap; best = i; }
+        }
+        if (best < 0 || plan->pieces == MP6_WS_STEM_NEW) break;
+        /* Move the copy's top under the head centre; a stem taller than the
+         * seat sinks into the bed rather than poking through the bloom. */
+        target.x = centre.x;
+        target.y = topModel[best].y < seat ? topModel[best].y : seat;
+        target.z = centre.z;
+        PSMTXMultVec(stemInv, &target, &local);
+        plan->source[plan->pieces] = best;
+        plan->localMove[plan->pieces].x = local.x - topLocal[best].x;
+        plan->localMove[plan->pieces].y = local.y - topLocal[best].y;
+        plan->localMove[plan->pieces].z = local.z - topLocal[best].z;
+        plan->modelTop[plan->pieces] = target;
+        if (getenv("MP6_WS_HSF_DIAG"))
+            printf("[MP6-WS-STEM] %s/%s head=(%.1f,%.1f,%.1f) stem=%d top=(%.1f,%.1f,%.1f)\n", stemName, headName,
+                   centre.x, centre.y, centre.z, (int)best, topModel[best].x, topModel[best].y, topModel[best].z);
+        newVtx += plan->vtxCount[best];
+        newFaces += plan->faceCount[best];
+        plan->pieces++;
+    }
+    if (plan->pieces == 0) return;
+    if (plan->baseVtx + newVtx > MP6_WS_STEM_VERTS) {
+        mp6_ws_extend_refuse(stemName, "stems: too many vertices");
+        return;
+    }
+    next = plan->baseVtx;
+    for (copy = 0; copy < plan->pieces; ++copy)
+        for (i = 0; i < plan->baseVtx; ++i)
+            if (plan->pieceOf[i] == plan->source[copy]) plan->vertexMap[copy][i] = (s16)next++;
+    if (!mp6_ws_extend_grow(modelId, stem, newVtx, 0, newFaces, mp6_ws_stem_write_faces, NULL)) return;
+    sv = stem->mesh.vertex->data;
+    for (copy = 0; copy < plan->pieces; ++copy) {
+        HuVecF move = plan->localMove[copy];
+        for (i = 0; i < plan->baseVtx; ++i) {
+            HuVecF p;
+            if (plan->pieceOf[i] != plan->source[copy]) continue;
+            p = sv[i];
+            p.x += move.x;
+            p.y += move.y;
+            p.z += move.z;
+            sv[plan->vertexMap[copy][i]] = p;
+            if (p.x < stem->mesh.mesh.min.x) stem->mesh.mesh.min.x = p.x;
+            if (p.z < stem->mesh.mesh.min.z) stem->mesh.mesh.min.z = p.z;
+            if (p.x > stem->mesh.mesh.max.x) stem->mesh.mesh.max.x = p.x;
+            if (p.z > stem->mesh.mesh.max.z) stem->mesh.mesh.max.z = p.z;
+        }
+    }
+    GXInvalidateVtxCache();
+}
+
+/* ==========================================================================
+ * Mirrored continuation of scenery cut off just past the 4:3 frame
+ * ==========================================================================
+ * Appends one reflected copy of a whole mesh across the local plane
+ * `axis` = `plane` (0/1/2 = X/Y/Z), so a walkway that simply ends where the
+ * native view stopped instead continues into its own mirror image. Every
+ * face is copied with its corners reflected and its winding reversed, so
+ * the copy faces the same way; ST, colour and normal indices are reused
+ * (the reflected copy keeps the source's texture and its top surfaces'
+ * lighting). The native faces and vertices are untouched, and a mesh
+ * already mirrored this way is left alone, so a repeated call is a no-op.
+ * Only for scenery whose cut lies outside the native frame. */
+#define MP6_WS_MIRROR_MESH_MAX 8
+typedef struct {
+    HU3D_MODELID modelId;
+    HSF_DATA *hsf;
+    HSF_OBJECT *obj;
+} MP6WSMirroredMesh;
+static MP6WSMirroredMesh g_mp6WsMirrored[MP6_WS_MIRROR_MESH_MAX];
+static s32 g_mp6WsMirrorBaseVtx, g_mp6WsMirrorFaceCount;
+
+static void mp6_ws_mirror_write_faces(MP6WSExtendEntry *unused, HSF_FACE *tail, const HSF_FACE *nativeFaces)
+{
+    s32 f, c, count = g_mp6WsMirrorFaceCount;
+    (void)unused;
+    for (f = 0; f < count; ++f) {
+        HSF_FACE_INDEX swap;
+        int corners = mp6_ws_terrain_corners(&nativeFaces[f]);
+        tail[f] = nativeFaces[f];
+        for (c = 0; c < corners; ++c) tail[f].index[c].vertex += (s16)g_mp6WsMirrorBaseVtx;
+        /* TRIs and strip-ordered QUADs both reverse by swapping corners 1 and 2. */
+        swap = tail[f].index[1];
+        tail[f].index[1] = tail[f].index[2];
+        tail[f].index[2] = swap;
+    }
+}
+
+void mp6_widescreen_mirror_mesh(int16_t modelId, const char *objName, int occurrence,
+                                int axis, float plane)
+{
+    HSF_OBJECT *o;
+    HSF_DATA *hsf;
+    HSF_FACE *faces;
+    HuVecF *v;
+    s32 i, slot = -1, count;
+
+    if (axis < 0 || axis > 2 || !isfinite(plane)) return;
+    o = mp6_ws_extend_locate_mesh_at(modelId, objName, FALSE, occurrence);
+    if (o == NULL) return;
+    hsf = Hu3DData[modelId].hsf;
+    for (i = 0; i < MP6_WS_MIRROR_MESH_MAX; ++i) {
+        MP6WSMirroredMesh *m = &g_mp6WsMirrored[i];
+        BOOL live = m->obj != NULL && mp6_ws_model_live(m->modelId, m->hsf);
+        if (live && m->obj == o) return;
+        if (slot < 0 && !live) slot = i;
+    }
+    if (slot < 0) return;
+    faces = o->mesh.face->data;
+    count = o->mesh.face->count;
+    if (o->mesh.vertex->count * 2 > 32767) return;
+    for (i = 0; i < count; ++i) {
+        if (!mp6_ws_terrain_corners(&faces[i])) {
+            mp6_ws_extend_refuse(objName, "mirror: TRI/QUAD faces only");
+            return;
+        }
+    }
+    g_mp6WsMirrorBaseVtx = o->mesh.vertex->count;
+    g_mp6WsMirrorFaceCount = count;
+    if (!mp6_ws_extend_grow(modelId, o, o->mesh.vertex->count, 0, count, mp6_ws_mirror_write_faces, NULL)) return;
+    v = o->mesh.vertex->data;
+    for (i = 0; i < g_mp6WsMirrorBaseVtx; ++i) {
+        HuVecF p = v[i];
+        float *coord = axis == 0 ? &p.x : axis == 1 ? &p.y : &p.z;
+        *coord = 2.0f * plane - *coord;
+        v[g_mp6WsMirrorBaseVtx + i] = p;
+    }
+    {
+        float *lo = axis == 0 ? &o->mesh.mesh.min.x : axis == 1 ? &o->mesh.mesh.min.y : &o->mesh.mesh.min.z;
+        float *hi = axis == 0 ? &o->mesh.mesh.max.x : axis == 1 ? &o->mesh.mesh.max.y : &o->mesh.mesh.max.z;
+        float rlo = 2.0f * plane - *hi, rhi = 2.0f * plane - *lo;
+        if (rlo < *lo) *lo = rlo;
+        if (rhi > *hi) *hi = rhi;
+    }
+    g_mp6WsMirrored[slot].modelId = modelId;
+    g_mp6WsMirrored[slot].hsf = hsf;
+    g_mp6WsMirrored[slot].obj = o;
+    GXInvalidateVtxCache();
+}
+
 void mp6_widescreen_reapply(void)
 {
+    static float previousScale = -1.0f;
     float k;
     s16 i;
 
-    if (!mp6_widescreen_enabled()) {
-        return;
-    }
+    mp6_widescreen_camera_reapply();
+    mp6_widescreen_motion_reapply();
+
     k = mp6_widescreen_scale_factor();
+    /* Native registrations already applied their exact baselines. Do no
+     * repeated geometry work while off, but restore once when leaving wide. */
+    if (k == 1.0f && previousScale == 1.0f) return;
+    previousScale = k;
+
+    for (i = 0; i < g_mp6WsFloorDupNum; ++i) {
+        MP6WSFloorDupEntry *e = &g_mp6WsFloorDup[i];
+        if (!mp6_ws_model_live(e->dupModelId, e->dupHsf)) continue;
+        if (k > 1.0f) Hu3DModelAttrReset(e->dupModelId, HU3D_ATTR_DISPOFF);
+        else Hu3DModelAttrSet(e->dupModelId, HU3D_ATTR_DISPOFF);
+    }
 
     for (i = 0; i < g_mp6WsModelNum; i++) {
         MP6WSModelEntry *e = &g_mp6WsModels[i];
-        if (Hu3DData[e->modelId].hsf != e->hsf) {
+        if (!mp6_ws_model_live(e->modelId, e->hsf)) {
             continue; /* dead / reused modelId slot -- never resurrect */
         }
         mp6_ws_apply_model_from_native(e, k);
     }
 
     mp6_ws_repeat_reapply_all(k);
-    mp6_ws_camera_reapply_all(k);
     mp6_ws_selective_reapply_all(k);
     mp6_ws_border_reapply_all(k);
     mp6_ws_split_reapply_all(k);
     mp6_ws_reposition_reapply_all(k);
     mp6_ws_extend_reapply_all(k); /* tile/mirror/ring companions */
+    mp6_ws_outer_x_reapply_all(k);
+}
+
+void mp6_widescreen_forget_model(int16_t modelId)
+{
+    s16 i;
+    mp6_widescreen_tile_forget(modelId);
+    mp6_widescreen_motion_forget(modelId);
+    /* Never touch the arena arrays here: links can still share them, and
+     * Hu3DModelKill owns their lifetime. Only these native snapshots use
+     * malloc. Invalidation must happen even when widescreen is now off. */
+    for (i = 0; i < g_mp6WsModelNum; ++i) {
+        if (g_mp6WsModels[i].modelId == modelId) {
+            g_mp6WsModels[i].hsf = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsRepeatNum; ++i) {
+        MP6WSRepeatEntry *e = &g_mp6WsRepeat[i];
+        if (e->modelId == modelId) {
+            free(e->native);
+            e->native = NULL;
+            e->hsf = NULL;
+            e->ptr = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsSelectiveNum; ++i) {
+        MP6WSSelectiveEntry *e = &g_mp6WsSelective[i];
+        if (e->modelId == modelId) {
+            free(e->native);
+            e->native = NULL;
+            e->hsf = NULL;
+            e->ptr = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsBorderNum; ++i) {
+        MP6WSBorderEntry *e = &g_mp6WsBorder[i];
+        if (e->modelId == modelId) {
+            free(e->native);
+            e->native = NULL;
+            e->hsf = NULL;
+            e->ptr = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsSplitNum; ++i) {
+        MP6WSSplitEntry *e = &g_mp6WsSplit[i];
+        if (e->modelId == modelId) {
+            free(e->native);
+            e->native = NULL;
+            e->hsf = NULL;
+            e->ptr = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsRepositionNum; ++i) {
+        if (g_mp6WsReposition[i].modelId == modelId) {
+            g_mp6WsReposition[i].hsf = NULL;
+            g_mp6WsReposition[i].obj = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsExtendNum; ++i) {
+        if (g_mp6WsExtend[i].modelId == modelId) {
+            g_mp6WsExtend[i].hsf = NULL;
+            g_mp6WsExtend[i].obj = NULL;
+        }
+    }
+    for (i = 0; i < MP6_WS_MIRROR_MESH_MAX; ++i) {
+        if (g_mp6WsMirrored[i].modelId == modelId) {
+            g_mp6WsMirrored[i].hsf = NULL;
+            g_mp6WsMirrored[i].obj = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsOuterXNum; ++i) {
+        if (g_mp6WsOuterX[i].modelId == modelId) {
+            g_mp6WsOuterX[i].hsf = NULL;
+            g_mp6WsOuterX[i].obj = NULL;
+        }
+    }
+    for (i = 0; i < g_mp6WsFloorDupNum; ++i) {
+        if (g_mp6WsFloorDup[i].dupModelId == modelId) {
+            g_mp6WsFloorDup[i].dupHsf = NULL;
+        }
+    }
 }
 
 void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label)
@@ -4553,9 +7384,22 @@ void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label)
          * whether that other object's own name matched the caller's
          * predicate -- a real risk this print makes directly checkable
          * instead of assumed away. */
+        HuVecF rawMin = {0}, rawMax = {0};
+        if (o->mesh.vertex && o->mesh.vertex->data && o->mesh.vertex->count > 0) {
+            HuVecF *v = o->mesh.vertex->data;
+            rawMin = rawMax = v[0];
+            for (s32 j = 1; j < o->mesh.vertex->count; ++j) {
+                if (v[j].x < rawMin.x) rawMin.x = v[j].x;
+                if (v[j].y < rawMin.y) rawMin.y = v[j].y;
+                if (v[j].z < rawMin.z) rawMin.z = v[j].z;
+                if (v[j].x > rawMax.x) rawMax.x = v[j].x;
+                if (v[j].y > rawMax.y) rawMax.y = v[j].y;
+                if (v[j].z > rawMax.z) rawMax.z = v[j].z;
+            }
+        }
         printf("[MP6-WS-DIAG]   obj[%d] name=%s vtx=%d vtxBuf=%p vtxData=%p childNum=%u min=(%.2f,%.2f,%.2f) max=(%.2f,%.2f,%.2f) "
                "basePos=(%.2f,%.2f,%.2f) baseRot=(%.2f,%.2f,%.2f) baseScale=(%.2f,%.2f,%.2f) "
-               "ownAttr wrapS=%d wrapT=%d bitmap=%s\n",
+               "ownAttr=%p rawMin=(%.2f,%.2f,%.2f) rawMax=(%.2f,%.2f,%.2f)\n",
                i, o->name ? o->name : "(null)",
                o->mesh.vertex ? o->mesh.vertex->count : -1,
                (void *)o->mesh.vertex,
@@ -4566,10 +7410,10 @@ void mp6_widescreen_debug_dump_model(HU3D_MODELID modelId, const char *label)
                o->mesh.base.pos.x, o->mesh.base.pos.y, o->mesh.base.pos.z,
                o->mesh.base.rot.x, o->mesh.base.rot.y, o->mesh.base.rot.z,
                o->mesh.base.scale.x, o->mesh.base.scale.y, o->mesh.base.scale.z,
-               o->mesh.attribute ? (int)o->mesh.attribute->wrapS : -1,
-               o->mesh.attribute ? (int)o->mesh.attribute->wrapT : -1,
-               (o->mesh.attribute && o->mesh.attribute->bitmap && o->mesh.attribute->bitmap->name)
-                   ? o->mesh.attribute->bitmap->name : "(null)");
+               /* Multi-material meshes retain an index/sentinel here. The
+                * resolved attribute table is printed separately below. */
+               (void *)o->mesh.attribute,
+               rawMin.x, rawMin.y, rawMin.z, rawMax.x, rawMax.y, rawMax.z);
     }
     for (i = 0; i < hsf->attributeNum; i++) {
         HSF_ATTRIBUTE *a = &hsf->attribute[i];

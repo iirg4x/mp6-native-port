@@ -1,0 +1,12 @@
+--- a/src/REL/micquizseldll/quiz.c
++++ b/src/REL/micquizseldll/quiz.c
+@@ -0,0 +1 @@
++#include "game/mic.h"
+@@ -72 +73,2 @@
+-s32 omPadErrChk(u8 playerIndex);
++/* omPadErrChk uses the shared object.h declaration. */
++u16 *HuMCCurResponseGet(void);
+@@ -643,0 +646,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

@@ -33,6 +33,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 /* SAVESTATE CARVE-OUT. Placing this AFTER this TU's own
  * includes is load-bearing, not stylistic: it is a #pragma clang section that
@@ -62,6 +63,15 @@ static int g_putFailureReported;
  * made BEFORE audio init (the launcher runs pre-GameMain) still lands
  * when the stream opens. */
 static float g_mp6MasterGain = 1.0f;
+static int g_menuMusicOverride;
+
+void mp6_audio_set_menu_override(int active)
+{
+    active = active != 0;
+    if (g_menuMusicOverride == active) return;
+    g_menuMusicOverride = active;
+    if (g_stream) SDL_SetAudioStreamGain(g_stream, active ? 0.0f : g_mp6MasterGain);
+}
 
 void mp6_audio_set_master_gain(float gain)
 {
@@ -69,7 +79,7 @@ void mp6_audio_set_master_gain(float gain)
     if (gain > 1.0f) gain = 1.0f;
     g_mp6MasterGain = gain;
     if (g_stream != NULL) {
-        SDL_SetAudioStreamGain(g_stream, g_mp6MasterGain);
+        SDL_SetAudioStreamGain(g_stream, g_menuMusicOverride ? 0.0f : g_mp6MasterGain);
     }
 }
 
@@ -118,18 +128,44 @@ static void SDLCALL mp6_audio_callback(void *userdata, SDL_AudioStream *stream, 
     }
 }
 
+/* The physical device's buffer is fixed when the first stream opens it, so
+ * every opener (game audio, launcher music and cues) comes through here.
+ * Android: SDL's AAudio backend defaults to 20 ms callbacks, with two of
+ * them queued ahead in SDL and a 40 ms AAudio buffer; 10 ms halves what
+ * the player hears late. The mixer runs on SDL's audio thread, so the
+ * game's frame rate does not change how often it has to fill. Stream
+ * role "Game" asks for AAUDIO_USAGE_GAME. MP6_AUDIO_SAMPLE_FRAMES
+ * overrides the size on any platform (device frames per callback). */
+int mp6_audio_sdl_init(void)
+{
+    const char *frames = getenv("MP6_AUDIO_SAMPLE_FRAMES");
+
+    if (SDL_WasInit(SDL_INIT_AUDIO)) return 1;
+    if (frames != NULL && frames[0] != '\0') {
+        SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames);
+    }
+#ifdef __ANDROID__
+    else {
+        SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "480");
+    }
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_ROLE, "Game");
+#endif
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+        printf("[AUDIO] SDL_InitSubSystem(SDL_INIT_AUDIO) failed: %s\n", SDL_GetError());
+        return 0;
+    }
+    return 1;
+}
+
 void mp6_audio_out_init(void)
 {
     SDL_AudioSpec spec;
 
     g_putFailureReported = 0;
 
-    if (!SDL_WasInit(SDL_INIT_AUDIO)) {
-        if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-            printf("[AUDIO] SDL_InitSubSystem(SDL_INIT_AUDIO) failed: %s -- no music will play\n",
-                   SDL_GetError());
-            return;
-        }
+    if (!mp6_audio_sdl_init()) {
+        printf("[AUDIO] no audio device -- no music will play\n");
+        return;
     }
 
     spec.format = SDL_AUDIO_S16;
@@ -144,8 +180,8 @@ void mp6_audio_out_init(void)
     /* A launcher-configured volume set before this init (see
      * g_mp6MasterGain's comment). Guarded so the default (1.0 -- every
      * automation run, and the launcher default) never issues the call. */
-    if (g_mp6MasterGain != 1.0f) {
-        SDL_SetAudioStreamGain(g_stream, g_mp6MasterGain);
+    if (g_mp6MasterGain != 1.0f || g_menuMusicOverride) {
+        SDL_SetAudioStreamGain(g_stream, g_menuMusicOverride ? 0.0f : g_mp6MasterGain);
     }
     if (!SDL_ResumeAudioStreamDevice(g_stream)) {
         printf("[AUDIO] SDL_ResumeAudioStreamDevice failed: %s -- no music will play\n",

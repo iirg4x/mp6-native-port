@@ -1,0 +1,265 @@
+#include "gx.hpp"
+#include "__gx.h"
+
+#include "../../gfx/tex_copy_conv.hpp"
+#include "../../gfx/texture.hpp"
+#include "../../window.hpp"
+#include "../../gfx/clear.hpp"
+#include "../../webgpu/gpu.hpp"
+#include "../vi/vi_internal.hpp"
+
+#include <algorithm>
+#include <bit>
+#include <cmath>
+
+namespace {
+aurora::Vec2<uint32_t> scale_copy_dst(u32 logicalWidth, u32 logicalHeight) {
+  if (g_gxState.viewportPolicy == AURORA_VIEWPORT_NATIVE) {
+    return {logicalWidth, logicalHeight};
+  }
+
+  const auto [logicalFbWidth, logicalFbHeight] = aurora::gx::logical_fb_size();
+  const auto [targetWidth, targetHeight] = aurora::gfx::get_render_target_size();
+  if (logicalFbWidth == 0 || logicalFbHeight == 0 || targetWidth == 0 || targetHeight == 0) {
+    return {logicalWidth, logicalHeight};
+  }
+
+  const float scaleX = static_cast<float>(targetWidth) / static_cast<float>(logicalFbWidth);
+  const float scaleY = static_cast<float>(targetHeight) / static_cast<float>(logicalFbHeight);
+  const auto scaledWidth = std::max<u32>(static_cast<u32>(std::lround(static_cast<float>(logicalWidth) * scaleX)), 1);
+  const auto scaledHeight = std::max<u32>(static_cast<u32>(std::lround(static_cast<float>(logicalHeight) * scaleY)), 1);
+  return {scaledWidth, scaledHeight};
+}
+} // namespace
+
+namespace aurora::gx {
+void copy_tex(const void* dest, GXBool clear) noexcept {
+  const auto rect = map_logical_scissor(g_gxState.texCopySrc);
+  const auto [dstWidth, dstHeight] = scale_copy_dst(g_gxState.texCopyDstWidth, g_gxState.texCopyDstHeight);
+  const auto texCopyFmt = g_gxState.texCopyFmt;
+  // GX_AURORA_SET_COPY_MIP_GEN: opt-in full mip chain on the resolve target,
+  // regenerated after every resolve (see render() in gfx/common.cpp). Off
+  // (the default) keeps the existing single-level path untouched.
+  const uint32_t mips =
+      g_gxState.texCopyMipGen ? static_cast<uint32_t>(std::bit_width(std::max(dstWidth, dstHeight))) : 1;
+
+  const GXState::CopyTextureKey key{
+      .dest = dest,
+      .width = dstWidth,
+      .height = dstHeight,
+      .format = texCopyFmt,
+      .mips = mips,
+  };
+  auto it = g_gxState.copyTextureCache.find(key);
+  if (it == g_gxState.copyTextureCache.end()) {
+    // A CPU copy destination has one current geometry. Keeping older
+    // width/height/mip variants alive serves no sampled texture --
+    // copyTextures[dest] can name only the latest one -- and quality changes
+    // otherwise strand every previous shadow-map allocation. Use the normal
+    // eviction path so dependent palette conversions are retired too.
+    bool hasOldGeometry = false;
+    for (const auto& [oldKey, _] : g_gxState.copyTextureCache) {
+      if (oldKey.dest == dest) {
+        hasOldGeometry = true;
+        break;
+      }
+    }
+    if (hasOldGeometry) {
+      evict_copy_texture(dest);
+    }
+    gfx::TextureHandle handle;
+    if (gfx::tex_copy_conv::needs_conversion(texCopyFmt)) {
+      handle = gfx::new_conv_texture(dstWidth, dstHeight, texCopyFmt, "Copy Conv Texture", mips);
+    } else {
+      // Configure the texture swizzle to use alpha 1.0 if targeting RGB565 or EFB doesn't have alpha
+      const auto fmt = texCopyFmt == GX_TF_RGB565 || g_gxState.pixelFmt == GX_PF_RGB8_Z24 ||
+                               g_gxState.pixelFmt == GX_PF_RGB565_Z16
+                           ? GX_TF_RGB565
+                           : GX_TF_RGBA8;
+      handle = gfx::new_render_texture(dstWidth, dstHeight, fmt, "Resolved Texture", mips);
+    }
+    if (mips > 1) {
+      handle->generatedMips = true;
+    }
+    it = g_gxState.copyTextureCache.emplace(key, GXState::CopyTextureRef{.handle = handle, .revision = 0}).first;
+  }
+  auto& handle = it->second;
+
+  if (g_gxState.alphaUpdate && g_gxState.dstAlpha != UINT32_MAX) {
+    if (!clear) {
+      // TODO: figure out the right behavior here.
+      // should the copy have a specific alpha value but the EFB remains untouched?
+    }
+    // Overwrite alpha before resolving
+    gfx::push_draw_command(gfx::clear::DrawData{
+        .pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{
+            .clearColor = false,
+            .clearAlpha = true,
+            .clearDepth = false,
+        }),
+        .color = wgpu::Color{0.f, 0.f, 0.f, g_gxState.dstAlpha / 255.f},
+    });
+  }
+  const auto clearColor = clear && g_gxState.colorUpdate;
+  const auto clearAlpha = clear && g_gxState.alphaUpdate;
+  const auto clearDepth = clear && g_gxState.depthUpdate;
+  gfx::resolve_pass_into(handle.handle, rect, clearColor, clearAlpha, clearDepth, g_gxState.clearColor,
+                         clear_depth_value(), texCopyFmt);
+  ++handle.revision;
+  g_gxState.copyTextures[dest] = handle;
+  note_copy_texture(dest);
+
+  // With stable texObjIds a texture object bound BEFORE the first copy into
+  // its data pointer never re-resolves: the bind-unchanged early-out in
+  // resolve_sampled_textures sees identical id+version (the CPU bytes at a
+  // copy dest never change), so the stale pre-copy upload stays bound
+  // forever. Kick any bind aliasing this dest so the next resolve consults
+  // copyTextures and picks up this copy (also refreshes dynamic-palette
+  // copies whose revision advanced).
+  for (auto& bind : g_gxState.textures) {
+    if (bind.texObj.data == dest) {
+      bind.texObj.texObjId = 0;
+    }
+  }
+}
+} // namespace aurora::gx
+
+extern "C" {
+GXRenderModeObj GXNtsc480IntDf = {
+    VI_TVMODE_NTSC_INT,
+    640,
+    480,
+    480,
+    40,
+    0,
+    640,
+    480,
+    VI_XFBMODE_DF,
+    0,
+    0,
+    {6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6},
+    {8, 8, 10, 12, 10, 8, 8},
+};
+GXRenderModeObj GXNtsc480Int = {
+    VI_TVMODE_NTSC_INT,
+    640,
+    480,
+    480,
+    40,
+    0,
+    640,
+    480,
+    VI_XFBMODE_DF,
+    0,
+    0,
+    {6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6},
+    {0, 0, 21, 22, 21, 0, 0},
+};
+GXRenderModeObj GXPal528IntDf = {
+    VI_TVMODE_PAL_INT,
+    704,
+    528,
+    480,
+    40,
+    0,
+    640,
+    480,
+    VI_XFBMODE_DF,
+    0,
+    0,
+    {6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6},
+    {8, 8, 10, 12, 10, 8, 8},
+};
+GXRenderModeObj GXMpal480IntDf = {
+    VI_TVMODE_PAL_INT,
+    640,
+    480,
+    480,
+    40,
+    0,
+    640,
+    480,
+    VI_XFBMODE_DF,
+    0,
+    0,
+    {6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6},
+    {8, 8, 10, 12, 10, 8, 8},
+};
+
+void GXAdjustForOverscan(GXRenderModeObj* rmin, GXRenderModeObj* rmout, u16 hor, u16 ver) {
+  *rmout = *rmin;
+  const auto size = aurora::window::get_window_size();
+  rmout->fbWidth = size.fb_width;
+  rmout->efbHeight = size.fb_height;
+  rmout->xfbHeight = size.fb_height;
+}
+
+void GXSetDispCopySrc(u16 left, u16 top, u16 wd, u16 ht) {}
+
+void GXSetTexCopySrc(u16 left, u16 top, u16 wd, u16 ht) {
+  GX_WRITE_AURORA(GX_AURORA_LOAD_COPY_SRC);
+  GX_WRITE_U32(left);
+  GX_WRITE_U32(top);
+  GX_WRITE_U32(wd);
+  GX_WRITE_U32(ht);
+}
+
+void GXSetDispCopyDst(u16 wd, u16 ht) {}
+
+void GXSetTexCopyDst(u16 wd, u16 ht, GXTexFmt fmt, GXBool mipmap) {
+  GX_WRITE_AURORA(GX_AURORA_LOAD_COPY_DST);
+  GX_WRITE_U32(wd);
+  GX_WRITE_U32(ht);
+  GX_WRITE_U32(fmt);
+  GX_WRITE_U8(mipmap != GX_FALSE);
+}
+
+// TODO GXSetDispCopyFrame2Field
+// TODO GXSetCopyClamp
+
+u32 GXSetDispCopyYScale(f32 vscale) { return 0; }
+
+void GXSetCopyClear(GXColor color, u32 depth) {
+  // BP 0x4F: clear color R + A
+  u32 reg0 = 0;
+  SET_REG_FIELD(0, reg0, 8, 0, color.r);
+  SET_REG_FIELD(0, reg0, 8, 8, color.a);
+  SET_REG_FIELD(0, reg0, 8, 24, 0x4F);
+  GX_WRITE_RAS_REG(reg0);
+
+  // BP 0x50: clear color B + G
+  u32 reg1 = 0;
+  SET_REG_FIELD(0, reg1, 8, 0, color.b);
+  SET_REG_FIELD(0, reg1, 8, 8, color.g);
+  SET_REG_FIELD(0, reg1, 8, 24, 0x50);
+  GX_WRITE_RAS_REG(reg1);
+
+  // BP 0x51: clear Z (24-bit)
+  u32 reg2 = 0;
+  SET_REG_FIELD(0, reg2, 24, 0, depth);
+  SET_REG_FIELD(0, reg2, 8, 24, 0x51);
+  GX_WRITE_RAS_REG(reg2);
+  __gx->bpSent = 1;
+}
+
+void GXSetCopyFilter(GXBool aa, u8 sample_pattern[12][2], GXBool vf, u8 vfilter[7]) {}
+
+void GXSetDispCopyGamma(GXGamma gamma) {}
+
+void GXCopyDisp(void* dest, GXBool clear) {}
+
+void GXCopyTex(void* dest, GXBool clear) {
+  GX_WRITE_AURORA(GX_AURORA_LOAD_COPY_DEST);
+  GX_WRITE_U64(reinterpret_cast<u64>(dest));
+
+  SET_REG_FIELD(0, __gx->cpTex, 1, 11, clear != GX_FALSE);
+  SET_REG_FIELD(0, __gx->cpTex, 1, 14, 0);
+  SET_REG_FIELD(0, __gx->cpTex, 8, 24, 0x52);
+  GX_WRITE_RAS_REG(__gx->cpTex);
+}
+
+// TODO GXGetYScaleFactor
+// TODO GXGetNumXfbLines
+// TODO GXClearBoundingBox
+// TODO GXReadBoundingBox
+}

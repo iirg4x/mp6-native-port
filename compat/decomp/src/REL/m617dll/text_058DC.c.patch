@@ -1,0 +1,49 @@
+--- a/src/REL/m617dll/text_058DC.c
++++ b/src/REL/m617dll/text_058DC.c
+@@ -2,0 +3 @@
++#include <stdio.h>
+@@ -92 +92,0 @@
+-extern int printf(const char *format, s32 modelId, s32 lightId);
+@@ -194 +194,2 @@
+-    u8 beforeEntries[22]; /* Not accessed by this file. */
++    u8 beforeEntries[18]; /* Not accessed by this file. */
++    ANIMDATA *animation;
+@@ -276 +277 @@
+-s16 fn_1_24D8(void);
++void fn_1_24D8(void);
+@@ -398,3 +399,3 @@
+-s16 fn_1_3BB8(s16, s16);
+-
+-s32 fn_1_3CD0(s16, s16);
++s16 fn_1_3BB8(HU3D_MODELID modelId, HU3D_LIGHTID lightId);
++
++s32 fn_1_3CD0(HU3D_MODELID modelId, HU3D_LIGHTID lightId);
+@@ -407 +408 @@
+-void fn_1_4DB0(M617VoiceWork *, s16);
++void fn_1_4DB0(M617PlayerStateData *work, s16 voiceMode);
+@@ -432 +433 @@
+-        fn_1_4DB0((M617VoiceWork *)player, 0);
++        fn_1_4DB0(player, 0);
+@@ -640,3 +641,3 @@
+-s16 fn_1_435C(s16 playerIndex, const Vec *position);
+-
+-s16 fn_1_4070(const Vec *position);
++s16 fn_1_435C(s16 playerIndex, const M617Vector3 *position);
++
++s16 fn_1_4070(const M617Vector3 *position);
+@@ -779 +780 @@
+-                    fn_1_435C(lightIndex, (Vec *)&light->objectPosition);
++                    fn_1_435C(lightIndex, (const M617Vector3 *)&light->objectPosition);
+@@ -782 +783 @@
+-                        fn_1_4070((Vec *)&light->objectPosition);
++                        fn_1_4070((const M617Vector3 *)&light->objectPosition);
+@@ -828 +829 @@
+-MGTIMER *fn_1_2FB4(int type, int duration, int end, f32 x, f32 y);
++MGTIMER *fn_1_2FB4(int type, int duration, int end, float x, float y);
+@@ -838,3 +839,3 @@
+-void fn_1_BA64();
+-
+-void fn_1_E1F0();
++void fn_1_BA64(void);
++
++void fn_1_E1F0(void);

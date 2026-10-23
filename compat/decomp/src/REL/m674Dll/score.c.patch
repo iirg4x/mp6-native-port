@@ -1,0 +1,8 @@
+--- a/src/REL/m674Dll/score.c
++++ b/src/REL/m674Dll/score.c
+@@ -52 +52 @@
+-    scoreWork = HuMemDirectMallocNum(HEAP_HEAP, M674_SCORE_WORK_SIZE, HU_MEMNUM_OVL);
++    scoreWork = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M674ScoreWork), HU_MEMNUM_OVL);
+@@ -54 +54 @@
+-    memset(scoreWork, 0, M674_SCORE_WORK_SIZE);
++    memset(scoreWork, 0, sizeof(M674ScoreWork));

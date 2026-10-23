@@ -1,0 +1,7 @@
+--- a/src/board/mgcall.c
++++ b/src/board/mgcall.c
+@@ -29,0 +30 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -2116,0 +2118,2 @@
++                    /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++                    mp6_quick_play_hold("minigame pick");

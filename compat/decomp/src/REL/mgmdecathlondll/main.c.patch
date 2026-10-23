@@ -1,0 +1,25 @@
+--- a/src/REL/mgmdecathlondll/main.c
++++ b/src/REL/mgmdecathlondll/main.c
+@@ -6,0 +7,2 @@
++#include "string.h"
++#include "game/frand.h"
+@@ -14,0 +17,5 @@
++extern void fn_1_5900(void);
++extern void fn_1_20D8(void);
++extern void fn_1_6960(void);
++extern void fn_1_75C4(void);
++extern void fn_1_C2FC(void);
+@@ -96 +103 @@
+-        memset(MgModeScore, 0, 8);
++        memset(MgModeScore, 0, sizeof(MgModeScore));
+@@ -98 +105 @@
+-        memset(MgModeWork, 0, 256);
++        memset(MgModeWork, 0, sizeof(MgModeWork));
+@@ -103 +110 @@
+-        memset(MgModeWorkInt, 0, 64);
++        memset(MgModeWorkInt, 0, sizeof(MgModeWorkInt));
+@@ -107,2 +114,2 @@
+-        memset(MgModeWorkFloat, 0, 64);
+-        memset(GwMgDecaScore, 0, 96);
++        memset(MgModeWorkFloat, 0, sizeof(MgModeWorkFloat));
++        memset(GwMgDecaScore, 0, sizeof(GwMgDecaScore));

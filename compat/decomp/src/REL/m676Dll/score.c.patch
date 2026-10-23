@@ -1,0 +1,8 @@
+--- a/src/REL/m676Dll/score.c
++++ b/src/REL/m676Dll/score.c
+@@ -36 +36 @@
+-    data = HuMemDirectMallocNum(HEAP_HEAP, 116, HU_MEMNUM_OVL);
++    data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M676ScoreWork), HU_MEMNUM_OVL);
+@@ -38 +38 @@
+-    memset(data, 0, 116);
++    memset(data, 0, sizeof(M676ScoreWork));

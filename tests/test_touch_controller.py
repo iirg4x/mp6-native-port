@@ -39,7 +39,7 @@ class TouchController(unittest.TestCase):
         directory.mkdir(exist_ok=True)
         exe = directory / 'touch-pad-selftest.exe'
         cmd = [build.ZIG, 'c++', '-std=c++20', '-O2', '-UNDEBUG', '-DSDL_STATIC_LIB', '-DTARGET_PC',
-               '-I', str(ROOT / 'include'), '-I', str(ROOT / 'build/android-aurora-source/include'),
+               '-I', str(ROOT / 'include'), '-I', str(ROOT / 'third_party/aurora/include'),
                '-I', str(deps / 'sdl-src/include'), '-I', str(imgui),
                str(ROOT / 'tests/native/touch_pad_selftest.cpp'),
                *[str(imgui / name) for name in ['imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp']],

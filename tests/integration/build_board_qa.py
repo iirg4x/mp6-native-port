@@ -15,7 +15,22 @@ ROOT = Path(__file__).resolve().parents[2]
 os.environ.setdefault('MP6_DISC_ROOT', 'build/disc-cache/orig/GP6E01')
 os.environ.setdefault('MP6_DECOMP_INC_DATA', 'build/disc-cache/split/include')
 sys.path.insert(0, str(ROOT / 'tools'))
+sys.path.insert(0, str(ROOT))
 import build
+from tests.integration.ao_resource_probe import instrument_ao_resources
+from tests.integration.ao_mip_offset_probe import instrument_ao_mip_offset
+from tests.integration.ao_admission_probe import instrument_ao_admission, instrument_fi_admission
+from tests.integration.ao_foreground_probe import instrument_upstream_foreground
+from tests.integration.ao_resize_probe import resize_probe
+from tests.integration.ao_fi_matrix_probe import (
+    instrument_frame_interp,
+    instrument_foliage,
+    instrument_hsfdraw,
+)
+from tests.integration.ao_fi_pixel_probe import (
+    instrument_frame_interp as instrument_fi_pixels,
+    instrument_frame_dump as instrument_pixel_dump,
+)
 
 OUTPUT = ROOT / 'build/board-qa'
 OUTPUT.mkdir(exist_ok=True)
@@ -63,6 +78,14 @@ def replace_once(text, marker, replacement):
 
 
 def player_probe(text):
+    # Observe ordinary button-driven map entry/return; do not substitute it.
+    for flag, phase in (('TRUE', 'overview'), ('FALSE', 'scroll')):
+        call = '            mbev_Scroll(playerNo, '+flag+');'
+        text = replace_once(text, call,
+            '            qa_state("map.'+phase+'",playerNo,-1);\n'
+            '            mp6_event_post("qa.map",playerNo,"'+phase+'");\n'+call+'\n'
+            '            qa_state("map.end",playerNo,-1);\n'
+            '            mp6_event_post("qa.map",playerNo,"done");')
     # Observe accepted requests (after the same-motion early-out), without
     # altering playback. The low-level probe below records real wraps/end holds.
     text = '''static void qa_capsule_audit(int playerNo, const char *route);
@@ -358,6 +381,9 @@ def placement_probe(text):
 
 
 def world_probe(text):
+    header=(ROOT/'tests/integration/widescreen_terrain_probe.h').as_posix()
+    text='#include "'+header+'"\n'+text.replace(
+        'mp6_widescreen_extend_terrain_outer_sides(', 'qa_wide_terrain(')
     text=replace_once(text,'void MB1_Create(void)\n{',r'''void MB1_Create(void)
 {
     /* Night assets and board state must agree before any scene model loads. */
@@ -367,10 +393,23 @@ def world_probe(text):
     text = replace_once(text, 'void ObjectSetup(void)\n{', r'''
 static MBMODELID qa_scene_create(int data, const int *motion, BOOL link)
 {
+    static int qaLeafFreezeDone;
     MBMODELID id=mbObjCreate(data,motion,link);
     HU3D_MODELID model=mbObjModelIDGet(id);
+    const char *rootName=NULL;
     if (model>=0 && Hu3DData[model].hsf && Hu3DData[model].hsf->root)
-        printf("[BOARD-QA] scene.asset=%08x model=%d root=%s\n",data,model,Hu3DData[model].hsf->root->name);
+        rootName=Hu3DData[model].hsf->root->name;
+    if (rootName)
+        printf("[BOARD-QA] scene.asset=%08x model=%d root=%s\n",data,model,rootName);
+    if (!qaLeafFreezeDone && getenv("MP6_QA_LEAF_FREEZE") &&
+        data==0x00D70006 && rootName && !strcmp(rootName,"b01_m002")) {
+        qaLeafFreezeDone=1;
+        Hu3DMotionTimeSet(model,7.0f);
+        Hu3DMotionSpeedSet(model,0.0f);
+        printf("[LEAF-FREEZE] {\"asset\":\"00d70006\",\"root\":\"%s\",\"resolvedModel\":%d,\"time\":%.9g,\"speed\":%.9g}\n",
+               rootName,model,Hu3DData[model].motWork.time,Hu3DData[model].motWork.speed);
+        fflush(stdout);
+    }
     return id;
 }
 #define mbObjCreate qa_scene_create
@@ -413,6 +452,20 @@ void ObjectSetup(void)
         fflush(stdout);
     }
 ''' + marker)
+    # The bridge is a continuous board-object deformation, not a move hook.
+    # Report an actual off-center bend under a player, not merely fixture setup.
+    bridge = re.search(r'^void fn_1_13CC\(void\)\n\{.*?^\}', text, re.M | re.S).group()
+    changed = replace_once(bridge, '    halfLength = work->halfLength;', r'''
+    static int qa_bridge_reported;
+    const char *qa_bridge_route = getenv("MP6_QA_ROUTE");
+    if (!qa_bridge_reported && qa_bridge_route && !strcmp(qa_bridge_route,"bridge") &&
+        playerNo >= 0 && masuId == playerMasuId &&
+        fabsf(work->halfLength - 0.5f * work->length) > 10.0f) {
+        qa_bridge_reported = 1;
+        qa_state("bridge.deform",playerNo,playerMasuId);
+    }
+    halfLength = work->halfLength;''')
+    text = replace_once(text, bridge, changed)
     # A starting-space fixture alone can walk AWAY from the slide/spring.
     # Install the authored hook through the real move-end dispatcher once.
     marker = 'int fn_1_760(int playerNo, s16 id)\n{'
@@ -437,6 +490,15 @@ void ObjectSetup(void)
         instrumented = instrumented[:-1] + ('    qa_state("' + label + '.end",playerNo,-1);\n'
             '    if (getenv("MP6_QA_HOLD_EVENT_END")) while (1) HuPrcVSleep();\n}')
         text = replace_once(text, function, instrumented)
+    function = re.search(r'^void fn_1_B68\(void\)\n\{.*?^\}', text, re.M | re.S).group()
+    instrumented = function.replace('{', '{\n    qa_state("timechange.begin",-1,-1);', 1)
+    instrumented = instrumented[:-1] + r'''    qa_state("timechange.end",-1,-1);
+    if (getenv("MP6_QA_STOP_TIMECHANGE")) {
+        mp6_event_post("qa.complete",0,"done");
+        mp6_max_ticks = (int)mp6_tick_count+600;
+    }
+}'''
+    text = replace_once(text, function, instrumented)
     marker = 'int MB1Ev_MasuHatena(int playerNo, s16 id)\n{'
     text = replace_once(text, marker, marker + '\n    qa_state("happening.begin",playerNo,id);')
     return text + '''
@@ -482,6 +544,13 @@ def sleep_probe(text):
 
 
 def dice_probe(text):
+    marker = '    diceResult[work->playerNo] = 0;\n    while (TRUE) {'
+    text = replace_once(text, marker,
+        '    qa_state("dice.ready",work->playerNo,-1);\n'
+        '    if (work->no == 0 && _CheckFlag(FLAG_BOARD_OPENING) &&\n'
+        '        work->playerNo >= 0 && work->playerNo < GW_PLAYER_MAX &&\n'
+        '        !GwPlayer[work->playerNo].comF)\n'
+        '        mp6_event_post("qa.dice",work->playerNo,"ready");\n'+marker)
     function = re.search(r'^BOOL mbDiceNumStopCheck\([^;]+?\)\n\{.*?^\}',
                          text, re.M | re.S).group()
     changed = replace_once(function, '            if (work->updateF) {', r'''
@@ -492,6 +561,17 @@ def dice_probe(text):
                         DiceNumObjOMExec,work->value,work->killF,work->time,work->maxTime);
 ''')
     return sleep_probe(replace_once(text, function, changed))
+
+
+def pause_probe(text):
+    marker = 'void mbPauseCreate(int playerNo)\n{'
+    text = replace_once(text, marker, marker+
+        '\n    qa_state("pause.begin",playerNo,-1);\n'
+        '    mp6_event_post("qa.pause",playerNo,"begin");')
+    marker = 'static void PauseDestroy(void)\n{'
+    return replace_once(text, marker, marker+
+        '\n    qa_state("pause.end",pausePlayer,-1);\n'
+        '    mp6_event_post("qa.pause",pausePlayer,"done");')
 
 
 def configure(configuration):
@@ -517,6 +597,9 @@ def last5_probe(text):
 
 
 def board_probe(text):
+    marker = '        GwSystem.turnNo++;\n        GwSystem.timeTurn++;'
+    text = replace_once(text, marker,
+                        '        qa_state("round.complete",-1,GwSystem.turnNo);\n' + marker)
     marker = '    s32 ovl;\n    mbClose();'
     return replace_once(text, marker, '''    s32 ovl;
     if (GWPartyGet() && GwSystem.turnNo > GwSystem.turnMax)
@@ -601,6 +684,24 @@ void qa_results_returned(void) {
                     mp6_frame_dump_trigger("graph.draw");
                 }
                 GXBegin(GX_QUADS, GX_VTXFMT0, 4);''')
+    text = replace_once(text, '    max = 225.0f / max;', r'''
+    /* Observe real round history. A draw call alone cannot prove that graph
+     * vertices are finite or that a final-round fixture has any history. */
+    static unsigned qa_history_modes;
+    unsigned qa_mode = group[MDRESULT_GROUP_VIEW_MODE] == 1;
+    if (!(qa_history_modes & (1u << qa_mode))) {
+        qa_history_modes |= 1u << qa_mode;
+        printf("[RESULT-HISTORY] mode=%u count=%d players=%d max=%g\n",
+               qa_mode,graphCount,playerCount,max);
+        for (int qi=0;qi<playerCount;qi++) {
+            printf("[RESULT-HISTORY] mode=%u player=%d values=",qa_mode,qi);
+            for (int qj=0;qj<=graphCount;qj++)
+                printf("%s%d",qj?",":"",qa_mode?lbl_1_bss_62[qi][qj]:lbl_1_bss_21A[qi][qj]);
+            printf("\n");
+        }
+        fflush(stdout);
+    }
+    max = 225.0f / max;''')
     return replace_once(text, '    SLSaveBoardEndExec();',
                         '    qa_results_finished = 1;\n    SLSaveBoardEndExec();')
 
@@ -614,11 +715,13 @@ def menu_return_probe(text):
 
 def input_probe(text):
     # The shipping script parser covers the old menu route, not shoulder keys.
-    # Add R only in this diagnostic executable; the real game's pad processing
+    # Add X/Y/R only in this diagnostic executable; the real game's pad processing
     # still receives/handles the trigger normally.
     marker = "    if (len == 1 && name[0] == 'b') return PAD_BUTTON_B;"
     return replace_once(text, marker, marker +
-        "\n    if (len == 1 && name[0] == 'r') return PAD_TRIGGER_R;")
+        "\n    if (len == 1 && name[0] == 'r') return PAD_TRIGGER_R;"
+        "\n    if (len == 1 && name[0] == 'x') return PAD_BUTTON_X;"
+        "\n    if (len == 1 && name[0] == 'y') return PAD_BUTTON_Y;")
 
 
 def snpc_probe(text):
@@ -676,6 +779,109 @@ void qa_snpc_effects(int playerNo) {
 '''
 
 
+def leaf_camera_probe(text):
+    # The small decorative flower in b01_m002, not the flower-jump event.
+    # Coordinates come from the native world-space geometry capture. This
+    # optional camera override exists only in this isolated QA executable.
+    marker = '    cameraP->dispOn = TRUE;\n'
+    return replace_once(text, marker, r'''
+    if (getenv("MP6_QA_SCENE_CAMERA") && mp6_tick_count >= 3000) {
+        static int qaSceneParsed;
+        static int qaSceneTriggered;
+        static float sceneEyeX;
+        static float sceneEyeY;
+        static float sceneEyeZ;
+        static float sceneCenterX;
+        static float sceneCenterY;
+        static float sceneCenterZ;
+        static float sceneFov;
+        if (!qaSceneParsed) {
+            const char *spec = getenv("MP6_QA_SCENE_CAMERA");
+            qaSceneParsed = spec && sscanf(spec, "%f %f %f %f %f %f %f",
+                &sceneEyeX, &sceneEyeY, &sceneEyeZ,
+                &sceneCenterX, &sceneCenterY, &sceneCenterZ,
+                &sceneFov) == 7 ? 1 : -1;
+        }
+        if (qaSceneParsed > 0) {
+            cameraP->eye = (HuVecF){sceneEyeX, sceneEyeY, sceneEyeZ};
+            cameraP->center = (HuVecF){sceneCenterX, sceneCenterY, sceneCenterZ};
+            cameraP->up = (HuVecF){0.0f, 1.0f, 0.0f};
+            cameraP->fov = sceneFov;
+            Hu3DCameraPerspectiveSet(cameraP->bit, cameraP->fov,
+                cameraP->near, cameraP->far, cameraP->aspect);
+            if (!qaSceneTriggered) {
+                qaSceneTriggered = 1;
+                mp6_frame_dump_trigger("scene.camera");
+                printf("[SCENE-CAMERA] {\"tick\":%ld,\"eye\":[%.6f,%.6f,%.6f],\"center\":[%.6f,%.6f,%.6f],\"up\":[0.000000,1.000000,0.000000],\"fov\":%.6f}\n",
+                       mp6_tick_count, sceneEyeX, sceneEyeY, sceneEyeZ,
+                       sceneCenterX, sceneCenterY, sceneCenterZ, sceneFov);
+                fflush(stdout);
+            }
+        }
+    }
+
+    if (getenv("MP6_QA_LEAF_CAMERA") && mp6_tick_count >= 3000) {
+        static int qaLeafTriggered;
+        static long qaLeafStart;
+        static const char *qaLeafMode;
+        long relativeTick;
+        float fov;
+        float centerX;
+        float centerY;
+        float centerZ;
+        float eyeX;
+        float eyeY;
+        float eyeZ;
+        if (!qaLeafTriggered) qaLeafStart = mp6_tick_count;
+        if (!qaLeafMode) {
+            qaLeafMode = getenv("MP6_QA_LEAF_CAMERA_MODE");
+            if (!qaLeafMode || !*qaLeafMode) qaLeafMode = "pan";
+        }
+        relativeTick = mp6_tick_count - qaLeafStart;
+        fov = 45.0f;
+        centerX = -333.0f;
+        centerY = 25.0f;
+        centerZ = 3073.0f;
+        eyeX = -333.0f;
+        eyeY = 90.0f;
+        eyeZ = 3273.0f;
+        if (!strcmp(qaLeafMode, "dolly")) {
+            float scale = 1.0f + 0.25f * HuSin((float)relativeTick * 3.0f);
+            eyeX = centerX + (eyeX - centerX) * scale;
+            eyeY = centerY + (eyeY - centerY) * scale;
+            eyeZ = centerZ + (eyeZ - centerZ) * scale;
+        } else if (!strcmp(qaLeafMode, "fov")) {
+            fov = 45.0f + 10.0f * HuSin((float)relativeTick * 3.0f);
+        } else if (!strcmp(qaLeafMode, "static")) {
+            /* Keep the authored fixed QA camera. */
+        } else {
+            /* Default/pan preserves the existing exact lateral sine. */
+            float shift = 4.0f * HuSin((float)(mp6_tick_count - qaLeafStart) * 3.0f);
+            centerX += shift;
+            eyeX += shift;
+        }
+        cameraP->fov = fov;
+        Hu3DCameraPerspectiveSet(cameraP->bit, cameraP->fov, cameraP->near, cameraP->far, cameraP->aspect);
+        cameraP->center = (HuVecF){centerX, centerY, centerZ};
+        cameraP->eye = (HuVecF){eyeX, eyeY, eyeZ};
+        cameraP->up = (HuVecF){0.0f, 1.0f, 0.0f};
+        cameraP->rot = (HuVecF){-18.0f, 0.0f, 0.0f};
+        cameraP->zoom = 210.0f;
+        if (!qaLeafTriggered) {
+            qaLeafTriggered = 1;
+            mp6_frame_dump_trigger("leaf.camera");
+            printf("[LEAF-QA] b01_m002 flower_a camera tick=%ld\n",mp6_tick_count);
+            printf("[LEAF-CAMERA] {\"mode\":\"%s\"}\n",qaLeafMode);
+        }
+        if (relativeTick <= 360 && relativeTick % 6 == 0) {
+            printf("[LEAF-CAMERA] {\"tick\":%ld,\"relativeTick\":%ld,\"mode\":\"%s\",\"eye\":[%.6f,%.6f,%.6f],\"center\":[%.6f,%.6f,%.6f],\"fov\":%.6f,\"aspect\":%.6f}\n",
+                   mp6_tick_count,relativeTick,qaLeafMode,eyeX,eyeY,eyeZ,centerX,centerY,centerZ,fov,cameraP->aspect);
+            fflush(stdout);
+        }
+    }
+''' + marker)
+
+
 def collect(*args, **kwargs):
     units = []
     probes = {'board_player.o': player_probe, 'board_capevent.o': capsule_probe,
@@ -684,8 +890,10 @@ def collect(*args, **kwargs):
               'board_shopevent.o': shop_probe,
               'board_capsule.o': placement_probe,
               'board_capspecial.o': special_probe, 'board_dice.o': dice_probe,
+              'board_pause.o': pause_probe,
               'board_last5.o': last5_probe, 'board_snpc.o': snpc_probe,
               'board_board.o': board_probe,
+              'board_camera.o': leaf_camera_probe,
               'rel_mdpresult.o': results_probe,
               'rel_mdparty.o': menu_return_probe,
               'rel_boot.o': menu_return_probe,
@@ -695,6 +903,23 @@ def collect(*args, **kwargs):
               'rel_world01.o': world_probe}
     for source, flags, name, flavor in collect_original(*args, **kwargs):
         obj = original_objects / name
+        if name == 'game_hsfdraw.o':
+            contents = instrument_hsfdraw(Path(source).read_text(encoding='utf-8'))
+            source = str(OUTPUT / 'hsfdraw_fi_matrix_probe.c')
+            Path(source).write_text(contents, encoding='utf-8')
+            obj = OUTPUT / 'obj' / name
+        elif name == 'plat_frame_interp_aurora.o' or Path(source).name == 'frame_interp.c':
+            contents = instrument_frame_interp(Path(source).read_text(encoding='utf-8'))
+            contents = instrument_fi_admission(contents)
+            contents = instrument_fi_pixels(contents)
+            source = str(OUTPUT / 'frame_interp_fi_matrix_probe.c')
+            Path(source).write_text(contents, encoding='utf-8')
+            obj = OUTPUT / 'obj' / name
+        elif Path(source).name == 'frame_dump.c':
+            contents = instrument_pixel_dump(Path(source).read_text(encoding='utf-8'))
+            source = str(OUTPUT / 'frame_dump_fi_pixel_probe.c')
+            Path(source).write_text(contents, encoding='utf-8')
+            obj = OUTPUT / 'obj' / name
         if name == 'plat_mp6_enhancements_aurora.o':
             contents = Path(source).read_text(encoding='utf-8')
             contents = replace_once(contents, 'void mp6_enh_cache_environment(void)\n{',
@@ -717,8 +942,8 @@ def collect(*args, **kwargs):
             contents = Path(source).read_text(encoding='utf-8')
             contents = contents.replace('#include "grounding_math.h"',
                 '#include "' + (ROOT / 'src/hsf/grounding_math.h').as_posix() + '"\n#include <stdlib.h>')
-            contents = replace_once(contents, 'static int active(void)\n{',
-                'static int active(void)\n{\n    if (getenv("MP6_QA_NO_GROUNDING")) return 0;\n'
+            contents = replace_once(contents, 'static int active(void) {',
+                'static int active(void) {\n    if (getenv("MP6_QA_NO_GROUNDING")) return 0;\n'
                 # A quick state includes the draw copies. Rebuild just the
                 # visual registry after restore for a genuine old-floor A/B;
                 # authored meshes and all simulation state remain untouched.
@@ -730,10 +955,10 @@ def collect(*args, **kwargs):
                 '        for (int i=0;i<count;i++) mp6_ground_w01_scenery(ids[i]);\n'
                 '        mp6_ground_w01_tree(tree);\n'
                 '    }')
-            contents = replace_once(contents, 'static void calibrate_lawn(HSF_OBJECT *o, Mtx world)\n{',
-                'static void calibrate_lawn(HSF_OBJECT *o, Mtx world)\n{\n    if (getenv("MP6_QA_NO_LAWN_LIFT")) return;')
-            contents = replace_once(contents, '    HuVecF *original=o->mesh.vertex->data;',
-                '    HuVecF *original=o->mesh.vertex->data;\n'
+            contents = replace_once(contents, 'static void calibrate_lawn(HSF_OBJECT *o, Mtx world) {',
+                'static void calibrate_lawn(HSF_OBJECT *o, Mtx world) {\n    if (getenv("MP6_QA_NO_LAWN_LIFT")) return;')
+            contents = replace_once(contents, '    HuVecF *original = o->mesh.vertex->data;',
+                '    HuVecF *original = o->mesh.vertex->data;\n'
                 '    if (getenv("MP6_QA_NO_CONNECTOR_LIFT") && !strcmp(o->name,"b01_m001")) return original;\n'
                 '    if (getenv("MP6_QA_NO_LOG_GROUNDING")) return original;\n'
                 '    if (getenv("MP6_QA_NO_TREE_GROUNDING") && m-Hu3DData==treeId) return original;')
@@ -749,8 +974,16 @@ def collect(*args, **kwargs):
             Path(source).write_text(contents, encoding='utf-8')
             obj = OUTPUT / 'obj' / name
         if name == 'plat_ambient_occlusion_aurora.o':
-            flags = [*flags, '-I'+str(ROOT/'src/gx')]
+            flags = [*flags, '-I'+str(ROOT/'src/gx'), '-DMP6_XEGTAO_QA_INVALID_SHADER']
             contents = Path(source).read_text(encoding='utf-8')
+            contents = instrument_ao_resources(contents)
+            contents = instrument_ao_admission(contents)
+            contents = instrument_ao_mip_offset(contents)
+            contents = instrument_upstream_foreground(contents)
+            contents = replace_once(contents,
+                '    p.depth[3] = level == 2 ? 0.35f : 0.20f;',
+                '    p.depth[3] = std::getenv("MP6_QA_UNSHADED_AO") ? 0.0f : '
+                '(level == 2 ? 0.35f : 0.20f);')
             # Observe the first admitted draw for each camera; no release probe.
             contents = replace_once(contents, '    job->frame = g_frame;', r'''
     job->frame = g_frame;
@@ -770,15 +1003,19 @@ def collect(*args, **kwargs):
             # exact scene poses remain valid for the regression comparison.
             shader = (ROOT / 'src/gx/ambient_occlusion_shader.hpp').read_text()
             unshaded = shader.replace('ambient_occlusion_shader','unshaded_ao_shader').replace(
-                'let amount = clamp(1.7 * occluded / max(unoccluded, 1e-6), 0.0, 1.0);', 'let amount = 0.0;')
+                'let amount = clamp(2.5 * occluded / max(unoccluded, 1e-6), 0.0, 1.0);', 'let amount = 0.0;')
             foreground = shader.replace('ambient_occlusion_shader','foreground_ao_shader').replace(
                 'return vec4f(foreground*(1.0-visibility),visibility);', 'return vec4f(foreground,0);')
             water = shader.replace('ambient_occlusion_shader','water_ao_shader')
-            water = replace_once(water, '    let uv = pixel.xy / p.sizes.xy;',
-                '    if (linear_depth(pixel.xy/p.sizes.xy)==0.0) { return vec4f(0,0,0,1); }\n'
-                '    let maskAt=clamp(vec2i(pixel.xy),vec2i(0),vec2i(textureDimensions(foliageColor))-1);\n'
-                '    return vec4f(vec3f(select(0.0,1.0,textureLoad(foliageColor,maskAt,0).a>0.0)),0);\n'
-                '    let uv = pixel.xy / p.sizes.xy;')
+            # Water is deliberately absent from prepared AO depth. Its mask
+            # must override the clear-depth test, but empty pixels in a later
+            # HUD camera must preserve the earlier camera's diagnostic image.
+            water_entry = '@fragment fn fs_composite(@builtin(position) pixel: vec4f) -> @location(0) vec4f {'
+            water = replace_once(water, water_entry,
+                water_entry + '\n    let maskAt=clamp(vec2i(pixel.xy),vec2i(0),vec2i(textureDimensions(foliageColor))-1);\n'
+                '    let waterPixel=textureLoad(foliageColor,maskAt,0).a>0.0;\n'
+                '    if (!waterPixel && linear_depth(pixel.xy/p.sizes.xy)==0.0) { return vec4f(0,0,0,1); }\n'
+                '    return vec4f(vec3f(select(0.0,1.0,waterPixel)),0);')
             legacy = replace_once(shader, 'ambient_occlusion_shader', 'legacy_foliage_shader')
             legacy = replace_once(legacy, 'FoliageSeed(vec4f(0),', 'FoliageSeed(vec4f(1),')
             legacy = replace_once(legacy, 'return vec4f(foreground*(1.0-visibility),visibility);',
@@ -788,20 +1025,21 @@ def collect(*args, **kwargs):
             selector = '''
 inline std::string qa_ao_shader(bool compatibility, bool preparedDepth=false,
                               bool attachmentDepth=false, bool multisampledDepth=false,
-                              bool decals=true) {
+                              bool decals=true, bool canonicalDepth=false) {
     if (std::getenv("MP6_QA_RAW_AO_DEPTH")) {
         std::fprintf(stderr,"Raw-depth QA is incompatible with the ordered depth task.\\n");
         std::abort();
     }
-    if (std::getenv("MP6_QA_WATER_AO")) return water_ao_shader(compatibility,preparedDepth,attachmentDepth,multisampledDepth,decals);
+    if (std::getenv("MP6_QA_WATER_AO")) return water_ao_shader(compatibility,preparedDepth,attachmentDepth,multisampledDepth,decals,canonicalDepth);
     return (std::getenv("MP6_QA_FOREGROUND_AO") ? foreground_ao_shader :
         (std::getenv("MP6_QA_UNSHADED_AO") ? unshaded_ao_shader :
-        (std::getenv("MP6_QA_LEGACY_FOLIAGE_BLEND") ? legacy_foliage_shader : ambient_occlusion_shader)))(compatibility,preparedDepth,attachmentDepth,multisampledDepth,decals);
+        (std::getenv("MP6_QA_LEGACY_FOLIAGE_BLEND") ? legacy_foliage_shader : ambient_occlusion_shader)))(compatibility,preparedDepth,attachmentDepth,multisampledDepth,decals,canonicalDepth);
 }
 '''
             shader_path.write_text(shader + '\n' + legacy + '\n' + unshaded + '\n' + foreground + '\n' + water + selector, encoding='utf-8')
             # Includes the direct single/MSAA foliage seed added with borrowed
-            # depth. The selector forwards all five parameters unchanged.
+            # depth. The selector forwards all six parameters unchanged,
+            # including the opt-in canonical preparation output contract.
             if contents.count('ambient_occlusion_shader(') != 4:
                 raise RuntimeError('AO source selection changed; review prepared/attachment/seed QA variants')
             contents = contents.replace('ambient_occlusion_shader(', 'qa_ao_shader(')
@@ -845,6 +1083,7 @@ extern "C" void mp6_ao_begin_frame(void) {
             if name == 'plat_framescope_aurora.o':
                 contents = gx_state_probe(contents)
             else:
+                contents = resize_probe(contents)
                 contents = contents.replace('    GXBegin(type, vtxfmt, nverts);',
                     '    extern void qa_gx_check(void); qa_gx_check();\n    GXBegin(type, vtxfmt, nverts);')
                 contents = contents.replace('    GXCallDisplayList(list, nbytes);',
@@ -854,6 +1093,10 @@ extern "C" void mp6_ao_begin_frame(void) {
             obj = OUTPUT / 'obj' / name
         if name in probes:
             prelude = '' if name == 'game_hsfdraw.o' else PRELUDE
+            if name == 'board_camera.o':
+                # camera.c deliberately has local player declarations; avoid
+                # pulling player.h in through the generic state-logging prelude.
+                prelude = '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include "mp6_frame_dump.h"\nextern long mp6_tick_count;\n'
             contents = prelude + probes[name](Path(source).read_text(encoding='utf-8'))
             source = str(OUTPUT / (name[:-2] + '_probe.c'))
             Path(source).write_text(contents, encoding='utf-8')
@@ -864,6 +1107,10 @@ extern "C" void mp6_ao_begin_frame(void) {
 
 def ground_geometry_probe(text):
     foliage = (ROOT / 'include/mp6_ao_foliage_draw.h').read_text()
+    # The HSF transform supplies qa_ao_fi_draw_hint(); this generated copy is
+    # the only foliage header linked into the QA executable.  Keep the FI
+    # observation seam active-but-no-op unless the runtime env is enabled.
+    foliage = instrument_foliage(foliage)
     foliage = replace_once(foliage, '    int water=mp6_ao_water_surface(draw);', r'''
     int water=mp6_ao_water_surface(draw);
     if (getenv("MP6_QA_WATER_AO")) {
@@ -975,5 +1222,13 @@ if result == 0:
     exe = OUTPUT / 'release/mp6native.exe'
     READY.write_text(json.dumps({'sha256': hashlib.sha256(exe.read_bytes()).hexdigest(),
                                 'builder_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                                'ao_resource_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ao_resource_probe.py').read_bytes()).hexdigest(),
+                                'ao_resize_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ao_resize_probe.py').read_bytes()).hexdigest(),
+                                'ao_fi_matrix_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ao_fi_matrix_probe.py').read_bytes()).hexdigest(),
+                                'ao_fi_pixel_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ao_fi_pixel_probe.py').read_bytes()).hexdigest(),
+                                'ao_mip_offset_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ao_mip_offset_probe.py').read_bytes()).hexdigest(),
+                                'ao_admission_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ao_admission_probe.py').read_bytes()).hexdigest(),
+                                'ao_foreground_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ao_foreground_probe.py').read_bytes()).hexdigest(),
+                                'geometry_probe_sha256': hashlib.sha256((ROOT/'tests/integration/ground_geometry_probe.h').read_bytes()).hexdigest(),
                                 'capsule_fixture_sha256': hashlib.sha256((ROOT/'tests/integration/capsule_audit_fixture.c').read_bytes()).hexdigest()}))
 raise SystemExit(result)

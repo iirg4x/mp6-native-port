@@ -1,0 +1,9 @@
+--- a/src/board/telop.c
++++ b/src/board/telop.c
+@@ -17,0 +18 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -400 +401,3 @@
+-                    || GwPlayer[telopWork->playerNo].comF) {
++                    || GwPlayer[telopWork->playerNo].comF
++                    /* [MP6] Quick Party: the turn banner passes as for a CPU. */
++                    || mp6_quick_play_scene()) {

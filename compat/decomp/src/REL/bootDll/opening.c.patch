@@ -1,13 +1,17 @@
 --- a/src/REL/bootDll/opening.c
 +++ b/src/REL/bootDll/opening.c
-@@ -14,0 +15 @@
+@@ -16,0 +17,2 @@
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -161,0 +163 @@ void OpeningCreate(void)
++#include "mp6_ambient_occlusion.h" /* authored page artwork is not scene geometry */
+@@ -165,0 +168 @@
 +    mp6_widescreen_extrude_model(OpeningMdlId[0]);
-@@ -536,2 +538,4 @@ static void PostDrawHook(s16 layerNo)
--    Hu3DCameraPerspectiveSet(OPENING_CAMERA_BIT, 30.f, 20.f, 15000.f, 1.2f);
--    Hu3DCameraViewportSet(OPENING_CAMERA_BIT, 0.0f, 0.0f, 640.f, 480.f, 0.0f, 1.0f);
-+    Hu3DCameraPerspectiveSet(OPENING_CAMERA_BIT, 30.f, 20.f, 15000.f,
-+                             1.2f * mp6_widescreen_scale_factor());
-+    Hu3DCameraViewportSet(OPENING_CAMERA_BIT, 0.0f, 0.0f,
-+                          mp6_widescreen_render_width(), 480.f, 0.0f, 1.0f);
+@@ -543,0 +547,6 @@
++    /* The character cutouts are painted page content captured by PostDrawHook.
++     * Do not bake scene AO into that illustration. Its post-layer depth clear
++     * starts a new eligible segment for the actual 3D book on layer 1. */
++    mp6_ao_camera_exclude(Hu3DCameraNo);
++    /* Page contents target the authored 640x320 texture, not the window. */
++    mp6_widescreen_camera_native_target(OPENING_CAMERA_BIT, 1);
+@@ -559,0 +569,2 @@
++    /* The book and scene around it are on-screen, unlike the page capture. */
++    mp6_widescreen_camera_native_target(OPENING_CAMERA_BIT, 0);

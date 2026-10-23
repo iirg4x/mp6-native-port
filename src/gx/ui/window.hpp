@@ -22,7 +22,7 @@ public:
         TabBuilder builder;
     };
 
-    Window();
+    explicit Window(bool fullscreen = false);
 
     Window(const Window &) = delete;
     Window &operator=(const Window &) = delete;
@@ -61,6 +61,7 @@ protected:
     std::vector<std::unique_ptr<Component>> mContentComponents;
     Insets mBodyPadding;
     bool mInitialOpen = true;
+    bool mFullscreen = false;
 };
 
 // Shared shell for small-style windows such as Modal and PresetWindow

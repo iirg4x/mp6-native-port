@@ -1,24 +1,26 @@
 --- a/src/REL/fileseldll/saveload.c
 +++ b/src/REL/fileseldll/saveload.c
-@@ -140 +140,3 @@ s32 FileBoxInit(s16 arg)
+@@ -144 +144,3 @@
 -            if (*p != SLCheckSumGet(0, SAVE_ICONBANNER_SIZE)) {
 +            /* The card image stores this checksum in big-endian order. */
 +            if ((u16)((((u8 *)p)[0] << 8) | ((u8 *)p)[1]) !=
 +                SLCheckSumGet(0, SAVE_ICONBANNER_SIZE)) {
-@@ -788 +790 @@ s32 FileCardCopy(const char *fileName, s32 size, void *addr)
+@@ -844,3 +846 @@
+-    /* The zero-length fill writes nothing; the card is first given an ERASE marker before the save
+-     * data. */
 -    memset(buf, size, 0);
 +    memset(buf, 0, size);
-@@ -1216,0 +1219 @@ s32 FileCardChoice(s16 arg0, s16 arg1)
+@@ -1301,0 +1302 @@
 +    s16 choiceCount;
-@@ -1224,0 +1228 @@ s32 FileCardChoice(s16 arg0, s16 arg1)
+@@ -1309,0 +1311 @@
 +        choiceCount = 3;
-@@ -1229,0 +1234 @@ s32 FileCardChoice(s16 arg0, s16 arg1)
+@@ -1314,0 +1317 @@
 +        choiceCount = 3;
-@@ -1234,0 +1240 @@ s32 FileCardChoice(s16 arg0, s16 arg1)
+@@ -1319,0 +1323 @@
 +        choiceCount = 2;
-@@ -1236,0 +1243,2 @@ s32 FileCardChoice(s16 arg0, s16 arg1)
+@@ -1321,0 +1326,2 @@
 +    } else {
 +        return FILESEL_RESULT_CANCEL;
-@@ -1257 +1265 @@ s32 FileCardChoice(s16 arg0, s16 arg1)
+@@ -1342 +1348 @@
 -    if (choice == -1) {
 +    if (choice < 0 || choice >= choiceCount) {

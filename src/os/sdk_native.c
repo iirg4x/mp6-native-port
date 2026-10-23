@@ -18,6 +18,21 @@ float __fabsf(float value)
     return fabsf(value);
 }
 
+/* Console preference storage used by the recovered Options overlay. Output
+ * mixing remains owned by MSM; this setting must round-trip across overlays. */
+static u32 nativeSoundMode = OS_SOUND_MODE_STEREO;
+
+u32 OSGetSoundMode(void)
+{
+    return nativeSoundMode;
+}
+
+void OSSetSoundMode(u32 mode)
+{
+    if (mode == OS_SOUND_MODE_MONO || mode == OS_SOUND_MODE_STEREO)
+        nativeSoundMode = mode;
+}
+
 /* MBBoardNoGet used to be defined here, out of line: on the e32fa5e pin the
  * accessor was an inline in include/REL/w01Dll_world01.h only, and src/board/
  * capsule.c -- which calls it -- does not include that REL header, so the
@@ -70,6 +85,22 @@ void PSQUATMultiply(const Quaternion *p, const Quaternion *q, Quaternion *pq)
     *pq = out;
 }
 
+void PSQUATNormalize(const Quaternion *src, Quaternion *unit)
+{
+    /* Same threshold and zero result as C_QUATNormalize; src may alias unit. */
+    f32 mag = (src->x * src->x) + (src->y * src->y) + (src->z * src->z) + (src->w * src->w);
+
+    if (mag >= 0.00001f) {
+        mag = 1.0f / sqrtf(mag);
+        unit->x = src->x * mag;
+        unit->y = src->y * mag;
+        unit->z = src->z * mag;
+        unit->w = src->w * mag;
+    } else {
+        unit->x = unit->y = unit->z = unit->w = 0.0f;
+    }
+}
+
 void PSMTXQuat(Mtx m, const Quaternion *q)
 {
     f32 s = 2.0f / ((q->w * q->w) + (q->x * q->x) +
@@ -93,6 +124,37 @@ void PSMTXQuat(Mtx m, const Quaternion *q)
 }
 
 #ifdef MP6_HEADLESS_BUILD
+/* These SDK vector operations are supplied by Aurora in graphical builds.
+ * Keep the CPU-only backend's results real, including aliased destinations.
+ * C_VECReflect follows src/dolphin/mtx/vec.c's normalization sequence. */
+f32 PSVECSquareDistance(const Vec *a, const Vec *b)
+{
+    f32 x = a->x - b->x;
+    f32 y = a->y - b->y;
+    f32 z = a->z - b->z;
+    return x * x + y * y + z * z;
+}
+
+static void sdk_normalize(const Vec *src, Vec *dst)
+{
+    f32 scale = 1.0f / sqrtf(src->x * src->x + src->y * src->y + src->z * src->z);
+    Vec result = {src->x * scale, src->y * scale, src->z * scale};
+    *dst = result;
+}
+
+void C_VECReflect(const Vec *src, const Vec *normal, Vec *dst)
+{
+    Vec a = {-src->x, -src->y, -src->z};
+    Vec b;
+    sdk_normalize(&a, &a);
+    sdk_normalize(normal, &b);
+    f32 dot = a.x * b.x + a.y * b.y + a.z * b.z;
+    Vec result = {b.x * 2.0f * dot - a.x,
+                  b.y * 2.0f * dot - a.y,
+                  b.z * 2.0f * dot - a.z};
+    sdk_normalize(&result, dst);
+}
+
 /* Aurora supplies these three real SDK/FIFO implementations in graphical
  * builds. The null backend has no FIFO, but still needs to consume and
  * report immediate attributes so headless execution can traverse draw code
@@ -120,5 +182,33 @@ void GXColor1u32(u32 color)
 {
     (void)color;
     mp6_shim_log("GX", "GXColor1u32 (headless attribute sink)");
+}
+#endif
+
+#ifndef MP6_HEADLESS_BUILD
+/* aurora/aurora.h; game files do not see Aurora's headers. */
+void aurora_texture_sources_written(const void *begin, const void *end);
+
+/* There is no CPU data cache to write back, but a flush is how the game says
+ * it wrote memory the GPU will read: a texture drawn into in place (Mowtown's
+ * mowed lawn) is converted again from the new bytes at its next draw. */
+void DCFlushRange(void *addr, u32 nBytes)
+{
+    aurora_texture_sources_written(addr, (const char *)addr + nBytes);
+}
+
+void DCFlushRangeNoSync(void *addr, u32 nBytes)
+{
+    aurora_texture_sources_written(addr, (const char *)addr + nBytes);
+}
+
+void DCStoreRange(void *addr, u32 nBytes)
+{
+    aurora_texture_sources_written(addr, (const char *)addr + nBytes);
+}
+
+void DCStoreRangeNoSync(void *addr, u32 nBytes)
+{
+    aurora_texture_sources_written(addr, (const char *)addr + nBytes);
 }
 #endif

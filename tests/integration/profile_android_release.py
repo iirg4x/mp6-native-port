@@ -73,7 +73,13 @@ def report(run):
     def rows(counter, denominator, limit):
         return [dict(symbol=name, percent=100 * weight / denominator)
                 for name, weight in counter.most_common(limit)]
+    clock_poll_cycles = sum(weight for frames, weight in stacks.items()
+                            if any('clock_gettime' in frame for frame in frames)
+                            and 'mp6_tick_clock_now' in frames)
     result = dict(samples=len(samples), native_build_id=actual, fps_evidence=False,
+        total_sampled_cycles=total,
+        throttle_clock_poll=dict(sampled_cycles=clock_poll_cycles,
+                                 percent=100 * clock_poll_cycles / total),
         scope='Active app user-space CPU cycles. Inclusive percentages overlap; not wall time.',
         self=rows(own, total, 50), inclusive=rows(inclusive, total, 80),
         stacks=[dict(frames=list(names), percent=100 * weight / total)

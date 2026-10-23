@@ -1,0 +1,7 @@
+--- a/src/REL/m660dll/text_0E6F4.c
++++ b/src/REL/m660dll/text_0E6F4.c
+@@ -22,0 +23,2 @@
++#include <stdio.h>
++#include "game/frand.h"
+@@ -25 +26,0 @@
+-extern int printf();

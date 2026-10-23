@@ -1,5 +1,7 @@
 --- a/src/board/branch.c
 +++ b/src/board/branch.c
+@@ -18,0 +19 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
 @@ -221 +221,9 @@
 -        u16 btnDown;
 +        /* MP6_NATIVE_PORT: three paths through this loop body never assign
@@ -11,3 +13,6 @@
 +         * branch's own choiceTime<0 path already writes `btnDown = 0;` for
 +         * exactly the frames where no button is meant to be down. */
 +        u16 btnDown = 0;
+@@ -271,0 +281,2 @@
++            /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++            mp6_quick_play_hold("path choice");

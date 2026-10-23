@@ -1,6 +1,6 @@
 --- a/src/REL/w01Dll/world01.c
 +++ b/src/REL/w01Dll/world01.c
-@@ -3,0 +4,176 @@
+@@ -4,0 +5,176 @@
 +
 +/* PORT FIX -- float-argument ABI, implicit-declaration class (the class
 + * tools/abi_warning_audit.py exists for; this TU was simply not in its
@@ -177,15 +177,14 @@
 +    fflush(stdout);
 +}
 +
-@@ -27,0 +204 @@
+@@ -28,0 +205,2 @@
 +#include "mp6_grounding.h"
-@@ -41 +218,2 @@
++#include "mp6_widescreen.h"
+@@ -154 +332,2 @@
 -typedef float (*W01CurveEval)();
 +/* Native callbacks must preserve float arguments and full-width pointers. */
 +typedef float (*W01CurveEval)(HuVecF *, HuVecF *, HuVecF *, HuVecF *, float);
-@@ -601,0 +780,9 @@
-+/* The generic integrator supplies a fourth control point. Quadratic Bezier
-+ * ignores it, but still needs a matching native function signature. */
+@@ -590,0 +770,36 @@
 +static float mp6W01BezierEval(HuVecF *a, HuVecF *b, HuVecF *c,
 +    HuVecF *unused, float t)
 +{
@@ -193,21 +192,56 @@
 +    return fn_1_14A90(a, b, c, t);
 +}
 +
-@@ -998,0 +1186 @@
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++#pragma pop
++
+@@ -720,0 +936 @@
 +    OSReport("[W01] prolog\n");
-@@ -1020,0 +1209 @@
+@@ -744,0 +961 @@
 +    OSReport("[W01] ObjectSetup board=%d\n", MBNO_WORLD_1);
-@@ -1038,0 +1228 @@
-+    mp6_ground_w01_begin(mbObjModelIDGet(modelId[0]));
-@@ -1045,0 +1236 @@
-+        mp6_ground_w01_scenery(mbObjModelIDGet((&modelId[1])[i]));
-@@ -1049,0 +1241 @@
-+    mp6_ground_w01_scenery(mbObjModelIDGet((&modelId[1])[i]));
-@@ -1092,0 +1284 @@
+@@ -764,0 +982,7 @@
++    /* Continue only the true outer terrain/backdrop boundaries for overview
++     * and off-center edge/Boo cameras. haikei10 and haikei17 are interior
++     * lawn plates; their extensions overlap authored haikei1/11/12/14
++     * neighbors at nearly identical depth. Register before AO snapshots. */
++    mp6_widescreen_extend_terrain_outer_sides(mbObjModelIDGet(modelIds[0]), "haikei15", 0.0f, 2.0f, 1);
++    mp6_widescreen_extend_terrain_outer_sides(mbObjModelIDGet(modelIds[0]), "sora2", 0.0f, 2.0f, 1);
++    mp6_ground_w01_begin(mbObjModelIDGet(modelIds[0]));
+@@ -771,0 +996 @@
++        mp6_ground_w01_scenery(mbObjModelIDGet((&modelIds[1])[modelIndex]));
+@@ -775,0 +1001 @@
++    mp6_ground_w01_scenery(mbObjModelIDGet((&modelIds[1])[modelIndex]));
+@@ -818,0 +1045 @@
 +    OSReport("[W01] MB1_Create complete\n");
-@@ -1096,0 +1289 @@
+@@ -823,0 +1051 @@
 +    mp6_ground_end();
-@@ -1143,0 +1337,18 @@
+@@ -875,0 +1104,18 @@
 +    /* MP6_W01_FORCE_FLOWER -- see the lever's note at the top of this file.
 +     * Deliberately routed through this dispatcher rather than around it: the
 +     * player is pointed at the real fling space and THIS function installs the
@@ -226,30 +260,32 @@
 +            return 0;
 +        }
 +    }
-@@ -1521,2 +1732,2 @@
+@@ -1271,2 +1517,2 @@
 -    s32 playerMasuId;
 -    s32 masuId;
 +    s32 playerMasuId = -1; /* native fix -- see this hunk's note below */
 +    s32 masuId = -1;
-@@ -1589 +1800,4 @@
+@@ -1333,3 +1579,4 @@
+-        // The initial pass reads the current player's space without rechecking whether a player is
+-        // active.
 -        work->lastMasuId = GwPlayer[playerNo].masuId;
 +        /* native fix: playerNo is GwSystem.turnPlayerNo, which is -1 for the
 +         * whole board opening; GwPlayer[-1] is an out-of-bounds read. */
 +        work->lastMasuId =
 +            (playerNo >= 0) ? GwPlayer[playerNo].masuId : -1;
-@@ -1603 +1817 @@
+@@ -1349 +1596 @@
 -    finalLength = w01CurveLen((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
 +    finalLength = w01CurveLen(mp6W01BezierEval, &work->startPos,
-@@ -1610 +1824 @@
+@@ -1356 +1603 @@
 -            t = w01CurveT((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
 +            t = w01CurveT(mp6W01BezierEval, &work->startPos,
-@@ -1894 +2108 @@
+@@ -1645 +1892 @@
 -    finalLength = w01CurveLen((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
 +    finalLength = w01CurveLen(mp6W01BezierEval, &work->startPos,
-@@ -1901 +2115 @@
+@@ -1652 +1899 @@
 -            t = w01CurveT((W01CurveEval)(u32)fn_1_14A90, &work->startPos,
 +            t = w01CurveT(mp6W01BezierEval, &work->startPos,
-@@ -2178 +2392,8 @@
+@@ -1945 +2192,8 @@
 -    HuVecF targetPos;
 +    /* MP6_NATIVE_PORT: the PSVECSubtract eleven lines below reads targetPos
 +     * before anything assigns it (-Werror=uninitialized-const-pointer). Its
@@ -259,15 +295,15 @@
 +     * initialiser removes the undefined read without changing one value the
 +     * function goes on to use. */
 +    HuVecF targetPos = { 0.0f, 0.0f, 0.0f };
-@@ -3294,0 +3516,3 @@
+@@ -3103,0 +3358,3 @@
 +            if (mp6W01FlowerTrace()) { /* flower trace -- see the top of file */
 +                mp6W01FlowerDump("swallow", i, modelId);
 +            }
-@@ -3327,0 +3552,3 @@
+@@ -3136,0 +3394,3 @@
 +            if (mp6W01FlowerTrace()) { /* flower trace -- see the top of file */
 +                mp6W01FlowerDump("flight", i, modelId);
 +            }
-@@ -4386,0 +4614,7 @@
+@@ -4224,0 +4485,7 @@
 +        /* Closes this iteration's GXBegin(displayData[0], GX_VTXFMT0, count)
 +         * -- the sub-primitive loop never ends any primitive, so each pass
 +         * was auto-closed by the NEXT GXBegin and the last stayed open inside
@@ -275,27 +311,27 @@
 +         * board/effect.c). Anchors to the for-loop close after GXColor1u32.
 +         * Empty inline on hardware (GXVert.h). */
 +        GXEnd();
-@@ -4436,0 +4671,6 @@
+@@ -4275,0 +4543,6 @@
 +    /* Closes the GXBegin(GX_QUADS, 4) eight lines up, whose fourth and
 +     * last position/texcoord pair is the line this anchors to, before
 +     * the GXEndDisplayList() just below. Empty inline on hardware
 +     * (GXVert.h); needed for Aurora's byte accounting inside a
 +     * display-list bracket -- see src/board/effect.c.patch. */
 +    GXEnd();
-@@ -4659,2 +4899,2 @@
+@@ -4505,2 +4778,2 @@
 -            * (((W01CurveEval)(u32)fn_1_14BF0)(&a, &b, &c, &d, t)
 -                + ((W01CurveEval)(u32)fn_1_14BF0)(&a, &b, &c, &d, 1.0)));
 +            * (fn_1_14BF0(&a, &b, &c, &d, t)
 +                + fn_1_14BF0(&a, &b, &c, &d, 1.0)));
-@@ -4664 +4904 @@
+@@ -4510 +4783 @@
 -                lengthSum += ((W01CurveEval)(u32)fn_1_14BF0)(&a, &b, &c, &d,
 +                lengthSum += fn_1_14BF0(&a, &b, &c, &d,
-@@ -4857 +5097 @@
+@@ -4709 +4982 @@
 -        t = W01CurveNewton((W01CurveEval)(u32)fn_1_14BF0,
 +        t = W01CurveNewton(fn_1_14BF0,
-@@ -5497,0 +5738 @@
+@@ -5379,0 +5653 @@
 +    mp6_ground_w01_tree(mbObjModelIDGet(work->modelId[0]));
-@@ -6153,0 +6395,9 @@
+@@ -6054,0 +6329,9 @@
 +        if (mp6W01LeafTrace()) { /* leaf trace, DRAW side: the angle this frame's
 +                                  * matrix was actually built from, plus the
 +                                  * view-space transform the quad is drawn with. */
@@ -305,14 +341,14 @@
 +                   modelMtx[0][0], modelMtx[0][1], modelMtx[0][2],
 +                   modelMtx[1][0], modelMtx[1][1], modelMtx[1][2]);
 +        }
-@@ -6183,0 +6433,6 @@
+@@ -6085,0 +6369,6 @@
 +    /* Closes the GXBegin(GX_QUADS, 4) eight lines up, whose fourth and
 +     * last position/texcoord pair is the line this anchors to, before
 +     * the GXEndDisplayList() just below. Empty inline on hardware
 +     * (GXVert.h); needed for Aurora's byte accounting inside a
 +     * display-list bracket -- see src/board/effect.c.patch. */
 +    GXEnd();
-@@ -6269,0 +6525,7 @@
+@@ -6172,0 +6462,7 @@
 +        }
 +        if (mp6W01LeafTrace()) { /* leaf trace -- see mp6W01LeafTrace above */
 +            printf("[W01-LEAF] tick=%ld i=%2d angle=%9.4f spd=%+9.5f pos=(%8.1f,%8.1f,%8.1f) vel=(%8.1f,%8.1f,%8.1f)\n",

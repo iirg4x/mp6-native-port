@@ -3,6 +3,7 @@
 // Credits: TwilitRealm
 
 #include "tab_bar.hpp"
+#include "../../audio/menu_sfx.hpp"
 
 /* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
  * sources, UI framework state, debug-tool latches) must not be captured or
@@ -154,6 +155,15 @@ void TabBar::add_tab(const Rml::String &title, TabCallback callback)
     });
 }
 
+void TabBar::set_tab_icon(int index, const Rml::String &assetName)
+{
+    if (index < 0 || index >= static_cast<int>(mTabs.size())) return;
+    auto &tab = mTabs[index];
+    tab.button.root()->SetInnerRML("<img class=\"category-icon\" src=\"" +
+        escape(resource_path("menu/" + assetName + ".png").generic_string()) +
+        "\"/><span>" + escape(tab.title) + "</span>");
+}
+
 bool TabBar::set_active_tab(int index)
 {
     if (index == -1) {
@@ -170,6 +180,7 @@ bool TabBar::set_active_tab(int index)
     }
     const auto &tab = mTabs[index];
     if (tab.button.focus()) {
+        if(mProps.selectedTabIndex>=0)audio::play_menu_sound(audio::MenuSound::Move);
         mLastFocusedTabIndex = index;
         for (int i = 0; i < static_cast<int>(mTabs.size()); ++i) {
             mTabs[i].button.set_selected(i == index);

@@ -1,0 +1,248 @@
+/* MP6 storybook: ivory pages, navy ink, red selection, golden paper accents.
+   All layout, text, controls and book surfaces are native. Decorative sprites
+   have independent transforms. 1em follows viewport AND device density. */
+body.settings-document { padding: 0; color: #090e62; font-family: "Bree Serif"; }
+window.party-settings {
+    max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0;
+    background-color: #ffdf24; decorator: none; backdrop-filter: none;
+    filter: none; box-shadow: none; transform: none; transition: none;
+    font-family: "Bree Serif"; font-size: 28px; font-weight: normal;
+}
+window.party-settings[open] { transform: none; filter: none; }
+.storybook story-backdrop, .storybook story-decoration, .storybook story-cast {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none;
+}
+.storybook story-backdrop { z-index: 0; overflow: hidden; }
+.storybook .day-field, .storybook .day-rays, .storybook .night-field { position: absolute; width: 100%; height: 100%; }
+.storybook .day-rays { transform-origin: 14% 14%; animation: rays-turn 70s linear-in-out infinite; }
+.storybook story-decoration { z-index: 2; }
+.storybook .sky-star { position: absolute; width: .65em; height: .65em; animation: star-twinkle 2.6s sine-in-out infinite alternate; }
+.storybook confetti { position: absolute; width: .45em; height: .7em; transform: rotate(25deg); animation: confetti-roll 7s sine-in-out infinite alternate; }
+.storybook confetti.pink { background-color: #f343be; }
+.storybook confetti.blue { background-color: #0bbaf3; }
+.storybook story-book { position: absolute; left: 3%; top: 9%; width: 94%; height: 81%; z-index: 2; pointer-events: none; }
+.storybook book-cover { position: absolute; top: 2%; left: 0; width: 100%; height: 98%; background-color: #df130c; border: .12em #ae180b; border-radius: .45em; box-shadow: 0 .2em .2em #ad8c2655; }
+.storybook book-edges { position: absolute; width: 49.6%; top: 3.8%; height: 94.5%; background-color: #e2c88a; border-bottom: .22em #c59a48; border-radius: .3em; }
+.storybook book-edges.left { left: .5%; }
+.storybook book-edges.right { right: .5%; }
+.storybook .page { position: absolute; top: 0; width: 49.6%; height: 97.3%; }
+.storybook .page.left { left: .4%; transform-origin: 100% 50%; }
+.storybook .page.right { right: .4%; transform-origin: 0% 50%; }
+.storybook book-spine { position: absolute; width: .08em; height: 92%; left: 50%; top: 4%; background-color: #b7a66c44; }
+.storybook.chapter-even .page.right { animation: page-light-a .28s cubic-out; }
+.storybook:not(.chapter-even) .page.right { animation: page-light-b .28s cubic-out; }
+.storybook story-cast { z-index: 6; }
+.storybook .host { position: absolute; width: 13%; height: auto; bottom: 8%; }
+.storybook .brighton { left: -1.5%; transform-origin: 50% 80%; animation: sun-rock 5s sine-in-out infinite alternate; z-index: 2; }
+.storybook .twila { right: -1.5%; transform-origin: 50% 80%; animation: moon-rock 6s sine-in-out infinite alternate; z-index: 2; }
+.storybook .cloud { position: absolute; width: 18%; height: auto; bottom: 0; }
+.storybook .cloud-left { left: -2%; animation: cloud-drift 8s sine-in-out infinite alternate; }
+.storybook .cloud-right { right: -2%; animation: cloud-drift 9s sine-in-out infinite alternate; }
+.storybook tab-bar {
+    position: absolute; left: 16%; top: 2%; width: 68%; height: 8.5%; z-index: 3;
+    display: flex; flex-direction: row; align-items: stretch; gap: .4em;
+    padding: 0; background-color: transparent; border: 0;
+    font-family: "Bree Serif"; font-weight: normal; font-size: 1em;
+}
+.storybook tab-bar tab {
+    display: flex; align-items: center; justify-content: center; flex: 1 1 0;
+    padding: .2em .2em .45em; min-width: 0; opacity: 1;
+    border: .07em #e9cf75; border-radius: .28em .28em 0 0;
+    color: #090e62; background-color: #fffdef; decorator: none; font-effect: none;
+    transform: none; transition: background-color .12s linear-in-out; text-transform: none; line-height: 1.2;
+}
+.storybook tab-bar tab:selected { color: #ffffff; background-color: #ef180b; border-color: #ffde3d; }
+.storybook tab-bar tab:hover { background-color: #fff0ae; }
+.storybook tab-bar tab:selected:hover { background-color: #d91309; }
+.storybook tab-bar tab:focus-visible { border-color: #ed7e13; }
+.storybook tab-bar tab span { pointer-events: none; }
+.storybook chapter-heading { position: absolute; left: 18%; top: 13%; width: 30%; height: 13%; z-index: 4; pointer-events: none; }
+.storybook .chapter-emblem { position: absolute; left: 9%; top: 13%; width: 7.5%; height: 12%; z-index: 4; pointer-events: none; }
+.storybook page-corner { position: absolute; width: 2em; height: 1.5em; border: .08em #f1c52b; border-radius: .4em; }
+.storybook page-corner.top-left { left: 1.7%; top: 4%; border-right: 0; border-bottom: 0; }
+.storybook page-corner.bottom-left { right: 52%; bottom: 5%; border-left: 0; border-top: 0; }
+.storybook page-corner.top-right { right: 1.7%; top: 4%; border-left: 0; border-bottom: 0; }
+.storybook page-corner.bottom-right { right: 1.7%; bottom: 5%; border-left: 0; border-top: 0; }
+.storybook chapter-title { display: block; font-size: 2.2em; line-height: 1.1; color: #080d62; }
+.storybook chapter-subtitle { display: block; font-size: .85em; color: #243183; padding-top: .2em; }
+.storybook content { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 4; padding: 0; pointer-events: none; }
+.storybook content pane { pointer-events: auto; font-size: 1em; background-color: transparent; border: 0; border-radius: 0; }
+.storybook content pane.settings-list {
+    position: absolute; left: 8%; top: 28%; width: 40%; height: 53%;
+    display: flex; flex-direction: column; align-items: stretch;
+    padding: .12em .3em .25em .65em; gap: 0; overflow: hidden auto;
+}
+.storybook .settings-list > .section-heading { display: none; }
+.storybook .setting-row {
+    position: relative; display: flex; align-items: center; justify-content: space-between;
+    width: 100%; min-height: 2.05em; flex: 0 0 auto; padding: .28em .18em .28em .65em; gap: .12em;
+    margin: 0; border: 0; border-bottom: .04em #e4d8b9; border-radius: .2em;
+    background-color: transparent; color: #090e62; opacity: 1; font-size: 1em;
+    font-family: "Bree Serif"; font-weight: normal; text-transform: none;
+    decorator: none; font-effect: none; transform: none; box-shadow: none;
+    transition: background-color .1s linear-in-out;
+}
+.storybook .setting-row key { display: block; flex: 1 1 0; min-width: 0; font-size: .94em; line-height: 1.2; pointer-events: none; }
+.storybook .setting-row value { display: block; flex: 0 0 28%; width: 28%; min-width: 0; text-align: center; font-size: .88em; line-height: 1.15; pointer-events: none; }
+.storybook .setting-row icon, .storybook toggle-switch { display: none; }
+.storybook .setting-row choice-step { display: flex; align-items: center; justify-content: center; flex: 0 0 1.25em; height: 1.65em; font-size: 1.2em; color: #dd9500; cursor: pointer; focus: none; }
+.storybook .setting-row choice-step:hover { background-color: #ffcc3544; border-radius: .25em; }
+.storybook .setting-row.current-row, .storybook .setting-row:focus { background-color: transparent; color: #ffffff; border-bottom-color: transparent; }
+.storybook .row-ribbon { display: none; position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+.storybook .current-row .row-ribbon { display: block; }
+.storybook .setting-row key, .storybook .setting-row value, .storybook choice-step { position: relative; z-index: 1; }
+.storybook .setting-row focus-star { z-index: 2; }
+.storybook .setting-row.current-row choice-step { color: #ffe760; }
+.storybook .setting-row:active { background-color: #ca190d; }
+.storybook .setting-row:disabled { opacity: .4; cursor: default; }
+.storybook .action-arrow { color: #df9f00; font-size: 1.2em; margin: 0 .3em; pointer-events: none; }
+.storybook focus-star { position: absolute; width: 1.3em; height: 1.3em; left: -.64em; top: .32em; opacity: 0; pointer-events: none; }
+.storybook focus-star story-shape { width: 100%; height: 100%; }
+.storybook .current-row focus-star { opacity: 1; animation: cursor-rock 1.8s sine-in-out infinite alternate; }
+.storybook .slider-row { flex-wrap: wrap; }
+.storybook .slider-row key { flex-basis: 47%; }
+.storybook .slider-row input { display: block; width: 98%; height: 1.3em; margin: .05em 0; background-color: transparent; focus: none; cursor: pointer; }
+.storybook input slidertrack { height: .22em; margin: .5em 0; background-color: #dccaa3; border-radius: .1em; }
+.storybook input sliderbar { width: .7em; height: .7em; margin-top: .27em; background-color: #fffcec; border: .08em #c18a00; border-radius: .35em; }
+.storybook input sliderprogress { height: .22em; background-color: #e8ae12; border-radius: .1em; }
+.storybook input sliderarrowdec, .storybook input sliderarrowinc { width: 0; height: 0; }
+.storybook story-preview, .storybook controller-guide { position: absolute; left: 53%; top: 14%; width: 40%; height: 48%; z-index: 3; }
+.storybook preview-heading { display: block; text-align: center; font-size: 1.23em; line-height: 1.3; margin-bottom: .45em; }
+.storybook preview-frame { position: relative; display: block; width: 100%; height: 76%; border: .12em #efca56; background-color: #e4eaca; }
+.storybook .game-frame { display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.storybook.in-game .game-frame { display: block; }
+.storybook.in-game preview-empty { display: none; }
+.storybook preview-empty { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100%; height: 100%; gap: .5em; color: #294735; padding: 1em; text-align: center; }
+.storybook preview-empty span { font-size: 1em; }
+.storybook preview-empty small { font-family: Inter; font-size: .65em; line-height: 1.5; }
+.storybook .photo-corner { position: absolute; width: 1.2em; height: 1.2em; pointer-events: none; }
+.storybook .tl { left: -.13em; top: -.13em; }
+.storybook .tr { right: -.13em; top: -.13em; transform: rotate(90deg); }
+.storybook .bl { left: -.13em; bottom: -.13em; transform: rotate(-90deg); }
+.storybook .br { right: -.13em; bottom: -.13em; transform: rotate(180deg); }
+.storybook preview-caption { display: block; text-align: center; font-size: .62em; padding-top: .25em; color: #3d4b75; }
+.storybook:not(.in-game) preview-caption { visibility: hidden; }
+.storybook settings-guide { position: absolute; left: 54%; top: 64%; width: 34%; height: 17%; z-index: 4; pointer-events: none; overflow: hidden; }
+.storybook guide-title { display: block; font-size: 1.25em; line-height: 1.2; padding-bottom: .25em; }
+.storybook guide-copy { display: block; font-family: Inter; font-size: .7em; line-height: 1.45; color: #263263; }
+.storybook content pane.settings-detail { position: absolute; left: 54%; top: 16%; width: 36%; height: 65%; display: none; padding: .2em .35em .2em 0; gap: .3em; font-family: Inter; font-size: .72em; line-height: 1.5; overflow: hidden auto; focus: auto; }
+.storybook.detail-open content pane.settings-detail { display: flex; }
+.storybook.detail-open story-preview, .storybook.detail-open controller-guide, .storybook.detail-open settings-guide { display: none; }
+.storybook pane.settings-detail .section-heading { font-family: "Bree Serif"; font-size: 1.55em; color: #090e62; margin: .15em 0 .3em; text-transform: none; }
+.storybook pane.settings-detail button { position: relative; display: flex; align-items: center; flex: 0 0 auto; width: 100%; min-height: 2.3em; padding: .4em .7em; font-family: "Bree Serif"; font-size: 1.15em; background-color: #f1e9ce; border: .05em #e4d4a2; border-radius: .3em; color: #101b61; opacity: 1; font-effect: none; box-shadow: none; }
+.storybook pane.settings-detail button:selected { background-color: #fff0a6; border-color: #ce9c12; }
+.storybook pane.settings-detail button:focus, .storybook pane.settings-detail button:hover { background-color: #eb2012; color: #fff; }
+.storybook pane.settings-detail button focus-star { display: none; }
+.storybook settings-footer { display: flex; position: absolute; left: 26%; bottom: 1.5%; width: 48%; min-height: 6%; z-index: 7; align-items: center; justify-content: center; gap: .25em; padding: .16em .45em; background-color: #fffdf0; border: .07em #101b61; border-radius: 1em; box-shadow: 0 .12em .08em #00000033; font-size: .75em; }
+.storybook settings-footer button { display: flex; align-items: center; justify-content: center; gap: .3em; padding: .15em .3em; background-color: transparent; border: .05em transparent; border-radius: .4em; color: #090e62; font-family: "Bree Serif"; font-size: 1em; opacity: 1; font-effect: none; box-shadow: none; min-height: 1.6em; }
+.storybook settings-footer button:hover, .storybook settings-footer button:focus-visible { background-color: #ffedb1; border-color: #d8a526; }
+.storybook settings-footer focus-star { display: none; }
+.storybook pad-prompt { display: flex; align-items: center; justify-content: center; width: 1.3em; height: 1.3em; border: .05em #142337; border-radius: .65em; font-family: Inter; font-weight: bold; color: white; font-size: .9em; pointer-events: none; }
+.storybook pad-prompt.a { background-color: #20aa4b; border-bottom-width: .15em; }
+.storybook pad-prompt.b { background-color: #ec3226; border-bottom-width: .15em; }
+.storybook #previous-chapter, .storybook #next-chapter { background-color: #e0e0df; border: .05em #626975; border-bottom-width: .14em; font-family: Inter; font-size: .9em; }
+.storybook chapter-hint { padding-left: .2em; pointer-events: none; }
+.storybook controller-guide { display: none; }
+.storybook.controls-chapter controller-guide { display: block; }
+.storybook.controls-chapter story-preview { display: none; }
+.storybook controller-body { display: block; position: relative; width: 90%; height: 68%; margin: .6em auto .2em; border-radius: 2.3em 2.3em 1.4em 1.4em; background-color: #6664b3; border: .1em #2c316a; box-shadow: 0 .15em 0 #414278; }
+.storybook pad-key, .storybook pad-trigger { position: absolute; display: flex; align-items: center; justify-content: center; background-color: #dbddd8; border: .06em #273354; border-bottom-width: .16em; font-family: Inter; font-weight: bold; font-size: .65em; color: #17254c; }
+.storybook pad-key span { pointer-events: none; }
+.storybook .stick { width: 23%; height: 34%; left: 9%; top: 13%; border-radius: 2em; }
+.storybook .dpad { width: 15%; height: 24%; left: 24%; top: 62%; border-radius: .5em; font-size: 1.2em; }
+.storybook .cstick { width: 18%; height: 28%; left: 61%; top: 66%; border-radius: 2em; background-color: #ffce1b; }
+.storybook pad-key.a { width: 20%; height: 31%; left: 65%; top: 23%; background-color: #28c393; border-radius: 2em; }
+.storybook pad-key.b { width: 12%; height: 20%; left: 54%; top: 48%; background-color: #f55750; border-radius: 2em; }
+.storybook pad-key.x { width: 11%; height: 33%; left: 85%; top: 16%; border-radius: 1em; }
+.storybook pad-key.y { width: 22%; height: 16%; left: 65%; top: 4%; border-radius: 1em; }
+.storybook pad-key.start { width: 17%; height: 15%; left: 42%; top: 25%; border-radius: .7em; font-size: .45em; }
+.storybook pad-trigger { top: -9%; height: 16%; width: 24%; border-radius: .5em .5em .2em .2em; }
+.storybook .trigger-l { left: 8%; }
+.storybook .trigger-r { right: 8%; }
+.storybook .trigger-z { right: 0; top: 4%; width: 11%; height: 10%; background-color: #755ac2; color: white; font-size: .45em; }
+.storybook controller-status { display: block; font-family: Inter; font-size: .62em; text-align: center; padding-top: .5em; }
+.storybook .touch-preview { position: relative; width: 100%; height: 9em; background-color: #ede8d2; border: .07em #cabd8c; border-radius: .4em; }
+.storybook .preview-control { position: absolute; display: flex; align-items: center; justify-content: center; border: .08em #364979; background-color: #a9b7c6; border-radius: 1em; font-size: .65em; }
+.storybook .sky-star.twinkle-slow { animation: star-twinkle 3.1s sine-in-out infinite alternate; }
+.storybook .sky-star.twinkle-fast { animation: star-twinkle 2.1s sine-in-out infinite alternate; }
+window.storybook.quiet-motion *, window.storybook.quiet-motion .sky-star,
+window.storybook.quiet-motion .page, window.storybook.quiet-motion focus-star { animation: none; transition: none; }
+.storybook scrollbarvertical { width: .18em; margin: 0; }
+.storybook scrollbarvertical sliderbar { width: .18em; background-color: #d8bc62; border-radius: .1em; }
+.storybook scrollbarvertical slidertrack { width: .18em; }
+@keyframes rays-turn { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes star-twinkle { from { opacity: .5; transform: scale(.8) rotate(-8deg); } to { opacity: 1; transform: scale(1.08) rotate(8deg); } }
+@keyframes confetti-roll { from { transform: rotate(-15deg) scaleX(.7); } to { transform: rotate(25deg) scaleX(1); } }
+@keyframes sun-rock { from { transform: rotate(-4deg); } to { transform: rotate(4deg); } }
+@keyframes moon-rock { from { transform: rotate(3deg); } to { transform: rotate(-3deg); } }
+@keyframes cloud-drift { from { transform: translateX(-.12em); } to { transform: translateX(.12em); } }
+@keyframes cursor-rock { from { transform: rotate(-8deg); } to { transform: rotate(8deg); } }
+@keyframes page-light-a { from { transform: scaleX(.97); } to { transform: scaleX(1); } }
+@keyframes page-light-b { from { transform: scaleX(.97); } to { transform: scaleX(1); } }
+
+/* Override inherited launcher typography and focus chrome at the leaf nodes. */
+.storybook .setting-row key { font-family: "Bree Serif"; font-weight: normal; text-transform: none; }
+.storybook .setting-row value { font-weight: normal; }
+.storybook .setting-row:focus-visible, .storybook .setting-row:hover,
+.storybook .setting-row:active, .storybook .setting-row:selected { box-shadow: none; }
+.storybook content pane.settings-list:not(:last-of-type) { border-right: 0; }
+.storybook focus-star story-shape { display: block; }
+.storybook choice-step span { pointer-events: none; }
+.storybook settings-footer pad-prompt span { font-family: Inter; font-weight: bold; pointer-events: none; }
+.storybook pane.settings-detail .section-heading { opacity: 1; }
+
+/* Approved presentation: the native mesh consumes the semantic Rml controls.
+   Keep their focus/callbacks alive; do not draw a second copy behind the sheet. */
+window.native-storybook { background-color: transparent; font-family: "Titan One"; }
+#window.native-storybook.book-closing, #window.native-storybook.book-closing * { pointer-events: none; }
+.native-storybook storybook-view { display: block; position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 10; focus: auto; }
+.native-storybook story-backdrop, .native-storybook story-book,
+.native-storybook story-decoration, .native-storybook story-cast,
+.native-storybook chapter-heading, .native-storybook .chapter-emblem,
+.native-storybook story-preview, .native-storybook controller-guide,
+.native-storybook settings-guide { display: none; }
+#window.native-storybook tab-bar, #window.native-storybook tab-bar *,
+#window.native-storybook settings-footer, #window.native-storybook settings-footer * { opacity: 0; pointer-events: none; }
+/* Its native replacement draws the footer. Rml still generates and blurs a
+   box-shadow texture before applying zero opacity to this semantic shell. */
+#window.native-storybook settings-footer { box-shadow: none; }
+.native-storybook content { z-index: 11; pointer-events: none; }
+.native-storybook content pane.settings-list { opacity: 0; pointer-events: none; }
+.native-storybook content pane.settings-list *,
+.native-storybook content pane.settings-list .setting-row,
+.native-storybook content pane.settings-list .setting-row * { opacity: 0; pointer-events: none; }
+
+/* Rml still walks display:none descendants during Context::Update.  The
+   native mesh is the only presentation for these legacy branches, so remove
+   their animation/transition bookkeeping without changing display, layout,
+   opacity, or focusability.  Keep the native storybook-view and the detail
+   pane out of this rule: the latter is the one DOM-rendered native-mode page. */
+#window.native-storybook story-backdrop,
+#window.native-storybook story-backdrop *,
+#window.native-storybook story-book,
+#window.native-storybook story-book *,
+#window.native-storybook story-decoration,
+#window.native-storybook story-decoration *,
+#window.native-storybook story-cast,
+#window.native-storybook story-cast *,
+#window.native-storybook chapter-heading,
+#window.native-storybook chapter-heading *,
+#window.native-storybook .chapter-emblem,
+#window.native-storybook story-preview,
+#window.native-storybook story-preview *,
+#window.native-storybook controller-guide,
+#window.native-storybook controller-guide *,
+#window.native-storybook settings-guide,
+#window.native-storybook settings-guide *,
+#window.native-storybook tab-bar,
+#window.native-storybook tab-bar *,
+#window.native-storybook settings-footer,
+#window.native-storybook settings-footer *,
+#window.native-storybook content pane.settings-list,
+#window.native-storybook content pane.settings-list * { animation: none; transition: none; }
+.native-storybook content pane.settings-detail { font-family: "Titan One"; color: #000000; left: 54%; top: 16%; width: 36%; height: 62%; }
+.native-storybook pane.settings-detail .section-heading,
+.native-storybook pane.settings-detail button { font-family: "Titan One"; color: #000000; }
+.native-storybook pane.settings-detail button { text-transform: none; }
+.native-storybook pane.settings-detail div:not(.section-heading) { color: #0900ed; font-size: .85em; line-height: 1.3; }
+.native-storybook content pane.settings-detail { display: none; pointer-events: none; }

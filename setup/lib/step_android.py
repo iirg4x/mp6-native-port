@@ -52,6 +52,9 @@ _ANDROID_NDK_VERSION = "27.3.13750724"
 _ANDROID_NATIVE_MANIFEST_VERSION = 2
 _ANDROID_NATIVE_OPTIMIZATION = {"debug": "-O0", "release": "-O2"}
 _ANDROID_RELEASE_SAFETY_FLAGS = ["-fno-strict-aliasing"]
+# tools/build.py build_android: release replays Unlocked FPS frames through
+# Aurora's retained replay, as the Windows release does.
+_ANDROID_RELEASE_FEATURE_FLAGS = ["-DMP6_AURORA_RETAINED_REPLAY=1"]
 _ANDROID_NATIVE_TARGET = "aarch64-linux-android28"
 _ANDROID_PLATFORM_FILES = {
     "android.jar": {"bytes": 27768026, "sha256": "d9eb9da824d9e247a352f570f01e1169e725b2954bca9e283a71786c59b59f9a"},
@@ -610,7 +613,8 @@ def verify_android_native_build_manifest(native_root, variant):
         "configuration": variant,
         "game_optimization": expected_optimization,
         "game_compile_flags": ([expected_optimization]
-                               + (_ANDROID_RELEASE_SAFETY_FLAGS if variant == "release" else [])),
+                               + (_ANDROID_RELEASE_SAFETY_FLAGS + _ANDROID_RELEASE_FEATURE_FLAGS
+                                  if variant == "release" else [])),
         "windowed": True,
     }
     wrong = {key: (expected, manifest.get(key)) for key, expected in expected_header.items()

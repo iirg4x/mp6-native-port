@@ -1,6 +1,6 @@
 --- a/src/game/frand.c
 +++ b/src/game/frand.c
-@@ -35,0 +36,22 @@
+@@ -53,0 +54,22 @@
 +    /* Real PowerPC divwu/divw does NOT trap on a zero divisor
 +     * (Gekko/Broadway silently produces an implementation-defined-but-
 +     * non-crashing result); x86_64 DOES fault, and zig cc's runtime UB
@@ -23,3 +23,14 @@
 +    if (modulus == 0) {
 +        return 0;
 +    }
+@@ -56,0 +79,10 @@
++
++/* Test levers and the gameplay trace (src/os/gameplay_trace.c) read and pin
++ * the shared stream; a zero seed would fall back to the wall clock. */
++u32 mp6_frand_seed_get(void) {
++    return frand_seed;
++}
++
++void mp6_frand_seed_set(u32 seed) {
++    frand_seed = seed;
++}

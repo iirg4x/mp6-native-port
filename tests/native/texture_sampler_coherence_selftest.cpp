@@ -38,6 +38,9 @@ static void bp(TexBpRegMapping::Kind kind,unsigned mapId,u32 value) {
 static unsigned resolves=0;
 static std::atomic_bool s_staticTextureCacheClearPending=false;
 static void do_clear_static_texture_cache() {}
+// No cache flushes in this fixture (texture_cache_dependencies covers them).
+static std::atomic_bool g_writtenPending=false;
+static void apply_written_textures() {}
 static bool is_palette_format(u32 format) { return format==GX_TF_C4 || format==GX_TF_C8 || format==GX_TF_C14X2; }
 static gfx::TextureHandle resolve_static_texture(const GXTexObj_&) { ++resolves; return std::make_shared<gfx::Image>(); }
 static gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj,const GXTlutObj_&) { return resolve_static_texture(obj); }

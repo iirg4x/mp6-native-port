@@ -1,0 +1,114 @@
+--- a/src/REL/resultDll/particle_renderer.c
++++ b/src/REL/resultDll/particle_renderer.c
+@@ -0,0 +1 @@
++#include "mp6_gxarray_registry.h" /* particle colours: a real span for Aurora */
+@@ -234,46 +235,6 @@
+-static inline void ResultQuadScaleAdd(register Vec *vertices, Vec *quadCorners, Vec *position,
+-                                      f32 size)
+-{
+-    f32 translationValues[4];
+-    f32 scaleValues[2];
+-    register Vec *corners;
+-    register f32 *translation;
+-    register f32 *scale;
+-    register f32 translationXY;
+-    register f32 translationZW;
+-    register f32 translationYZ;
+-    register f32 scalePair;
+-    register f32 first;
+-    register f32 second;
+-    register f32 third;
+-
+-    translationValues[0] = translationValues[3] = position->x;
+-    translationValues[1] = position->y;
+-    translationValues[2] = position->z;
+-    scaleValues[0] = scaleValues[1] = size;
+-    corners = quadCorners;
+-    translation = translationValues;
+-    scale = scaleValues;
+-    asm {
+-        psq_l scalePair, 0(scale), 0, 0
+-        psq_l translationXY, 0(translation), 0, 0
+-        psq_l translationZW, 8(translation), 0, 0
+-        psq_l translationYZ, 4(translation), 0, 0
+-        psq_l first, 0(corners), 0, 0
+-        psq_l second, 8(corners), 0, 0
+-        psq_l third, 16(corners), 0, 0
+-        ps_madd first, first, scalePair, translationXY
+-        ps_madd second, second, scalePair, translationZW
+-        ps_madd third, third, scalePair, translationYZ
+-        psq_st first, 0(vertices), 0, 0
+-        psq_st second, 8(vertices), 0, 0
+-        psq_st third, 16(vertices), 0, 0
+-        psq_l first, 24(corners), 0, 0
+-        psq_l second, 32(corners), 0, 0
+-        psq_l third, 40(corners), 0, 0
+-        ps_madd first, first, scalePair, translationXY
+-        ps_madd second, second, scalePair, translationZW
+-        ps_madd third, third, scalePair, translationYZ
+-        psq_st first, 24(vertices), 0, 0
+-        psq_st second, 32(vertices), 0, 0
+-        psq_st third, 40(vertices), 0, 0
++static inline void ResultQuadScaleAdd(Vec *vertices, Vec *corners, Vec *position, f32 size)
++{
++    for (int i = 0; i < 4; ++i) {
++        vertices[i].x = fmaf(corners[i].x, size, position->x);
++        vertices[i].y = fmaf(corners[i].y, size, position->y);
++        vertices[i].z = fmaf(corners[i].z, size, position->z);
+@@ -285,14 +246,4 @@
+-static inline void ResultQuadClear(register Vec *vertices)
+-{
+-    register f32 *zero = lbl_1_data_8E0;
+-    register f32 pair;
+-
+-    asm {
+-        psq_l pair, 0(zero), 0, 0
+-        psq_st pair, 0(vertices), 0, 0
+-        psq_st pair, 8(vertices), 0, 0
+-        psq_st pair, 16(vertices), 0, 0
+-        psq_st pair, 24(vertices), 0, 0
+-        psq_st pair, 32(vertices), 0, 0
+-        psq_st pair, 40(vertices), 0, 0
+-    }
++static inline void ResultQuadClear(Vec *vertices)
++{
++    for (int i = 0; i < 6; ++i)
++        memcpy((u8 *)vertices + i * 2 * sizeof(f32), lbl_1_data_8E0, 2 * sizeof(f32));
+@@ -303,18 +254,3 @@
+-static inline void ResultQuadTexCopy(register HuVec2f *textureCoords,
+-    register HuVec2f *patternCoords)
+-{
+-    register f32 first;
+-    register f32 second;
+-    register f32 third;
+-    register f32 fourth;
+-
+-    asm {
+-        psq_l first, 0(patternCoords), 0, 0
+-        psq_l second, 8(patternCoords), 0, 0
+-        psq_l third, 16(patternCoords), 0, 0
+-        psq_l fourth, 24(patternCoords), 0, 0
+-        psq_st first, 0(textureCoords), 0, 0
+-        psq_st second, 8(textureCoords), 0, 0
+-        psq_st third, 16(textureCoords), 0, 0
+-        psq_st fourth, 24(textureCoords), 0, 0
+-    }
++static inline void ResultQuadTexCopy(HuVec2f *textureCoords, HuVec2f *patternCoords)
++{
++    memcpy(textureCoords, patternCoords, 4 * sizeof(*textureCoords));
+@@ -374 +310 @@
+-        void *data = (void *)lbl_1_bss_14A8;
++        void *data = (void *)(intptr_t)lbl_1_bss_14A8;
+@@ -773 +709,4 @@
+-        GXSetArray(GX_VA_CLR0, &renderer->particles->color, sizeof(ResultDrawParticle));
++        /* [MP6] An interior pointer has no heap size to look up: give Aurora the span. */
++        mp6_gxarray_bind_span(GX_VA_CLR0, &renderer->particles->color,
++            renderer->particleCount ? (renderer->particleCount - 1) * sizeof(ResultDrawParticle) + sizeof(GXColor) : 0,
++            sizeof(ResultDrawParticle));
+@@ -832 +771 @@
+-    hookData->callback = (void *)callback;
++    hookData->callback = (void *)(intptr_t)callback;
+@@ -870,0 +810,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

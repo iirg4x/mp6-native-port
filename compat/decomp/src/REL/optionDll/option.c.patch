@@ -1,0 +1,26 @@
+--- a/src/REL/optionDll/option.c
++++ b/src/REL/optionDll/option.c
+@@ -0,0 +1,3 @@
++#include "game/audio.h"
++void HuAudStreamFadeOut(s32 streamNo);
++#include "game/mic.h"
+@@ -340 +343 @@
+-                    child->property = (void *)(mode++ & 3);
++                    child->property = (void *)(intptr_t)(mode++ & 3);
+@@ -391 +394 @@
+-    memberNo = (s32)process->property;
++    memberNo = (s32)(intptr_t)process->property;
+@@ -491,0 +495,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++
+@@ -12,0 +16 @@
++#include "mp6_widescreen.h"
+@@ -424,0 +429,7 @@
++            if (i == 0) {
++                /* Continue the cloud-frame outer edges, as in Party and Solo,
++                 * and the floor's outer ring so its back corners reach them.
++                 * The floor shares this model, so it is extended in place. */
++                mp6_widescreen_extend_pillar_edge(lbl_1_bss_66E[i], "pillar");
++                mp6_widescreen_extrude_model_border_xz(lbl_1_bss_66E[i], "yuka");
++            }

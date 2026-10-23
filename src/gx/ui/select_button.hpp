@@ -30,12 +30,18 @@ public:
     void set_modified(bool value);
     void set_value_label(const Rml::String &value);
     SelectButton &on_pressed(SelectButtonCallback callback);
+    void on_step(std::function<bool(int)> callback) { mStep = std::move(callback); }
+    void step_availability(std::function<bool(int)> callback) { mCanStep = std::move(callback); }
+    virtual bool can_step(int direction) const { return !disabled() && (!mCanStep || mCanStep(direction)); }
+    void update() override;
 
 protected:
     void update_props(Props props);
     virtual bool handle_nav_command(NavCommand cmd);
 
     Props mProps;
+    std::function<bool(int)> mStep;
+    std::function<bool(int)> mCanStep;
     Rml::Element *mKeyElem = nullptr;
     Rml::Element *mIconElem = nullptr;
     Rml::Element *mValueElem = nullptr;

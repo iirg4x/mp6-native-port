@@ -1,0 +1,117 @@
+--- a/include/REL/m638Dll.h
++++ b/include/REL/m638Dll.h
+@@ -29 +29,3 @@
+-/* State shared by the minigame scene and its timed callbacks. */
++/* Native views share one pointer-width-aware scene/team layout. */
++typedef struct M638SceneView M638SceneView;
++typedef struct M638TeamView M638TeamView;
+@@ -59 +61 @@
+-s32 fn_1_7660(s32 (*callback)(void *), void *data);
++M638Job *fn_1_7660(s32 (*callback)(void *), void *data);
+@@ -63,8 +65,2 @@
+-/* Scene lighting positions and the day/night lighting choice. */
+-typedef struct M638LightingView {
+-    u8 unknown000[1704]; /* Scene fields not used by the lighting callbacks. */
+-    Point3d lightPosition; /* Position of the scene's directional light. */
+-    Point3d lightTarget; /* Point the scene light aims toward. */
+-    u8 unknown6C0[44]; /* Scene fields not used by the lighting callbacks. */
+-    s16 alternateLight; /* Nonzero selects the alternate course lighting. */
+-} M638LightingView;
++/* This is a consumed view of the existing scene, not additional storage. */
++typedef M638SceneView M638LightingView;
+@@ -81,18 +77,5 @@
+-/* Model handles cached while the scene and course props are created. */
+-typedef struct M638ModelCacheView {
+-    u8 unknown000[1810]; /* Scene state preceding the shared model cache. */
+-    s16 models[74]; /* Model handles cached for the scene and course props. */
+-} M638ModelCacheView;
+-
+-/* Camera and status-sprite state used while the two team views move. */
+-typedef struct M638SceneCameraView {
+-    u8 unknown000[524]; /* Scene camera state preceding team 0's view model. */
+-    s16 team0Model; /* Team 0 camera-view model handle. */
+-    u8 unknown20E[834]; /* Scene camera state between the team view models. */
+-    s16 team1Model; /* Team 1 camera-view model handle. */
+-    u8 unknown552[310]; /* Scene camera state preceding split animation data. */
+-    M638CameraWork camera; /* Shared camera split transition state. */
+-    u8 unknown690[280]; /* Scene state preceding the status sprites. */
+-    s16 sprite0; /* First status sprite handle. */
+-    s16 sprite1; /* Second status sprite handle. */
+-} M638SceneCameraView;
++/* Existing scene model-cache interval, indexed by creation consumers. */
++typedef M638SceneView M638ModelCacheView;
++
++/* Combined view of independently consumed fields on the same scene object. */
++typedef M638SceneView M638SceneCameraView;
+@@ -116,16 +99,6 @@
+-/* Course lighting choice and cached course model handles. */
+-typedef struct M638ScenePropsView {
+-    u8 unknown000[1772]; /* Scene state preceding lighting and model handles. */
+-    s16 alternateLight; /* Nonzero selects the alternate course lighting. */
+-    u8 unknown6EE[36]; /* Scene state between lighting and model handles. */
+-    s16 models[74]; /* Cached scene and course prop model handles. */
+-} M638ScenePropsView;
+-
+-/* Input state used by a team and the player records assigned to it. */
+-typedef struct M638TeamInputView {
+-    u8 unknown000[784]; /* Team state preceding the current input values. */
+-    s16 active; /* Nonzero while this team accepts player input. */
+-    s16 button; /* Button selected for the current team action. */
+-    u8 unknown314[36]; /* Team state preceding the team variant. */
+-    s16 variant; /* Team index used by team-specific behavior. */
+-} M638TeamInputView;
++/* Only these consumers are named; unknown intervals are not new storage. */
++typedef M638SceneView M638ScenePropsView;
++
++/* Views over the existing allocated team/player records. Unknown intervals
++ * are explicit; these declarations do not allocate storage or name originals. */
++typedef M638TeamView M638TeamInputView;
+@@ -168,26 +141,4 @@
+-typedef struct M638SceneSplitView {
+-    u8 unknown000[1672]; /* Scene state preceding the split transition. */
+-    M638CameraWork camera; /* Progress and horizontal position of the split. */
+-    u8 unknown690[106]; /* Scene state preceding the selected screen side. */
+-    s16 side; /* Team side being brought to the full-screen view. */
+-} M638SceneSplitView;
+-typedef struct M638TeamFinishView {
+-    u8 unknown000[8]; /* Team finish state preceding the output value. */
+-    f32 output; /* Current output passed to the finish presentation. */
+-    u8 unknown00C[20]; /* Team finish state preceding the source value. */
+-    f32 source; /* Starting value blended into the finish presentation. */
+-    u8 unknown024[488]; /* Team finish state preceding the finish model. */
+-    s16 model; /* Winning team's finish model handle. */
+-    u8 unknown20E[242]; /* Team finish model state preceding blend values. */
+-    f32 blend; /* Current visual blend for the team's finish presentation. */
+-    f32 base; /* Blend value used as the finish transition's starting point. */
+-    f32 elapsed; /* Frames elapsed in the finish transition. */
+-    s32 state; /* Finish callback phase. */
+-    u8 unknown310[40]; /* Team finish state preceding the team variant. */
+-    s16 variant; /* Team index used to select finish sounds and assets. */
+-} M638TeamFinishView;
+-
+-typedef struct M638SceneChoicesView {
+-    u8 unknown000[1788]; /* Scene state preceding course choice values. */
+-    s16 choices[11]; /* Selected course event choices. */
+-} M638SceneChoicesView;
++typedef M638SceneView M638SceneSplitView;
++typedef M638TeamView M638TeamFinishView;
++
++typedef M638SceneView M638SceneChoicesView;
+@@ -226,9 +177 @@
+-typedef struct M638SceneCourseView {
+-    u8 unknown000[1728]; /* Scene state preceding course event timing. */
+-    f32 eventTimes[10]; /* Course motion times for the event hooks. */
+-    f32 endTime; /* Course motion time at the end of the segment. */
+-    s16 alternateLight; /* Nonzero selects alternate course lighting. */
+-    u8 unknown6EE[14]; /* Scene course state preceding selected choices. */
+-    s16 choices[11]; /* Selected course event choices. */
+-    s16 models[74]; /* Cached model handles for the course scene. */
+-} M638SceneCourseView;
++typedef M638SceneView M638SceneCourseView;
+@@ -291,0 +235 @@
++#if !defined(TARGET_PC)
+@@ -292,0 +237,2 @@
++#endif
++#if !defined(TARGET_PC)
+@@ -293,0 +240 @@
++#endif

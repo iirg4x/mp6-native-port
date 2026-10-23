@@ -1,0 +1,127 @@
+--- a/src/REL/m675Dll/player.c
++++ b/src/REL/m675Dll/player.c
+@@ -0,0 +1,2 @@
++#include "mp6_m675.h"
++#include "mp6_widescreen.h"
+@@ -16,21 +17,0 @@
+-typedef struct M675Collision M675Collision;
+-struct M675Collision {
+-    u32 flags, mask; /* Collision enable flags and overlap-channel mask. */
+-    u32 type; /* Event type reported by this collision record. */
+-    s32 index; /* Owner-supplied record index. */
+-    s32 shapeType; /* Collision shape selector: 0 sphere, 10 ring, 11 boundary. */
+-    OMOBJ *owner; /* Object that owns this collision record. */
+-    void *excludedOwner; /* Other owner ignored when the collision pair is checked. */
+-    OMOBJ_FUNC update; /* Callback that refreshes the owner's transform. */
+-    s32 (*contact)(M675Collision *, M675Collision *); /* Pair-contact callback. */
+-    Vec *position, *velocity; /* World position and velocity used by collision response. */
+-    Vec positionCopy; /* Position snapshot stored when the record is initialized. */
+-    f32 radius; /* Collision radius. */
+-    f32 yieldOnContact; /* Nonzero makes this sphere move against a zero-valued sphere. */
+-    s32 handled; /* Nonzero after another callback handles this event. */
+-};
+-typedef struct M675EffectRegistration {
+-    s32 active; /* Nonzero enables drawing this registration's ground ring. */
+-    f32 radius; /* World-space radius around position. */
+-    Vec *position; /* Address of the registered effect's world position. */
+-} M675EffectRegistration;
+@@ -52,16 +32,0 @@
+-typedef struct M675ActorState {
+-    M675Collision collision; /* Player contact data; prop instances leave it disabled. */
+-    s32 playerMappingIndex; /* Player mapping used by the player gameplay helpers. */
+-    s32 formationIndexAtCreation; /* Formation slot supplied when a player is created. */
+-    s32 formationIndex; /* Current player slot in the formation arrays. */
+-    s32 active; /* Gates human input, motion-offset easing, result arrival reporting and character
+-                 * feedback. */
+-    Vec basePosition; /* Player formation position before a motion offset is applied. */
+-    Vec position, velocity, rotation; /* World position, per-frame movement and Euler angles. */
+-    f32 baseYaw; /* Player facing angle before its motion offset is applied. */
+-    u32 buttonsDown, buttons; /* Buttons pressed this frame and currently held. */
+-    f32 stickAngle, stickMagnitude; /* Stick angle in degrees and its magnitude. */
+-    s32 motion, motionFrame; /* Selected motion and transform-update count since its selection. */
+-    s32 requestedMotion; /* Motion queued by the current frame's behavior. */
+-    f32 motionSpeed; /* Playback speed for the queued motion. */
+-} M675ActorState;
+@@ -124,18 +88,0 @@
+-void fn_1_B14(s32,s32,s32);
+-s32 fn_1_A98(s32);
+-void fn_1_B4C(s32);
+-s32 fn_1_B6C(void);
+-s32 fn_1_D3CC(void);
+-s32 fn_1_D494(s32,s32);
+-s32 fn_1_A60(void);
+-s32 fn_1_F058(s32);
+-Vec *fn_1_D550(s32,s32);
+-s32 fn_1_32EC(Vec *);
+-void fn_1_4424(s32,s32,Vec *,s32,s32);
+-void fn_1_4BB4(Vec *,Vec *,f32,Vec *);
+-f32 fn_1_47DC(f32,f32,f32);
+-f32 fn_1_48F8(f32,f32);
+-s32 fn_1_10170(M675Collision *);
+-void fn_1_E918(M675EffectRegistration *);
+-void fn_1_4F2C(HUPROCESS *manager);
+-void fn_1_5048(void);
+@@ -155,2 +101,0 @@
+-void fn_1_61F4(M675ActorState *state);
+-void fn_1_6210(M675ActorState *state, s32 motionIndex, f32 speed);
+@@ -162 +107 @@
+-s32 fn_1_66EC(M675Collision *callback, M675Collision *event);
++s32 fn_1_66EC(void *callbackContextPtr, void *eventContextPtr);
+@@ -167,2 +111,0 @@
+-void fn_1_74C8(M675ActorState *state);
+-void fn_1_74FC(M675ActorState *state, s32 modelId);
+@@ -351,0 +296,22 @@
++/* Widescreen, view only: players wait for the intro just outside the native
++ * 4:3 frame, which a wide frame shows. Draw each one from outside the wide
++ * frame instead, converging on its real position as it walks to its first
++ * mark. The actor's position, walk, timing and arrival barrier stay native,
++ * so the game plays out exactly as at 4:3. */
++static void mp6_m675_entrance_view(M675PlayerWork *work, s32 model)
++{
++    Vec shown = work->actor.position;
++    s32 slot = work->actor.formationIndex;
++    float k = mp6_widescreen_scale_factor();
++    fn_1_74FC(&work->actor, model);
++    if (k <= 1.0f || work->processPhase != 0 || work->phase > 2 || slot < 0 || slot >= 4)
++        return;
++    float start = lbl_1_data_1A8[slot].x, mark = lbl_1_data_1E8[slot].x;
++    float f = (shown.x - mark) / (start - mark);
++    if (f <= 0.0f) return;
++    shown.x += (f < 1.0f ? f : 1.0f) * (k - 1.0f) * start;
++    Hu3DModelPosSetV((s16)model, &shown);
++}
++
+@@ -395 +347 @@
+-    state = HuMemDirectMallocNum(HEAP_HEAP, 460, HU_MEMNUM_OVL);
++    state = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M675PlayerWork), HU_MEMNUM_OVL);
+@@ -397 +349 @@
+-    memset(state, 0, 460);
++    memset(state, 0, sizeof(M675PlayerWork));
+@@ -769 +741 @@
+-    fn_1_74FC(&state->actor, model);
++    mp6_m675_entrance_view(state, model);
+@@ -924,2 +878,5 @@
+-s32 fn_1_66EC(M675Collision *callback, M675Collision *event)
+-{
++s32 fn_1_66EC(void *callbackContextPtr, void *eventContextPtr)
++{
++    M675Collision *callback = callbackContextPtr;
++    M675CollisionHeader *event = eventContextPtr;
++    M675Collision *sphereEvent = eventContextPtr;
+@@ -934 +891 @@
+-    if (event->shapeType == 0 && event->handled == 0) {
++    if (event->shapeType == 0 && sphereEvent->handled == 0) {
+@@ -939 +896 @@
+-        event->handled = 1;
++        sphereEvent->handled = 1;
+@@ -1215,0 +1173,2 @@
++
++/* Storage only; omOvlKill owns runtime allocation teardown. */
+@@ -603,3 +603,4 @@
+-        /* This completion path returns without a value even though the player update
+-         * tests its result. */
+-        return;
++        /* Hardware returned the non-null work pointer still in r3; native code
++         * must return the completion explicitly or the player never reaches its
++         * win/lose phases. */
++        return done;

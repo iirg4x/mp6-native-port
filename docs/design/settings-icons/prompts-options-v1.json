@@ -1,0 +1,48 @@
+{
+  "generator": "built-in imagegen",
+  "style_reference": "res/menu/picture.png",
+  "assets": [
+    {
+      "name": "option-preset",
+      "prompt": "Use case: stylized-concept. Create ONE isolated raster menu illustration for a modern Mario Party-inspired settings card. Reference is STYLE ONLY, do not reuse the picture frame or star. Match its simple bright pictogram language: large readable silhouette, saturated game colors, restrained two-tone shading, fine white outer edge, no photorealism, no heavy glossy plastic, no texture noise. Subject: three chunky Mario dice blocks, one red, one blue, one yellow, arranged as a compact selectable trio, white pips. Centered square composition filling 80 percent of canvas, entire object visible, generous clean transparent margins. True transparent RGBA background. No text, no panel, no duplicate objects except explicitly requested.",
+      "source": "option-preset-v1.png",
+      "runtime": "res/menu/option-preset.png"
+    },
+    {
+      "name": "option-shadow",
+      "prompt": "Use case: stylized-concept. Create ONE isolated raster menu illustration for a modern Mario Party-inspired settings card. Reference is STYLE ONLY, do not reuse the picture frame or star. Match its simple bright pictogram language: large readable silhouette, saturated game colors, restrained two-tone shading, fine white outer edge, no photorealism, no heavy glossy plastic, no texture noise. Subject: a single white Yoshi egg with green spots standing over a clearly defined soft oval ground shadow, the shadow is part of the illustration on otherwise transparent background. Centered square composition filling 80 percent of canvas, entire object visible, generous clean transparent margins. True transparent RGBA background. No text, no panel, no duplicate objects except explicitly requested.",
+      "source": "option-shadow-v1.png",
+      "runtime": "res/menu/option-shadow.png"
+    },
+    {
+      "name": "option-edges",
+      "prompt": "Use case: stylized-concept. Create ONE isolated raster menu illustration for a modern Mario Party-inspired settings card. Reference is STYLE ONLY, do not reuse the picture frame or star. Match its simple bright pictogram language: large readable silhouette, saturated game colors, restrained two-tone shading, fine white outer edge, no photorealism, no heavy glossy plastic, no texture noise. Subject: one red Koopa shell angled three quarters, with bold exceptionally smooth clean white rim and one tiny glint at the curved edge. Centered square composition filling 80 percent of canvas, entire object visible, generous clean transparent margins. True transparent RGBA background. No text, no panel, no duplicate objects except explicitly requested.",
+      "source": "option-edges-v1.png",
+      "runtime": "res/menu/option-edges.png"
+    },
+    {
+      "name": "option-occlusion",
+      "prompt": "Use case: stylized-concept. Create ONE isolated raster menu illustration for a modern Mario Party-inspired settings card. Reference is STYLE ONLY, do not reuse the picture frame or star. Match its simple bright pictogram language: large readable silhouette, saturated game colors, restrained two-tone shading, fine white outer edge, no photorealism, no heavy glossy plastic, no texture noise. Subject: a short green Mario warp pipe on a small cream floor tile, gentle close contact shading exactly at its base, no heavy cast shadow. Centered square composition filling 80 percent of canvas, entire object visible, generous clean transparent margins. True transparent RGBA background. No text, no panel, no duplicate objects except explicitly requested.",
+      "source": "option-occlusion-v1.png",
+      "runtime": "res/menu/option-occlusion.png"
+    },
+    {
+      "name": "option-effects",
+      "prompt": "Use case: stylized-concept. Create ONE isolated raster menu illustration for a modern Mario Party-inspired settings card. Reference is STYLE ONLY, do not reuse the picture frame or star. Match its simple bright pictogram language: large readable silhouette, saturated game colors, restrained two-tone shading, fine white outer edge, no photorealism, no heavy glossy plastic, no texture noise. Subject: two colorful crossed party maracas with a few tiny musical notes. Centered square composition filling 80 percent of canvas, entire object visible, generous clean transparent margins. True transparent RGBA background. No text, no panel, no duplicate objects except explicitly requested.",
+      "source": "option-effects-v1.png",
+      "runtime": "res/menu/option-effects.png"
+    },
+    {
+      "name": "option-camera",
+      "prompt": "Use case: stylized-concept. Create ONE isolated raster menu illustration for a modern Mario Party-inspired settings card. Reference is STYLE ONLY, do not reuse the picture frame or star. Match its simple bright pictogram language: large readable silhouette, saturated game colors, restrained two-tone shading, fine white outer edge, no photorealism, no heavy glossy plastic, no texture noise. Subject: Lakitu's compact black camera resting on a small smiling white cloud, large lens, no character. Centered square composition filling 80 percent of canvas, entire object visible, generous clean transparent margins. True transparent RGBA background. No text, no panel, no duplicate objects except explicitly requested.",
+      "source": "option-camera-v1.png",
+      "runtime": "res/menu/option-camera.png"
+    }
+  ],
+  "unused": [
+    {
+      "name": "option-speed",
+      "reason": "Generation failed. Fast Forward uses the functional double-play transport symbol instead."
+    }
+  ]
+}

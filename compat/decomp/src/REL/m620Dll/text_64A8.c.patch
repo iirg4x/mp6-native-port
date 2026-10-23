@@ -1,0 +1,127 @@
+--- a/src/REL/m620Dll/text_64A8.c
++++ b/src/REL/m620Dll/text_64A8.c
+@@ -2,0 +3,2 @@
++#include "mp6_widescreen.h"
++#include <string.h>
+@@ -30,2 +32,2 @@
+-s32 fn_1_4408(s32 resource);
+-s32 fn_1_4510(s32 model, s32 resource);
++int fn_1_4408(int dataNum);
++int fn_1_4510(int model, int dataNum);
+@@ -84,2 +86,2 @@
+-    s32 secondaryRelation;
+-    s32 invoke;
++    OMOBJ *secondaryRelation;
++    void (*invoke)(s32 argument);
+@@ -157,4 +159,6 @@
+-    s32 ringActive;
+-    s32 ringBlendMode;
+-    f32 ringRadius;
+-    Vec *ringPosition;
++    struct {
++        s32 ringActive;
++        s32 ringBlendMode;
++        f32 ringRadius;
++        Vec *ringPosition;
++    };
+@@ -348,0 +353,36 @@
++#include "game/hu3d.h"
++/* The garden stage is the prop whose HSF carries the outer grass. */
++static int mp6_m620_is_garden(s16 model)
++{
++    HSF_DATA *hsf = Hu3DData[model].hsf;
++    s32 i;
++
++    for (i = 0; hsf != NULL && i < hsf->objectNum; i++) {
++        if (hsf->object[i].name != NULL && strcmp(hsf->object[i].name, "gro_out_a") == 0) {
++            return 1;
++        }
++    }
++    return 0;
++}
++
++/* Continue one outer ground piece's flat grass (local y = 0) away from the
++ * arena centre, which is the world origin seen from the piece's frame. */
++static void mp6_m620_extend_ground(s16 model, const char *name)
++{
++    HSF_DATA *hsf = Hu3DData[model].hsf;
++    s32 i;
++
++    for (i = 0; i < hsf->objectNum; i++) {
++        HSF_OBJECT *object = &hsf->object[i];
++        if (object->name != NULL && strcmp(object->name, name) == 0) {
++            f32 angle = -object->mesh.base.rot.y * 3.14159265f / 180.0f;
++            f32 x = -object->mesh.base.pos.x, z = -object->mesh.base.pos.z;
++            mp6_widescreen_extend_floor_at(model, name, 0, 0.0f, x * cosf(angle) + z * sinf(angle),
++                                           -x * sinf(angle) + z * cosf(angle), 4.0f);
++            mp6_widescreen_extend_terrain_sides(model, name, x * cosf(angle) + z * sinf(angle), 1);
++            mp6_widescreen_extend_terrain_outer_sides(model, name, x * cosf(angle) + z * sinf(angle), 2.0f, 1);
++            return;
++        }
++    }
++}
++
+@@ -385,0 +426,9 @@
++        if (mp6_m620_is_garden(model)) {
++            static const char *const mp6_m620_ground[] = {
++                "gro_out_a", "gro_out_b", "gro_out_c", "gro_out_d", "gro_out_e",
++                "gro_out_f", "gro_out_g", "gro_out_h", "gro_out_i",
++            };
++            for (i = 0; i < (s32)(sizeof(mp6_m620_ground) / sizeof(mp6_m620_ground[0])); i++) {
++                mp6_m620_extend_ground(model, mp6_m620_ground[i]);
++            }
++        }
+@@ -569 +618,2 @@
+-    u32 header[8];
++    u32 header[5];
++    void *headerPointers[3];
+@@ -578 +628 @@
+-extern u32 lbl_1_bss_338[16];
++extern u64 lbl_1_bss_338[10];
+@@ -580 +630 @@
+-    {1, 4, 2, 0, 11, 0, 0, 0}, {0.0f, 0.0f, 0.0f}, 580.0f, 580.0f, 1
++    {1, 4, 2, 0, 11}, {0, 0, 0}, {0.0f, 0.0f, 0.0f}, 580.0f, 580.0f, 1
+@@ -582 +632 @@
+-extern s32 fn_1_FFCC(void *value);
++extern int fn_1_FFCC(void *value);
+@@ -591 +641 @@
+-    memset(destination, 0, 64);
++    memset(destination, 0, sizeof(lbl_1_bss_338));
+@@ -682 +732 @@
+-extern s32 fn_1_E570(s32, s32, f32, s32, s32, s32);
++extern s32 fn_1_E570(Point3d *pointB, Point3d *pointA, f32 trailLength, s32 sourceMode, s32 targetMode, s32 resourceId);
+@@ -703,2 +753,2 @@
+-    work->firstEffect = fn_1_E570((s32)&positionCopy,
+-                                  (s32)&work->appearance.destination,
++    work->firstEffect = fn_1_E570(&positionCopy,
++                                  &work->appearance.destination,
+@@ -709,2 +759,2 @@
+-    work->secondEffect = fn_1_E570((s32)&work->target,
+-                                   (s32)&positionCopy,
++    work->secondEffect = fn_1_E570(&work->target,
++                                   &positionCopy,
+@@ -737,2 +787,2 @@
+-extern void fn_1_E6D0(s32 effectIndex, Vec *position, Vec *adjustedPosition);
+-extern void fn_1_E8A8(s32 effectIndex, f32 blend);
++extern s32 fn_1_E6D0(s32 recordIndex, Vec *position, Vec *adjustedPosition);
++extern void fn_1_E8A8(s32 effectIndex);
+@@ -742 +792 @@
+-extern void fn_1_63A0(s32 playerIndex, Vec *position);
++extern void fn_1_63A0(s32 playerIndex, HuVecF *position);
+@@ -765 +815 @@
+-        fn_1_E8A8(work->secondEffect, 0.2f);
++        fn_1_E8A8(work->secondEffect);
+@@ -920 +970 @@
+-extern M620PlayerLaunchSetup *fn_1_10118(s32 type, s32 playerIndex);
++extern void *fn_1_10118(u32 type, s32 id);
+@@ -1365 +1415 @@
+-extern s32 fn_1_FF54(void *value);
++extern int fn_1_FF54(void *value);
+@@ -1523 +1573 @@
+-extern f32 fn_1_4620(f32 start, f32 end, f32 factor);
++extern float fn_1_4620(float start, float end, float factor);
+@@ -1648 +1698 @@
+-extern float fn_1_47F0(Vec *first, M620A618Point *second);
++extern float fn_1_47F0(HuVecF *start, HuVecF *end);
+@@ -1775,0 +1826 @@
++s32 fn_1_FC0(void);

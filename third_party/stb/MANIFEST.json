@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/nothings/stb",
+  "revision": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+  "file": "stb_image.h",
+  "version": "2.30",
+  "license": "MIT or public domain; license text is included at the end of stb_image.h",
+  "purpose": "JPEG decoding for original disc THP movie previews"
+}

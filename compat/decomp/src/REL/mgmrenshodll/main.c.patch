@@ -1,0 +1,14 @@
+--- a/src/REL/mgmrenshodll/main.c
++++ b/src/REL/mgmrenshodll/main.c
+@@ -35 +35 @@
+-extern HU3D_MODELID fn_1_0(s32 minigameIndex, s32 stillIndex, Vec *position);
++extern HU3D_MODELID fn_1_0(s16 minigameIndex, s16 stillIndex, Vec *position);
+@@ -73,0 +74,3 @@
++extern void fn_1_D2BC(void);
++extern void fn_1_1E9C(void);
++extern void fn_1_D3A8(void);
+@@ -414,0 +418 @@
++    stop = 1;
+@@ -451,2 +454,0 @@
+-    /* stop is read without initialization; the 25-step limit applies only if this loop is
+-     * entered. */

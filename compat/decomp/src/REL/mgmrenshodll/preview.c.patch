@@ -1,0 +1,35 @@
+--- a/src/REL/mgmrenshodll/preview.c
++++ b/src/REL/mgmrenshodll/preview.c
+@@ -0,0 +1 @@
++#include "mp6_widescreen.h"
+@@ -53,3 +54,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSpriteId);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        if (movieSpriteId != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSpriteId);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        }
+@@ -159,3 +162,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        if (movieSprite != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        }
+@@ -180 +185,4 @@
+-    Hu3DFbCopyExec(0, 0, 284, 256, GX_TF_RGB565, 0, lbl_1_bss_94);
++    if (HuTHPStartCheck() != 0) {
++        Hu3DFbCopyExec((s16)((mp6_widescreen_render_width() - 640) / 2), 0,
++                       284, 256, GX_TF_RGB565, 0, lbl_1_bss_94);
++    }
+@@ -222,0 +231,2 @@
++    /* Native GX submits each primitive explicitly; the PPC FIFO did not. */
++    GXEnd();
+@@ -241 +251,2 @@
+-}
++    GXEnd();
++}

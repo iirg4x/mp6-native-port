@@ -1,0 +1,67 @@
+--- a/src/REL/m674Dll/effects.c
++++ b/src/REL/m674Dll/effects.c
+@@ -10,0 +11,2 @@
++#include "mp6_widescreen.h"
++#include "mp6_gxarray_registry.h"
+@@ -31 +33 @@ void fn_1_EBDC(M674TextureWork *work);
+-void fn_1_F028(M674TextureWork *work, Mtx matrix);
++void fn_1_F028(M674TextureWork *work, f32 (*viewMatrix)[4]);
+@@ -192 +194 @@ void fn_1_E56C(HU3D_MODEL *unusedObject, Mtx *matrix)
+-            u32 color = sprite->color.packed;
++            GXColor color = sprite->color.channels;
+@@ -199,24 +201,13 @@ void fn_1_E56C(HU3D_MODEL *unusedObject, Mtx *matrix)
+-            GXWGFifo.f32 = centerX - halfWidth;
+-            GXWGFifo.f32 = centerY;
+-            GXWGFifo.f32 = centerZ - halfWidth;
+-            GXWGFifo.u32 = color;
+-            GXWGFifo.f32 = 0.0f;
+-            GXWGFifo.f32 = 0.0f;
+-            GXWGFifo.f32 = centerX + halfWidth;
+-            GXWGFifo.f32 = centerY;
+-            GXWGFifo.f32 = centerZ - halfWidth;
+-            GXWGFifo.u32 = color;
+-            GXWGFifo.f32 = 1.0f;
+-            GXWGFifo.f32 = 0.0f;
+-            GXWGFifo.f32 = centerX + halfWidth;
+-            GXWGFifo.f32 = centerY;
+-            GXWGFifo.f32 = centerZ + halfWidth;
+-            GXWGFifo.u32 = color;
+-            GXWGFifo.f32 = 1.0f;
+-            GXWGFifo.f32 = 1.0f;
+-            GXWGFifo.f32 = centerX - halfWidth;
+-            GXWGFifo.f32 = centerY;
+-            GXWGFifo.f32 = centerZ + halfWidth;
+-            GXWGFifo.u32 = color;
+-            GXWGFifo.f32 = 0.0f;
+-            GXWGFifo.f32 = 1.0f;
++            GXPosition3f32(centerX - halfWidth, centerY, centerZ - halfWidth);
++            GXColor4u8(color.r, color.g, color.b, color.a);
++            GXTexCoord2f32(0.0f, 0.0f);
++            GXPosition3f32(centerX + halfWidth, centerY, centerZ - halfWidth);
++            GXColor4u8(color.r, color.g, color.b, color.a);
++            GXTexCoord2f32(1.0f, 0.0f);
++            GXPosition3f32(centerX + halfWidth, centerY, centerZ + halfWidth);
++            GXColor4u8(color.r, color.g, color.b, color.a);
++            GXTexCoord2f32(1.0f, 1.0f);
++            GXPosition3f32(centerX - halfWidth, centerY, centerZ + halfWidth);
++            GXColor4u8(color.r, color.g, color.b, color.a);
++            GXTexCoord2f32(0.0f, 1.0f);
++            GXEnd();
+@@ -351 +342 @@ void fn_1_EE3C(M674TextureWork *work, GXTexMapID map, u32 matrixId, Mtx inputMat
+-    GXSetTexCopySrc(0, 0, 640, 480);
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
+@@ -357 +348 @@ void fn_1_EE3C(M674TextureWork *work, GXTexMapID map, u32 matrixId, Mtx inputMat
+-    C_MTXLightPerspective(perspectiveMatrix, fov, 1.2f, 0.5f,
++    C_MTXLightPerspective(perspectiveMatrix, fov, 1.2f * mp6_widescreen_scale_factor(), 0.5f,
+@@ -574,3 +565,3 @@ void fn_1_F5D8(M674TextureWork *work) {
+-    GXSetArray(GX_VA_POS, (void *)lbl_1_rodata_6C0, 6U);
+-    GXSetArray(GX_VA_CLR0, (void *)lbl_1_rodata_5A0, 2U);
+-    GXSetArray(GX_VA_TEX0, (void *)lbl_1_rodata_780, 4U);
++    mp6_gxarray_bind_span(GX_VA_POS, lbl_1_rodata_6C0, sizeof(lbl_1_rodata_6C0), 6);
++    mp6_gxarray_bind_span(GX_VA_CLR0, lbl_1_rodata_5A0, sizeof(lbl_1_rodata_5A0), 2);
++    mp6_gxarray_bind_span(GX_VA_TEX0, lbl_1_rodata_780, sizeof(lbl_1_rodata_780), 4);
+@@ -629 +620,3 @@ void fn_1_F9A4(Vec *origin, f32 size, f32 scale, f32 scaleStep, u8 alpha)
+-            slot->color.packed = (s32)alpha - 256;
++            /* Retail stored 0xFFFFFF00 | alpha big-endian: white, fading alpha. */
++            slot->color.channels.r = slot->color.channels.g = slot->color.channels.b = 255;
++            slot->color.channels.a = alpha;

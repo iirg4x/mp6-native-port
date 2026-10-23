@@ -32,7 +32,8 @@ class AndroidProfileSummary(unittest.TestCase):
             self.assertFalse(summary.thermal_evidence(run,10)[0]['valid'])
             self.assertEqual(summary.thermal_evidence(run,None)[0],dict(available=False))
 
-    def summarize(self, log, resume=None, request=None, marker=None, later_resume=None):
+    def summarize(self, log, resume=None, request=None, marker=None, later_resume=None,
+                  warmup_board_ticks=None):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
             run=root/'build/session/run'
@@ -41,6 +42,8 @@ class AndroidProfileSummary(unittest.TestCase):
             if request is not None:
                 (run/'request.json').write_text(json.dumps(request))
             args=['summary','run','--session','session']
+            if warmup_board_ticks is not None:
+                args += ['--warmup-board-ticks', str(warmup_board_ticks)]
             if resume is not None:
                 (run/'resume-1.json').write_text(json.dumps({'last_reported_tick':resume}))
                 if marker is None:
@@ -61,8 +64,59 @@ class AndroidProfileSummary(unittest.TestCase):
         result=self.summarize(log)
         self.assertEqual(result['presents_hz']['n'],2)
         self.assertEqual(result['presents_hz']['median'],191)
+        self.assertNotIn('surface_success_rate_1s',result)
         self.assertTrue(result['measurement_window']['full_tick_windows_only'])
         self.assertTrue(result['measurement_window']['valid'])
+
+    def test_surface_success_rate_is_optional_and_parsed_separately(self):
+        log='[EVENT] w01.live=board tick=100\n'
+        log+='[MP6-TICKRATE] ticks=250 rate=300 tick=2200\n'
+        log+='[MP6-PRESENTRATE] window=5.00s presents=1500 rate=300.000 surface-success-rate-1s=287.500 (cum: begin-frames=1500 end-frames=1500 ticks=2200)\n'
+        log+='[MP6-GPU] span=3.2\n'
+        result=self.summarize(log,warmup_board_ticks=1800)
+        self.assertEqual(result['presents_hz']['median'],300)
+        self.assertEqual(result['surface_success_rate_1s']['n'],1)
+        self.assertEqual(result['surface_success_rate_1s']['median'],287.5)
+
+    def test_zero_surface_success_rate_is_present_and_legacy_logs_stay_absent(self):
+        log='[EVENT] w01.live=board tick=100\n'
+        log+='[MP6-TICKRATE] ticks=250 rate=300 tick=2200\n'
+        log+='[MP6-PRESENTRATE] window=5.00s presents=0 rate=0.000 surface-success-rate-1s=0.000 (cum: begin-frames=0 end-frames=0 ticks=2200)\n'
+        log+='[MP6-GPU] span=0.0\n'
+        result=self.summarize(log,warmup_board_ticks=1800)
+        self.assertEqual(result['surface_success_rate_1s']['n'],1)
+        self.assertEqual(result['surface_success_rate_1s']['mean'],0.0)
+        self.assertEqual(result['surface_success_rate_1s']['median'],0.0)
+
+    def test_present_rate_samples_surface_success_once_per_report(self):
+        bridge = (Path(__file__).resolve().parents[1] / 'src/gx/aurora_bridge.c').read_text()
+        block = bridge[bridge.index('static void mp6_present_rate_log(void)'):
+                       bridge.rindex('static void mp6_present_rate_log_final(void)')]
+        self.assertIn('if (elapsed >= 5.0)', block)
+        self.assertEqual(block.count('surfaceSuccessRate1s ='),1)
+        self.assertEqual(block.count('surface-success-rate-1s=%.3f'),1)
+
+    def test_explicit_warmup_cutoff_excludes_earlier_windows(self):
+        log='[EVENT] w01.live=board tick=100\n'
+        log+='[MP6-TICKRATE] ticks=250 rate=300 tick=1900\n'
+        log+='[MP6-PRESENTRATE] rate=300\n[MP6-GPU] span=3.2\n'
+        log+='[MP6-TICKRATE] ticks=50 rate=301 tick=1950\n'
+        log+='[MP6-PRESENTRATE] rate=301\n[MP6-GPU] span=3.1\n'
+        result=self.summarize(log,warmup_board_ticks=1800)
+        self.assertEqual(result['measurement_window']['warmup_board_ticks'],1800)
+        self.assertEqual(result['measurement_window']['first_tick'],1900)
+        self.assertEqual(result['presents_hz']['n'],1)
+        self.assertEqual(result['presents_hz']['median'],301)
+
+    def test_invalid_warmup_bounds_fail_before_run_file_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for value in ('599', '6001', 'not-an-integer'):
+                args=['summary','missing','--session','session','--warmup-board-ticks',value]
+                with self.subTest(value=value), patch.object(summary,'ROOT',root), \
+                     patch.object(sys,'argv',args), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        summary.main()
 
     def test_resume_warmup_and_unknown_window_are_not_admitted(self):
         log='[EVENT] w01.live=board tick=100\n'

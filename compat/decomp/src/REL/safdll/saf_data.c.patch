@@ -1,0 +1,6 @@
+--- a/src/REL/safdll/saf_data.c
++++ b/src/REL/safdll/saf_data.c
+@@ -33,0 +34,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

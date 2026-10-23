@@ -1,0 +1,14 @@
+--- a/src/REL/m665dll/scene.c
++++ b/src/REL/m665dll/scene.c
+@@ -2,0 +3,2 @@
++#include <string.h>
++#include "mp6_widescreen.h"
+@@ -219,0 +222,3 @@
++            mp6_widescreen_extend_terrain_outer_sides(modelId, "ground", 0.0f, 6.0f, 1);
++            mp6_widescreen_extend_terrain_outer_sides(modelId, "floor2", 0.0f, 2.0f, 1);
++            mp6_widescreen_extend_terrain_outer_sides(modelId, "floor_N", 0.0f, 6.0f, 1);
+@@ -346 +351 @@
+-void fn_1_F0(s16 mode, s16 frame);
++void fn_1_F0(void);
+@@ -354 +358,0 @@
+-void fn_1_200(s16 mode, s16 frame);

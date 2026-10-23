@@ -1,0 +1,16 @@
+--- a/src/REL/mgmtournamentdll/camera.c
++++ b/src/REL/mgmtournamentdll/camera.c
+@@ -0,0 +1 @@
++#include "mp6_mgmtournament_native.h"
+@@ -20,6 +21,5 @@
+-void fn_1_14C8(OMOBJ *object);
+-s16 fn_1_A42C(void);
+-void fn_1_143C(s16 viewIndex, u32 durationFrames);
+-void fn_1_16F8(HU3D_CAMERA *camera, Vec *startPosition, Vec *startTarget, const Vec *endPosition,
+-               const Vec *endTarget, f32 durationFrames, f32 elapsedFrames);
+-void fn_1_7C78(Vec *center);
++
++
++
++
++

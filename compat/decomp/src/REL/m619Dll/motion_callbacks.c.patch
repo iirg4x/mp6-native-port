@@ -1,0 +1,5 @@
+--- a/src/REL/m619Dll/motion_callbacks.c
++++ b/src/REL/m619Dll/motion_callbacks.c
+@@ -143 +143 @@
+-    return (s32)node;
++    return node != NULL;

@@ -1,0 +1,43 @@
+--- a/src/REL/m658dll/math_camera.c
++++ b/src/REL/m658dll/math_camera.c
+@@ -6,0 +7 @@
++#include "mp6_widescreen.h"
+@@ -20 +20,0 @@
+-typedef struct M658PoolNode { struct M658PoolNode *prev; struct M658PoolNode *next; } M658PoolNode;
+@@ -22 +21,0 @@
+-typedef struct M658Pool { M658PoolNode *active; M658PoolNode *free; u8 reserved08[8]; } M658Pool;
+@@ -25,6 +23,0 @@
+-typedef struct M658RegistryDescriptorView {
+-    void (*render)(void);
+-    void (*update)(void *item, s32 event);
+-    s32 itemBytes;
+-    s32 count;
+-} M658RegistryDescriptorView;
+@@ -44 +37 @@
+-extern const M658RegistryDescriptorView lbl_1_data_494[];
++extern M658RegistryDescriptor lbl_1_data_494[];
+@@ -341,0 +335,4 @@
++            if (entry->resourceId == 0x750003) {
++                /* The colored base plane ends before the animated star layers. */
++                mp6_widescreen_extend_color_rim(rootModelId, "642nightSKYa1", 2, 0, 22);
++            }
+@@ -869 +866 @@
+-static inline void DebugValue(u32 address) { }
++static inline void DebugValue(uintptr_t address) { }
+@@ -885 +882 @@
+-    DebugValue((u32)(i = 0, material = modelData->hsf->material));
++    DebugValue((uintptr_t)(i = 0, material = modelData->hsf->material));
+@@ -893 +890 @@
+-        DebugValue((u32)(i++, material++));
++        DebugValue((uintptr_t)(i++, material++));
+@@ -909 +906 @@
+-    DebugValue((u32)(i = 0, material = modelData->hsf->material));
++    DebugValue((uintptr_t)(i = 0, material = modelData->hsf->material));
+@@ -917 +914 @@
+-        DebugValue((u32)(i++, material++));
++        DebugValue((uintptr_t)(i++, material++));
+@@ -932,2 +929,2 @@
+-    DebugValue((u32)(i = 0, material = modelData->hsf->material));
+-    for (; i < modelData->hsf->materialNum; DebugValue((u32)(i++, material++))) {
++    DebugValue((uintptr_t)(i = 0, material = modelData->hsf->material));
++    for (; i < modelData->hsf->materialNum; DebugValue((uintptr_t)(i++, material++))) {

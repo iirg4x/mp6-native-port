@@ -1,0 +1,152 @@
+--- a/src/REL/micquizdll/quiz.c
++++ b/src/REL/micquizdll/quiz.c
+@@ -41,0 +42 @@
++#include "mp6_widescreen.h"
+@@ -1661 +1662 @@
+-    fn_1_407C(0, 0, 640, 480, 5, lbl_1_bss_30->bmp->data);
++    fn_1_407C((s16)((mp6_widescreen_render_width() - 640) / 2), 0, 640, 480, 5, lbl_1_bss_30->bmp->data);
+@@ -1667 +1668 @@
+-    fn_1_407C(0, 0, 640, 480, 5, lbl_1_bss_34->bmp->data);
++    fn_1_407C((s16)((mp6_widescreen_render_width() - 640) / 2), 0, 640, 480, 5, lbl_1_bss_34->bmp->data);
+@@ -2847 +2848 @@
+-            process->property = (void *)lbl_1_bss_4D8->responseRecord[2];
++            process->property = (void *)(intptr_t)lbl_1_bss_4D8->responseRecord[2];
+@@ -2889 +2890 @@
+-            process->property = (void *)lbl_1_bss_4D8->responseRecord[2];
++            process->property = (void *)(intptr_t)lbl_1_bss_4D8->responseRecord[2];
+@@ -2912 +2913 @@
+-            process->property = (void *)lbl_1_bss_4D8->responseRecord[2];
++            process->property = (void *)(intptr_t)lbl_1_bss_4D8->responseRecord[2];
+@@ -2935 +2936 @@
+-            process->property = (void *)lbl_1_bss_4D8->responseRecord[2];
++            process->property = (void *)(intptr_t)lbl_1_bss_4D8->responseRecord[2];
+@@ -2937 +2938 @@
+-            process->property = (void *)lbl_1_bss_4D8->responseRecord[3];
++            process->property = (void *)(intptr_t)lbl_1_bss_4D8->responseRecord[3];
+@@ -2965 +2966 @@
+-            process->property = (void *)lbl_1_bss_4D8->responseRecord[2];
++            process->property = (void *)(intptr_t)lbl_1_bss_4D8->responseRecord[2];
+@@ -3062 +3063 @@
+-    playerNo = (s32)process->property;
++    playerNo = (s32)(intptr_t)process->property;
+@@ -3149 +3150 @@
+-    HuPrcVSleep(120);
++    HuPrcVSleep();
+@@ -3157 +3158 @@
+-    process->property = (void *)((playerNo << 16) | (u16)points);
++    process->property = (void *)(uintptr_t)(u32)((playerNo << 16) | (u16)points);
+@@ -3170 +3171 @@
+-    property = (u32)process->property;
++    property = (u32)(uintptr_t)process->property;
+@@ -3198 +3199 @@
+-    process->property = (void *)((playerNo << 16) | (u16)points);
++    process->property = (void *)(uintptr_t)(u32)((playerNo << 16) | (u16)points);
+@@ -3211 +3212 @@
+-    property = (u32)process->property;
++    property = (u32)(uintptr_t)process->property;
+@@ -3703 +3704 @@
+-            process->property = (void *)(s32)lbl_1_bss_4D8->responseRecord[2];
++            process->property = (void *)(intptr_t)lbl_1_bss_4D8->responseRecord[2];
+@@ -4702 +4703 @@
+-    fn_1_20D08(0, (u32)playerNumber, 0);
++    mp6_micquiz_insert_text(0, playerNumber, 0);
+@@ -4766 +4767 @@
+-        fn_1_20D08(2, (u32)questionCountText, 0);
++        mp6_micquiz_insert_text(2, questionCountText, 0);
+@@ -4787 +4788 @@
+-        fn_1_20D08(1, (u32)number, 1);
++        mp6_micquiz_insert_text(1, number, 1);
+@@ -4795 +4796 @@
+-        fn_1_20D08(3, (u32)number, 1);
++        mp6_micquiz_insert_text(3, number, 1);
+@@ -4931 +4932 @@
+-        fn_1_20D08(0, (u32)questionCountText, 0);
++        mp6_micquiz_insert_text(0, questionCountText, 0);
+@@ -4951 +4952 @@
+-    fn_1_20D08(3, (u32)questionCountText, 0);
++    mp6_micquiz_insert_text(3, questionCountText, 0);
+@@ -5033,2 +5034,2 @@
+-    fn_1_20D08(0, (u32)firstText, 0);
+-    fn_1_20D08(0, (u32)secondText, 1);
++    mp6_micquiz_insert_text(0, firstText, 0);
++    mp6_micquiz_insert_text(0, secondText, 1);
+@@ -5048,2 +5049,2 @@
+-    fn_1_20D08(0, (u32)firstText, 0);
+-    fn_1_20D08(0, (u32)secondText, 1);
++    mp6_micquiz_insert_text(0, firstText, 0);
++    mp6_micquiz_insert_text(0, secondText, 1);
+@@ -5275 +5276 @@
+-        fn_1_20D08(0, (u32)playerScore, 2);
++        mp6_micquiz_insert_text(0, playerScore, 2);
+@@ -5286 +5287 @@
+-        fn_1_20D08(3, (u32)playerScore, 2);
++        mp6_micquiz_insert_text(3, playerScore, 2);
+@@ -5303 +5304 @@
+-        fn_1_20D08(1, (u32)playerScore, 2);
++        mp6_micquiz_insert_text(1, playerScore, 2);
+@@ -5314 +5315 @@
+-        fn_1_20D08(3, (u32)playerScore, 2);
++        mp6_micquiz_insert_text(3, playerScore, 2);
+@@ -5331 +5332 @@
+-        fn_1_20D08(1, (u32)playerScore, 1);
++        mp6_micquiz_insert_text(1, playerScore, 1);
+@@ -5341 +5342 @@
+-        fn_1_20D08(3, (u32)playerScore, 1);
++        mp6_micquiz_insert_text(3, playerScore, 1);
+@@ -5359 +5360 @@
+-        fn_1_20D08(0, (u32)playerScore, 2);
++        mp6_micquiz_insert_text(0, playerScore, 2);
+@@ -5369 +5370 @@
+-        fn_1_20D08(3, (u32)playerScore, 2);
++        mp6_micquiz_insert_text(3, playerScore, 2);
+@@ -5388 +5389 @@
+-        fn_1_20D08(0, (u32)playerScore, 3);
++        mp6_micquiz_insert_text(0, playerScore, 3);
+@@ -5399 +5400 @@
+-        fn_1_20D08(3, (u32)playerScore, 3);
++        mp6_micquiz_insert_text(3, playerScore, 3);
+@@ -5415 +5416 @@
+-        fn_1_20D08(0, (u32)playerScore, 0);
++        mp6_micquiz_insert_text(0, playerScore, 0);
+@@ -5534 +5535 @@
+-        fn_1_20D08(1, (u32)scoreText, 0);
++        mp6_micquiz_insert_text(1, scoreText, 0);
+@@ -5540 +5541 @@
+-        fn_1_20D08(3, (u32)scoreText, 0);
++        mp6_micquiz_insert_text(3, scoreText, 0);
+@@ -6221 +6222 @@
+-    if ((u32)lbl_1_bss_28 == 0) {
++    if (lbl_1_bss_28 == NULL) {
+@@ -6269 +6270 @@
+-        alphaFloat = __OSu8tof32(&motion->color.a);
++        OSu8tof32(&motion->color.a, &alphaFloat);
+@@ -6272 +6273 @@
+-        motion->color.a = __OSf32tou8(alphaFloat);
++        OSf32tou8(&alphaFloat, &motion->color.a);
+@@ -6300 +6301 @@
+-        right = (640.0f);
++        right = (f32)mp6_widescreen_render_width();
+@@ -6928 +6929 @@
+-    fn_1_20D08(1, (u32)number, 0);
++    mp6_micquiz_insert_text(1, number, 0);
+@@ -1547,0 +1547,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -4323,0 +4323,2 @@
++    /* Every table ends at or above the largest roll; keep the last answer. */
++    return 3;
+@@ -5972,0 +5972,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -6003,0 +6003,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -6771 +6771 @@
+-        return;
++        return 0;
+@@ -6799,0 +6799,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -6808,0 +6808,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

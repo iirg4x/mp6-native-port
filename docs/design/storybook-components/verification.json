@@ -1,0 +1,19 @@
+{
+  "viewport": [
+    1672,
+    941
+  ],
+  "components": 86,
+  "particleInstances": 18,
+  "powerOfTwoTextures": true,
+  "foregroundChangedPixels": 0,
+  "foregroundMaximumChannelDifference": 0,
+  "intentionalChanges": [
+    "Two flat background colors",
+    "Separate zigzag mask",
+    "Stars and confetti are particles",
+    "Sun and moon animate independently"
+  ],
+  "method": "Source-derived semantic component assembly. Foreground comparison excludes the explicitly revised backdrop. This proves the frozen visual pose only, not runtime text or animation quality.",
+  "runtimeWiring": false
+}

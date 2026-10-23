@@ -1,0 +1,4 @@
+--- a/include/REL/m659/collision.h
++++ b/include/REL/m659/collision.h
+@@ -31,0 +32 @@
++int fn_1_4CA4(M659Collision *value);

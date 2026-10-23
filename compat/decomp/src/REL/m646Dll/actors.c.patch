@@ -1,0 +1,192 @@
+--- a/src/REL/m646Dll/actors.c
++++ b/src/REL/m646Dll/actors.c
+@@ -33 +33 @@
+-#define M646_PROJECTILE_WORK_BYTES 244
++#define M646_PROJECTILE_WORK_BYTES sizeof(M646ActorState)
+@@ -37,17 +36,0 @@
+-typedef struct M646ActorAnchor_s M646ActorAnchor;
+-typedef struct M646ModelCollider_s M646ModelCollider;
+-struct M646ActorAnchor_s {
+-    u32 kind; /* Collision registration and activity flags. */
+-    s32 group; /* Collision group bits tested against other registered objects. */
+-    s32 callbackType; /* Actor collision category used by contact handling. */
+-    s32 playerIndex; /* Collision player tag; projectile setup fixes it at zero. */
+-    s32 callbackMode; /* Manager mode that selects this anchor's collision path. */
+-    OMOBJ *owner; /* Object whose work record owns this anchor. */
+-    void (*update)(OMOBJ *); /* Callback that updates the anchor after collision checks. */
+-    s32 (*contact)(M646ActorAnchor *, M646ModelCollider *); /* Handles target contact. */
+-    Vec *position; /* Current actor position in stage units. */
+-    Vec *direction; /* Per-frame movement vector in stage units. */
+-    Vec savedPosition; /* Previous position used for swept collision checks. */
+-    f32 radius; /* Actor collision radius in stage units. */
+-    f32 responseScale; /* Scales movement added by actor-actor contact. */
+-};
+@@ -85,75 +68,7 @@
+-typedef struct M646MeshEdge_s {
+-    Vec first; /* First endpoint in the source mesh's local coordinates. */
+-    Vec second; /* Second endpoint in the source mesh's local coordinates. */
+-    Mtx *matrix; /* Matrix used to transform this edge into world space. */
+-} M646MeshEdge;
+-
+-typedef struct M646WorldEdge_s {
+-    Vec first; /* First endpoint in world coordinates. */
+-    Vec second; /* Second endpoint in world coordinates. */
+-    Vec normal; /* Edge normal; zero when its endpoints coincide, including model-target buffers. */
+-    f32 planeConstant; /* Plane offset in world units. */
+-} M646WorldEdge;
+-
+-typedef struct M646CollisionRecord_s {
+-    u8 stageCollisionPrefix[32]; /* Stage collision data before the edge list. */
+-    s32 edgeCount; /* Number of edges included in the stage collision sweep. */
+-    M646WorldEdge *current; /* Edges used by the current collision pass. */
+-    M646WorldEdge *alternate; /* Spare edge buffer swapped during updates. */
+-    M646MeshEdge *original; /* Source mesh endpoints before world transforms. */
+-    s32 transformCount; /* Number of HSF object transforms. */
+-    HSF_TRANSFORM **transforms; /* Source transforms for the HSF object list. */
+-    Mtx *matrices; /* Per-object matrices applied to source edges. */
+-} M646CollisionRecord;
+-
+-typedef struct M646ModelAttachment_s M646ModelAttachment;
+-struct M646ModelCollider_s {
+-    u32 kind; /* Collision participation flags. */
+-    s32 group; /* Group mask compared with the projectile group. */
+-    s32 callbackType; /* Target category selecting points, sound, and contact flags. */
+-    s32 unusedPlayerIndex; /* Player-index slot unused by target attachments. */
+-    s32 callbackMode; /* 11 selects model-target contact tests. */
+-    M646ModelAttachment *owner; /* Target attachment that owns this collider. */
+-    void (*update)(M646ModelAttachment *); /* Unused target-update callback; setup assigns an empty
+-                                            * function. */
+-    s32 (*contact)(M646ModelCollider *, M646ActorAnchor *); /* Handles the target reaction. */
+-    s32 edgeCount; /* Number of collision edges. */
+-    M646WorldEdge *current; /* Edges used by the current contact pass. */
+-    M646WorldEdge *alternate; /* Spare world-space edge buffer. */
+-    s32 transformCount; /* Number of collider transform matrices. */
+-    HSF_TRANSFORM pose; /* Target joint position, rotation, and scale. */
+-    Mtx *matrices; /* Transform matrices allocated for the collider. */
+-    u8 attachmentColliderPrefix[4]; /* Collider data before its category value. */
+-    s16 category; /* Selects the category-specific contact distance. */
+-    HU3D_MODELID model; /* Model containing the attached target joint. */
+-    char jointName[64]; /* Joint followed by the attachment. */
+-    HSF_OBJECT *source; /* HSF object selected during collider setup. */
+-    s32 assigned; /* Nonzero while a computer player's target selection has reserved this
+-                   * attachment. */
+-};
+-
+-struct M646ModelAttachment_s {
+-    HU3D_MODELID parentModel; /* Model containing the attached target joint. */
+-    HU3D_MODELID model; /* Model used by the attachment animation. */
+-    HU3D_MOTIONID motion; /* Joint motion played for the attachment. */
+-    s16 state; /* Zero enables score-target contact handling. */
+-    M646ModelCollider collider; /* Collision data registered with the manager. */
+-    Vec position; /* Current attachment position in stage units. */
+-};
+-
+-typedef struct M646ActorStageSource_s {
+-    u8 stageWorkPrefix[11304]; /* Stage work before its moving collision record. */
+-    M646CollisionRecord collision; /* World-space edges for this moving stage piece. */
+-    u8 stageWorkTail[104]; /* Stage work after the collision record. */
+-} M646ActorStageSource;
+-
+-typedef struct M646ActorStageWork_s {
+-    s32 state; /* Cleared at stage creation; not read or changed by the stage callbacks. */
+-    s32 stageOrder[6]; /* Layout descriptor index assigned to each of the six stage slots. */
+-    M646ActorStageSource stages[6]; /* Collision records for the six stage pieces. */
+-} M646ActorStageWork;
+-
+-typedef struct M646ActorPlayerTarget_s {
+-    u8 playerTargetPrefix[172]; /* Player work before the target-active flag. */
+-    s32 active; /* Cleared after a stage-boundary contact. */
+-} M646ActorPlayerTarget;
++
++
++
++
++
++
++
+@@ -176,12 +91,3 @@
+-void fn_1_1F24(OMOBJ *obj);
+-s32 fn_1_1F80(M646ActorAnchor *actor, M646ModelCollider *target);
+-s32 fn_1_48A4(const M646CollisionRecord *anchor, const Point3d *position);
+-s32 fn_1_3E80(void *collisionResource);
+-void fn_1_8F04(s32 player, s32 score);
+-void fn_1_8F5C(s32 player);
+-s32 fn_1_B3C0(HuVecF *position, s32 soundId);
+-
+-typedef struct M646ActorPlayerSource_s {
+-    M646PlayerWork motion; /* Launching player identity and character motion state. */
+-    u8 playerWorkBeforeTarget[308]; /* Player work between motion state and target state. */
+-} M646ActorPlayerSource;
++void fn_1_1F24(void *context);
++s32 fn_1_1F80(void *actorContext, void *targetContext);
++
+@@ -194,3 +99,0 @@
+-void fn_1_AF4(void);
+-void fn_1_AF8(void);
+-void fn_1_AFC(OMOBJMAN *objman, s16 player);
+@@ -210,3 +113,2 @@
+-void fn_1_1F24(OMOBJ *obj);
+-s32 fn_1_1F80(M646ActorAnchor *actor, M646ModelCollider *target);
+-OMOBJ *fn_1_23D0(Vec *position, f64 phase, Vec *direction, OMOBJ *player);
++void fn_1_1F24(void *context);
++s32 fn_1_1F80(void *actorContext, void *targetContext);
+@@ -274,6 +176,10 @@
+-void fn_1_AF4(void)
+-{
+-}
+-
+-void fn_1_AF8(void)
+-{
++void fn_1_AF4(s16 mode, s16 frameNo)
++{
++    (void)mode;
++    (void)frameNo;
++}
++
++void fn_1_AF8(s16 mode, s16 frameNo)
++{
++    (void)mode;
++    (void)frameNo;
+@@ -523,2 +429,2 @@
+-                M646ActorStageWork *stageWork = lbl_1_bss_80->data;
+-                M646ActorStageSource *stageData = &stageWork->stages[stage];
++                M646MovingStageWork *stageWork = lbl_1_bss_80->data;
++                M646MovingStageState *stageData = &stageWork->stages[stage];
+@@ -529,2 +435,2 @@
+-                    M646PlayerRuntimeWork *playerWork = player->data;
+-                    M646ActorPlayerTarget *target = playerWork->targetData;
++                    M646PlayerFullWork *playerWork = player->data;
++                    M646ModelAttachment *target = playerWork->targetData;
+@@ -532 +438 @@
+-                        target->active = 0;
++                        target->collider.assigned = 0;
+@@ -571,2 +477,3 @@
+-void fn_1_1F24(OMOBJ *obj)
+-{
++void fn_1_1F24(void *context)
++{
++    OMOBJ *obj = context;
+@@ -580,2 +487,4 @@
+-s32 fn_1_1F80(M646ActorAnchor *actor, M646ModelCollider *target)
+-{
++s32 fn_1_1F80(void *actorContext, void *targetContext)
++{
++    M646ActorAnchor *actor = actorContext;
++    M646CollisionHeader *target = targetContext;
+@@ -586 +495 @@
+-    M646ModelAttachment *attachment = target->owner;
++    M646ModelAttachment *attachment = target->callbackMode == 11 ? target->owner : NULL;
+@@ -591 +500 @@
+-    if (attachment->state == 0) {
++    if (attachment == NULL || attachment->state == 0) {
+@@ -662,2 +571,2 @@
+-    M646ActorPlayerSource *playerWork = playerObject->data;
+-    M646PlayerWork *motion = &playerWork->motion;
++    M646PlayerFullWork *playerWork = playerObject->data;
++    M646PlayerWork *motion = &playerWork->aiming.motion;
+@@ -687 +596 @@
+-    omVibrate(playerWork->motion.playerIndex, 20, 4, 4);
++    omVibrate(playerWork->aiming.motion.playerIndex, 20, 4, 4);
+@@ -690,0 +600,2 @@
++
++/* Storage only; runtime allocations are freed by normal overlay teardown. */

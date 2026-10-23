@@ -1,0 +1,74 @@
+--- a/src/REL/m638Dll/game.c
++++ b/src/REL/m638Dll/game.c
+@@ -2,0 +3,13 @@
++#include "mp6_widescreen.h"
++
++static void mp6_m638_prompt_positions(M638SceneView *scene)
++{
++    float margin = mp6_widescreen_half_width_delta();
++    for (int i = 0; i < 5; ++i) {
++        /* Keep each team's callouts on its outside edge, not over its actors.
++         * Re-derive from native positions so resizing never accumulates. */
++        espPosSet(scene->teams[0].sprites[i], 50.0f - margin, 150.0f);
++        espPosSet(scene->teams[1].sprites[i], 526.0f + margin, 150.0f);
++    }
++}
++
+@@ -692 +705 @@
+-    PSVECSubtract(&scene->lightTarget, &scene->lightPosition, &lightDirection);
++    PSVECSubtract(&scene->vector1, &scene->vector0, &lightDirection);
+@@ -695,3 +708 @@
+-        lightId =
+-            Hu3DGLightCreate(scene->lightPosition.x, scene->lightPosition.y, scene->lightPosition.z,
+-                             lightDirection.x, lightDirection.y, lightDirection.z, 95U, 95U, 127U);
++        lightId = Hu3DGLightCreate(scene->vector0.x, scene->vector0.y, scene->vector0.z, lightDirection.x, lightDirection.y, lightDirection.z, 95U, 95U, 127U);
+@@ -699,3 +710 @@
+-        lightId = Hu3DGLightCreate(scene->lightPosition.x, scene->lightPosition.y,
+-                                   scene->lightPosition.z, lightDirection.x, lightDirection.y,
+-                                   lightDirection.z, 207U, 207U, 207U);
++        lightId = Hu3DGLightCreate(scene->vector0.x, scene->vector0.y, scene->vector0.z, lightDirection.x, lightDirection.y, lightDirection.z, 207U, 207U, 207U);
+@@ -718,4 +727,4 @@
+-    shadowPosition.x = scene->lightPosition.x;
+-    shadowPosition.y = 0.3f * scene->lightPosition.y;
+-    shadowPosition.z = 0.3f * scene->lightPosition.z;
+-    PSVECSubtract(&shadowPosition, &scene->lightTarget, &shadowDirection);
++    shadowPosition.x = scene->vector0.x;
++    shadowPosition.y = 0.3f * scene->vector0.y;
++    shadowPosition.z = 0.3f * scene->vector0.z;
++    PSVECSubtract(&shadowPosition, &scene->vector1, &shadowDirection);
+@@ -729,2 +738 @@
+-    Hu3DShadowMultiPosSet(&shadowPosition, &shadowSide, &scene->lightTarget,
+-                          (s16) (lbl_1_rodata_10[0] | lbl_1_rodata_10[1]));
++    Hu3DShadowMultiPosSet(&shadowPosition, &shadowSide, &scene->vector1, (s16) (lbl_1_rodata_10[0] | lbl_1_rodata_10[1]));
+@@ -1767,0 +1776 @@
++    mp6_m638_prompt_positions(scene);
+@@ -1775 +1784 @@
+-    viewProgress = (Hu3DMotionTimeGet(scene->team0Model) - 120.0f) / 435.0f;
++    viewProgress = (Hu3DMotionTimeGet(scene->teams[0].course.model) - 120.0f) / 435.0f;
+@@ -1783,2 +1792,2 @@
+-    espPosSet(scene->sprite0, 276.0f, y);
+-    viewProgress = (Hu3DMotionTimeGet(scene->team1Model) - 120.0f) / 435.0f;
++    espPosSet(scene->sprites[1], 276.0f, y);
++    viewProgress = (Hu3DMotionTimeGet(scene->teams[1].course.model) - 120.0f) / 435.0f;
+@@ -1792 +1801,2 @@
+-    espPosSet(scene->sprite1, 300.0f, y);
++    espPosSet(scene->sprites[2], 300.0f, y);
++    mp6_m638_prompt_positions(scene);
+@@ -2086 +2096 @@
+-    if (scene->side == 0) {
++    if (scene->winner == 0) {
+@@ -2108 +2118 @@
+-        motionTime = Hu3DMotionTimeGet(team->model);
++        motionTime = Hu3DMotionTimeGet(team->course.model);
+@@ -2117 +2127 @@
+-        team->output = team->source * weight;
++        team->actor.rot.x = team->actor.blend * weight;
+@@ -2124 +2134 @@
+-            team->output = 0.0f;
++            team->actor.rot.x = 0.0f;
+@@ -2129 +2139 @@
+-        motionTime = Hu3DMotionTimeGet(team->model);
++        motionTime = Hu3DMotionTimeGet(team->course.model);
+@@ -2138 +2148 @@
+-        if (Hu3DMotionEndCheck(team->model)) {
++        if (Hu3DMotionEndCheck(team->course.model)) {

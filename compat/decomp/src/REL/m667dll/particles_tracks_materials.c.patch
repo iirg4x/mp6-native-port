@@ -1,0 +1,84 @@
+--- a/src/REL/m667dll/particles_tracks_materials.c
++++ b/src/REL/m667dll/particles_tracks_materials.c
+@@ -0,0 +1,2 @@
++#include "game/audio.h"
++#include "game/hsfex.h"
+@@ -14,14 +15,0 @@
+-typedef struct M667ParticleConfigView {
+-    u32 flags;                         /* Bit 0 alternates scale between half and full size. */
+-    GXColor targetColor;               /* End color used by the particle's per-update color
+-                                        * blend. */
+-    GXColor startingColor;              /* Start color used by the particle's per-update color
+-                                         * blend. */
+-    HuVecF initialVelocity;            /* Initial displacement per particle update. */
+-    f32 velocityMultiplier[3];         /* Per-frame X, Y, and Z velocity multipliers. */
+-    f32 velocityYDelta;                /* Per-frame change to vertical velocity. */
+-    u8 reservedBytes[4];               /* Reserved bytes between velocity and scale settings. */
+-    f32 scaleRate;                     /* Per-frame change to base scale. */
+-    f32 alphaRate;                     /* Per-frame change to alpha. */
+-    f32 colorInterpolation;            /* Blend fraction from startingColor to targetColor. */
+-} M667ParticleConfigView;
+@@ -187,3 +175,3 @@
+-void fn_1_7350(void *description, s32 *modelSlotCount, s32 *motionSlotCount)
+-{
+-    M667ModelDescription *entry;
++void fn_1_7350(const M667ModelDescription *description, s32 *modelSlotCount, s32 *motionSlotCount)
++{
++    const M667ModelDescription *entry;
+@@ -198 +186 @@
+-        entry = &((M667ModelDescription *)description)[index];
++        entry = &description[index];
+@@ -231 +219 @@
+-void fn_1_7424(OMOBJ *object, M667ModelDescription *description)
++void fn_1_7424(OMOBJ *object, const M667ModelDescription *description)
+@@ -237 +225 @@
+-    M667ModelDescription *entry;
++    const M667ModelDescription *entry;
+@@ -304,9 +291,0 @@
+-typedef struct M667ParticleDescription {
+-    u32 flags; /* Readiness bits used to skip animation and work-buffer setup. */
+-    s32 resourceId; /* Sprite-animation data number; a negative value ends the list. */
+-    s32 count; /* Maximum number of particle slots. */
+-    s32 blendMode; /* Blend mode passed to the particle renderer. */
+-    s32 modelId; /* Created particle-system model handle. */
+-    ANIMDATA *animation; /* Loaded animation used by the particle-system model. */
+-    u8 reservedAfterAnimation[4]; /* Reserved bytes after the loaded animation pointer. */
+-} M667ParticleDescription;
+@@ -345,2 +324,2 @@
+-            parameters = HuMemDirectMallocNum(HEAP_HEAP, count * 56, HU_MEMNUM_OVL);
+-            memset(parameters, 0, count * 56);
++            parameters = HuMemDirectMallocNum(HEAP_HEAP, count * sizeof(M667ParticleConfigView), HU_MEMNUM_OVL);
++            memset(parameters, 0, count * sizeof(M667ParticleConfigView));
+@@ -387,4 +366,4 @@
+-OMOBJ *fn_1_7868(void *description)
+-{
+-    extern void fn_1_7350(void *description, s32 *models, s32 *motions);
+-    extern void fn_1_7424(OMOBJ *object, M667ModelDescription *description);
++OMOBJ *fn_1_7868(const M667ModelDescription *description)
++{
++    extern void fn_1_7350(const M667ModelDescription *description, s32 *models, s32 *motions);
++    extern void fn_1_7424(OMOBJ *object, const M667ModelDescription *description);
+@@ -493 +472,2 @@
+-    while (bytes > 0) {
++    stride = itemBytes + sizeof(M667PoolNode);
++    while (bytes >= stride) {
+@@ -500 +479,0 @@
+-        stride = itemBytes + sizeof(M667PoolNode);
+@@ -789 +768 @@
+-#include "REL/m667dll/sqrtf.h"
++
+@@ -821 +799,0 @@
+-    extern s32 fn_1_8544(Point3d *source, Point3d *destination);
+@@ -953 +931 @@
+-        material->color[0] = *savedColor * redScale;
++        material->color[0] = (u8)(s32)(*savedColor * redScale);
+@@ -955 +933 @@
+-        material->color[1] = *savedColor * greenScale;
++        material->color[1] = (u8)(s32)(*savedColor * greenScale);
+@@ -957 +935 @@
+-        material->color[2] = *savedColor * blueScale;
++        material->color[2] = (u8)(s32)(*savedColor * blueScale);
+@@ -1021,0 +1000,3 @@
++
++/* Native equivalent of the module's positive-input sqrt helper. */
++f32 fn_1_8E8C(f32 x) { return x > 0.0f ? sqrtf(x) : x; }

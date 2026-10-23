@@ -76,6 +76,13 @@ int mp6_shadow_quality_scale(int baseSize);
  * there purely as the documented fallback shape. */
 int mp6_shadow_effective_size(int size);
 
+/* A per-camera shadow cannot be sampled through an empty camera scissor.
+ * The single shared shadow-map path is deliberately not subject to this. */
+static inline int mp6_shadow_camera_contributes(float fov, int width, int height)
+{
+    return fov != -1.0f && width > 0 && height > 0;
+}
+
 /* Offscreen shadow-pass bracket, engaged by Hu3DShadowExec only when the
  * effective scale exceeds 2 (never at 1x/2x -- those keep the pristine
  * in-EFB pass exactly as before). Windowed build: begin emits aurora's

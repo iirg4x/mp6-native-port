@@ -1,0 +1,247 @@
+--- a/include/REL/m646Dll/module_types.h
++++ b/include/REL/m646Dll/module_types.h
+@@ -76,33 +75,0 @@
+-typedef struct M646PlayerRuntimeWork_s {
+-    M646PlayerWork motion;             /* Character motion and turn-transition state. */
+-    f32 forceAngle;                    /* Forced head-joint Z rotation, in degrees. */
+-    Vec modelPosition;                 /* Aim-model position; shots aim 120 world units farther in
+-                                        * Z. */
+-    Vec projectileDirection;           /* Flight displacement per frame, with length 40 world
+-                                        * units. */
+-    Vec projectilePosition;            /* Gun-hook position where a shot starts. */
+-    Vec itemPosition;                  /* Detached gun position during the finish animation. */
+-    Vec itemRotation;                  /* Detached gun rotation in degrees. */
+-    f32 itemPhase;                     /* Frames elapsed in the detached-gun animation. */
+-    f32 itemDuration;                  /* Detached-gun animation duration in frames. */
+-    u8 unusedPlayerStorage[12];        /* Cleared at player creation; item, input, and target
+-                                       * callbacks leave these bytes untouched. */
+-    s16 padIndex;                      /* Controller port used by this player. */
+-    f32 stickOffsetX;                  /* Horizontal aim displacement this frame, in world units. */
+-    f32 stickOffsetY;                  /* Vertical aim displacement this frame, in world units. */
+-    u32 buttons;                       /* Buttons pressed this frame. */
+-    s32 playerKind;                    /* Zero for a human player; nonzero for a computer player. */
+-    s16 comDifficulty;                 /* Computer difficulty, 0-3; -1 for a human player. */
+-    s32 targetReady;                   /* Nonzero while a computer player's target is active. */
+-    s32 motionReady;                   /* Nonzero while computer aim is moving toward its target. */
+-    void *targetData;                  /* Chosen attachment, or NULL when aiming at stored
+-                                        * coordinates. */
+-    f32 aimError;                      /* Extra arrival tolerance in world units. */
+-    f32 randomX;                       /* Horizontal error added to the target, in world units. */
+-    f32 randomY;                       /* Vertical error added to the target, in world units. */
+-    s16 targetDelayTicks;              /* Remaining target-selection attempts to wait; not a frame
+-                                        * count. */
+-    s16 shotCount;                     /* Number of shots fired by the computer player. */
+-    f32 targetX;                       /* Horizontal fallback aim coordinate in world units. */
+-    f32 targetY;                       /* Vertical fallback aim coordinate in world units. */
+-} M646PlayerRuntimeWork;
+@@ -116,13 +83,197 @@
+-typedef struct M646AnchorRecord_s {
+-    s32 kind;                         /* Collision registration and activity flags. */
+-    s32 group;                        /* Group mask compared with projectile collision groups. */
+-    s32 callbackType;                 /* Contact category; stage setup uses 12. */
+-    s32 unknown0C;                    /* Player-tag slot cleared for stage surfaces. */
+-    s32 callbackMode;                 /* 10 selects the stage-surface collision path. */
+-    OMOBJ *owner;                     /* Moving-stage object that owns the surface. */
+-    s32 unknown18;                    /* Update-callback slot cleared for stage surfaces. */
+-    s32 unknown1C;                    /* Contact-callback slot cleared for stage surfaces. */
+-    s32 unknown20;                    /* Edge count set by the collision-mesh setup helper. */
+-    Point3d *pointBuffer;             /* Active edge buffer exchanged by the transform updater. */
+-    Point3d *transformedBuffer;        /* Spare edge buffer exchanged by the transform updater. */
+-} M646AnchorRecord;
++
++/* Native shared collision records: one layout and callback ABI for every consumer. */
++typedef struct M646MeshEdge_s {
++    Vec first; /* First endpoint in the source mesh's local coordinates. */
++    Vec second; /* Second endpoint in the source mesh's local coordinates. */
++    Mtx *matrix; /* Transform used to produce the world-space edge. */
++} M646MeshEdge;
++
++typedef struct M646WorldEdge_s {
++    Vec first; /* First endpoint in world coordinates. */
++    Vec second; /* Second endpoint in world coordinates. */
++    Vec normal; /* Edge normal; zero when its endpoints coincide, including model-target buffers. */
++    f32 planeConstant; /* Plane offset in world units. */
++} M646WorldEdge;
++
++#define M646_COLLISION_PREFIX \
++    u32 kind; \
++    u32 group; \
++    u32 callbackType; \
++    s32 playerIndex; \
++    s32 callbackMode; \
++    void *owner; \
++    void (*update)(void *); \
++    s32 (*contact)(void *, void *);
++
++typedef struct M646CollisionHeader_s {
++    M646_COLLISION_PREFIX
++} M646CollisionHeader;
++
++typedef struct M646BodyAnchor_s {
++    M646_COLLISION_PREFIX
++    Vec *position; /* Current actor position in stage units. */
++    Vec *direction; /* Movement vector changed by collision response. */
++    Vec savedPosition; /* Previous frame position for swept contacts. */
++    f32 radius; /* Collision radius in stage units. */
++    f32 responseScale; /* Scales movement added by actor-actor contact. */
++} M646BodyAnchor;
++
++typedef struct M646SurfaceCollider_s {
++    M646_COLLISION_PREFIX
++    s32 edgeCount; /* Number of collision edges. */
++    M646WorldEdge *current; /* Active world-space edge buffer. */
++    M646WorldEdge *alternate; /* Spare buffer swapped during transform updates. */
++    M646MeshEdge *original; /* Source edge endpoints in local coordinates. */
++    s32 transformCount; /* Number of transforms used by this collider. */
++    HSF_TRANSFORM **transforms; /* Source model transforms. */
++    Mtx *matrices; /* Matrices applied to source edge endpoints. */
++    M646WorldEdge *contactEdge; /* Edge active during the contact callback. */
++} M646SurfaceCollider;
++
++typedef struct M646ModelCollider_s {
++    M646_COLLISION_PREFIX
++    s32 edgeCount; /* Number of edges in this collider. */
++    M646WorldEdge *current; /* Active world-space edge buffer. */
++    M646WorldEdge *alternate; /* Spare edge buffer. */
++    s32 transformCount; /* Number of transforms applied to the collider. */
++    HSF_TRANSFORM pose; /* Joint position and scale used by this attachment. */
++    Mtx *matrices; /* Transform matrices for collider geometry. */
++    M646WorldEdge *contactEdge; /* Edge supplied to the target's contact callback. */
++    s16 category; /* Selects the category-specific contact distance. */
++    HU3D_MODELID model; /* Model that supplies this attachment's joint position. */
++    char jointName[64]; /* Joint used to follow the target model. */
++    HSF_OBJECT *source; /* HSF object used to initialize this collider. */
++    s32 assigned; /* Nonzero while a computer player's target selection has reserved this
++                   * attachment. */
++} M646ModelCollider;
++
++#undef M646_COLLISION_PREFIX
++typedef M646BodyAnchor M646ActorAnchor;
++typedef M646BodyAnchor M646PlayerAnchor;
++typedef M646SurfaceCollider M646CollisionRecord;
++
++typedef struct M646ModelAttachment_s {
++    HU3D_MODELID parentModel; /* Hook parent, or -1 after the first projectile contact. */
++    HU3D_MODELID model; /* Visible target model. */
++    HU3D_MOTIONID motion; /* Hit animation, paused until first contact. */
++    s16 state; /* Number of contacts; zero means still attached and unhit. */
++    M646ModelCollider collider; /* Contact geometry and callbacks for this target. */
++    Vec position; /* World position captured when the target detaches. */
++} M646ModelAttachment;
++
++typedef struct M646MovingStageState_s {
++    HU3D_MODELID model; /* Visible layout hooked to its carrier. */
++    HU3D_MODELID hiddenModel; /* Invisible model supplying collision meshes. */
++    HU3D_MODELID parentModel; /* Carrier model holding this layout. */
++    s16 modelPadding; /* Unused storage between model IDs and the layout kind. */
++    u32 stageKind; /* Descriptor index: 0-4 normal, 5 opening, 6 special. */
++    M646ModelAttachment attachments[5][12]; /* Targets grouped by contact-distance category. */
++    s16 jointIndex[5]; /* Next collider name to read in each target group. */
++    u8 jointIndexPadding[2]; /* Unused storage after the collider-name indices. */
++    M646CollisionRecord collision; /* Edge geometry for the layout's stage surface. */
++    u8 reservedStageStorage[104]; /* Remaining storage not accessed by these stage callbacks. */
++} M646MovingStageState;
++
++typedef struct M646MovingStageGroup_s {
++    char **attachmentNames; /* Hook names for the visible targets. */
++    char **colliderNames; /* Mesh names in the hidden collision model. */
++    s16 attachmentCount; /* Number of targets created in this group. */
++    s32 callbackType; /* Contact category, offset by target index for the opening layout. */
++} M646MovingStageGroup;
++
++typedef struct M646MovingStageDescriptor_s {
++    s32 modelFile; /* DATA_m646 resource for the visible layout. */
++    s32 hiddenModelFile; /* DATA_m646 resource for its collision meshes. */
++    char *hiddenHook; /* Visible-model joint holding the hidden collision model. */
++    M646MovingStageGroup groups[5]; /* Target hooks and collision categories for this layout. */
++} M646MovingStageDescriptor;
++
++typedef struct M646MovingStageWork_s {
++    s32 state; /* Cleared at startup; not read by these stage callbacks. */
++    s32 stageOrder[6]; /* Opening layout followed by five randomized layouts. */
++    M646MovingStageState stages[6]; /* Loaded layout and target work for each carrier. */
++} M646MovingStageWork;
++
++typedef struct M646PlayerAimState_s {
++    M646PlayerWork motion; /* Character motion and turn-transition state. */
++    f32 forceAngle; /* Forced head-joint Z rotation, in degrees. */
++} M646PlayerAimState;
++
++typedef struct M646PlayerFullWork_s {
++    M646PlayerAimState aiming; /* Character motion and forced aim angle. */
++    Vec modelPosition; /* Aim-model position; projectile target is 120 world units farther in Z. */
++    Vec projectileDirection; /* Flight displacement per frame, with length 40 world units. */
++    Vec projectilePosition; /* Gun-hook position where a shot starts. */
++    Vec itemPosition; /* Detached gun position during the finish animation. */
++    Vec itemRotation; /* Detached gun rotation in degrees. */
++    f32 itemPhase; /* Frames elapsed in the detached-gun animation. */
++    f32 itemDuration; /* Detached-gun animation duration in frames. */
++    u8 itemWorkTail[12]; /* Player storage between item animation and controller state. */
++    s16 padIndex; /* Controller port used by this player. */
++    u8 padIndexPadding[2]; /* Storage after the controller index. */
++    f32 stickOffsetX; /* Horizontal aim displacement for this frame, in world units. */
++    f32 stickOffsetY; /* Vertical aim displacement for this frame, in world units. */
++    u32 buttons; /* Buttons pressed this frame. */
++    s32 playerKind; /* Zero for a human player; nonzero for a computer player. */
++    s16 comDifficulty; /* Computer difficulty; -1 for a human player. */
++    u8 difficultyPadding[2]; /* Storage between difficulty and targeting flags. */
++    s32 targetReady; /* Nonzero while a computer player's target is active. */
++    s32 motionReady; /* Nonzero while the computer aim is still moving toward its target. */
++    M646ModelAttachment *targetData; /* Chosen target, or NULL when aiming at stored coordinates. */
++    f32 aimError; /* Extra arrival tolerance in world units. */
++    f32 randomX; /* Horizontal computer aim error added to the target, in world units. */
++    f32 randomY; /* Vertical computer aim error added to the target, in world units. */
++    s16 targetDelayTicks; /* Remaining target-selection attempts to wait; not a frame count. */
++    s16 shotCount; /* Number of shots fired by the computer player. */
++    f32 targetX; /* Horizontal fallback aim coordinate in world units. */
++    f32 targetY; /* Vertical fallback aim coordinate in world units. */
++    M646PlayerAnchor anchor; /* Player's record registered with collision handling. */
++    u8 playerWorkTail[104]; /* Player storage following the collision anchor. */
++} M646PlayerFullWork;
++
++extern M646PositionTable lbl_1_bss_84;
++
++/* Signatures shared by recovered source owners. */
++void fn_1_AF4(s16 mode, s16 frameNo);
++void fn_1_AF8(s16 mode, s16 frameNo);
++void fn_1_AFC(OMOBJMAN *objman, s16 player);
++OMOBJ *fn_1_23D0(Vec *position, f64 phase, Vec *direction, OMOBJ *player);
++void fn_1_543C(OMOBJMAN *manager);
++void fn_1_5564(s16 player, s32 state);
++void fn_1_55A0(void);
++void fn_1_5634(OMOBJ *obj);
++s32 fn_1_5694(OMOBJ *obj);
++s32 fn_1_57DC(s16 player);
++void fn_1_5850(s16 player);
++void fn_1_589C(s16 player);
++void fn_1_5964(s16 player, s32 resetAttribute);
++void fn_1_59E0(s16 player, Vec *position);
++void fn_1_5A64(OMOBJ *obj, s16 motion);
++f64 fn_1_2968(Vec lhs, Vec rhs);
++void fn_1_2B50(OMOBJMAN *objMan);
++s32 fn_1_3E80(void *collisionResource);
++s32 fn_1_3EF8(void *collisionResource);
++void fn_1_436C(M646CollisionRecord *record, HSF_OBJECT *object);
++void fn_1_43A0(M646CollisionRecord *record);
++s32 fn_1_48A4(const M646CollisionRecord *anchor, const Point3d *position);
++void fn_1_48DC(M646ModelCollider *collider, HSF_OBJECT *objects, HU3D_MODELID model, char *name);
++void fn_1_4DD0(M646ModelCollider *collider);
++void fn_1_8158(OMOBJMAN *objman);
++void fn_1_81FC(s16 index, Point3d *out);
++void fn_1_8980(void);
++void fn_1_4E28(OMOBJMAN *objman);
++void fn_1_8E78(OMOBJMAN *objman);
++void fn_1_8F04(s32 playerIndex, s32 scorePoints);
++void fn_1_8F5C(s32 playerIndex);
++u16 fn_1_8FD4(void);
++s32 fn_1_9024(void);
++void fn_1_9118(void);
++s32 fn_1_9380(void);
++void fn_1_1E4(s32 cameraMotionIndex);
++s32 fn_1_2CC(void);
++s32 fn_1_B3C0(HuVecF *worldPosition, s32 soundId);
++s32 fn_1_B4BC(s32 soundId);
++void fn_1_98E0(OMOBJMAN *objman);
++void fn_1_A028(OMOBJ *obj);
++s32 fn_1_A0D4(void);
++s32 fn_1_A0FC(void);

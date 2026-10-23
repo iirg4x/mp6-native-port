@@ -1,0 +1,112 @@
+--- a/src/REL/m668DLL/callbacks.c
++++ b/src/REL/m668DLL/callbacks.c
+@@ -2,0 +3,2 @@
++#include "mp6_widescreen.h"
++#include <string.h>
+@@ -454 +456 @@
+-        lbl_1_bss_2C[objIndex] = fn_1_178(30, 84U, fn_1_494C);
++        lbl_1_bss_2C[objIndex] = fn_1_178(30, sizeof(M668PlayerWork), fn_1_494C);
+@@ -596,2 +598,2 @@
+-    GXSetViewport((0.0f), (0.0f), (640.0f), (480.0f), (0.0f), (1.0f));
+-    GXSetScissor(0U, 0U, 640U, 480U);
++    GXSetViewport((0.0f), (0.0f), mp6_widescreen_render_width(), (480.0f), (0.0f), (1.0f));
++    GXSetScissor(0U, 0U, mp6_widescreen_render_width(), 480U);
+@@ -632,0 +635 @@
++    GXEnd();
+@@ -649 +652 @@
+-    GXSetTexCopySrc(0U, 0U, 640U, 480U);
++    GXSetTexCopySrc(0U, 0U, mp6_widescreen_render_width(), 480U);
+@@ -652,2 +655,2 @@
+-    GXSetViewport((0.0f), (0.0f), (640.0f), (480.0f), (0.0f), (1.0f));
+-    GXSetScissor(0U, 0U, 640U, 480U);
++    GXSetViewport((0.0f), (0.0f), mp6_widescreen_render_width(), (480.0f), (0.0f), (1.0f));
++    GXSetScissor(0U, 0U, mp6_widescreen_render_width(), 480U);
+@@ -694,0 +698 @@
++    GXEnd();
+@@ -717,0 +722 @@
++    GXEnd();
+@@ -733,2 +738,2 @@
+-        GXSetViewport((0.0f), (0.0f), (640.0f), (480.0f), (0.0f), (1.0f));
+-        GXSetScissor(0U, 0U, 640U, 480U);
++        GXSetViewport((0.0f), (0.0f), mp6_widescreen_render_width(), (480.0f), (0.0f), (1.0f));
++        GXSetScissor(0U, 0U, mp6_widescreen_render_width(), 480U);
+@@ -773,8 +778,2 @@
+-            waveOffsetX[segmentIndex] =
+-                (f32) (((1.5) * sin((4.0) * ((0.02617993877991494) *
+-                                             (f64) (f32) (lbl_1_bss_10 + segmentIndex)))) /
+-                       (640.0));
+-            waveOffsetY[segmentIndex] =
+-                -M668Abs((f32) (((4.0) * cos((0.039269908169872414) *
+-                                                 (f64) (f32) (lbl_1_bss_10 + (segmentIndex * 4)))) /
+-                                    (480.0)));
++            waveOffsetX[segmentIndex] = (f32)(((1.5) * sin((4.0) * ((0.02617993877991494) * (f64)(f32)(lbl_1_bss_10 + segmentIndex)))) / mp6_widescreen_render_width());
++            waveOffsetY[segmentIndex] = -M668Abs((f32)(((4.0) * cos((0.039269908169872414) * (f64)(f32)(lbl_1_bss_10 + (segmentIndex * 4)))) / (480.0)));
+@@ -806,4 +805,12 @@
+-    }
+-}
+-
+-/* Scene setup creates the arena, actor and effect models, collision map, and lighting. */
++        GXEnd();
++    }
++}
++
++
++/* Surrounding scenery only. The pillar and both playable platforms keep
++ * their native shape; nami's separate platform-contact rings are protected. */
++static int mp6_m668_wide_cave(const char *name)
++{
++    return !strcmp(name, "iwa");
++}
++
+@@ -827,2 +834,2 @@
+-    work->sceneModel[0] =
+-        Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 0), HU_MEMNUM_OVL, HEAP_MODEL));
++    work->sceneModel[0] = Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 0), HU_MEMNUM_OVL, HEAP_MODEL));
++    mp6_widescreen_extrude_model_selective_horizontal(work->sceneModel[0], mp6_m668_wide_cave);
+@@ -835,2 +842,2 @@
+-    work->actorModel[0] =
+-        Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 4), HU_MEMNUM_OVL, HEAP_MODEL));
++    work->actorModel[0] = Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 4), HU_MEMNUM_OVL, HEAP_MODEL));
++    mp6_widescreen_extend_sides(work->actorModel[0], "yougan", 1);
+@@ -843,2 +850,2 @@
+-    work->actorModel[1] =
+-        Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 7), HU_MEMNUM_OVL, HEAP_MODEL));
++    work->actorModel[1] = Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 7), HU_MEMNUM_OVL, HEAP_MODEL));
++    mp6_widescreen_extend_sides(work->actorModel[1], "yougan_b", 0);
+@@ -866,2 +873,4 @@
+-    work->effect[0].model =
+-        Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 11), HU_MEMNUM_OVL, HEAP_MODEL));
++    work->effect[0].model = Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m668, 11), HU_MEMNUM_OVL, HEAP_MODEL));
++    mp6_widescreen_extrude_outer_components(work->effect[0].model, "nami", 910.0f);
++    mp6_widescreen_pair_rigid_components(work->sceneModel[0], "iwa",
++        work->effect[0].model, "nami", 500.0f);
+@@ -920,0 +930 @@
++    f32 halfWidth;
+@@ -923 +933 @@
+-    GXSetTexCopySrc(0U, 0U, 640U, 480U);
++    GXSetTexCopySrc(0U, 0U, mp6_widescreen_render_width(), 480U);
+@@ -926 +936 @@
+-    GXSetViewport((0.0f), (0.0f), (640.0f),
++    GXSetViewport((0.0f), (0.0f), mp6_widescreen_render_width(),
+@@ -928 +938 @@
+-    GXSetScissor(0U, 0U, 640U, 480U);
++    GXSetScissor(0U, 0U, mp6_widescreen_render_width(), 480U);
+@@ -981,0 +992 @@
++        halfWidth = particleSize / mp6_widescreen_scale_factor();
+@@ -994 +1005 @@
+-        texOffset.x = lbl_1_bss_40[i].x;
++        texOffset.x = lbl_1_bss_40[i].x / mp6_widescreen_scale_factor();
+@@ -999 +1010 @@
+-        GXPosition3f32(particleX + particleSize, particleY, (0.0f));
++        GXPosition3f32(particleX + halfWidth, particleY, (0.0f));
+@@ -1001,2 +1012,2 @@
+-        GXTexCoord2f32(texOffset.x + (particleX + particleSize), particleY + texOffset.y);
+-        GXPosition3f32(particleX + particleSize, particleY + particleSize, (0.0f));
++        GXTexCoord2f32(texOffset.x + (particleX + halfWidth), particleY + texOffset.y);
++        GXPosition3f32(particleX + halfWidth, particleY + particleSize, (0.0f));
+@@ -1004,2 +1015 @@
+-        GXTexCoord2f32(texOffset.x + (particleX + particleSize),
+-                       texOffset.y + (particleY + particleSize));
++        GXTexCoord2f32(texOffset.x + (particleX + halfWidth), texOffset.y + (particleY + particleSize));
+@@ -1010,0 +1021 @@
++    GXEnd();

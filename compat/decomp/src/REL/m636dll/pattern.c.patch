@@ -1,0 +1,209 @@
+--- a/src/REL/m636dll/pattern.c
++++ b/src/REL/m636dll/pattern.c
+@@ -9,20 +8,0 @@
+-#define PIXEL_PLAYER_SIDE_OFFSET 104
+-#define PIXEL_PLAYER_RECORD_OFFSET 120
+-#define PIXEL_LANDING_COUNTER_OFFSET 136
+-#define PIXEL_TIMER_OFFSET 68
+-#define PIXEL_TEAM_PIXELS_OFFSET 530
+-#define PIXEL_RIGHT_TEAM_PIXELS_OFFSET 546
+-#define PIXEL_FLOOR_PANEL_MODELS_OFFSET 408
+-#define PIXEL_RIGHT_FLOOR_MODELS_OFFSET 440
+-#define PIXEL_PANEL_OFF_MOTION_OFFSET 400
+-#define PIXEL_PANEL_ON_MOTION_OFFSET 402
+-#define PIXEL_PANEL_TURN_ON_MOTION_OFFSET 404
+-#define PIXEL_PANEL_TURN_OFF_MOTION_OFFSET 406
+-#define PIXEL_FLOOR_DRAW_HOOK_OFFSET 528
+-#define PIXEL_SELECTED_PICTURE_OFFSET 504
+-#define PIXEL_ROUND_CELL_CHOICES_OFFSET 508
+-#define PIXEL_PICTURE_CELL_MODELS_OFFSET 286
+-#define PIXEL_PICTURE_INTRO_MODELS_OFFSET 274
+-#define PIXEL_REFERENCE_MODEL_OFFSET 270
+-#define PIXEL_REFERENCE_CELL_MODELS_OFFSET 578
+-#define PIXEL_TARGET_PIXELS_OFFSET 562
+@@ -39 +19 @@
+-void fn_1_2F10(MGACTOR *actor, int playerSlot)
++void fn_1_2F10(MGACTOR *actor, intptr_t playerSlot)
+@@ -51,2 +31,2 @@
+-    side = *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET);
+-    player = *(MGPLAYER **)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++    side = lbl_1_bss_0.teamSide[playerIndex];
++    player = lbl_1_bss_0.players[playerIndex];
+@@ -56 +36 @@
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_LANDING_COUNTER_OFFSET) = 90;
++        lbl_1_bss_0.landingCounter[playerIndex] = 90;
+@@ -66 +46 @@
+-            MgTimerDoneCheck(*(MGTIMER **)((u8 *)&lbl_1_bss_0 + PIXEL_TIMER_OFFSET)) != 0) {
++            MgTimerDoneCheck(lbl_1_bss_0.timer) != 0) {
+@@ -69,7 +49,4 @@
+-        if (((u8 *) &lbl_1_bss_0 + side * PIXEL_CELL_COUNT +
+-             PIXEL_TEAM_PIXELS_OFFSET)[column + row * 4] == 1) {
+-            ((u8 *) &lbl_1_bss_0 + side * PIXEL_CELL_COUNT +
+-             PIXEL_TEAM_PIXELS_OFFSET)[column + row * 4] = 0;
+-            Hu3DMotionSet(*(s16 *) ((u8 *) &lbl_1_bss_0 + side * PIXEL_CELL_MODEL_SET_BYTES +
+-                                    (column + row * 4) * 2 + PIXEL_FLOOR_PANEL_MODELS_OFFSET),
+-                          *(s16 *) ((u8 *) &lbl_1_bss_0 + PIXEL_PANEL_TURN_OFF_MOTION_OFFSET));
++        if (lbl_1_bss_0.teamPixels[side][column + row * 4] == 1) {
++            lbl_1_bss_0.teamPixels[side][column + row * 4] = 0;
++            Hu3DMotionSet(lbl_1_bss_0.panelModels[side][column + row * 4],
++                          lbl_1_bss_0.panelMotions[3]);
+@@ -77,5 +54,3 @@
+-            ((u8 *) &lbl_1_bss_0 + side * PIXEL_CELL_COUNT +
+-             PIXEL_TEAM_PIXELS_OFFSET)[column + row * 4] = 1;
+-            Hu3DMotionSet(*(s16 *) ((u8 *) &lbl_1_bss_0 + side * PIXEL_CELL_MODEL_SET_BYTES +
+-                                    (column + row * 4) * 2 + PIXEL_FLOOR_PANEL_MODELS_OFFSET),
+-                          *(s16 *) ((u8 *) &lbl_1_bss_0 + PIXEL_PANEL_TURN_ON_MOTION_OFFSET));
++            lbl_1_bss_0.teamPixels[side][column + row * 4] = 1;
++            Hu3DMotionSet(lbl_1_bss_0.panelModels[side][column + row * 4],
++                          lbl_1_bss_0.panelMotions[2]);
+@@ -97,2 +72,2 @@
+-    *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_FLOOR_DRAW_HOOK_OFFSET) = Hu3DHookFuncCreate(fn_1_3C94);
+-    Hu3DModelLayerSet(*(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_FLOOR_DRAW_HOOK_OFFSET), 0);
++    lbl_1_bss_0.floorDrawHook = Hu3DHookFuncCreate(fn_1_3C94);
++    Hu3DModelLayerSet(lbl_1_bss_0.floorDrawHook, 0);
+@@ -101,2 +76,2 @@
+-        *((u8 *)&lbl_1_bss_0 + PIXEL_TEAM_PIXELS_OFFSET + cellIndex) = lbl_1_data_140[cellIndex];
+-        *((u8 *) &lbl_1_bss_0 + PIXEL_RIGHT_TEAM_PIXELS_OFFSET + cellIndex) =
++        lbl_1_bss_0.teamPixels[0][cellIndex] = lbl_1_data_140[cellIndex];
++        lbl_1_bss_0.teamPixels[1][cellIndex] =
+@@ -105,3 +80,3 @@
+-        panelModel = *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_FLOOR_PANEL_MODELS_OFFSET + cellIndex * 2);
+-        if (*((u8 *)&lbl_1_bss_0 + PIXEL_TEAM_PIXELS_OFFSET + cellIndex) == 0) {
+-            Hu3DMotionSet(panelModel, *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_PANEL_OFF_MOTION_OFFSET));
++        panelModel = lbl_1_bss_0.panelModels[0][cellIndex];
++        if (lbl_1_bss_0.teamPixels[0][cellIndex] == 0) {
++            Hu3DMotionSet(panelModel, lbl_1_bss_0.panelMotions[0]);
+@@ -109,6 +84,6 @@
+-            Hu3DMotionSet(panelModel, *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_PANEL_ON_MOTION_OFFSET));
+-        }
+-
+-        panelModel = *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_RIGHT_FLOOR_MODELS_OFFSET + cellIndex * 2);
+-        if (*((u8 *)&lbl_1_bss_0 + PIXEL_RIGHT_TEAM_PIXELS_OFFSET + cellIndex) == 0) {
+-            Hu3DMotionSet(panelModel, *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_PANEL_OFF_MOTION_OFFSET));
++            Hu3DMotionSet(panelModel, lbl_1_bss_0.panelMotions[1]);
++        }
++
++        panelModel = lbl_1_bss_0.panelModels[1][cellIndex];
++        if (lbl_1_bss_0.teamPixels[1][cellIndex] == 0) {
++            Hu3DMotionSet(panelModel, lbl_1_bss_0.panelMotions[0]);
+@@ -116,5 +91,5 @@
+-            Hu3DMotionSet(panelModel, *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_PANEL_ON_MOTION_OFFSET));
+-        }
+-    }
+-
+-    *(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET) = frand() % 3;
++            Hu3DMotionSet(panelModel, lbl_1_bss_0.panelMotions[1]);
++        }
++    }
++
++    lbl_1_bss_0.selectedPicture = frand() % 3;
+@@ -129,2 +104 @@
+-                if (*(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_ROUND_CELL_CHOICES_OFFSET +
+-                              previousChoice * 4) == chosenCell) {
++                if (lbl_1_bss_0.roundCellChoices[previousChoice] == chosenCell) {
+@@ -145 +119 @@
+-            if (*(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET) == 2) {
++            if (lbl_1_bss_0.selectedPicture == 2) {
+@@ -163 +137 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_ROUND_CELL_CHOICES_OFFSET + cellIndex * 4) =
++            lbl_1_bss_0.roundCellChoices[cellIndex] =
+@@ -178,2 +152 @@
+-    modelId = *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_PICTURE_CELL_MODELS_OFFSET +
+-                        pictureIndex * PIXEL_CELL_MODEL_SET_BYTES + cellIndex * 2);
++    modelId = lbl_1_bss_0.pictureCellModels[pictureIndex][cellIndex];
+@@ -181 +154 @@
+-        *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_PICTURE_INTRO_MODELS_OFFSET + pictureIndex * 2),
++        lbl_1_bss_0.pictureIntroModels[pictureIndex],
+@@ -185,2 +158 @@
+-        Hu3DModelAttrSet(*(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_PICTURE_CELL_MODELS_OFFSET +
+-                                   pictureIndex * PIXEL_CELL_MODEL_SET_BYTES + otherCell * 2),
++        Hu3DModelAttrSet(lbl_1_bss_0.pictureCellModels[pictureIndex][otherCell],
+@@ -193 +165 @@
+-    Hu3DModelAttrSet(*(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_REFERENCE_MODEL_OFFSET),
++    Hu3DModelAttrSet(lbl_1_bss_0.referenceModel,
+@@ -198 +170 @@
+-            *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_REFERENCE_CELL_MODELS_OFFSET + otherCell * 2),
++            lbl_1_bss_0.referenceCellModels[otherCell],
+@@ -203 +175 @@
+-        *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_REFERENCE_CELL_MODELS_OFFSET + cellIndex * 2),
++        lbl_1_bss_0.referenceCellModels[cellIndex],
+@@ -206 +178 @@
+-        *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_REFERENCE_CELL_MODELS_OFFSET + cellIndex * 2),
++        lbl_1_bss_0.referenceCellModels[cellIndex],
+@@ -209 +181 @@
+-        *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_REFERENCE_CELL_MODELS_OFFSET + cellIndex * 2),
++        lbl_1_bss_0.referenceCellModels[cellIndex],
+@@ -219,2 +191 @@
+-    modelId = (*(s16 *) ((s8 *) (&lbl_1_bss_0) + (pictureIndex * PIXEL_CELL_MODEL_SET_BYTES) +
+-                         (cellIndex * 2) + (PIXEL_PICTURE_CELL_MODELS_OFFSET)));
++    modelId = (lbl_1_bss_0.pictureCellModels[pictureIndex][cellIndex]);
+@@ -235,2 +206 @@
+-    modelId = *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_PICTURE_CELL_MODELS_OFFSET +
+-                        pictureIndex * PIXEL_CELL_MODEL_SET_BYTES + cellIndex * 2);
++    modelId = lbl_1_bss_0.pictureCellModels[pictureIndex][cellIndex];
+@@ -240,2 +210 @@
+-        Hu3DModelAttrSet(*(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_PICTURE_CELL_MODELS_OFFSET +
+-                                   pictureIndex * PIXEL_CELL_MODEL_SET_BYTES + otherCell * 2),
++        Hu3DModelAttrSet(lbl_1_bss_0.pictureCellModels[pictureIndex][otherCell],
+@@ -253 +222 @@
+-            *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_REFERENCE_CELL_MODELS_OFFSET + otherCell * 2),
++            lbl_1_bss_0.referenceCellModels[otherCell],
+@@ -257 +226 @@
+-    modelId = *(s16 *)((s8 *)&lbl_1_bss_0 + PIXEL_REFERENCE_CELL_MODELS_OFFSET + cellIndex * 2);
++    modelId = lbl_1_bss_0.referenceCellModels[cellIndex];
+@@ -271,2 +240 @@
+-    modelId = *(HU3D_MODELID *) ((u8 *) &lbl_1_bss_0 + PIXEL_PICTURE_CELL_MODELS_OFFSET +
+-                                 pictureIndex * PIXEL_CELL_MODEL_SET_BYTES + cellIndex * 2);
++    modelId = lbl_1_bss_0.pictureCellModels[pictureIndex][cellIndex];
+@@ -298 +266 @@
+-        memcpy((u8 *)&lbl_1_bss_0 + rowIndex * 4 + PIXEL_TARGET_PIXELS_OFFSET, sourceRow, 4);
++        memcpy((&lbl_1_bss_0.targetPixels[rowIndex * 4]), sourceRow, 4);
+@@ -303,4 +271,4 @@
+-            ((u8 *)&lbl_1_bss_0 + PIXEL_TARGET_PIXELS_OFFSET)[rowIndex * 4],
+-            ((u8 *)&lbl_1_bss_0 + PIXEL_TARGET_PIXELS_OFFSET)[rowIndex * 4 + 1],
+-            ((u8 *)&lbl_1_bss_0 + PIXEL_TARGET_PIXELS_OFFSET)[rowIndex * 4 + 2],
+-            ((u8 *)&lbl_1_bss_0 + PIXEL_TARGET_PIXELS_OFFSET)[rowIndex * 4 + 3]);
++            lbl_1_bss_0.targetPixels[rowIndex * 4],
++            lbl_1_bss_0.targetPixels[rowIndex * 4 + 1],
++            lbl_1_bss_0.targetPixels[rowIndex * 4 + 2],
++            lbl_1_bss_0.targetPixels[rowIndex * 4 + 3]);
+@@ -316,2 +284,2 @@
+-    teamPixels = (u8 *)&lbl_1_bss_0 + (side * PIXEL_CELL_COUNT) + PIXEL_TEAM_PIXELS_OFFSET;
+-    targetPixels = (u8 *)&lbl_1_bss_0 + PIXEL_TARGET_PIXELS_OFFSET;
++    teamPixels = lbl_1_bss_0.teamPixels[side];
++    targetPixels = lbl_1_bss_0.targetPixels;
+@@ -333,2 +301,2 @@
+-    teamPixels = (u8 *)&lbl_1_bss_0 + side * PIXEL_CELL_COUNT + PIXEL_TEAM_PIXELS_OFFSET;
+-    targetPixels = (u8 *)&lbl_1_bss_0 + PIXEL_TARGET_PIXELS_OFFSET;
++    teamPixels = lbl_1_bss_0.teamPixels[side];
++    targetPixels = lbl_1_bss_0.targetPixels;
+@@ -352,2 +320,2 @@
+-    teamPixels = (u8 *)&lbl_1_bss_0 + PIXEL_TEAM_PIXELS_OFFSET + (side * PIXEL_CELL_COUNT);
+-    targetPixels = (u8 *)&lbl_1_bss_0 + PIXEL_TARGET_PIXELS_OFFSET;
++    teamPixels = lbl_1_bss_0.teamPixels[side];
++    targetPixels = lbl_1_bss_0.targetPixels;
+@@ -368,2 +336 @@
+-    panelModel = *(s16 *) ((u8 *) &lbl_1_bss_0 + side * PIXEL_CELL_MODEL_SET_BYTES +
+-                           PIXEL_FLOOR_PANEL_MODELS_OFFSET + (column + row * 4) * 2);
++    panelModel = lbl_1_bss_0.panelModels[side][column + row * 4];
+@@ -373,2 +340,2 @@
+-    if (motionId == *(s16*)((u8*)&lbl_1_bss_0 + PIXEL_PANEL_TURN_ON_MOTION_OFFSET)
+-        || motionId == *(s16*)((u8*)&lbl_1_bss_0 + PIXEL_PANEL_TURN_OFF_MOTION_OFFSET)) {
++    if (motionId == lbl_1_bss_0.panelMotions[2]
++        || motionId == lbl_1_bss_0.panelMotions[3]) {
+@@ -393,2 +360 @@
+-            modelId = *(s16 *)((u8 *)&lbl_1_bss_0 + (side * PIXEL_CELL_MODEL_SET_BYTES)
+-                     + (cellIndex * 2) + PIXEL_FLOOR_PANEL_MODELS_OFFSET);
++            modelId = lbl_1_bss_0.panelModels[side][cellIndex];
+@@ -397 +363 @@
+-                    == *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_PANEL_TURN_ON_MOTION_OFFSET)) {
++                    == lbl_1_bss_0.panelMotions[2]) {
+@@ -399 +365 @@
+-                                  *(s16 *) ((u8 *) &lbl_1_bss_0 + PIXEL_PANEL_ON_MOTION_OFFSET));
++                                  lbl_1_bss_0.panelMotions[1]);
+@@ -401 +367 @@
+-                           == *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_PANEL_TURN_OFF_MOTION_OFFSET)) {
++                           == lbl_1_bss_0.panelMotions[3]) {
+@@ -403 +369 @@
+-                                  *(s16 *) ((u8 *) &lbl_1_bss_0 + PIXEL_PANEL_OFF_MOTION_OFFSET));
++                                  lbl_1_bss_0.panelMotions[0]);

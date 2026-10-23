@@ -1,6 +1,6 @@
 --- a/src/game/charman.c
 +++ b/src/game/charman.c
-@@ -115 +115,21 @@
+@@ -116 +116,21 @@
 -static u16 dustFlags[CHAR_NPC_MAX];
 +/* Real, unpatched original decomp bug (not a decompilation error --
 + * charman.c is independently confirmed byte-identical against the real
@@ -23,7 +23,7 @@
 + * target), just gives this one loop the storage it was already assuming
 + * it had. */
 +static u16 dustFlags[CHAR_NPC_NO_BASE];
-@@ -286 +306,7 @@
+@@ -296 +316,7 @@
 -    printf("Time %dmsec\n", OSTicksToMilliseconds(OSGetTick()-start));
 +    /* MP6_NATIVE_PORT: OSTicksToMilliseconds yields a 64-bit value on this
 +     * host (dolphin/os.h types OSTime as long long), so `%d` consumed the
@@ -32,12 +32,28 @@
 +     * format string: the printed text then matches the console's for every
 +     * value this timing report can produce. */
 +    printf("Time %dmsec\n", (int)OSTicksToMilliseconds(OSGetTick()-start));
-@@ -557,2 +583,2 @@
--static inline s16 EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param);
--static s16 EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param);
+@@ -609,11 +635,7 @@
+-static s16 EffectDustCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale,
+-                            EFFECTPARAM *param);
+-static s16 EffectHitCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale,
+-                           EFFECTPARAM *param);
+-static s16 EffectSmokeCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale,
+-                             EFFECTPARAM *param);
+-
+-static inline s16 EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ,
+-                                   float scale, float ofsY, EFFECTPARAM *param);
+-static s16 EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale,
+-                            s16 charNo, float ofsY, EFFECTPARAM *param);
++static s16 EffectDustCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, EFFECTPARAM *param);
++static s16 EffectHitCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, EFFECTPARAM *param);
++static s16 EffectSmokeCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, EFFECTPARAM *param);
++
 +static inline void EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param);
 +static void EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param);
-@@ -1141,0 +1168,14 @@
++
+@@ -1212,2 +1234,14 @@
+-// Plays a character sound at the model position or with its configured volume and pan; no value is
+-// assigned to this function's declared s16 return.
 +/* Host-UB fix, and only that -- no behaviour change. This is declared s16
 + * (game/charman.h), but every path fell off the end of it without ever
 + * executing a return. On the real hardware's PowerPC ABI that "worked" by
@@ -52,15 +68,17 @@
 + * no sound at all and had nothing to hand back, is observably identical
 + * while being defined. Every call site in the game discards the result,
 + * so no caller can tell the difference either way. */
-@@ -1148 +1188 @@
+@@ -1220 +1254 @@
 -            CharFXPlayPos(charNo, seNo, &modelP->pos);
 +            return CharFXPlayPos(charNo, seNo, &modelP->pos);
-@@ -1150,5 +1190,11 @@
+@@ -1222,7 +1256,11 @@
 -            CharFXPlayVolPan(charNo, seNo, workP->vol, workP->pan);
 -        }
 -    }
 -}
 -
+-// Plays the win voice selected for the current minigame, falling back to the standard win voice.
+-// The playback is the useful result; ret is returned without being assigned in this function.
 +            return CharFXPlayVolPan(charNo, seNo, workP->vol, workP->pan);
 +        }
 +    }
@@ -72,14 +90,16 @@
 + * value (on PowerPC, in practice, whatever the call on the line above had
 + * just left in r3 -- i.e. the handle it meant all along). It now returns
 + * that handle explicitly instead. All call sites discard it. */
-@@ -1159 +1204,0 @@
+@@ -1233 +1270,0 @@
 -    s16 ret;
-@@ -1170,2 +1215 @@
+@@ -1244,2 +1281 @@
 -    _CharFXPlay(charNo, seNo, voiceFlag);
 -    return ret;
 +    return _CharFXPlay(charNo, seNo, voiceFlag);
-@@ -1340 +1384,14 @@
--static inline s16 EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param)
+@@ -1432,3 +1468,14 @@
+-// Emits warning particles around the model and records model and height data for animation.
+-static inline s16 EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ,
+-                                   float scale, float ofsY, EFFECTPARAM *param)
 +/* The two file-local, side-effect-only members of this file's Effect*Create
 + * family. Unlike EffectDustCreate / EffectHitCreate / EffectSmokeCreate
 + * above -- each of which forwards the single id EffectCreate produced --
@@ -94,10 +114,13 @@
 + * without touching a single caller. The bare early return inside keeps its
 + * original meaning exactly: give up on the remaining cameras. */
 +static inline void EffectWarnCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, float ofsY, EFFECTPARAM *param)
-@@ -1377 +1434 @@
--static s16 EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param)
+@@ -1471,3 +1518 @@
+-// Emits orbiting bird particles and records which character and head-height offset they follow.
+-static s16 EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale,
+-                            s16 charNo, float ofsY, EFFECTPARAM *param)
 +static void EffectBirdCreate(HU3D_MODELID modelId, float posX, float posY, float posZ, float scale, s16 charNo, float ofsY, EFFECTPARAM *param)
-@@ -2545,0 +2603,12 @@
+@@ -2712 +2757,12 @@
+-// Starts motion-timed dust and sound effects for an NPC or character.
 +/* Declared s32 in game/charman.h, but the child-process-creation failure
 + * path was a bare valueless return and the success path fell off the end
 + * of the function entirely -- so the forwarding wrapper right below it
@@ -110,22 +133,24 @@
 + * dereferences NULL, so the guard can only fire where the original already
 + * crashed -- and it reaps the orphaned child process the original would
 + * have leaked on the way down. */
-@@ -2551 +2620 @@
+@@ -2718 +2774 @@
 -        return;
 +        return 0;
-@@ -2553,0 +2623,4 @@
+@@ -2720,0 +2777,4 @@
 +        if(!work) {
 +            HuPrcKill(process);
 +            return 0;
 +        }
-@@ -2560,0 +2634 @@
+@@ -2727,0 +2788 @@
 +    return (s32)(uintptr_t)process;
-@@ -2565,3 +2639 @@
+@@ -2733,3 +2794 @@
 -    s32 ret;
 -    CharNpcDustSet(modelId, motId, type, CHAR_NPC_NONE);
 -    return ret;
 +    return CharNpcDustSet(modelId, motId, type, CHAR_NPC_NONE);
-@@ -2751,0 +2824,7 @@
+@@ -2930,2 +2989,7 @@
+-// Selects the character's footstep sound and spatial playback when UpdateCharAnim reaches a step;
+-// its configured-volume/pan path returns an unassigned s16.
 +/* Third instance of the same shape in this file: the local it returns on
 + * one path is declared and returned but never assigned, and the muted
 + * early-out at the top was a bare valueless return. Both now hand back the
@@ -133,16 +158,16 @@
 + * that this function's other muted early-out (in the 0x8000 branch below)
 + * already returns for exactly the same condition. Every call site in the
 + * file discards the result. */
-@@ -2756 +2834,0 @@
+@@ -2936 +2999,0 @@
 -    s16 ret;
-@@ -2758 +2836 @@
+@@ -2938 +3001 @@
 -        return;
 +        return -1;
-@@ -2773,2 +2851 @@
+@@ -2953,2 +3016 @@
 -            _CharFXPlay(charNo, seId, voiceFlag);
 -            return ret;
 +            return _CharFXPlay(charNo, seId, voiceFlag);
-@@ -3029 +3106,7 @@
+@@ -3222 +3284,7 @@
 -    s16 motNo;
 +    /* MP6_NATIVE_PORT: the motId search below breaks on the first match and
 +     * leaves motNo untouched when there is none, so the switch dispatched on

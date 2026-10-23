@@ -1,0 +1,14 @@
+--- a/include/REL/m626Dll/collision.h
++++ b/include/REL/m626Dll/collision.h
+@@ -16 +16 @@
+-    void (*invoke)(s32 argument);
++    void (*invoke)(void *argument);
+@@ -37 +37 @@
+-    void (*invoke)(s32 argument);
++    void (*invoke)(void *argument);
+@@ -50 +50 @@
+-    void (*invoke)(s32 argument);
++    void (*invoke)(void *argument);
+@@ -78 +78 @@
+-    void (*invoke)(s32 argument);
++    void (*invoke)(void *argument);

@@ -3,6 +3,7 @@
 #include "mp6_json.h"
 #include "mp6_path.h"
 #include "mp6_enhancements.h"
+#include "mp6_quick_play.h"
 #include <cassert>
 #include <cmath>
 #include <fstream>

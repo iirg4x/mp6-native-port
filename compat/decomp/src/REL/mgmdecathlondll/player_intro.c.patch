@@ -1,0 +1,11 @@
+--- a/src/REL/mgmdecathlondll/player_intro.c
++++ b/src/REL/mgmdecathlondll/player_intro.c
+@@ -2,0 +3,2 @@
++#include "string.h"
++#include "game/frand.h"
+@@ -145,2 +147,3 @@
+-    lbl_1_bss_88->data = HuMemDirectMallocNum(HEAP_HEAP, 280, HU_MEMNUM_OVL);
+-    memset(lbl_1_bss_88->data, 0, 280);
++    lbl_1_bss_88->data = HuMemDirectMallocNum(
++        HEAP_HEAP, sizeof(DecathlonMotionPath) * 10, HU_MEMNUM_OVL);
++    memset(lbl_1_bss_88->data, 0, sizeof(DecathlonMotionPath) * 10);

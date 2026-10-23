@@ -1,7 +1,7 @@
 --- a/src/game/ShapeExec.c
 +++ b/src/game/ShapeExec.c
-@@ -41 +41,29 @@
--        shapeIdx = obj->mesh.mesh.baseMorph;
+@@ -53 +53,29 @@
+-        baseShapeIndex = obj->mesh.mesh.baseMorph;
 +        /* PORT FIX -- bound the pose index BEFORE the float->int cast.
 +         *
 +         * `baseMorph` is written raw by hsfmotion.c's HSF_CHANNEL_MORPH case
@@ -21,16 +21,16 @@
 +         *
 +         * Clamping in FLOAT space, before the cast, removes both at once and
 +         * is a no-op for every value retail actually produced: an in-range
-+         * baseMorph is unchanged, and `t` stays exactly `morph - shapeIdx`.
-+         * The `!(morph > 0.0f)` form is deliberate -- it catches NaN too.
-+         * ShapeProc's own gate guarantees shapeNum >= 1 here. */
++         * baseMorph is unchanged, and the blend factor stays exactly
++         * `morph - baseShapeIndex`. The `!(morph > 0.0f)` form is deliberate --
++         * it catches NaN too. ShapeProc's own gate guarantees shapeNum >= 1 here. */
 +        float morph = obj->mesh.mesh.baseMorph;
 +        if (!(morph > 0.0f)) {
 +            morph = 0.0f;
 +        } else if (morph > (float)(obj->mesh.shapeNum - 1)) {
 +            morph = (float)(obj->mesh.shapeNum - 1);
 +        }
-+        shapeIdx = morph;
-@@ -46 +74 @@
--        t = obj->mesh.mesh.baseMorph - shapeIdx;
-+        t = morph - shapeIdx;
++        baseShapeIndex = morph;
+@@ -58 +86 @@
+-        blendFactor = obj->mesh.mesh.baseMorph - baseShapeIndex;
++        blendFactor = morph - baseShapeIndex;

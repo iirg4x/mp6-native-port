@@ -1,0 +1,157 @@
+--- a/src/REL/m675Dll/camera.c
++++ b/src/REL/m675Dll/camera.c
+@@ -0,0 +1 @@
++#include "mp6_m675.h"
+@@ -21,4 +21,0 @@
+-typedef struct M675ObjectState {
+-    void *userData; /* Controller-specific configuration. */
+-    void (*callback)(OMOBJ *); /* Optional callback run after the controller's own update. */
+-} M675ObjectState;
+@@ -48,6 +44,0 @@
+-#undef lbl_1_bss_188
+-#undef fn_1_4540
+-#undef lbl_1_bss_48
+-#undef lbl_1_bss_188
+-#undef fn_1_45C4
+-typedef void (*CameraCallback)(OMOBJ *, u32, s32);
+@@ -67,13 +57,0 @@
+-typedef struct M675AudioConfigView_s {
+-    u32 cameras; /* Cameras sharing this mapping; zero terminates the configuration list. */
+-    s32 panMin, panMax; /* Pan endpoints for the horizontal 0 to 576 mapping. */
+-    s32 volumeMin, volumeMiddle, volumeMax; /* Volume at the far, middle and near depths. */
+-    float distanceFar, distanceMiddle, distanceNear; /* Camera-space depths in world units. */
+-} M675AudioConfigView;
+-typedef struct M675FogParam_s {
+-    s32 layer; /* Render layer using this fog; -1 terminates the list. */
+-    u32 cameras; /* Camera mask supplying the near and far clipping distances. */
+-    GXFogType type; /* GX fog projection and falloff mode. */
+-    float start, end; /* Fog distances in world units before scaling the end distance. */
+-    GXColor color; /* Fog RGBA color passed to GX. */
+-} M675FogParam;
+@@ -82 +60 @@
+-    s32 callbackWord; /* Optional object callback stored as a word; zero disables it. */
++    OMOBJ_FUNC callback; /* Optional native-width object callback. */
+@@ -85,21 +62,0 @@
+-typedef struct M675CameraEntry_s {
+-    s32 active, motion, model; /* Motion-active flag, motion resource and camera model ID. */
+-    OM_CAMERA_VIEW view, previousView; /* Current view and view saved when camera motion stops. */
+-    Vec position, up, target; /* World-space camera pose read before this frame's view update. */
+-    float fov, nearPlane, farPlane, aspect; /* FOV in degrees, world clipping planes and aspect. */
+-    float viewport[4]; /* Pixel x, y, width and height. */
+-    float scissor[4]; /* Pixel x, y, width and height, converted to integers when applied. */
+-    s32 setupState; /* Zero requests the shadow callback's one-time camera-motion stop. */
+-    s32 setupTimer; /* Reset when the shadow callback advances the entry's setup state. */
+-    u8 unmappedCameraStorage[24]; /* Remaining storage cleared during camera setup. */
+-} M675CameraEntry;
+-typedef struct M675CameraWork_s {
+-    u32 cameras; /* Mask of cameras updated by this controller. */
+-    float shadowRadius, shadowFov; /* Shadow coverage in world units and FOV in degrees. */
+-    Vec shadowDirection; /* Light direction used to place the shadow camera. */
+-    GXColor shadowColor; /* Shadow tint; the update applies its RGB components. */
+-    void (*callback)(OMOBJ *, u32, s32); /* Per-camera update, passed its mask and index. */
+-    M675CameraEntry entries[16]; /* One view and optional motion model per camera bit. */
+-    s32 initializationCount; /* Shared guard for the shadow callback's one-time setup. */
+-    u8 unmappedManagerStorage[4]; /* Remaining storage cleared with the manager allocation. */
+-} M675CameraWork;
+@@ -114 +71 @@
+-    s32 callbackWord; /* Optional object callback stored as a word; zero disables it. */
++    OMOBJ_FUNC callback; /* Optional native-width object callback. */
+@@ -136 +92,0 @@
+-void fn_1_1DD8(s32 camera, Vec *direction, Vec *target, float fov, float radius);
+@@ -241 +196,0 @@
+-extern inline float tanf(float x) { return (float)tan(x); }
+@@ -369 +324 @@
+-void fn_1_10A0(OMOBJMAN *manager, void *parameters)
++void fn_1_10A0(OMOBJMAN *manager, M675FogParam *parameters)
+@@ -379 +334 @@
+-    work->parameters = ((M675FogParam *)parameters);
++    work->parameters = parameters;
+@@ -381 +336 @@
+-    for (i = 0; ((M675FogParam *)parameters)->layer != -1; i++, ((M675FogParam *)parameters)++) {
++    for (i = 0; parameters->layer != -1; i++, parameters++) {
+@@ -383,5 +338,5 @@
+-            Hu3DFogSet(((M675FogParam *) parameters)->start, ((M675FogParam *) parameters)->end,
+-                       ((M675FogParam *) parameters)->color.r,
+-                       ((M675FogParam *) parameters)->color.g,
+-                       ((M675FogParam *) parameters)->color.b);
+-        Hu3DLayerHookSet(((M675FogParam *)parameters)->layer, fn_1_11F8);
++            Hu3DFogSet(parameters->start, parameters->end,
++                       parameters->color.r,
++                       parameters->color.g,
++                       parameters->color.b);
++        Hu3DLayerHookSet(parameters->layer, fn_1_11F8);
+@@ -393 +348 @@
+-    M675LightData *fogStateView = omObjGetDataAs(lbl_1_bss_2D0, M675LightData);
++    M675FogWork *fogStateView = omObjGetDataAs(lbl_1_bss_2D0, M675FogWork);
+@@ -418,2 +373,2 @@
+-void fn_1_12EC(s32 callbackWord) {
+-    s32 *fogState;
++void fn_1_12EC(OMOBJ_FUNC callback) {
++    M675FogWork *fogState;
+@@ -423 +378 @@
+-        fogState[1] = callbackWord;
++        fogState->callback = callback;
+@@ -428 +383 @@
+-    M675LightData *fogStateView;
++    M675FogWork *fogStateView;
+@@ -431,2 +386,2 @@
+-        fogStateView = omObjGetDataAs(lbl_1_bss_2D0, M675LightData);
+-        fogStateView->position.x = fogFactor;
++        fogStateView = omObjGetDataAs(lbl_1_bss_2D0, M675FogWork);
++        fogStateView->factor = fogFactor;
+@@ -521,2 +476,2 @@
+-                bit, __cvt_fp2unsigned(entry->scissor[0]), __cvt_fp2unsigned(entry->scissor[1]),
+-                __cvt_fp2unsigned(entry->scissor[2]), __cvt_fp2unsigned(entry->scissor[3]));
++                bit, (u32)(entry->scissor[0]), (u32)(entry->scissor[1]),
++                (u32)(entry->scissor[2]), (u32)(entry->scissor[3]));
+@@ -600 +555 @@
+-extern void fn_1_1FC8(CameraCallback callback) {
++extern void fn_1_1FC8(M675CameraCallback callback) {
+@@ -675,2 +630,2 @@
+-    M675LightData *cameraStateView = (M675LightData *)object->data;
+-    cameraStateView->position.x = shadowFov;
++    M675CameraWork *cameraStateView = object->data;
++    cameraStateView->shadowFov = shadowFov;
+@@ -689,2 +644,2 @@
+-    M675LightData *cameraStateView = (M675LightData *)object->data;
+-    return &cameraStateView->position.y;
++    M675CameraWork *cameraStateView = object->data;
++    return &cameraStateView->shadowDirection.x;
+@@ -838 +793 @@
+-void fn_1_2F38(HUPROCESS *objectManager, u32 audioConfig) {
++void fn_1_2F38(HUPROCESS *objectManager, M675AudioConfigView *audioConfig) {
+@@ -840 +795 @@
+-    u32 *objectState;
++    M675AudioWork *objectState;
+@@ -844 +799 @@
+-    objectState = (u32 *)HuMemDirectMallocNum(HEAP_HEAP, 1544, HU_MEMNUM_OVL);
++    objectState = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M675AudioWork), HU_MEMNUM_OVL);
+@@ -846,2 +801,2 @@
+-    memset(objectState, 0, 1544);
+-    *objectState = audioConfig;
++    memset(objectState, 0, sizeof(M675AudioWork));
++    objectState->config = audioConfig;
+@@ -852 +807 @@
+-    M675ObjectState *state = omObjGetDataAs(lbl_1_bss_2C8, M675ObjectState);
++    M675AudioWork *state = omObjGetDataAs(lbl_1_bss_2C8, M675AudioWork);
+@@ -893,2 +848,2 @@
+-void fn_1_3164(s32 callbackWord) {
+-    s32 *audioState;
++void fn_1_3164(OMOBJ_FUNC callback) {
++    M675AudioWork *audioState;
+@@ -898 +853 @@
+-        audioState[1] = callbackWord;
++        audioState->callback = callback;
+@@ -926,3 +881,3 @@
+-void fn_1_32EC(void *position)
+-{
+-    fn_1_3318(1, position);
++s32 fn_1_32EC(Vec *position)
++{
++    return fn_1_3318(1, position);
+@@ -1164 +1119 @@
+-void fn_1_4BB4(Point3d *start, Point3d *end, Point3d *position, f32 factor)
++void fn_1_4BB4(Point3d *start, Point3d *end, f32 factor, Point3d *position)
+@@ -1199,0 +1155,2 @@
++
++/* Storage only; omOvlKill owns runtime allocation teardown. */

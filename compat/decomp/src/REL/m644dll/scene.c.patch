@@ -1,0 +1,14 @@
+--- a/src/REL/m644dll/scene.c
++++ b/src/REL/m644dll/scene.c
+@@ -2,0 +3 @@
++#include <string.h>
+@@ -41,3 +42,3 @@
+-extern void fn_1_7D98(void);
+-extern void fn_1_4E84(void);
+-extern void fn_1_6838(void);
++extern s32 fn_1_7D98(void);
++extern s32 fn_1_4E84(void);
++extern s32 fn_1_6838(void);
+@@ -45 +46 @@
+-extern s32 fn_1_9190(void);
++extern void fn_1_9190(void);

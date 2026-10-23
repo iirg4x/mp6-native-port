@@ -1,0 +1,6 @@
+--- a/src/REL/openingDll/opening.c
++++ b/src/REL/openingDll/opening.c
+@@ -305,0 +306,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

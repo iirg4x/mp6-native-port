@@ -1,0 +1,7 @@
+--- a/src/REL/m647dll/text_00000.c
++++ b/src/REL/m647dll/text_00000.c
+@@ -2,0 +2 @@
++#include "mp6_mg_winner.h"
+@@ -159,0 +159,2 @@
++        /* Port addition: name the winners (retail never did; see mp6_mg_winner.h). */
++        mp6_mg_winner_message(-1, -1, -1, -1);

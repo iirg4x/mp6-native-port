@@ -33,4 +33,6 @@ def run(module):
         return module
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-    print('Verified:', list(pool.map(run, ['m601dll', 'instdll', 'mgmfreedll'])))
+    # Keep this route gate on actually unavailable overlays so it continues
+    # to verify the safe fallback path after instdll recovery.
+    print('Verified:', list(pool.map(run, ['m601dll', 'mgmdecathlondll', 'mgmbattledll'])))

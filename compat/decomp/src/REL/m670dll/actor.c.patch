@@ -1,0 +1,8 @@
+--- a/src/REL/m670dll/actor.c
++++ b/src/REL/m670dll/actor.c
+@@ -13,3 +13,2 @@
+-/* MgPlayerCreate uses this hook in sequence mode 5 to add 8 times the ground-face normal's x and z
+- * components to the actor position when the ground attribute has bit 0x80. */
+-void fn_1_2384(MGACTOR *actor, int playerNo)
++/* MgPlayerCreate uses this collision hook to move players away from marked floor polygons in play. */
++void fn_1_2384(MGACTOR *actor, intptr_t playerNo)

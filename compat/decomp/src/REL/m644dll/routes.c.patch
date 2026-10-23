@@ -1,0 +1,13 @@
+--- a/src/REL/m644dll/routes.c
++++ b/src/REL/m644dll/routes.c
+@@ -2,0 +3 @@
++#include <string.h>
+@@ -60 +61 @@
+-extern s32 fn_1_519C(s32 index);
++extern s16 fn_1_519C(s32 player_slot);
+@@ -63 +64 @@
+-void fn_1_6394(void)
++void fn_1_6394(OMOBJ *object)
+@@ -253,0 +253,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

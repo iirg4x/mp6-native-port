@@ -1,0 +1,148 @@
+--- a/src/REL/m642dll/main.c
++++ b/src/REL/m642dll/main.c
+@@ -113 +113 @@
+-        return;
++        return 0;
+@@ -117,0 +118 @@
++void *fn_1_A0(s32 priority, u32 bytes, void (*update)(OMOBJ *));
+@@ -121 +122 @@
+-    lbl_1_bss_2C = fn_1_A0(100, 372, fn_1_31CC);
++    lbl_1_bss_2C = fn_1_A0(100, sizeof(M642SceneWork), fn_1_31CC);
+@@ -355 +356 @@
+-        return;
++        return FALSE;
+@@ -373,3 +374,3 @@
+-        team = (s32) lbl_1_bss_18->players[team][lbl_1_bss_18->active];
+-    }
+-    return (void *)team;
++        return lbl_1_bss_18->players[team][lbl_1_bss_18->active];
++    }
++    return (void *)(intptr_t)team;
+@@ -385 +386 @@
+-extern void *fn_1_86B0(M667Pool *pool);
++extern void *fn_1_86B0(void *pool);
+@@ -392 +393 @@
+-        return;
++        return NULL;
+@@ -396 +397 @@
+-        return;
++        return NULL;
+@@ -765 +766 @@
+-extern s32 fn_1_9008(Vec *position, float min, float max, s32 sound);
++extern s32 fn_1_9008(HuVecF *input, f32 lower, f32 upper, s32 soundEffect);
+@@ -1037,3 +1038,2 @@
+-extern s32 fn_1_8A50(Vec *source, Vec *destination);
+-extern s16 fn_1_7D1C(M642ParticleOwner *owner, s16 camera, f32 x, f32 y, f32 z,
+-                     f32 scale, M642ParticleConfigView *config);
++extern s32 fn_1_8A50(Point3d *source, Point3d *destination);
++extern s16 fn_1_7D1C(M642ParticleOwner *owner, s16 camera, float x, float y, float z, float scale, void *config);
+@@ -1172,7 +1172,7 @@
+-OMOBJ *fn_1_84D8();                                    /* static */
+-void *fn_1_8568();                                    /* static */
+-void *fn_1_859C();                                    /* static */
+-s32 fn_1_91EC(s32);                         /* static */
+-s32 fn_1_9250(s32);                         /* static */
+-s32 fn_1_92B4();                                /* static */
+-void *fn_1_A0(s32, u32, void (*)(OMOBJ *));
++OMOBJ *fn_1_84D8(void *capacity);                                    /* static */
++void *fn_1_8568(void *work);                                    /* static */
++void *fn_1_859C(void *work);                                    /* static */
++void *fn_1_91EC(s32 index);                         /* static */
++void *fn_1_9250(s32 index);                         /* static */
++void *fn_1_92B4(void);                                /* static */
++void *fn_1_A0(s32 priority, u32 bytes, void (*update)(OMOBJ *));
+@@ -1188,20 +1188,10 @@
+-    fn_1_91EC(1);
+-    sceneWork->scene_objects[0] = fn_1_84D8();
+-    fn_1_91EC(2);
+-    sceneWork->scene_objects[1] = fn_1_84D8();
+-    fn_1_91EC(3);
+-    sceneWork->scene_objects[2] = fn_1_84D8();
+-    fn_1_91EC(4);
+-    sceneWork->scene_objects[3] = fn_1_84D8();
+-    fn_1_91EC(5);
+-    sceneWork->scene_objects[4] = fn_1_84D8();
+-    fn_1_91EC(6);
+-    sceneWork->scene_objects[5] = fn_1_84D8();
+-    fn_1_91EC(7);
+-    sceneWork->scene_objects[6] = fn_1_84D8();
+-    fn_1_91EC(8);
+-    sceneWork->scene_objects[7] = fn_1_84D8();
+-    fn_1_9250(0);
+-    sceneWork->owners = fn_1_8568();
+-    fn_1_92B4();
+-    sceneWork->spriteAssets = fn_1_859C();
++    sceneWork->scene_objects[0] = fn_1_84D8(fn_1_91EC(1));
++    sceneWork->scene_objects[1] = fn_1_84D8(fn_1_91EC(2));
++    sceneWork->scene_objects[2] = fn_1_84D8(fn_1_91EC(3));
++    sceneWork->scene_objects[3] = fn_1_84D8(fn_1_91EC(4));
++    sceneWork->scene_objects[4] = fn_1_84D8(fn_1_91EC(5));
++    sceneWork->scene_objects[5] = fn_1_84D8(fn_1_91EC(6));
++    sceneWork->scene_objects[6] = fn_1_84D8(fn_1_91EC(7));
++    sceneWork->scene_objects[7] = fn_1_84D8(fn_1_91EC(8));
++    sceneWork->owners = fn_1_8568(fn_1_9250(0));
++    sceneWork->spriteAssets = fn_1_859C(fn_1_92B4());
+@@ -1209,3 +1199,3 @@
+-    lbl_1_bss_14 = fn_1_A0(10, 72, fn_1_42D0);
+-    lbl_1_bss_10 = fn_1_A0(10, 8, fn_1_4C60);
+-    lbl_1_bss_18 = fn_1_A0(10, 7916, fn_1_4EC4);
++    lbl_1_bss_14 = fn_1_A0(10, sizeof(M642RoundControl), fn_1_42D0);
++    lbl_1_bss_10 = fn_1_A0(10, 2 * sizeof(void *), fn_1_4C60);
++    lbl_1_bss_18 = fn_1_A0(10, sizeof(M642GridWork), fn_1_4EC4);
+@@ -1214 +1204 @@
+-        lbl_1_bss_1C[playerIndex] = fn_1_A0(20, 144, fn_1_51D4);
++        lbl_1_bss_1C[playerIndex] = fn_1_A0(20, sizeof(M642PlayerWork), fn_1_51D4);
+@@ -1218,2 +1208,2 @@
+-    lbl_1_bss_C = fn_1_A0(10, 4120, fn_1_7558);
+-    lbl_1_bss_8 = fn_1_A0(10, 8, fn_1_4E5C);
++    lbl_1_bss_C = fn_1_A0(10, sizeof(M642EffectWork), fn_1_7558);
++    lbl_1_bss_8 = fn_1_A0(10, 2 * sizeof(void *), fn_1_4E5C);
+@@ -1227 +1217 @@
+-extern void fn_1_1F98(HU3D_MODELID model, s16 motion, BOOL enabled);
++extern void fn_1_1F98(HU3D_MODELID model, HU3D_MOTIONID motion, BOOL lagF);
+@@ -1787,0 +1778 @@
++void *fn_1_8618(void *buffer, s32 bytes, s32 itemBytes);
+@@ -1795,2 +1786,4 @@
+-    work->pools[0] = fn_1_8618((u8 *)&work->cellStorage[0], 3600, 48);
+-    work->pools[1] = fn_1_8618((u8 *)&work->cellStorage[1], 3600, 48);
++    work->pools[0] = fn_1_8618((u8 *)&work->cellStorage[0], sizeof(work->cellStorage[0]),
++                                  sizeof(M642GridCell));
++    work->pools[1] = fn_1_8618((u8 *)&work->cellStorage[1], sizeof(work->cellStorage[1]),
++                                  sizeof(M642GridCell));
+@@ -1817,2 +1810,2 @@
+-extern float fn_1_2A38(const Vec *first, const Vec *second, float height);
+-extern void fn_1_2B28(s32 team, float scale, Vec *position, float yScale);
++extern f32 fn_1_2A38(const HuVecF *previousPosition, const HuVecF *currentPosition, f32 targetY);
++extern void fn_1_2B28(s32 team, f32 size, Vec *origin, f32 heightScale);
+@@ -1990 +1983 @@
+-extern f32 fn_1_320(Vec *direction);
++extern f32 fn_1_320(HuVecF *direction);
+@@ -2069,2 +2062,2 @@
+-extern s32 fn_1_8F9C(Vec *position, s32 camera, f32 min, f32 max, s32 sound);
+-extern s16 fn_1_8E68(Vec *position, s32 camera, f32 min, f32 max);
++extern s32 fn_1_8F9C(Vec *position, s32 camera, float nearPan, float farPan, s32 sound);
++extern s16 fn_1_8E68(Vec *position, s32 camera, float nearPan, float farPan);
+@@ -2112 +2105 @@
+-        effect = (s32)fn_1_30EC(work->team, &position);
++        effect = (s32)(intptr_t)fn_1_30EC(work->team, &position);
+@@ -2172 +2165 @@
+-extern s32 fn_1_8A50(Vec *source, Vec *result);
++extern s32 fn_1_8A50(Point3d *source, Point3d *destination);
+@@ -2194,2 +2187,2 @@
+-extern float fn_1_320(Vec *direction);
+-extern float fn_1_378(float start, float end, float t);
++extern f32 fn_1_320(HuVecF *direction);
++extern f32 fn_1_378(f32 start, f32 end, f32 blend);
+@@ -2533,6 +2526,6 @@
+-    s16 *playerState = object->data;
+-
+-    if (playerState[54] != 0) {
+-        playerState[54]--;
+-    }
+-    switch (playerState[53]) {
++    M642PlayerWork *playerState = object->data;
++
++    if (playerState->aiFrames != 0) {
++        playerState->aiFrames--;
++    }
++    switch (playerState->aiState) {

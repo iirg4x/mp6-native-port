@@ -1,0 +1,8 @@
+--- a/src/REL/m660dll/text_06BF8.c
++++ b/src/REL/m660dll/text_06BF8.c
+@@ -55 +55 @@
+-void fn_1_67D4(s16 slot, s16 mode, struct VoicePosition *position);
++void fn_1_67D4(s16 slot, s16 mode, Vec *position);
+@@ -638 +638 @@
+-void fn_1_9128(MGACTOR *actor, int parameter)
++void fn_1_9128(MGACTOR *actor, intptr_t parameter)

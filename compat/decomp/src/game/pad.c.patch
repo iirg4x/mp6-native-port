@@ -1,0 +1,7 @@
+--- a/src/game/pad.c
++++ b/src/game/pad.c
+@@ -232 +232,3 @@
+-                    } else {
++                    /* S02 requests (20, 0, 0): retain the initial motor
++                     * command until cutoff, without a zero-period remainder. */
++                    } else if(rumbleState->offTime + rumbleState->onTime != 0) {

@@ -8,7 +8,7 @@ what changes during play. Existing saved configuration keys remain compatible.
 | Video | Original / Classic+ / Modern presets, picture quality, smoothness, FPS counter; desktop window and monitor controls |
 | Audio | Volume and More Sound Effects |
 | Game | Guided game selection; desktop save-folder shortcut |
-| Mods | Fast Forward and Free Camera |
+| Mods | Fast Forward, Quick Party, Free Camera and Unlock All |
 | Advanced | Extra Memory and Graphics Driver (only when multiple real drivers exist) |
 | Touch Controls (Android) | Full GameCube touch controller, size/opacity, floating sticks, layout editor and individual control visibility |
 | Save States | Numbered slots, Quick Save / Load, compatibility and trusted-file guidance; available during play |
@@ -41,6 +41,58 @@ options; the preset description explains this.
 Fast Forward speeds up gameplay. Unlocked FPS smooths motion at normal speed;
 these are intentionally separate controls. Explicit launch overrides still
 take priority without changing the saved configuration.
+
+## Quick Party
+
+Mods > **Quick Party** (Off / 2x / 3x / 4x) shortens a party without touching
+minigames. It is off by default, applies live and is saved as
+`game.quick_play` (1 = off, 2..4). `MP6_QUICK_PLAY=0..4` overrides it for a
+run; `MP6_QUICK_PLAY_TRACE=1` logs every change between full speed and the
+wait that holds normal speed.
+
+- Boards and results screens run the chosen multiple faster. Where the
+  device keeps up, the board simply runs that many more ticks a second and
+  shows one per display refresh (also on the web, where the game otherwise
+  follows the display). Whatever the device cannot reach is made up inside
+  the game at the normal 60 ticks a second: board event waits, walking
+  between spaces, turning on the spot and camera moves take fewer ticks.
+  Minigames, their instructions, file select and every mode menu stay at
+  normal speed.
+- The board drops to normal speed for exactly the ticks it waits on a human:
+  the dice block, path choices, the orb menu and targeting, the shop, item
+  roulettes, the minigame pick, the map view, choice windows and the pause
+  menu. Cursors, roulettes and the dice keep their usual timing.
+- Message text prints at once and "press A to continue" pauses move on by
+  themselves straight away, so lines that only explain or comment no longer
+  stop the game; questions never answer themselves, and help panels stay up. The turn-start
+  banner and the solo board guide pass without a press, as they already do
+  for CPU players.
+- The game boots straight to save-file selection: no warning screen, logos,
+  opening or title. Backing out of file select still reaches the title.
+- Mode select skips the hosts' greeting, and Party Mode skips the welcome
+  lines, the "learn how to play Party Mode?" question and the "choose the
+  game settings" line, opening straight on board selection. The saved-party
+  resume question and every setting screen (board, mode, players,
+  characters, skill levels, turns) still come up as usual; backing out of
+  board selection asks whether to leave Party Mode.
+
+VSync is never changed. Fast Forward is separate: it runs every scene as
+fast as the device allows. Nothing reaches the save file.
+
+## Unlock All
+
+Mods > **Unlock All** makes every board, character, minigame, Star Bank
+extra and Solo-mode prize record available without unlocking it first, like
+the game's own debug unlock but without its bank-star grant. It is off by
+default, applies live (menus already open update when next entered) and is
+saved as `game.unlock_all`. `MP6_UNLOCK_ALL=1`/`0` overrides it for a run.
+
+The memory card is never changed by it. The mod answers the game's unlock
+queries without touching the loaded save data, so turning it off shows exactly
+what the save has unlocked. While it is on, the Star Bank cannot write its
+"owned" items back and new unlocks are not recorded; the bank's on/off
+minigame-mode option still saves normally. `tests/test_unlock_all.py` checks
+this against the real save format.
 
 ## Ambient Occlusion
 
@@ -93,11 +145,12 @@ not a copy of Dolphin's source or artwork.
 
 ## Unavailable minigames
 
-The port excludes the upstream board/mgcall.c and links src/os/minigame_stub.c
-on Windows and Android. End-of-turn, duel, Bowser, Donkey Kong and single-player
-calls return immediately, without minigame awards. The UI shows a skip notice.
+Boards roll and launch minigames with the game's own flow on every platform.
+When the rolled minigame's module is not recovered yet, it ends at once with
+nobody scoring (Bowser minigames: everyone escapes), the results screen and
+turn save still run, and the board continues. The UI shows a notice.
 
-A separate missing-module fallback now returns through the real overlay
+Outside boards the missing-module fallback returns through the real overlay
 manager to the nearest supported history entry instead of idling on a black
 screen. One-shot boot initialization is not a return target. If no usable
 history exists, it resets the history root to mode select.

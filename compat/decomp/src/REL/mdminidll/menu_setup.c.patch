@@ -1,0 +1,57 @@
+--- a/src/REL/mdminidll/menu_setup.c
++++ b/src/REL/mdminidll/menu_setup.c
+@@ -0,0 +1,2 @@
++#include "mp6_widescreen.h"
++#include <string.h>
+@@ -10,0 +13,3 @@
++/* Cross-owner particle calls need their real native argument ABI. */
++void fn_1_257D0(void);
++void fn_1_259FC(HuVecF *position);
+@@ -858,3 +863,2 @@
+-    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f, 10000.0f, 1.2f);
+-    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
+-    memset(cameraState, 0, 80U);
++    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
++    memset(cameraState, 0, sizeof(*cameraState));
+@@ -1281 +1285 @@
+-    u8 neighborBytes[16]; /* Eight signed neighbor indices stored as byte pairs; -1 ends a link. */
++    s16 neighborCharacter[8]; /* Eight signed neighbor indices stored as byte pairs; -1 ends a link. */
+@@ -1390,11 +1394,11 @@
+-    {{255, 255, 255, 255, 0, 1, 0, 5, 0, 4, 255, 255, 255, 255, 255, 255}, -1},
+-    {{255, 255, 255, 255, 0, 2, 0, 6, 0, 5, 0, 4, 0, 0, 255, 255}, -1},
+-    {{255, 255, 255, 255, 0, 3, 255, 255, 0, 6, 0, 5, 0, 1, 255, 255}, -1},
+-    {{255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 6, 0, 2, 255, 255}, -1},
+-    {{0, 0, 0, 1, 0, 5, 0, 9, 0, 8, 0, 7, 255, 255, 255, 255}, -1},
+-    {{0, 1, 0, 2, 0, 6, 0, 10, 0, 9, 0, 8, 0, 4, 0, 0}, -1},
+-    {{0, 2, 0, 3, 0, 10, 0, 10, 0, 10, 0, 9, 0, 5, 0, 1}, -1},
+-    {{255, 255, 0, 4, 0, 8, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255}, -1},
+-    {{0, 4, 0, 5, 0, 9, 255, 255, 255, 255, 255, 255, 0, 7, 255, 255}, -1},
+-    {{0, 5, 0, 6, 0, 10, 255, 255, 255, 255, 255, 255, 0, 8, 0, 4}, -1},
+-    {{0, 6, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 9, 0, 5}, -1}
++    {{-1, -1, 1, 5, 4, -1, -1, -1}, -1},
++    {{-1, -1, 2, 6, 5, 4, 0, -1}, -1},
++    {{-1, -1, 3, -1, 6, 5, 1, -1}, -1},
++    {{-1, -1, -1, -1, -1, 6, 2, -1}, -1},
++    {{0, 1, 5, 9, 8, 7, -1, -1}, -1},
++    {{1, 2, 6, 10, 9, 8, 4, 0}, -1},
++    {{2, 3, 10, 10, 10, 9, 5, 1}, -1},
++    {{-1, 4, 8, -1, -1, -1, -1, -1}, -1},
++    {{4, 5, 9, -1, -1, -1, 7, -1}, -1},
++    {{5, 6, 10, -1, -1, -1, 8, 4}, -1},
++    {{6, -1, -1, -1, -1, -1, 9, 5}, -1}
+@@ -1994,0 +1999,6 @@
++        if (modelIndex == 0) {
++            /* Leave the shadow receiver unchanged; fill only the outer border. */
++            mp6_widescreen_floor_border_fill_dup(DATANUM(DATA_mdmini, 0), "yuka");
++        } else if (modelIndex == 2) {
++            mp6_widescreen_extend_pillar_edge(menuObject->mdlId[modelIndex], "pillar");
++        }
+@@ -2017,0 +2028 @@
++    mp6_widescreen_floor_border_fill_dup_kill_all();
+@@ -2154,0 +2166 @@
++            mp6_widescreen_extend_ring(object->mdlId[modelIndex], "CP");
+@@ -4285,0 +4298 @@
++    mp6_widescreen_floor_border_fill_dup_kill_all();
+@@ -4852,0 +4852,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

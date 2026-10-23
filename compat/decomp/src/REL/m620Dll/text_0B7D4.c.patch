@@ -1,0 +1,72 @@
+--- a/src/REL/m620Dll/text_0B7D4.c
++++ b/src/REL/m620Dll/text_0B7D4.c
+@@ -2,0 +3,2 @@
++#include "game/hu3d.h"
++#include <stddef.h>
+@@ -267 +269 @@
+-    u8 unreadRecords[140]; /* Ring pointers are accessed through the draw callback's view. */
++    void *unreadRecords[35]; /* Ring pointers are accessed through the draw callback's view. */
+@@ -383,0 +386 @@
++            GXEnd();
+@@ -494 +497,2 @@
+-    u8 unreadBeforePosition[32]; /* Registration state is not used for trail collision. */
++    u32 registrationWords[5];
++    void *registrationPointers[3]; /* Registration state is not used for trail collision. */
+@@ -859 +863,3 @@
+-extern int HuSprTexLoad(int texture, int x, int y, int width, int height, int format);
++#include "game/sprite.h"
++void HuSprTexLoad(ANIMDATA *anim, s16 bmpNo, s16 texMapId, GXTexWrapMode wrapS,
++                  GXTexWrapMode wrapT, GXTexFilter filter);
+@@ -875 +881 @@
+-    HuSprTexLoad((u32)work->animations[entry->source], 0, 0, 0, 0, 1);
++    HuSprTexLoad(work->animations[entry->source], 0, 0, 0, 0, 1);
+@@ -998,0 +1005 @@
++        GXEnd();
+@@ -1012 +1019,3 @@
+-    u8 unreadBeforeCount[48]; /* Particle-model settings are not inspected here. */
++    u8 unreadBeforeCount[28]; /* Particle-model settings are not inspected here. */
++    void *unreadBeforeCountWork;
++    u8 unreadBeforeCountAnimation[16];
+@@ -1014 +1023,2 @@
+-    u8 unreadBeforeRecords[22]; /* Counters and animation settings are not inspected here. */
++    u8 unreadBeforeRecords[18]; /* Counters and animation settings are not inspected here. */
++    ANIMDATA *unreadBeforeRecordsAnimation;
+@@ -1083 +1093,3 @@
+-    u8 beforeCount[48]; /* Particle-model settings are not inspected here. */
++    u8 beforeCount[28]; /* Particle-model settings are not inspected here. */
++    void *beforeCountWork;
++    u8 beforeCountAnimation[16];
+@@ -1085 +1097,2 @@
+-    u8 beforeRecords[22]; /* Counters and animation settings are not inspected here. */
++    u8 beforeRecords[18]; /* Counters and animation settings are not inspected here. */
++    ANIMDATA *beforeRecordsAnimation;
+@@ -1097 +1110,3 @@
+-    u8 unreadBeforeCount[48]; /* Particle-model settings are not inspected here. */
++    u8 unreadBeforeCount[28]; /* Particle-model settings are not inspected here. */
++    void *unreadBeforeCountWork;
++    u8 unreadBeforeCountAnimation[16];
+@@ -1099 +1114,2 @@
+-    u8 unreadBeforeRecords[22]; /* Counters and animation settings are not inspected here. */
++    u8 unreadBeforeRecords[18]; /* Counters and animation settings are not inspected here. */
++    ANIMDATA *unreadBeforeRecordsAnimation;
+@@ -1255 +1271 @@
+-    u8 unreadAnimations[16]; /* Four animation pointers precede the trail records. */
++    ANIMDATA *unreadAnimations[4]; /* Four animation pointers precede the trail records. */
+@@ -1343,3 +1359,3 @@
+-    model = (M620EffectModel *)&Hu3DData[modelId];
+-    effectData = model->effectData;
+-    trail = (M620EffectBatch *)(effectData + effectIndex * sizeof(M620EffectBatch) + 16);
++    model = NULL;
++    effectData = Hu3DData[modelId].hookData;
++    trail = (M620EffectBatch *)&((M620HookWork *)effectData)->entries[effectIndex];
+@@ -1393 +1409,2 @@
+-        points = effectData[recordIndex].points;
++        points = (M620EffectPoint *)((u8 *)((M620HookWork *)effectData)->entries[recordIndex].records
++                                     - offsetof(M620EffectPoint, position));
+@@ -1406,0 +1424,6 @@
++
++_Static_assert(offsetof(M620ParticleWork, count) == offsetof(HU3D_PARTICLE, maxCnt), "m620 particle count");
++_Static_assert(offsetof(M620ParticleWork, records) == offsetof(HU3D_PARTICLE, data), "m620 particle data");
++_Static_assert(offsetof(M620EffectWorkE1F4, records) == offsetof(HU3D_PARTICLE, data), "m620 burst data");
++_Static_assert(offsetof(M620EffectHookWorkView, records) == offsetof(HU3D_PARTICLE, data), "m620 hook data");
++_Static_assert(sizeof(M620ParticleRecord) == sizeof(HU3D_PARTICLE_DATA), "m620 particle record");

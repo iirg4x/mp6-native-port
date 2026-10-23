@@ -1,0 +1,11 @@
+--- a/src/REL/m626Dll/collision.c
++++ b/src/REL/m626Dll/collision.c
+@@ -14 +14 @@
+-    data = HuMemDirectMallocNum(HEAP_HEAP, 192, HU_MEMNUM_OVL);
++    data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M626EntryWork), HU_MEMNUM_OVL);
+@@ -16 +16 @@
+-    memset(data, 0, 192);
++    memset(data, 0, sizeof(M626EntryWork));
+@@ -100 +100 @@
+-                current->invoke((s32)current->primaryRelation);
++                current->invoke(current->primaryRelation);

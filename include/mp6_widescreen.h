@@ -117,16 +117,20 @@ int mp6_widescreen_render_width(void);
  * by construction. */
 float mp6_widescreen_scale_factor(void);
 
-/* The 2D HUD-repositioning shim's additive re-center offset, in the SAME
- * 0..576 logical coordinate space HuSprDispInit's own MTXOrtho projection
- * already uses (game/sprput.c) -- i.e. (576.0f*scale_factor() - 576.0f) /
- * 2.0f, 0.0f when disabled. This is what turns a screen-anchored literal
- * X coordinate (e.g. board/opening.c's `mbWinTopPosSet(228, 392)`) that
- * was centered-ish for the old 576-wide logical canvas into one correctly
- * centered-ish for the new, wider one -- added once, centrally, inside
- * game/window.c's HuWinPosSet / game/esprite.c's espPosSet / game/sprman.c's
- * HuSprGrpPosSet / game/gamemes.c's GameMesPosSet, instead of hand-editing
- * every affected data-table constant individually. */
+/* Screen copies that the game projects back onto the scene with the live
+ * camera (Hu3DFbCopyLayerSet, the Hu3D water layer) ask for the native
+ * 0,0,640,480 frame, but the camera's widened aspect spans its whole wide
+ * viewport. A native full-frame request is taken from that viewport and
+ * scaled into the caller's native-size texture, so the projection lands on
+ * the right texels; any other rectangle is copied as given. Same arguments
+ * as Hu3DFbCopyExec. */
+void mp6_widescreen_copy_view(int x, int y, int w, int h, int texFmt, int mipmapF, void *buf);
+
+/* Extra margin per side in the native 0..576 HUD coordinate space:
+ * 576*(scale_factor()-1)/2, zero when disabled. The shared sprite/window
+ * projection is centered, so ordinary native positions need NO offset.
+ * Only explicit edge anchors subtract this at the left or add it at the
+ * right; scene-owned updates must rederive from native positions on resize. */
 float mp6_widescreen_half_width_delta(void);
 
 /* Decomp-side (compat/decomp/src/game/init.c.patch, called from inside
@@ -144,6 +148,121 @@ float mp6_widescreen_half_width_delta(void);
  * tick (as src/gx/aurora_bridge.c's VIWaitForRetrace does, to track a
  * live interactive resize) is cheap. */
 void mp6_widescreen_apply_render_width(int newFbWidth);
+
+/* Called before Hu3DModelKill releases/recycles an instance. Clears only
+ * its registrations and host snapshots, never shared arena geometry. */
+void mp6_widescreen_forget_model(int16_t modelId);
+
+/* Opt-in decorative motion: widen X travel around a parent-local pivot, not
+ * the object itself. Embedded clips only; curves rederive on aspect changes. */
+void mp6_widescreen_motion_x(int16_t modelId, const char *objName, float pivotX);
+void mp6_widescreen_motion_reapply(void);
+void mp6_widescreen_motion_forget(int16_t modelId);
+
+/* A signed, world-projected native-pixel cutout. Center first, then clip to
+ * the live framebuffer, including objects travelling through wide margins. */
+void mp6_widescreen_camera_cutout(int bits, float x, float y, float width, float height);
+
+/* Repeat an authored horizontal strip into wide-only margins, at its native
+ * texel/geometry density. Call after updating the unrotated source position.
+ * period is the complete source strip's repeat distance (including its own
+ * repeated sections); nativeHalfView is the native camera's half width there.
+ * Rigid, unattached strips with primary motion and an identity custom matrix
+ * only; finish HSF/material setup before linking. Links follow source motion
+ * phase and are owned by its model lifetime. */
+void mp6_widescreen_tile_x(int16_t modelId, float period, float nativeHalfView);
+/* Alternating reflected copies of a finite canvas. Bounds are measured in
+ * model-local space; artwork, cell spacing and primary motion stay native. */
+void mp6_widescreen_tile_mirror_x(int16_t modelId, float left, float right,
+                                  float nativeHalfView);
+void mp6_widescreen_tile_forget(int16_t modelId);
+/* The TRI/QUAD height-band silhouette planner in an XY wall plane, including
+ * flared sides whose X changes with height. No skinning or
+ * original face edits; texture density and live-aspect behavior match terrain. */
+void mp6_widescreen_extend_wall_outer_sides(int16_t modelId, const char *objName,
+                                           float centerX, float reach, int mirror);
+/* Widen an XY wall silhouette without extrapolating its depth plane. The
+ * appended boundary strips keep each source endpoint's Y/Z and ST values;
+ * this is for non-planar backdrop bands whose authored Z must not be guessed. */
+void mp6_widescreen_extend_wall_edges(int16_t modelId, const char *objName,
+                                      float centerX, float reach, int mirror);
+/* Push a flat card's, wall strip's or bed's outermost planes along model X
+ * outward by min(reach*(aspectScale-1), limit) local units (limit 0 = no cap;
+ * zero-based name occurrence; sides -1 left only, +1 right only, 0 both, for
+ * halves that meet a twin). The local axis nearest model X is used. Interior
+ * geometry stays native; moved corners follow their face's texture gradient,
+ * so REPEAT art continues at native density. tile=1 also continues a CLAMP
+ * card by repeating it while widened (for art whose ends nearly meet);
+ * tile=0 stretches CLAMP end panels instead. An untextured, vertex-coloured
+ * card (no ST buffer) only moves its outer planes. */
+void mp6_widescreen_extend_outer_x(int16_t modelId, const char *objName, int occurrence,
+                                   int sides, float reach, float limit, int tile);
+/* Give every head quad in headName that has no stem top within headRadius
+ * (model X/Z) a copy of the stem piece whose top height best matches it.
+ * For flower heads that only a wide view shows; native geometry stays
+ * untouched and a repeated call is a no-op. */
+void mp6_widescreen_add_stems(int16_t modelId, const char *stemName, const char *headName,
+                              float headRadius);
+/* Append one copy of a whole mesh reflected across the local plane
+ * axis (0/1/2 = X/Y/Z) = plane, for scenery that ends in a cut just past the
+ * native frame. Native faces stay untouched; a repeated call is a no-op. */
+void mp6_widescreen_mirror_mesh(int16_t modelId, const char *objName, int occurrence,
+                                int axis, float plane);
+enum { MP6_WS_MARGIN_TERRAIN, MP6_WS_MARGIN_WALL, MP6_WS_MARGIN_RECT };
+typedef struct {
+    const char *object;
+    int plane;
+    int material; /* -1 selects the complete object. */
+    float centerX, reach;
+    int mirror;
+} MP6WSStaticMargin;
+/* Only for a fresh, independently loaded, non-linked companion. Original
+ * animated scenery stays untouched; this owner draws appended borders only. */
+void mp6_widescreen_static_margins(int16_t modelId,
+                                  const MP6WSStaticMargin *surfaces, int count);
+
+/* Append a textured strip beyond a mesh's outer local-space plane. Native
+ * surfaces stay unchanged; axis 0/1/2 selects X/Y/Z. Rectangular quad edges
+ * only. Call before model linking/animation setup; follows live aspect. */
+void mp6_widescreen_extend_edge(int16_t modelId, const char *objName, int axis, float boundary);
+/* Explicit reach per extra aspect unit for narrow edge meshes. A positive
+ * span uses camera coverage instead of mesh width; zero uses the mesh span. */
+void mp6_widescreen_extend_edge_span(int16_t modelId, const char *objName, int axis,
+                                    float boundary, float span);
+/* Continue sloping QUAD walls beyond an outer local-axis plane. Appended
+ * panels follow their source side edges and mirror CLAMP art at native density;
+ * original faces, attached props, animation and collision stay untouched. */
+void mp6_widescreen_extend_sloped_rim(int16_t modelId, const char *objName, int axis,
+                                    float boundary);
+/* Sloping QUAD wall with a slightly oblique end band (explicit tolerance,
+ * <=1 local unit). Append native-density atlas tiles with independent ST
+ * starts/ends to retain block joints without sampling outside CLAMP UVs.
+ * reach is local-axis distance per extra aspect unit (0 uses the native span).
+ * Source faces, positions and texture records stay unchanged. */
+void mp6_widescreen_extend_tiled_sloped_rim(int16_t modelId, const char *objName,
+                                           int axis, float boundary, float reach, float tolerance);
+/* Same planner, selecting a zero-based occurrence of a repeated object name. */
+void mp6_widescreen_extend_tiled_sloped_rim_at(int16_t modelId, const char *objName,
+                                              int occurrence, int axis, float boundary,
+                                              float reach, float tolerance);
+void mp6_widescreen_extend_tiled_rim_sides(int16_t modelId, const char *objName,
+                                          float reach, float tolerance);
+/* Append a full density-preserving reflection of one finite XY quad.
+ * side=-1 selects its left edge, +1 its right; native art stays untouched. */
+void mp6_widescreen_extend_billboard_mirror(int16_t modelId, const char *objName, int side);
+/* Continue the open upper rails of static, textured triangle-strip walls.
+ * Each eligible strip is a monotonic pair of constant-height rails; only
+ * its upper rail at/above minHeight grows, by reach*(aspectScale-1).
+ * Native faces stay unchanged and mirrored UV slopes retain texel density. */
+void mp6_widescreen_extend_strip_rim(int16_t modelId, const char *objName,
+                                   float minHeight, float reach);
+/* Append a mirrored-texture rim outside a star-shaped TRI/QUAD floor.
+ * Interior holes, native texture density and non-horizontal geometry stay unchanged. */
+void mp6_widescreen_extend_floor(int16_t modelId, const char *objName, float y, float centerX, float centerZ);
+/* Explicit zero-based mesh-name occurrence and extra coverage for distant
+ * cameras. All normal validation applies; names, native faces/UVs stay intact. */
+void mp6_widescreen_extend_floor_at(int16_t modelId, const char *objName, int occurrence,
+                                      float y, float centerX, float centerZ, float reach);
 
 /* "Cover" camera framing for a 3D scene whose backdrop is fixed-size
  * geometry with no single scalable plane (fallback rule: scale a 2D
@@ -226,14 +345,10 @@ static inline float mp6_widescreen_cover_fov(float nativeFovDeg)
  * (mesh+UV edge extrude, stays sharp) -- see mp6_widescreen_extrude_model_
  * repeat() below.
  *
- * An exact no-op (returns immediately, zero extra calls, zero registry
- * churn) when widescreen is disabled (mp6_widescreen_enabled() == false --
- * NOT merely scale_factor() <= 1.0f, which can legitimately be true even
- * while the feature is ON, e.g. the window's initial shape happens to be
- * native 4:3; gating on the feature flag instead of the current scale
- * ensures this model still gets registered and tracks a LATER resize-up in
- * that case), matching every other mp6_widescreen_* accessor's default-off
- * contract. Assumes an UNROTATED backdrop (world = pos + scale*local, no
+ * Registers the native baseline even when widescreen is disabled, so a
+ * later toggle works without reloading the scene. Scale 1 preserves native
+ * geometry; disabling after widening restores it. Assumes an UNROTATED
+ * backdrop (world = pos + scale*local, no
  * rotation term) -- every call site this project has needed so far
  * confirmed unrotated by direct read of its own Hu3DModelRotGet/no
  * Hu3DModelRotSet call; a future rotated backdrop would need the center
@@ -263,8 +378,7 @@ void mp6_widescreen_extrude_model(int16_t modelId);
  * removes that risk entirely while keeping the identical X/Y coverage the
  * isotropic function already provided. Every other call site keeps
  * calling the plain isotropic function above, unaffected. Same
- * no-op/default-off contract as mp6_widescreen_extrude_model() above
- * (gated on mp6_widescreen_enabled(), not the current scale_factor()) and
+ * native-baseline contract as mp6_widescreen_extrude_model() above and
  * the same dynamic-registry treatment -- registers once, re-derives every
  * frame. */
 void mp6_widescreen_extrude_model_xy(int16_t modelId);
@@ -278,9 +392,8 @@ void mp6_widescreen_extrude_model_xy(int16_t modelId);
  * untouched, so the floor's own world-height and its computed center (the
  * play-circle) stay exactly where they were while its edges push further
  * out of frame. Same CLAMP-only, unrotated-top-level-transform contract
- * as every other variant in this header. Same no-op contract: returns
- * immediately when widescreen is disabled, or modelId/its hsf is
- * invalid. */
+ * as every other variant in this header. Invalid models are ignored;
+ * disabled scenes retain their native baseline for later live toggles. */
 void mp6_widescreen_extrude_model_xz(int16_t modelId);
 
 /* A HORIZONTAL-ONLY sibling of mp6_widescreen_extrude_model() above, for
@@ -301,6 +414,53 @@ void mp6_widescreen_extrude_model_xz(int16_t modelId);
  * no-op/default-off contract and dynamic-registry treatment as
  * mp6_widescreen_extrude_model() above. */
 void mp6_widescreen_extrude_model_horizontal(int16_t modelId);
+
+/* Widen only disconnected TRI/QUAD pieces wholly outside a local-XZ radius.
+ * Refuses a face crossing the radius, deforming/shared buffers, and nested or
+ * rotated/scaled meshes. Used for M668's outer shoreline; the three platform
+ * contact rings stay bit-exact. Root-mesh identity XZ transform required. */
+void mp6_widescreen_extrude_outer_components(int16_t modelId, const char *objName, float radius);
+
+/* Continue a rectangular QUAD surface at both outer X edges. Original
+ * positions/UVs remain untouched; new side strips retain texel density.
+ * mirror != 0 samples inward for CLAMP art; 0 continues REPEAT texture UVs. */
+void mp6_widescreen_extend_sides(int16_t modelId, const char *objName, int mirror);
+/* Mirror a static XY backdrop QUAD or validated vertical stack of full-width
+ * rectangular QUADs on its exposed outer perimeter. Native faces/vertices/UVs
+ * stay intact; internal stack seams are not duplicated, and the outer frame
+ * follows live aspect while collapsing at 4:3. Requires coherent (non-atlas)
+ * UVs. */
+void mp6_widescreen_extend_backdrop_frame(int16_t modelId, const char *objName);
+/* Same extension, limited to a rectangular material section of a mixed mesh.
+ * Other materials and all native vertices/UVs/faces remain unchanged. */
+void mp6_widescreen_extend_material_sides(int16_t modelId, const char *objName,
+                                         int material, int mirror);
+/* Continue the exposed left/right perimeter of a TRI/QUAD terrain mesh.
+ * Native faces stay intact; appended panels preserve edge height, depth,
+ * colors and texel density. centerX is in mesh-local coordinates. This is
+ * background coverage, not a collision/terrain-height adjustment. */
+void mp6_widescreen_extend_terrain_sides(int16_t modelId, const char *objName,
+                                        float centerX, int mirror);
+/* Only the extreme X planes, excluding internal river/hole boundaries.
+ * reach multiplies the appended margin for distant/off-center cameras. */
+void mp6_widescreen_extend_terrain_outer_sides(int16_t modelId, const char *objName,
+                                              float centerX, float reach, int mirror);
+/* Same outer-X continuation, restricted to faces whose material index matches
+ * material. A material filter is validated against the owning HSF and does
+ * not alter any other material's bounds, faces, vertices, or UVs. */
+void mp6_widescreen_extend_terrain_outer_sides_material(int16_t modelId,
+                                                        const char *objName,
+                                                        float centerX, float reach,
+                                                        int mirror, int material);
+/* Append solid side panels to a validated vertical curved strip. reach is
+ * the extra horizontal coverage multiplier; authored scenery is untouched. */
+void mp6_widescreen_extend_backdrop_strip(int16_t modelId, const char *objName, float reach);
+
+/* Keep compact disconnected rocks and their enclosing lava rims rigid while
+ * the surrounding registered scenery widens. Both receive the rock's exact
+ * X translation. Ambiguous/missing pairings are refused without partial edits. */
+void mp6_widescreen_pair_rigid_components(int16_t rockModel, const char *rockName,
+    int16_t rimModel, const char *rimName, float maxSpan);
 
 /* The REPEAT (tiling) counterpart to mp6_widescreen_extrude_model() above.
  * Confirmed needed for real (not speculative) -- mode-select's ocean plane
@@ -347,9 +507,8 @@ void mp6_widescreen_extrude_model_horizontal(int16_t modelId);
  * per model instance (immediately after Hu3DModelCreate/CreateData) --
  * that's just no longer a hard requirement.
  *
- * Same default-off contract as mp6_widescreen_extrude_model(): returns
- * immediately when widescreen is disabled (mp6_widescreen_enabled() ==
- * false), or when modelId/its hsf is invalid. Same unrotated-backdrop
+ * Same native-baseline contract as mp6_widescreen_extrude_model(); invalid
+ * models are ignored. Same unrotated-backdrop
  * assumption (see that function's own comment) -- world = pos +
  * scale*local, no rotation term. */
 void mp6_widescreen_extrude_model_repeat(int16_t modelId);
@@ -393,12 +552,18 @@ typedef int (*MP6WSNameMatchFn)(const char *name);
  * differently-nested caller is not generically handled (flagged, not
  * silently mis-transformed).
  *
- * Same default-off contract as every other function here (returns
- * immediately, zero registry churn, when widescreen is disabled) and the
- * same dynamic-registry treatment (registers each touched vertex buffer
+ * Same native-baseline contract and dynamic-registry treatment (registers each touched vertex buffer
  * once, re-derives it every frame from a cached native snapshot, so a live
  * window resize keeps converging). */
 void mp6_widescreen_extrude_model_selective_horizontal(int16_t modelId, MP6WSNameMatchFn match);
+
+/* Proportional cover for one flat backdrop object behind foreground art:
+ * scale its XY by scale_factor() (plus 1% edge overscan) about its own
+ * horizontal center and a vertical pivot (anchor -1 bottom edge, 0 middle,
+ * +1 top edge). Nothing is mirrored or stretched; the extra height is
+ * cropped by the frame. Z, other objects and the model transform stay
+ * native; scale 1 is bit-exact. */
+void mp6_widescreen_scale_backdrop(int16_t modelId, const char *objName, int anchor);
 
 /* On-device report on mode-select's sky: leaving clouds/stars fully
  * native-position left them mismatched against the widening checkered
@@ -486,7 +651,7 @@ void mp6_widescreen_extrude_model_reposition_x_clamped(int16_t modelId, MP6WSNam
  * than once for the same model must snapshot ONE center and pass the
  * IDENTICAL value to every call, or each call's own fresh recomputation
  * will disagree once an earlier call has already mutated a matched
- * object's `base.pos`). Returns 0.0f if widescreen is disabled or
+ * object's `base.pos`). Returns 0.0f if
  * modelId/its hsf is invalid -- safe/inert, since a caller only ever
  * consults this when about to make a widescreen-gated call anyway. */
 float mp6_widescreen_model_center_x(int16_t modelId);
@@ -563,6 +728,9 @@ void mp6_widescreen_extrude_model_border_xz(int16_t modelId, const char *objName
  * comment) -- kept here, still functional, for its own history and any
  * future caller. */
 void mp6_widescreen_split_separate_x(int16_t modelId);
+/* The same split for one named mesh object whose native bbox reaches both
+ * 4:3 edges (a corner-cloud frame); every other object stays native. */
+void mp6_widescreen_split_object_x(int16_t modelId, const char *objName);
 
 /* User's own diagnosis, confirmed by pixel-crop comparison against a
  * circled screenshot: "move the pillars back so the floor does not show
@@ -626,10 +794,9 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * is simply ABSENT there rather than distorted -- judged more honest than
  * a decal that visibly deforms on resize, but a real trade-off, not a full
  * elimination of every shadow ray. No shared decomp file (game/hsfdraw.c,
- * game/hsfman.c) is touched by this mechanism at all. Same default-off
- * contract as every other function in this header (a disabled build never
- * calls `Hu3DModelCreateData` a second time, so the duplicate never
- * exists); the existing border-registry/reapply machinery picks up the
+ * game/hsfman.c) is touched by this mechanism at all. The duplicate is
+ * prepared at scene creation but stays hidden at native aspect/off; the
+ * existing border-registry/reapply machinery picks up the
  * duplicate for free (it registers by modelId exactly like any other
  * border_xz caller), so dynamic resize needs no new wiring here.
  *
@@ -648,10 +815,14 @@ void mp6_widescreen_split_separate_x_zback(int16_t modelId, float zBackAtRefK, f
  * See the .c helper's own comment for the full texel census. */
 void mp6_widescreen_floor_border_fill_dup(int32_t dataNum, const char *objName);
 
+/* Also handles mdmini's ys80_floor and mdsing's ys78_floor: the fill repeats their clean plank strip
+ * at native density, while the original emblem/shadow receiver stays intact.
+ * The Party-only baked-shadow UV correction does not apply to this texture. */
+
 /* Companion teardown for mp6_widescreen_floor_border_fill_dup() above --
  * call once per scene teardown (mdpartydll's own fn_1_87BC), alongside the
  * existing Hu3DModelKill loop. Kills every live registered duplicate and
- * resets the registry; a true no-op when widescreen was never enabled. */
+ * resets the registry, including companions prepared while disabled. */
 void mp6_widescreen_floor_border_fill_dup_kill_all(void);
 
 /* ==========================================================================
@@ -669,15 +840,15 @@ void mp6_widescreen_floor_border_fill_dup_kill_all(void);
  * fetch live, so a window resize re-derives everything with no further
  * bakes. At k=1 every appended quad is zero-area (tiles/mirror collapse
  * to the seam edge; the ring's outer loop equals the rim verbatim) and
- * the object's live min/max read back exactly native -- and a disabled
- * build never registers/grows/re-bakes at all: default-off stays
- * byte-identical, the same contract every mechanism in this header keeps.
+ * the object's live min/max read back exactly native. Registration and
+ * the one-time bake also run while disabled; native faces stay unchanged
+ * and appended faces rasterize nothing until the aspect actually widens.
  * Grown buffers are allocated under the model's own HEAP_MODEL mallocNo
  * tag, so Hu3DModelKill's tag bulk-free reclaims them -- NO explicit
  * teardown call site exists or is needed (unlike the floor dup above);
  * dead registry entries are detected by the same hsf-identity liveness
  * check every registry in this header uses and recycled. Registration is
- * gated on mp6_widescreen_enabled() (never on the current k) and every
+ * independent of the current preference/aspect, and every
  * layout expectation is validated against the live data first (violations
  * degrade to "no extension", loudly under MP6_WS_HSF_DIAG, never to a
  * guess).
@@ -720,6 +891,20 @@ void mp6_widescreen_extend_tiles(int16_t modelId, const char *objName,
  * (wsdesign_title_*). */
 void mp6_widescreen_extend_mirror(int16_t modelId, const char *objName, float halfW);
 
+/* Explicit authored-tail reflection for a curved/oblique XZ end-cap. The
+ * inclusive face range must contain QUADs from one rigid, non-deformed strip;
+ * `seamVertexA/B` identify its unique emitted end-cap edge. The helper
+ * snapshots the native source positions, duplicates only that range, and
+ * reverses the HSF QUAD winding for the reflected copy. At native aspect the
+ * appended tail collapses to the seam midpoint; at k>1 the complete copy is
+ * shown at native density (never scaled by k). Invalid ranges, non-QUADs,
+ * skin/cluster/shape meshes, and seams that cross the selected source are
+ * refused. Native vertex/normal buffers and UV/ST records remain untouched;
+ * generated faces reuse their source corner normal indices. */
+void mp6_widescreen_extend_reflected_face_range(int16_t modelId, const char *objName,
+                                                int32_t firstFace, int32_t lastFace,
+                                                int16_t seamVertexA, int16_t seamVertexB);
+
 /* Pinned-UV rim RING for the party golden-swirl disc ("CP", mdparty[3]):
  * one quad per fan chord (exactly 16 -- validated against the live data),
  * inner vertices the rim vertices VERBATIM (watertight), outer the same
@@ -738,6 +923,20 @@ void mp6_widescreen_extend_mirror(int16_t modelId, const char *objName, float ha
  * continuing), and panel1/panel2 (the live board-map render targets) no
  * longer scale with the window (native foreground size). */
 void mp6_widescreen_extend_ring(int16_t modelId, const char *objName);
+/* Opt-in ring continuation for patterned discs: generated outer loop STs
+ * mirror the authored radial UV excursion inward by (aspect-1). Native ring
+ * behavior and all source vertices/faces remain unchanged. */
+void mp6_widescreen_extend_ring_reflect_uv(int16_t modelId, const char *objName);
+/* Append horizontal, edge-color continuation to an untextured planar
+ * backdrop. Original gradient/geometry stays intact; holes stay open.
+ * axis=1 means local XZ plane, axis=2 XY. Center uses these plane axes. */
+void mp6_widescreen_extend_color_rim(int16_t modelId, const char *objName,
+                                    int axis, float centerX, float centerOther);
+/* XY color rim with an explicit native-height asset correction: append a
+ * bottom strip at bottomY, preserving source colors and the original grid.
+ * Unlike aspect-only margins, this bottom strip stays present at native 4:3. */
+void mp6_widescreen_extend_color_rim_bottom(int16_t modelId, const char *objName,
+                                           float centerX, float centerY, float bottomY);
 
 /* Pinned-UV EDGE EXTRUSION for the party proscenium border ("pillar",
  * mdparty[0]) -- REPLACES mp6_widescreen_split_separate_x_zback at that
@@ -769,8 +968,8 @@ void mp6_widescreen_extend_ring(int16_t modelId, const char *objName);
  * constData's API-set SHADOW_MAP receiver bits across the re-bake --
  * fn_1_861C flags this very model via Hu3DModelShadowMapSet before this
  * runs), per-tick pure-arithmetic reapply (16 x-writes + the box), k=1
- * collapses every strip to zero area with min/max byte-native, disabled
- * builds never register/grow at all, buffers die with the model's own
+ * collapses every strip to zero area with min/max byte-native, and the
+ * buffers die with the model's own
  * tag bulk-free. */
 void mp6_widescreen_extend_pillar_edge(int16_t modelId, const char *objName);
 
@@ -780,75 +979,68 @@ void mp6_widescreen_extend_pillar_edge(int16_t modelId, const char *objName);
  * Registers live aspect reapplication; strips collapse at native 4:3. */
 void mp6_widescreen_extend_results_set(int16_t modelId);
 
-/* The load-bearing closed form behind the tile treatment above: the value
- * the SHIPPED star/cloud repositions actually consumed was model_center_x
- * taken AFTER sora's own (now-retired) selective widen -- k-DEPENDENT
- * (+702.95 at k=1, -439.35 at k=1.625, -544.79 at k=1.775) because the
- * widen is about the hierarchical centre, not 0. Under the tile treatment
- * sora never widens, so this reproduces that exact value arithmetically
- * instead:
- *     c0      = model_center_x(native model)
- *     objBox' = [c0 + k(objMin-c0), c0 + k(objMax-c0)]
- *     result  = center_x(union(every OTHER mesh's composed box, objBox'))
- * Verified bit-equal against the shipped-order computation on the real
- * mdsel[2] data at k=1/1.625/1.775 (tools/mp6scene mirrors). Collapses to
- * the plain hierarchical centre at k=1, so the caller uses it
- * unconditionally where mp6_widescreen_model_center_x() stood before.
- * Snapshot it BEFORE mp6_widescreen_extend_tiles() (the tiles extend the
- * object's live min/max, so order matters) and pass the ONE frozen value
- * to both reposition calls, exactly as established for the star/cloud
- * split above. Returns 0.0f when widescreen is disabled or the model is
- * invalid, same contract as mp6_widescreen_model_center_x(). */
+/* Compute the decoration center as if the named backdrop were widened,
+ * without widening its original artwork. Bounds come from actual transformed
+ * vertices through the hierarchy. At native aspect this is the normal center.
+ * Snapshot BEFORE adding backdrop tiles and use that same frozen value for
+ * both star/cloud reposition calls, so the first group's edits cannot move the
+ * second group's reference point. Returns zero for an invalid model. */
 float mp6_widescreen_model_center_x_widened(int16_t modelId, const char *objName);
 
 /* ==========================================================================
  * Camera + master per-frame re-apply
  * ========================================================================== */
 
-/* Replaces the two-call Hu3DCameraPerspectiveSet(cameraBit, fov, nearZ,
- * farZ, aspectBase * mp6_widescreen_scale_factor()) + Hu3DCameraViewportSet
- * (cameraBit, 0, 0, mp6_widescreen_render_width(), vpH, 0, 1) pair every
- * widened per-scene 3D camera in this project used to call ONCE, at scene
- * setup (mdpartydll/mdparty.c's fn_1_33A0, mdseldll/mdsel.c's fn_1_1734,
- * bootDll/boot.c's ObjectSetup/BootTitleExec, fileseldll/filesel.c's
- * ObjectSetup) -- same "frozen at scene load" defect the model extrude
- * functions above have, root-caused by the exact same pattern: each
- * scene's own per-frame camera-position updater (Party's fn_1_32D0, mode-
- * select's fn_1_1370, boot's CameraOutView, file-select/mode-select's
- * shared omOutViewMulti) re-issues Hu3DCameraPosSet every frame but NEVER
- * Hu3DCameraPerspectiveSet/ViewportSet, so the aspect/viewport baked in at
- * setup never tracks a later resize.
- *
- * ALSO issues the matching Hu3DCameraScissorSet(cameraBit, 0, 0,
- * mp6_widescreen_render_width(), vpH) -- a camera's SCISSOR rect is a
- * separate HU3D_CAMERA field from its viewport (game/hsfman.c), defaulted
- * from RenderMode->fbWidth by Hu3DCameraCreate ONCE, at creation time, same
- * as viewportW used to be before the per-frame camera-widen mechanism
- * existed -- but no widened camera call site ever called
- * Hu3DCameraScissorSet itself (confirmed: not even on real hardware, where
- * RenderMode->fbWidth is a process-lifetime constant, so this was always a
- * non-issue there). Without this, GXSetScissor (re-issued every frame from
- * the camera's own cached scissorW, game/hsfman.c) clips the frame to
- * whatever width was live when the scene/camera was CREATED, regardless of
- * how correctly the viewport itself tracks a later resize -- this was the
- * actual, confirmed cause of the black-bar/boxing symptom that survived
- * the viewport-only fix (ground-truthed by live capture + pixel
- * measurement: the viewport-only fix alone still boxed at exactly
- * oldRenderWidth/newRenderWidth of the true width, matching a stale
- * scissor exactly).
- *
- * This call applies immediately (byte-identical to the two-call pair it
- * replaces, including the disabled case, since render_width()==640 there
- * matches Hu3DCameraCreate's own native default) AND registers the camera
- * bit so mp6_widescreen_reapply() re-issues all three calls every frame
- * with the LIVE scale_factor()/render_width() -- safe with NO compounding
- * risk (Hu3DCameraPerspectiveSet/ViewportSet/ScissorSet are plain
- * absolute-value struct writes, game/hsfman.c, not relative like model
- * pos/scale). vpX/vpY/vpNearZ/vpFarZ (viewport) and scissorX/scissorY are
- * always (0, 0, 0, 1) / (0, 0) at every call site this project has needed
- * -- hardcoded inside the implementation rather than parameterized here; a
- * future site needing different values would need those added explicitly,
- * not silently assumed. */
+/* Hu3D setters take native 640-wide screen coordinates and native aspect.
+ * The shared mapping owns only horizontal projection/rectangles, never scene
+ * FOV, clipping planes, pose or vertical framing. Split-screen rectangles are
+ * mapped proportionally; direct offscreen GX passes bypass these hooks. */
+void mp6_widescreen_camera_created(int bits);
+void mp6_widescreen_camera_forget(int bits);
+void mp6_widescreen_camera_perspective(int index, float aspect);
+void mp6_widescreen_camera_viewport(int index, float x, float width);
+void mp6_widescreen_camera_scissor(int index, unsigned int x, unsigned int width);
+void mp6_widescreen_camera_reapply(void);
+/* A camera may temporarily render a fixed-size texture (storybook pages).
+ * Use native coordinates for that pass, then restore on-screen mapping.
+ * Creation/destruction reset this mode; resizing never changes the target. */
+void mp6_widescreen_camera_native_target(int bits, int enabled);
+/* World-projected masks (for example bus windows) retain native width and
+ * translate with the centered 3D composition. Ordinary split-screen cameras
+ * keep proportional scissors. Creation/destruction reset this opt-in. */
+void mp6_widescreen_camera_centered_scissor(int bits, int enabled);
+
+/* Scenes stage actors just past the native 4:3 edge so they can run or fly
+ * in later (m650's results Chain Chomp and bone). The widened frame shows
+ * them early. For a world point outside the native frame of the first live
+ * camera in `bits`, writes the world offset that keeps it the same distance
+ * outside the widened frame and returns 1. Returns 0 with a zero offset when
+ * widescreen is off or the point is inside the native frame, so native play
+ * is unchanged. Gameplay positions must never use this: it is for actors a
+ * cut-scene places off screen on purpose. */
+int mp6_widescreen_offstage_offset(int bits, const float point[3], float offset[3]);
+
+/* Resize a plain tiled sprite band, preserving its group ID and draw order.
+ * Original members retain identity/state; extra tiles follow normal group
+ * ownership. Call before drawing while the band is visible. */
+int16_t mp6_widescreen_sprite_band(int16_t group, int nativeCount, int tileMember,
+                                 float tileWidth, float left, float right);
+
+/* A field of esprites the scene scrolls and wraps inside its native span
+ * (resultDll's checker backdrop). Whole copies of that span repeat into the
+ * wide margins, following the native sprites' pose every tick, so density,
+ * motion and the authored wrap stay native. begin after creating the field,
+ * update after each tick's positions, forget before killing the sprites. */
+void mp6_widescreen_esp_scroll_begin(const int32_t *espIds, int count, float span);
+void mp6_widescreen_esp_scroll_update(const int32_t *espIds);
+void mp6_widescreen_esp_scroll_forget(const int32_t *espIds);
+
+/* Shared by regular sprites and the custom minigame score-box draw hook. */
+struct HuSprite_s;
+void mp6SprScissorSet(struct HuSprite_s *sp);
+
+/* Convenience for existing full-screen menu call sites. Uses the same native
+ * setters as every other camera; no independent scene registry. */
 void mp6_widescreen_camera_widen(int cameraBit, float fov, float nearZ, float farZ, float aspectBase, float vpH);
 
 /* Investigative diagnostics (src/hsf/mp6_widescreen_extrude.c has the
@@ -878,13 +1070,25 @@ void mp6_widescreen_debug_dump_world_bbox(int16_t modelId, const char *label);
  * cameras) -- call once per tick. Hooked from src/gx/aurora_bridge.c's
  * VIWaitForRetrace, the same per-tick site mp6_widescreen_apply_render_
  * width() already uses (game/init.c.patch), so a continuous interactive
- * drag-resize converges every single frame. A true no-op (a for-loop over
- * permanently-empty registries -- every registration path above is gated
- * on mp6_widescreen_enabled()) whenever widescreen is disabled, matching
- * every other accessor's default-off contract; headless builds never call
+ * drag-resize converges every single frame. Disabling restores geometry
+ * once; subsequent native-aspect ticks skip geometry work while camera
+ * animation still updates. Headless builds never call
  * this at all (there is no window to resize, and mp6_widescreen_enabled()
  * is always false there regardless). */
 void mp6_widescreen_reapply(void);
+
+/* Row-structured, envelope-free animated water: append reflected faces whose
+ * row edges follow the evaluated shape. Original vertices/shape arrays stay
+ * unchanged. Extra faces collapse to zero area at native aspect. */
+void mp6_widescreen_extend_shape_mirror(int16_t modelId, const char *objName);
+void mp6_widescreen_shape_update(int16_t modelId);
+
+/* Port-only HUSPR attribute: opt in flat full-screen tint/dimming sprites.
+ * Drawing widens their local matrix about the HUD centre each frame, without
+ * changing source scale, alpha, group state or any untagged central artwork.
+ * Uses an otherwise unused native attribute bit; sprite destruction/reuse
+ * naturally clears it. Not for textured pictures, panels or custom scissors. */
+#define MP6_HUSPR_ATTR_WIDE_BACKDROP 0x1000
 
 #ifdef __cplusplus
 }

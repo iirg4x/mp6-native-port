@@ -9,16 +9,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class GpuStats(unittest.TestCase):
     def test_async_profiler(self):
-        source = (ROOT/'build/android-aurora-source/lib/webgpu/gpu_prof.cpp').read_text()
+        source = (ROOT/'third_party/aurora/lib/webgpu/gpu_prof.cpp').read_text()
         begin = source.index('#else\n\n#include <algorithm>') + len('#else\n')
-        end = source.index('\n#endif', begin)
+        # The #endif closing this #else, skipping nested conditionals.
+        depth, end = 0, begin
+        for line in source[begin:].splitlines(keepends=True):
+            if line.startswith('#if'):
+                depth += 1
+            elif line.startswith('#endif'):
+                if depth == 0:
+                    break
+                depth -= 1
+            end += len(line)
         subject = source[begin:end]
         with tempfile.TemporaryDirectory(prefix='gpu-stats-', dir=ROOT/'build') as temp:
             folder = Path(temp)
             (folder/'gpu_stats_subject.inc').write_text(subject)
             exe = folder/'test.exe'
             result = subprocess.run([build.ZIG,'c++','-std=c++20','-O2','-UNDEBUG',
-                '-I',str(folder),'-I',str(ROOT/'build/android-aurora-source/include'),
+                '-I',str(folder),'-I',str(ROOT/'third_party/aurora/include'),
                 str(ROOT/'tests/native/gpu_stats_selftest.cpp'),'-o',str(exe)],
                 capture_output=True,text=True,timeout=120)
             self.assertEqual(result.returncode,0,result.stderr)

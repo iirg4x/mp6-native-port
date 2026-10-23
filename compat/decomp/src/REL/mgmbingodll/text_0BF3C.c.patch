@@ -1,0 +1,8 @@
+--- a/src/REL/mgmbingodll/text_0BF3C.c
++++ b/src/REL/mgmbingodll/text_0BF3C.c
+@@ -191,2 +191,3 @@
+-        playerObject->data = HuMemDirectMallocNum(HEAP_HEAP, 72, HU_MEMNUM_OVL);
+-        memset(playerObject->data, 0, 72);
++        playerObject->data = HuMemDirectMallocNum(
++            HEAP_HEAP, sizeof(MgmbingoPlayerData), HU_MEMNUM_OVL);
++        memset(playerObject->data, 0, sizeof(MgmbingoPlayerData));

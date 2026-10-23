@@ -1,0 +1,12 @@
+--- a/src/REL/m613Dll/progress.c
++++ b/src/REL/m613Dll/progress.c
+@@ -16,2 +16,2 @@
+-extern s32 fn_1_3A10(void);
+-extern s32 fn_1_3A9C(void);
++extern s16 fn_1_3A10(void);
++extern s16 fn_1_3A9C(void);
+@@ -19,2 +19,2 @@
+-extern s32 fn_1_3BD4(s16);
+-extern s32 fn_1_3578(s32, s16, s16, s16);
++extern s16 fn_1_3BD4(s16 group);
++extern s32 fn_1_3578(HSF_BITMAP *bitmap, s16 x, s16 y, s16 pixelFormat);

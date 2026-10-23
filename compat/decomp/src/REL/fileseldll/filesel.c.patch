@@ -1,9 +1,9 @@
 --- a/src/REL/fileseldll/filesel.c
 +++ b/src/REL/fileseldll/filesel.c
-@@ -23,0 +24,2 @@
+@@ -24,0 +25,2 @@
 +#include "mp6_widescreen.h" /* widescreen support */
 +#include "mp6_anim_native.h" /* ANM ownership-aware teardown (see the exit-path free below) */
-@@ -238,6 +240,16 @@
+@@ -262,6 +264,16 @@
 -    Hu3DCameraPerspectiveSet(1, 5.0f, 20.0f, 15000.0f, 1.2f);
 -    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f,
 -                          480.0f, 0.0f, 1.0f);
@@ -26,7 +26,7 @@
 +    mp6_widescreen_camera_widen(1, 5.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
 +    /* Same fix as the sibling camera above. */
 +    mp6_widescreen_camera_widen(2, 10.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
-@@ -331 +343,21 @@
+@@ -356 +368,21 @@
 -        HuMemDirectFree(lbl_1_bss_D8[i].cardTextureAnim);
 +        /* Each cardTextureAnim is a HuSprAnimMake() result, and under this
 +         * port that function REGISTERS the graph with the native ANM ownership
@@ -49,7 +49,7 @@
 +            }
 +            HuMemDirectFree(lbl_1_bss_D8[i].cardTextureAnim);
 +        }
-@@ -391,0 +424,50 @@
+@@ -421,0 +454,50 @@
 +    /* This is the file-select storybook's own distant backdrop --
 +     * positioned far behind the book itself (z=-9000 vs the book's
 +     * z=-2000), drawn under camera bit 2 (already aspect-widened above).
@@ -100,24 +100,34 @@
 +     * still goes through the plain, fully-isotropic
 +     * mp6_widescreen_extrude_model(), byte-unchanged. */
 +    mp6_widescreen_extrude_model_xy(lbl_1_bss_2D8[1]);
-@@ -1014 +1096,15 @@
--        strcpy(obj->name, lbl_1_data_190[i]);
-+        /* Under this port's HSF loader stub, every loaded model has
-+         * objectNum==0, so the by-name lookup above can never succeed --
-+         * it reports the not-found case and returns NULL (its own existing
-+         * contract, unchanged). The original code writes through that
-+         * pointer unconditionally because on real hardware the model
-+         * always contains this object, so the NULL branch is unreachable
-+         * there; natively it's a guaranteed null-pointer write, confirmed
-+         * as this exact crash by the log ending at hsfman.c's own
-+         * not-found report line. Skipping the rename when the object
-+         * doesn't exist is semantically exact: the rename only retargets
-+         * which sub-object later per-slot logic finds by name, and with
-+         * zero objects there is nothing to find either way. */
-+        if (obj != NULL) {
-+            strcpy(obj->name, lbl_1_data_190[i]);
+@@ -905,0 +988,17 @@
++/* The badge leaves the book to the left for name entry. Its native parked
++ * position is outside 4:3, but inside a wider camera. Widen only that exit
++ * destination, keeping the on-book position and badge geometry unchanged. */
++static float mp6_filesel_badge_slide_x(float home, float phase)
++{
++    float x = home - 200.0f * phase;
++    float k = mp6_widescreen_scale_factor();
++    return k > 1.0f ? x + (home - 200.0f) * (k - 1.0f) * phase : x;
++}
++
++void mp6_filesel_badge_park(void)
++{
++    Hu3DModelPosSet(lbl_1_bss_2D8[2],
++        mp6_filesel_badge_slide_x(lbl_1_bss_68[3].x, 1.0f),
++        lbl_1_bss_68[3].y, lbl_1_bss_68[3].z);
++}
++
+@@ -924 +1023 @@
+-            Hu3DModelPosSet(lbl_1_bss_2D8[2], lbl_1_bss_68[3].x - 200.0f * scale, lbl_1_bss_68[3].y,
++            Hu3DModelPosSet(lbl_1_bss_2D8[2], mp6_filesel_badge_slide_x(lbl_1_bss_68[3].x, scale), lbl_1_bss_68[3].y,
+@@ -1069 +1168,4 @@
+-        strcpy(slotObject->name, lbl_1_data_190[i]);
++        /* A missing optional HSF object cannot be renamed. */
++        if (slotObject != NULL) {
++            strcpy(slotObject->name, lbl_1_data_190[i]);
 +        }
-@@ -1048,0 +1145,18 @@
+@@ -1107,0 +1210,18 @@
 +    /* fn_1_35AC runs every frame and grabs a screen-space snapshot of each
 +     * save slot's own star/date/count sprite group into a texture pasted
 +     * onto the "page label" 3D quad -- the same photograph-a-live-frame
@@ -136,30 +146,38 @@
 +     * widen by the same factor, so it cancels out of the ratio; only the
 +     * additive recenter survives) -- a no-op (byte-identical float ops)
 +     * when disabled. */
-@@ -1051 +1165 @@
--        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1)),
-+        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 1) + mp6_widescreen_half_width_delta()),
-@@ -1193,0 +1308,5 @@
+@@ -1110 +1230 @@
+-        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 0x1)),
++        Hu3DFbCopyExec(1.1111111640930176 * (288.0 * (i & 0x1) + mp6_widescreen_half_width_delta()),
+@@ -1262,0 +1383,5 @@
 +    if (i >= 4) {
 +        HuPrcEnd();
 +        return;
 +    }
 +    prevState = p->visualState;
-@@ -1402 +1521 @@
--    proc->property = (void *)arg1;
-+    proc->property = (void *)(intptr_t)arg1;
-@@ -1414 +1533 @@
+@@ -1480 +1605 @@
+-    proc->property = (void *)processProperty;
++    proc->property = (void *)(intptr_t)processProperty;
+@@ -1493 +1618 @@
 -    bank = (s32)proc->property;
 +    bank = (s32)(intptr_t)proc->property;
-@@ -1827,0 +1947,5 @@
+@@ -1926,0 +2052,5 @@
 +    /* Closes the GXBegin(GX_QUADS, 0, 4) camera Z-clear above -- anchors to
 +     * its fourth and last GXPosition3f32. Shaped exactly like hsfman.c's
 +     * Hu3DZClear, closed the same way. Empty inline on hardware (GXVert.h);
 +     * was the last 'vertex data not evenly divisible' source. */
 +    GXEnd();
-@@ -1946 +2070 @@
--                proc2->property = (void *)a;
-+                proc2->property = (void *)(intptr_t)a;
-@@ -2010 +2134 @@
+@@ -2048 +2178 @@
+-                proc2->property = (void *)selectedBoxNo;
++                proc2->property = (void *)(intptr_t)selectedBoxNo;
+@@ -2117 +2247 @@
 -    idx = (s32)proc->property;
 +    idx = (s32)(intptr_t)proc->property;
+@@ -2159 +2289 @@
+-        GXSetTexCopySrc(0, 0, 640, 480);
++        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
+@@ -2190,2 +2320,2 @@
+-    transS = ((f32)cam->scissorX + (f32)cam->scissorW / 2.0f) / 640.0f;
+-    C_MTXLightPerspective(lightMtx, cam->fov, 1.2f, 0.5f, -0.5f, transS, 0.5f);
++    transS = ((f32)cam->scissorX + (f32)cam->scissorW / 2.0f) / mp6_widescreen_render_width();
++    C_MTXLightPerspective(lightMtx, cam->fov, cam->aspect, 0.5f, -0.5f, transS, 0.5f);

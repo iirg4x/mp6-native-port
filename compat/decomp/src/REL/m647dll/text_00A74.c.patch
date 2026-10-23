@@ -1,0 +1,21 @@
+--- a/src/REL/m647dll/text_00A74.c
++++ b/src/REL/m647dll/text_00A74.c
+@@ -7,0 +8,4 @@
++#include <string.h>
++#include "game/board/player.h"
++void fn_1_AE58(s16 mode);
++void fn_1_AF18(s16 cameraMode);
+@@ -2,0 +2 @@
++#include "mp6_mg_winner.h"
+@@ -890,0 +890,11 @@
++    /* Port addition: name the winners (retail never did; see mp6_mg_winner.h). */
++    {
++        s16 mp6Winners[4] = { -1, -1, -1, -1 };
++        s32 mp6Index;
++        for (mp6Index = 0; mp6Index < 4; mp6Index++) {
++            if (lbl_1_bss_54[mp6Index].finishPlace == 0) {
++                mp6Winners[mp6Index] = lbl_1_bss_54[mp6Index].characterId;
++            }
++        }
++        mp6_mg_winner_message(mp6Winners[0], mp6Winners[1], mp6Winners[2], mp6Winners[3]);
++    }

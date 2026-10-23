@@ -6,18 +6,23 @@
 
 #include <RmlUi/Core.h>
 #include <SDL3/SDL_filesystem.h>
+#ifdef __EMSCRIPTEN__
+#include "mp6_web_content.h"
+#endif
 #include <absl/container/flat_hash_set.h>
 #include <aurora/rmlui.hpp>
 #include <fmt/format.h>
 
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <ranges>
 
 /* [MP6] dropped: #include "RmlUi/Debugger/Debugger.h" */
 #include "lib/window.hpp" /* [MP6] aurora internal, via -I AURORA_ROOT */
 #include "input.hpp"
 #include "prelaunch.hpp"
+#include "settings.hpp"
 #include "window.hpp"
 
 #include "launcher_state.hpp" /* [MP6] replaces <port/settings.h> */
@@ -48,6 +53,9 @@ namespace {
     std::vector<std::unique_ptr<Document>> sPassiveDocuments;
     std::deque<Toast> sToasts;
     bool sMenuNotificationRequested = false;
+    std::optional<Notice> sNotice;
+    clock::time_point sNoticeEnd;
+    unsigned sNoticeGeneration = 0;
 
     // Sometimes gamepads can connect and disconnect quickly, especially during
     // connection negotiation. In this case, we'll receive an _ADDED event for a
@@ -66,17 +74,21 @@ bool initialize() noexcept
         return false;
     }
 
-    /* [MP6] UI faces from res/fonts/. The body font is Inter (SIL OFL,
-     * redistributable) in place of the commercial FOT-NewRodin Pro the
-     * upstream UI used; the .rcss body rules were re-pointed to the "Inter"
-     * family to match. See docs/PARTYBOARD_PROVENANCE.md for each font's
-     * license status. */
+    /* Storybook menus, notices and dialogs use Titan One. Inter remains for
+     * dense developer-console data; the original UI faces are retained for
+     * compatibility. All redistributed licenses live beside the font files. */
     load_font("fonts/AlegreyaSC-Regular.ttf");
     load_font("fonts/AlegreyaSC-Bold.ttf");
     load_font("fonts/MaterialSymbolsRounded-Regular.ttf");
     load_font("fonts/N64Party-Monochromatic.otf");
     load_font("fonts/Inter-Regular.ttf");
+    load_font("fonts/BreeSerif-Regular.ttf");
+    load_font("fonts/TitanOne-Regular.ttf");
     load_font("fonts/Inter-Bold.ttf");
+
+    // PNG decoding, font-atlas preparation and first stylesheet parsing belong
+    // to startup, not the first frame of the settings book's opening animation.
+    SettingsWindow::preload_resources();
 
     // Rml::Debugger::Initialise(aurora::rmlui::get_context());
     // Rml::Debugger::SetVisible(true);
@@ -377,7 +389,13 @@ Insets safe_area_insets(Rml::Context *context) noexcept
     }
 
     SDL_Rect safeRect {};
+#ifdef __EMSCRIPTEN__
+    // Browser: SDL reports the whole canvas; the page knows the notch and the
+    // bottom gesture zone (src/web/safe_area_web.c).
+    if (!mp6_web_window_safe_area(window, &safeRect)) {
+#else
     if (!SDL_GetWindowSafeArea(window, &safeRect)) {
+#endif
         return {};
     }
 
@@ -413,6 +431,26 @@ std::deque<Toast> &get_toasts() noexcept
 void show_menu_notification() noexcept
 {
     sMenuNotificationRequested = true;
+}
+
+void show_notice(Notice notice) noexcept
+{
+    sNoticeEnd = clock::now() + notice.duration;
+    sNotice = std::move(notice);
+    ++sNoticeGeneration;
+}
+
+const Notice *current_notice() noexcept
+{
+    if (sNotice && clock::now() >= sNoticeEnd) {
+        sNotice.reset();
+    }
+    return sNotice ? &*sNotice : nullptr;
+}
+
+unsigned notice_generation() noexcept
+{
+    return sNoticeGeneration;
 }
 
 bool consume_menu_notification_request() noexcept

@@ -35,10 +35,11 @@ bool Component::focus()
     }
     // Can we focus self?
     if (mRoot->Focus(true)) {
+        const bool book = mRoot->Closest(".storybook") != nullptr;
         mRoot->ScrollIntoView(Rml::ScrollIntoViewOptions {
-            Rml::ScrollAlignment::Center,
-            Rml::ScrollAlignment::Center,
-            Rml::ScrollBehavior::Smooth,
+            book ? Rml::ScrollAlignment::Nearest : Rml::ScrollAlignment::Center,
+            book ? Rml::ScrollAlignment::Nearest : Rml::ScrollAlignment::Center,
+            book ? Rml::ScrollBehavior::Instant : Rml::ScrollBehavior::Smooth,
             Rml::ScrollParentage::Closest,
         });
         return true;

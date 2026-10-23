@@ -37,8 +37,11 @@ protected:
     std::array<long, MP6_CONSOLE_PANEL_COUNT> mPanelTick {};
     Rml::Element *mPanelStack = nullptr; /* [MP6] the tiling container for them */
     Rml::Element *mCurrentToast = nullptr;
+    Rml::Element *mCurrentToastProgress = nullptr;
     Rml::Element *mControllerWarning = nullptr;
     Rml::Element *mMenuNotification = nullptr;
+    Rml::Element *mNotice = nullptr; /* [MP6] the centered notice panel's layer */
+    unsigned mNoticeGeneration = 0;
     clock::time_point mCurrentToastStartTime;
     clock::time_point mMenuNotificationStartTime;
 
@@ -52,6 +55,7 @@ protected:
     bool mFpsHavePrevCounter = false;
     Uint64 mFpsPrevCounter = 0;
     Uint64 mFpsLastUpdate = 0;
+    float mFpsLast = 0.f;
 
     void advance_fps_counter(float &outFps, Uint64 perfFreq);
 };

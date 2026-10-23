@@ -1,0 +1,178 @@
+[
+{
+  "name": "chapter-sound",
+  "size": [
+    512,
+    512
+  ],
+  "prompt": "Use case: style-transfer. Image 1 is the icon to restyle. Images 2 and 3 are the EXACT STYLE REFERENCES: the existing Brighton sun and Twila moon sprites used beside this icon in one storybook menu. Match images 2 and 3 faithfully: softly modeled, warm saturated illustrated volume, smooth airbrushed tonal shading that rounds surfaces, modest soft highlights, a THIN nearly black outline and a consistent ivory cutout rim. It must look drawn by the same artist as those two character sprites, with the same amount of volume and shading, neither flat vector nor shiny glossy plastic. Preserve the icon subject and simple readable composition but replace the thick brown outlined flat treatment from image 1. No extruded metallic bevels, no photographic reflections, no heavy outlines. NO faces or eyes on the icon, the reference characters are style only. Genuine transparent background, clean empty alpha between all shapes, no flecks/debris, no text, no backdrop. Subject stays one red joined eighth-note pair with two small golden sparkles. Round the red note stems and note heads through gentle shading like the rounded sun face and its rays. Ivory edge as narrow relative to the whole icon as the moon reference.",
+  "sourcePath": "generated_images/exec-9b539351-fac9-4b0b-826f-61e3dbb4dcdc.png",
+  "rejectedFlatSource": "generated_images/exec-fbd225c4-65ad-4328-ad91-ef9ba98af05a.png",
+  "rejectedFlatPrompt": "Use case: precise-object-edit. Edit the supplied chapter icon into a SIMPLE PAPER-CUTOUT illustration for a playful Mario Party storybook menu. Dramatically simplify: flat saturated color shapes, a single gentle tonal gradient per shape, thin tidy dark warm outline, narrow uniform ivory edge. Almost front-on, no shiny highlights, no glossy plastic, no metallic reflections, no extruded gold bevels, no realistic 3D depth, no drop shadow, no grain. Compact balanced silhouette readable at 120 pixels. Transparent background, no text. Keep just ONE cherry-red joined pair of rounded eighth notes, with a subtle darker red edge and TWO simple tiny gold four-point sparkles. Remove all gold extrusion. Smooth simple note silhouette.",
+  "styleReferences": ["assets/brighton.png", "assets/twila.png"],
+  "originalPrompt": "Use case: stylized-concept. Asset type: one production-ready transparent chapter icon for a Mario Party 6-inspired animated storybook settings menu. Style: charming early-2000s party-game 3D illustration, rounded chunky forms, saturated colors, smooth clean toy-like shading, soft warm highlights, thin warm dark contour and restrained ivory cutout edging. A polished readable icon, not a UI screenshot, not flat vector placeholder. Centered, entire silhouette visible with generous transparent margins. Genuine alpha transparency, no paper background, no pedestal, no lettering, no logos, no watermark, no checkerboard, no grain. Subject: a single large joined pair of eighth music notes, bright cherry red with golden yellow beveled side faces. Slight lively tilt. The two oval note heads and connecting beam have soft rounded edges and a coherent readable musical-note silhouette. Two tiny gold sparkle accents beside it, kept near the main shape. Camera almost front-on, slight three-quarter depth. Designed to read clearly at 200 pixels on ivory paper.",
+  "originalSource": "generated_images/exec-e7bb4e90-e990-4c20-8181-ccab14ac4f71.png",
+  "tool": "built-in imagegen",
+  "preserveGeneratedAlpha": true
+},
+{
+  "name": "chapter-game",
+  "size": [
+    512,
+    512
+  ],
+  "prompt": "Use case: style-transfer. Image 1 is the icon to restyle. Images 2 and 3 are the EXACT STYLE REFERENCES: the existing Brighton sun and Twila moon sprites used beside this icon in one storybook menu. Match images 2 and 3 faithfully: softly modeled, warm saturated illustrated volume, smooth airbrushed tonal shading that rounds surfaces, modest soft highlights, a THIN nearly black outline and a consistent ivory cutout rim. It must look drawn by the same artist as those two character sprites, with the same amount of volume and shading, neither flat vector nor shiny glossy plastic. Preserve the icon subject and simple readable composition but replace the thick brown outlined flat treatment from image 1. No extruded metallic bevels, no photographic reflections, no heavy outlines. NO faces or eyes on the icon, the reference characters are style only. Genuine transparent background, clean empty alpha between all shapes, no flecks/debris, no text, no backdrop. Subject stays one rounded gold folder with red star emblem and a simple blue game disc peeking out. Gently shade the folder, red star and disc like the sun rays and moon shape in the references; enough volume to feel illustrated, but no die, extra objects or metallic rainbow details.",
+  "sourcePath": "generated_images/exec-7836e08a-a99d-4ac3-897b-e07ce0d7d692.png",
+  "rejectedFlatSource": "generated_images/exec-6910c184-683f-48fe-b3f7-d0a261583070.png",
+  "rejectedFlatPrompt": "Use case: precise-object-edit. Edit the supplied chapter icon into a SIMPLE PAPER-CUTOUT illustration for a playful Mario Party storybook menu. Dramatically simplify: flat saturated color shapes, a single gentle tonal gradient per shape, thin tidy dark warm outline, narrow uniform ivory edge. Almost front-on, no shiny highlights, no glossy plastic, no metallic reflections, no extruded gold bevels, no realistic 3D depth, no drop shadow, no grain. Compact balanced silhouette readable at 120 pixels. Transparent background, no text. Simplify to ONE golden-yellow file folder with a small flat red star on its front, and ONE simple pale-blue disc with a center hole peeking out behind. REMOVE THE DIE completely. No rainbow sheen, no detailed folded layers, no bevels. Just two clean flat cutout shapes, subtle smooth shading.",
+  "styleReferences": ["assets/brighton.png", "assets/twila.png"],
+  "originalPrompt": "Use case: stylized-concept. Asset type: one production-ready transparent chapter icon for a Mario Party 6-inspired animated storybook settings menu. Style: charming early-2000s party-game 3D illustration, rounded chunky forms, saturated colors, smooth clean toy-like shading, soft warm highlights, thin warm dark contour and restrained ivory cutout edging. A polished readable icon, not a UI screenshot, not flat vector placeholder. Centered, entire silhouette visible with generous transparent margins. Genuine alpha transparency, no paper background, no pedestal, no lettering, no logos, no watermark, no checkerboard, no grain. Subject: a compact golden save-file folder with a glossy red star emblem on its front, a silver-blue game disc peeking out behind the folder, and one chunky white six-sided party-game die with red pips tucked beside it. One cohesive compact icon, playful three-quarter view, strong simple silhouette. The disc clearly has a small center hole. Warm gold, cherry red, ivory white, a hint of cyan. Designed to read clearly at 200 pixels on ivory paper.",
+  "originalSource": "generated_images/exec-318c0331-c933-47b9-9399-30ca3b50b0c5.png",
+  "tool": "built-in imagegen",
+  "preserveGeneratedAlpha": true
+},
+  {
+    "name": "brighton",
+    "sourcePath": "generated_images/exec-11dd1a8f-6658-43e2-b9f5-d4789c49b157.png",
+    "prompt": "Use case: precise-object-edit. Image 1 is the edit target, the existing transparent Brighton sun-face cutout used in a Mario Party 6 storybook menu. Change ONLY the colors of the triangular rays around the face. All rays on the VIEWER'S LEFT half must be saturated red/red-orange; all rays on the VIEWER'S RIGHT half must be golden yellow. At the top and bottom central ray, split the ray vertically along the center: red on its left, gold on its right. This color split is OPPOSITE to the face: preserve the existing golden-yellow LEFT face half and RED right face half exactly, with the same opposite-colored eyes. Preserve the exact ray shapes, entire silhouette, ivory die-cut border, thin dark contour, face split shape, eyes, happy mouth and tongue, proportions and gentle shading. Do not add rays, rings, grain, lettering, extra objects, shadows or backdrop. Keep a genuine transparent background. The whole existing cutout must remain fully visible, centered, suitable for packing into a 512x512 texture. No changes other than the requested ray recoloring.",
+    "tool": "built-in imagegen",
+    "referenceRole": "Upright face with offset single-color ray ring; upper-left red rays lengthened from orderly-ring base",
+    "originalSource": "generated_images/exec-7e7911c2-f21c-48f2-b019-96cbd68576f8.png",
+    "originalPrompt": "Create ONE newly illustrated production sprite for the Mario Party 6 storybook settings UI. Input image is STYLE AND PROPORTION REFERENCE ONLY. Do not crop, extract, copy a rectangle, or return a screenshot. Draw the requested element fresh as a clean isolated component, matching the reference's shape language, saturated colors, subtle smooth shading and paper-cutout personality. Genuine transparent background, clean alpha contour, no fuzzy white remnants. No text, lettering, icons, watermark, checkerboard, other objects or scene. No canvas/paper grain, no noisy texture. Keep enough clear margin that every outer edge is intact.\nRequested component: Brighton's smiling SUN FACE paper cutout from Mario Party 6, as at the lower LEFT of the reference. New clean illustration: round face split asymmetrically golden yellow and red-orange, two oval eyes, cheerful open smile, alternating long yellow/orange triangular rays. Thick ivory die-cut border and very thin dark contour. Face only, no body, no crown, no extra star, no clouds. Entire silhouette fully visible. No elements from the surrounding menu. Output 512x512.",
+    "repairSource": "generated_images/exec-dc21cdcb-7451-4758-9181-ce557fa741ea.png",
+    "repairPrompt": "Use case: precise-object-edit. Image 1 is the edit target: transparent Brighton sun face cutout. Fix ONLY the TOP CENTER ray and BOTTOM CENTER ray. They must NOT be split into two colors. Make the entire top-center triangular ray RED, with subtle red-orange shading only. Make the entire bottom-center triangular ray GOLDEN YELLOW, with subtle gold shading only. Remove the vertical red/gold boundary within each of those two rays completely. Every individual ray must be ONE color, either red or gold; never two contrasting halves. Keep all other viewer-left rays red and all other viewer-right rays gold. Preserve the exact existing face (yellow on left, red on right), face split shape, eyes, smile, tongue, shading, proportions, every ray shape, ivory paper-cutout border and thin dark contour. Keep genuine transparent background. Do not change layout, shape, size or any other detail. Entire cutout visible; no new objects, no background, no grain.",
+    "ringSource": "generated_images/exec-df8fafc0-82f6-45b1-b7d6-2a0453b86739.png",
+    "ringPrompt": "Use case: precise-object-edit. Image 1 is the edit target, the existing transparent Brighton cutout. Make only this specific RAY RING correction; lock the round FACE exactly as it is, upright and unrotated. First add a mirror counterpart of the SHORT upper-left red triangular ray (the one whose face is near x38%, y20% of the image, between the tall top ray and the long upper-left diagonal ray) on the upper-RIGHT/yellow side: same shape and size reflected left-to-right, but golden yellow. Then rotate the ENTIRE ring of triangular rays around the center of the stationary round face by 15 degrees CLOCKWISE. The face, eyes, nose/split, mouth, tongue must NOT rotate. The purpose is a gap/valley at the vertical red/yellow boundary: no triangular ray should sit directly across that boundary. After rotating, every ray whose tip is on the viewer's LEFT is entirely RED/RED-ORANGE, and every ray whose tip is on the viewer's RIGHT is entirely GOLDEN YELLOW. Never split any individual ray into red and yellow portions. Preserve the exact cheerful face and its yellow left half / red right half, opposite-color eyes, smooth shading, ivory cutout border and thin dark contour. Keep the existing long/short ray personality, do not replace it with uniform tiny spikes. No extra objects, no background, no text, no grain. Genuine transparent background; entire new silhouette visible with margin.",
+    "rejectedLengthVariant": {
+      "sourcePath": "generated_images/exec-5678e74b-e3da-4a14-924d-c2f72d3d592a.png",
+      "prompt": "Use case: precise-object-edit. Image 1 is the edit target: transparent Brighton sun-character game sprite. Change ONLY the lengths of the surrounding triangular rays so the silhouette has much stronger long/short variation, as requested. Current rays are too uniformly long. Create a clear alternating rhythm of long prominent spikes and short tucked-in triangular rays around the entire ring, with occasional medium lengths. The long rays should extend about twice as far beyond the circular face as the short rays. In particular, make the upper-right tall gold ray at x59.5%, y8.7% a distinct long accent surrounded by clearly shorter rays; carry equally clear long/short variation through both sides and the bottom, rather than only changing the top. Preserve the existing ray angles and the 15-degree clockwise ring offset: a valley, not a ray, at the top/bottom red-yellow division. Every individual ray must remain one color only: viewer-left rays red/red-orange, viewer-right rays golden yellow; never bisect a ray into two colors. Keep the face EXACTLY unchanged: upright round yellow-left/red-right face, same eyes, nose, smile, tongue, proportions and expression. Do not rotate the face, recolor it, change the cutout style or add facial features. Preserve smooth shaded surfaces, thin dark contour, consistent ivory sticker border, clean edges. No new objects, text, grain, or background. Full silhouette within square frame with transparent margin. Genuine transparent background.",
+      "reason": "User rejected short/random rays; requested lengthening the upper-left instead."
+    },
+    "upperLeftPrompt": "Use case: precise-object-edit. Image 1 is the edit target, the prior orderly Brighton sun sprite, NOT a prompt to redesign. User correction: 'the rays should be longer in the top left'. Make ONLY the two RED triangular rays in the UPPER-LEFT quadrant visibly LONGER: the large diagonal red ray around 10:30 and the nearby more upright red ray around 11:30. Extend their tips radially outward by roughly 25-30% of their exposed length beyond the face, retaining their existing root positions, angles, triangular proportions and smooth red shading. This creates a deliberate longer upper-left silhouette, not random length variation. KEEP EVERY OTHER RAY its original length and shape. Do not add tiny rays, do not shorten rays, do not add extra teeth, do not make a random spiky outline. Keep the orderly existing ring and its clockwise offset, each whole ray single-colored red on viewer-left or gold on viewer-right. Never split a ray into red and gold. The upright round FACE is invariant: exact same yellow-left/red-right split, eyes, nose, cheerful mouth/tongue, proportions, placement and shading. Keep its orientation unchanged. Preserve ivory die-cut border with consistent width and thin dark outline; extend border naturally around the two lengthened tips. Fully visible cutout on genuine transparent background, with enough canvas margin for longer upper-left tips. No text, grain, background, extra objects, or other edits.",
+    "upperLeftSource": "generated_images/exec-04dbedcb-6d46-426d-832d-da5f678a71fa.png"
+  },
+  {
+    "name": "twila",
+    "sourcePath": "generated_images/exec-9bc5cf43-4cc9-42a8-9e86-449f6b7d0c84.png",
+    "prompt": "Create ONE newly illustrated production sprite for the Mario Party 6 storybook settings UI. Input image is STYLE AND PROPORTION REFERENCE ONLY. Do not crop, extract, copy a rectangle, or return a screenshot. Draw the requested element fresh as a clean isolated component, matching the reference's shape language, saturated colors, subtle smooth shading and paper-cutout personality. Genuine transparent background, clean alpha contour, no fuzzy white remnants. No text, lettering, icons, watermark, checkerboard, other objects or scene. No canvas/paper grain, no noisy texture. Keep enough clear margin that every outer edge is intact.\nRequested component: Twila's smiling CRESCENT MOON FACE paper cutout from Mario Party 6, as at the lower RIGHT of the reference. New clean illustration: crescent faces toward left, green inner half and warm yellow outer half, oval yellow eyes and little curved smile. Thick ivory die-cut border and thin dark contour. Face only, no body, no dangling star, no clouds. Preserve the reference personality, do not turn it into a generic sleeping moon. Entire silhouette fully visible. Output 512x512.",
+    "tool": "built-in imagegen",
+    "referenceRole": "style/proportion reference only; newly generated artwork"
+  },
+  {
+    "name": "cloud",
+    "sourcePath": "generated_images/exec-5e1f4e6f-7368-4eec-999e-b1ffb3c5827c.png",
+    "prompt": "Create ONE newly illustrated production sprite for the Mario Party 6 storybook settings UI. Input image is STYLE AND PROPORTION REFERENCE ONLY. Do not crop, extract, copy a rectangle, or return a screenshot. Draw the requested element fresh as a clean isolated component, matching the reference's shape language, saturated colors, subtle smooth shading and paper-cutout personality. Genuine transparent background, clean alpha contour, no fuzzy white remnants. No text, lettering, icons, watermark, checkerboard, other objects or scene. No canvas/paper grain, no noisy texture. Keep enough clear margin that every outer edge is intact.\nRequested component: ONE long LOW fluffy pale sky-blue paper-cutout CLOUD with a flat base, scalloped upper silhouette of five rounded puffs, the central puff highest. Smooth pale-blue gentle vertical shading, a thin navy contour inside a thick ivory die-cut border. Match the layered cloud cutouts in the reference, NO realistic cloud texture or volume. No sun, no face, no stars. Entire silhouette visible. Approximate width:height 2.3:1. Output 512x256.",
+    "tool": "built-in imagegen",
+    "referenceRole": "style/proportion reference only; newly generated artwork"
+  },
+  {
+    "name": "sky-sun",
+    "size": [
+      256,
+      256
+    ],
+    "prompt": "Use case: stylized-concept. Asset type: ONE transparent background sun sprite for Mario Party 6 storybook menu. Full-screen attached concept is REFERENCE ONLY: match the simple partially hidden golden sun behind the book at the UPPER LEFT. Generate the complete sun as a fresh isolated component, not a screenshot or crop. A plain smooth bright lemon-yellow circular disc, narrow warmer golden raised circular rim, encircled by a ring of short stubby orange-gold triangular sun rays. Compact chunky rays, not long thin spikes. The disc is BLANK: absolutely no spiral, no swirl, no concentric rings inside the face, no face, no eyes, no lettering. Gentle understated shading like a colored paper/game sprite, no grain, no glitter, no metallic gloss. Keep all rays intact, circular front-on silhouette, generous transparent margin. No background rays, no glow, no clouds, no book, no other UI. Actual transparent background. Final asset intended to render about 170 pixels wide, lower half hidden by book, but provide complete sun.",
+    "sourcePath": "generated_images/exec-43fce71c-4d6a-4aa9-972e-112a28ec07bd.png",
+    "tool": "built-in imagegen",
+    "referenceRole": "Fresh plain sun, concept is style reference only"
+  },
+  {
+    "name": "sky-moon",
+    "sourcePath": "generated_images/exec-0fb56d5d-6c57-41ad-96fa-afb2926b5cfb.png",
+    "prompt": "Create ONE newly illustrated production sprite for the Mario Party 6 storybook settings UI. Input image is STYLE AND PROPORTION REFERENCE ONLY. Do not crop, extract, copy a rectangle, or return a screenshot. Draw the requested element fresh as a clean isolated component, matching the reference's shape language, saturated colors, subtle smooth shading and paper-cutout personality. Genuine transparent background, clean alpha contour, no fuzzy white remnants. No text, lettering, icons, watermark, checkerboard, other objects or scene. No canvas/paper grain, no noisy texture. Keep enough clear margin that every outer edge is intact.\nRequested component: ONE golden decorative CRESCENT MOON for the upper-right NIGHT sky, no face. A clean stylized gold crescent opening toward the LEFT, thick rounded outer curve tapering into two elegant tips, very subtle warm shading. Match reference upper-right crescent. No eyes, face, stars, halo, glow, white border or background. Entire crescent visible. Output 256x256.",
+    "tool": "built-in imagegen",
+    "referenceRole": "style/proportion reference only; newly generated artwork"
+  },
+  {
+    "name": "book-half",
+    "sourcePath": "generated_images/exec-7673d997-6646-4e14-a34d-d6d12c88cde1.png",
+    "prompt": "Use case: precise-object-edit. Asset type: transparent game UI sprite, ONE LEFT HALF of an open red hardcover storybook, to be mirrored by the renderer. Image 1 is the edit target. Preserve the exact composition, smooth pale ivory top sheet, curved top and bottom contours, slanted outer LEFT edge, perfectly straight vertical RIGHT binding edge, glossy red cover, lighting style and transparent silhouette. Change ONLY the page stack under the top sheet: replace the two or three chunky ivory bands along the bottom and outer left edge with a dense, convincing stack of about 14 thin ivory paper leaves with delicate warm-gold separations. Fit these many fine layers within roughly the existing stack thickness, curving naturally and converging neatly at the right binding. Clearly separate the topmost single sheet from the stationary stack. No lettering, no grain/noise, no objects, no full two-page book. Keep the large top paper face empty for live menu content. Retain genuinely transparent background and full silhouette with padding. 1024x1024.",
+    "tool": "built-in imagegen",
+    "referenceRole": "Existing generated book-half edited to show many thin page edges; no concept pixels",
+    "originalSource": "generated_images/exec-0d138c57-f88e-4234-83ce-50dbb542024e.png",
+    "originalPrompt": "Create ONE newly illustrated production sprite for the Mario Party 6 storybook settings UI. Input image is STYLE AND PROPORTION REFERENCE ONLY. Do not crop, extract, copy a rectangle, or return a screenshot. Draw the requested element fresh as a clean isolated component, matching the reference's shape language, saturated colors, subtle smooth shading and paper-cutout personality. Genuine transparent background, clean alpha contour, no fuzzy white remnants. No text, lettering, icons, watermark, checkerboard, other objects or scene. No canvas/paper grain, no noisy texture. Keep enough clear margin that every outer edge is intact.\nRequested component: ONLY ONE LEFT HALF of the blank open storybook, with its thin red hardcover lip and thin ivory page stack behind it. This ONE half will be mirrored in code to create the right half, so the RIGHT BINDING EDGE MUST BE PERFECTLY STRAIGHT AND VERTICAL from the upper-right to lower-right corner, with no protruding binding or right-hand page. The left outer edge is gently slanted, the top gently bows upward, and the bottom curves down toward the lower-right binding. Smooth pale ivory page face, subtle warm cream shading concentrated near the right binding and lower edges; narrow vivid red hardcover lip visible only along left and bottom. No central text, decorations, icons, tabs, colored split, perspective rotation, or grain. Match the neutral ivory book in the reference. Keep the whole half inside the canvas with clean intact edges. Near-square silhouette suitable for 1024x1024 texture.",
+    "preserveGeneratedAlpha": true
+  },
+  {
+    "name": "selection-ribbon",
+    "sourcePath": "generated_images/exec-6fe0f3eb-5393-438c-97ab-d840acb9bcea.png",
+    "prompt": "Create ONE newly illustrated production sprite for the Mario Party 6 storybook settings UI. Input image is STYLE AND PROPORTION REFERENCE ONLY. Do not crop, extract, copy a rectangle, or return a screenshot. Draw the requested element fresh as a clean isolated component, matching the reference's shape language, saturated colors, subtle smooth shading and paper-cutout personality. Genuine transparent background, clean alpha contour, no fuzzy white remnants. No text, lettering, icons, watermark, checkerboard, other objects or scene. No canvas/paper grain, no noisy texture. Keep enough clear margin that every outer edge is intact.\nRequested component: A single wide horizontal vivid RED selected-option ribbon. Width:height 8.5:1. Straight flat top/bottom, subtly rounded left corners, pointed chevron RIGHT end only, a subtle red tonal gradient and faint highlight. Empty center. No folded tails, no gold trim, no stars, no text. Match the Widescreen selection ribbon from the reference but freshly draw only its empty shape. Minimal smooth shading, not glossy plastic. Output 1024x128.",
+    "tool": "built-in imagegen",
+    "referenceRole": "style/proportion reference only; newly generated artwork"
+  },
+  {
+    "name": "cursor-star",
+    "sourcePath": "generated_images/exec-9d06f020-891c-4fe3-803f-d5d1d1612197.png",
+    "prompt": "Use case: stylized-concept.\nAsset type: a single transparent game UI selection cursor sprite.\nReference image is style reference ONLY: the small gold star at the left of the red Widescreen selection ribbon. Generate fresh artwork of THAT simple star, not the screen. Exactly one five-point yellow-gold star, upright with pleasantly rounded tips and short arms, compact puffy center, subtle soft bevel shading, pale yellow highlight at upper left, warm golden edges. Thin near-black outline snug to the star silhouette, about 2 percent of icon width. No ivory sticker backing, no second outline, no blue outline, no eyes, no mouth, no sparkles, no extra objects. Minimal smooth shading, no paper grain or glitter. Straight-on orthographic view. Centered with generous transparent margin, intended to read at 56 pixels in a Mario Party 6 storybook menu. Genuinely transparent background. Do NOT crop, reproduce or redraw the whole reference UI. Only one newly generated star sprite.",
+    "tool": "built-in imagegen",
+    "referenceRole": "style/proportion reference only; newly generated artwork"
+  },
+  {
+    "name": "cloud-round",
+    "size": [
+      512,
+      512
+    ],
+    "sourcePath": "generated_images/exec-aac3c55e-7856-460e-a742-26c968843080.png",
+    "prompt": "Create ONE new isolated cloud paper-cutout game UI sprite on actual transparency. The attached image is a STYLE reference only, never crop or reproduce its pixels. Match the rounded PALE BLUE cutout clouds behind Brighton at the lower-left of the reference. A compact, slightly asymmetrical cloud with THREE BIG ROUND LOBES: tall round lobe on left, lower middle lobe, little round lobe right; flat horizontal base. Width about 1.6 times height. Thin deep-navy contour, ivory die-cut rim, smooth pale blue shading only, NO grain. NOT a long stretched strip, NOT a realistic fluffy cloud, NOT a cloud scene. Entire shape visible with clear transparent margins. No star, no sun, no face, no letters, no detached fragments. Production component meant to layer with OTHER DIFFERENT cloud shapes. Output a single cloud only.",
+    "tool": "built-in imagegen",
+    "referenceRole": "new component; concept is style reference only"
+  },
+  {
+    "name": "cloud-bank",
+    "size": [
+      512,
+      256
+    ],
+    "sourcePath": "generated_images/exec-23a7e1bd-89f9-4c48-8a82-ce5b9e7525b6.png",
+    "prompt": "Create ONE new isolated cloud paper-cutout game UI sprite on actual transparency. Attached image is STYLE reference only, do not extract its pixels. Match the pale sky-blue cutout clouds at the bottom of the Mario Party 6 storybook reference. This is a WIDE LOW bank with FOUR UNEQUAL ROUNDED LOBES: small end cap left, medium lobe, larger lobe to the RIGHT of center, small end cap right; flat horizontal base. Width about 2.6 times height. Distinct asymmetrical silhouette, not repeated equal scallops. Thin navy contour inside smooth ivory die-cut rim. Gentle pale-blue tonal shading, no texture/grain. Entire isolated shape visible. NO characters, star, text, background, disconnected fragments or other cloud. Do not redraw the menu. Fresh newly generated component, not a crop.",
+    "tool": "built-in imagegen",
+    "referenceRole": "new component; concept is style reference only"
+  },
+  {
+    "name": "bubble-star",
+    "size": [
+      128,
+      128
+    ],
+    "sourcePath": "generated_images/exec-b2d1a162-94bc-4845-a1ee-d4e437bdd328.png",
+    "prompt": "Generate exactly ONE tiny yellow bubble STAR ornament, the rounded yellow star centered on the gold horizontal divider below Widescreen in the attached storybook menu. Attached image is style reference ONLY; never crop or extract it. Smooth puffy five-point silhouette with strongly rounded tips and rounded indents, plump short arms. Warm golden yellow with gentle light-yellow highlight upper left, minimal soft shading. No dark outline, no ivory rim, no face, no sparkle or other object, no text. Smooth clean minimal game UI sprite on genuine transparent background with margins. Designed to display at 30 pixels. Do not use a sharp geometric star. Match the reference's soft inflated gold star, not a metal/glitter star.",
+    "repairPrompt": "Edit only this isolated gold bubble star. Remove the tiny spike/speck above its top point and every stray colored edge fragment. Keep the same round five-point silhouette, plump proportions, smooth yellow/gold shading and highlight, no outline or backing. The top point must end in one smooth rounded curve. Preserve genuine transparent background. Single clean production sprite, no other changes.",
+    "originalSource": "generated_images/exec-a5a39183-bb01-42a1-830d-46d61f384310.png",
+    "tool": "built-in imagegen",
+    "referenceRole": "new component; concept is style reference only"
+  },
+  {
+    "name": "button-round",
+    "size": [
+      128,
+      128
+    ],
+    "prompt": "Use case: precise-object-edit. Image 1 is the edit target: the existing green round game-controller UI button shell. Change only its green color to neutral grayscale, preserving the exact simple circular silhouette, narrow dark edge, subtle upper-left highlight, smooth domed shading, and transparent background. No letter or symbol. This is a single reusable luminance texture that will be tinted green or red in the game renderer. Keep the midface a bright light gray, edge charcoal, brightest highlight near white. No white concentric rings, no extra borders, no texture grain, no canvas shadow. One isolated unlettered round button on genuine transparency. Keep the design simple and readably shaded at 40 pixels.",
+    "sourcePath": "generated_images/exec-11725955-f9cb-4dff-88bd-ac499e82231f.png",
+    "tool": "built-in imagegen",
+    "referenceRole": "Existing round shell edited to neutral grayscale; both colors are runtime tints"
+  },
+  {
+    "name": "button-shoulder",
+    "size": [
+      128,
+      128
+    ],
+    "prompt": "Use case: stylized-concept. Asset type: single transparent UI sprite for Mario Party 6, a proper GameCube-style LEFT shoulder button prompt shell, blank with no letter. Front-on 2D controller-button icon, subtly domed matte silver-gray cap, thin charcoal outline and a narrow light inner edge, simple clean shading from upper left. Silhouette is a compact horizontal shoulder tab about 1.3 times wider than high, NOT a trapezoid and NOT a keyboard key: a broadly rounded upper-left shoulder sweeping smoothly into a gently arched horizontal top, straight short right edge with small rounded corners, nearly horizontal bottom with rounded lower-left. The outer left end has an obvious generous shoulder curve. The central face is flat enough for a separately rendered L. Its mirrored copy will be used as R. Minimal, softly shaded, no grain, no texture, no glossy chrome, no ridges, no white concentric rim, no text, no symbols, no controller body, no perspective or angled sidewalls. One centered isolated gray shell occupying most of a square transparent canvas. Genuine transparent background; no backdrop or external shadow.",
+    "sourcePath": "generated_images/exec-a120c0f2-80c2-4038-b295-6556ae37d96e.png",
+    "tool": "built-in imagegen",
+    "referenceRole": "Fresh component, not a concept crop"
+  },
+  {
+    "name": "tab-selected",
+    "size": [
+      512,
+      256
+    ],
+    "prompt": "Use case: stylized-concept. Asset type: ONE freshly drawn transparent blank selected chapter tab sprite. The attached full-screen concept is a STYLE AND SHAPE REFERENCE ONLY. Draw only the small red PICTURE tab shell seen at the TOP LEFT of the book, no text or emblems. Do not crop the concept. Precisely follow its corner treatment: a simple near-rectangular ivory outer tab, narrow warm golden border, vivid red inset panel whose upper-left and upper-right corners are CONCAVE QUARTER-CIRCLE CUT-INS, like a classic framed storybook label. Tiny rounded ivory/gold corner blocks remain outside each recessed red corner; the red top edge starts inward and drops into the side through a crisp small concave scallop. These inset red corners are NOT ordinary convex roundRect corners. Same slight notched inset detail at bottom corners. Outer silhouette remains a basic rectangle with small rounded outer corners, no shoulders or protrusions. Width about 2.2 times height. Red face fills about 90 percent width, understated smooth red shading, thin bright gold/cream border, no grain. No lettering, no sun, no star, no icons. Straight-on isolated entire sprite on real transparent background with clean margins. Minimal clean game menu component, not an ornate plaque.",
+    "sourcePath": "generated_images/exec-76838969-62b2-4f81-9f6e-5acd4dac3c56.png",
+    "tool": "built-in imagegen",
+    "referenceRole": "Fresh component, not a concept crop"
+  }
+]

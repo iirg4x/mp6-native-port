@@ -54,6 +54,7 @@
 #include "mp6_boot.h"
 #include "mp6_console.h"    /* the dev console's per-process slice hook */
 #include "mp6_diag_probe.h" /* the pull-side scheduler probe at the bottom */
+#include "mp6_quick_play.h" /* Quick Party: board sleeps shortened by its time scale */
 #include "host.h" /* mp6_coro_* context backend + mp6_host_sleep_ns; this
                    * file owns the ENTIRE scheduler (dispatch loop, yield
                    * status, slot-reuse table, HUPROCESS observables) --
@@ -151,11 +152,14 @@ static void ProcessTrampoline(void *param)
         exit(1);
     }
 
-    entry();
-
-    fprintf(stderr, "[FATAL] process_native: a HuPrc process function returned instead of "
-                    "calling HuPrcEnd() -- unsupported\n");
-    exit(1);
+    /* HuPrcCreate installs func in jump.lr. gclongjmp loads it into LR and
+     * enters via bnelr/blr, not a branch-and-link: the initial return address
+     * is func itself. A process that returns therefore re-enters immediately.
+     * m618/m630/m637 rely on this after their end-of-frame HuPrcVSleep.
+     * Termination still goes through HuPrcEnd and never returns here. */
+    for (;;) {
+        entry();
+    }
 }
 
 /* Dispatches `process`; BLOCKS (an ordinary, synchronous call from
@@ -489,7 +493,10 @@ void HuPrcSleep(s32 time)
     HUPROCESS *process = HuPrcCurrentGet();
     if (time != 0 && process->exec != HUPRC_EXEC_KILLED) {
         process->exec = HUPRC_EXEC_SLEEP;
-        process->sleep = time;
+        /* Quick Party: a timed pause on a sped-up board lasts 1/scale as many
+         * ticks (forever, -1, stays forever). Everything a board waits on --
+         * motions, moves, camera -- is sped up by the same scale. */
+        process->sleep = mp6_quick_play_scale_sleep(time);
     }
     YieldToDispatcher(1);
 }

@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import unittest
 from tools import build
-from integration.run_capsule_matrix import CASES, SELF, SPACE, seed_precedes_turns
+from tests.integration.run_capsule_matrix import CASES, SELF, SPACE, seed_precedes_turns
 
 ROOT=Path(__file__).resolve().parents[1]
 

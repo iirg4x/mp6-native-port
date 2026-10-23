@@ -1,0 +1,22 @@
+--- a/src/REL/m626Dll/support.c
++++ b/src/REL/m626Dll/support.c
+@@ -23 +23 @@
+-HuVecF *fn_1_E40();
++HuVecF *fn_1_E40(void);
+@@ -41 +41 @@
+-f32 *fn_1_1F1C();
++f32 *fn_1_1F1C(void);
+@@ -171 +171 @@
+-HuVecF *fn_1_E40() {
++HuVecF *fn_1_E40(void) {
+@@ -378 +377,0 @@
+-extern inline float tanf(float x) { return (float)tan(x); }
+@@ -473 +472 @@
+-f32 *fn_1_1F1C() {
++f32 *fn_1_1F1C(void) {
+@@ -604 +603 @@
+-    audioWork = HuMemDirectMallocNum(HEAP_HEAP, 1544, HU_MEMNUM_OVL);
++    audioWork = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*audioWork), HU_MEMNUM_OVL);
+@@ -606 +605 @@
+-    memset(audioWork, 0, 1544);
++    memset(audioWork, 0, sizeof(*audioWork));

@@ -1,16 +1,30 @@
 --- a/src/game/gamemes.c
 +++ b/src/game/gamemes.c
-@@ -7,4 +7 @@
+@@ -6,4 +6,3 @@
 -extern inline double fabs(double x)
 -{
 -   return __fabs(x);
 -}
++#include "mp6_widescreen.h"
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
 +#include <math.h> /* Host CRT owns fabs, including its optimized inline. */
-@@ -25,0 +27 @@
+@@ -24,0 +24 @@
 +#include "string.h"
-@@ -213 +215 @@
--GAMEMESID GameMesCreate(s16 mesNo, ...)
-+GAMEMESID GameMesCreate(s32 mesNo, ...)
-@@ -349 +351 @@
--    if(maxTime <= 0 && maxTime > 99) {
-+    if(maxTime <= 0 || maxTime > 99) {
+@@ -234,2 +234 @@
+-/* Called by game, board, and minigame sequences to create a message or timer. */
+-GAMEMESID GameMesCreate(s16 messageTypeId, ...)
++GAMEMESID GameMesCreate(s32 messageTypeId, ...)
+@@ -381,2 +380 @@
+-    /* This condition is impossible, so the supplied time value remains unclamped here. */
+-    if(initialSeconds <= 0 && initialSeconds > 99) {
++    if(initialSeconds <= 0 || initialSeconds > 99) {
+@@ -412 +409,0 @@
+-    /* The first update moves the group to the message position. */
+@@ -423,0 +421,4 @@
++    /* [MP6] Quick Party: a running countdown is a timed challenge. */
++    if(!(message->stat & GAMEMES_STAT_TIMEEND)) {
++        mp6_quick_play_countdown();
++    }
+@@ -1071 +1072 @@
+-    GXSetScissor(sprite->scissorX, sprite->scissorY, sprite->scissorW, sprite->scissorH);
++    mp6SprScissorSet(sprite);

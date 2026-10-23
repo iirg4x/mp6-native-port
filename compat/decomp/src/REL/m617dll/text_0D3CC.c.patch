@@ -1,0 +1,34 @@
+--- a/src/REL/m617dll/text_0D3CC.c
++++ b/src/REL/m617dll/text_0D3CC.c
+@@ -50 +50 @@
+-s32 fn_1_24D8();
++void fn_1_24D8(void);
+@@ -54,6 +54,8 @@
+-s32 fn_1_4DB0(void *, s32);
+-
+-s32 fn_1_730();
+-
+-extern void fn_1_2B48();
+-
++void fn_1_4DB0(M617PlayerStateData *work, s16 voiceMode);
++
++void fn_1_730(void);
++
++extern void fn_1_2B48(void);
++
++void fn_1_5DB4(void);
++void fn_1_53AC(s16 useFirstStream, s16 fadeFrames);
+@@ -147,3 +149,3 @@
+-s32 fn_1_24D8(void);
+-
+-s16 fn_1_5C1C(void);
++void fn_1_24D8(void);
++
++void fn_1_5C1C(void);
+@@ -161,3 +163,3 @@
+-extern s32 fn_1_3CD0(s16 modelId, s16 lightId);
+-
+-extern s16 fn_1_3BB8(s16 modelId, s16 lightId);
++extern s32 fn_1_3CD0(HU3D_MODELID modelId, HU3D_LIGHTID lightId);
++
++extern s16 fn_1_3BB8(HU3D_MODELID modelId, HU3D_LIGHTID lightId);

@@ -1,0 +1,15 @@
+--- a/src/REL/m662dll/ending.c
++++ b/src/REL/m662dll/ending.c
+@@ -24,1 +24,1 @@
+-#include "REL/m662dll/game.h"
++#include "mp6_m662_native.h"
+@@ -26,6 +25,0 @@
+-extern void fn_1_4EFC(s32, s32);
+-extern void fn_1_984(void);
+-extern void fn_1_2670(void);
+-extern s32 fn_1_48E8(void *, s32);
+-extern s32 fn_1_57A8(void);
+-s32 fn_1_A7A4(void);
+@@ -33,2 +26,0 @@
+-extern s32 fn_1_2DA0(f32 *, f32, f32, f32);
+-extern void fn_1_5008(s16, s16, void *);

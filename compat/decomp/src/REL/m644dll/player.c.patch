@@ -1,0 +1,56 @@
+--- a/src/REL/m644dll/player.c
++++ b/src/REL/m644dll/player.c
+@@ -2,0 +3 @@
++#include <string.h>
+@@ -37 +38 @@
+-extern s32 fn_1_6588(s32 route);
++extern s16 fn_1_6588(s32 route_motion);
+@@ -39 +40 @@
+-extern f32 fn_1_65A4(s32 side, s32 route, s32 variant);
++extern float fn_1_65A4(s32 side, s32 route, s32 variant);
+@@ -42 +43 @@
+-extern f32 fn_1_6768(s32 route, s32 variant);
++extern float fn_1_6768(s32 route, s32 variant);
+@@ -46 +47 @@
+-extern void fn_1_7FF4(s32 group, s32 point, Vec *out);
++extern void fn_1_7FF4(s32 entry_index, s32 slot, Point3d *position);
+@@ -66,3 +67,3 @@
+-extern void fn_1_7E5C(HU3D_MODELID modelId, s32 group, s32 variant);
+-
+-void fn_1_7FF4(s32, s32, Vec *);
++extern void fn_1_7E5C(s16 model, s32 entry_index, s32 slot);
++
++void fn_1_7FF4(s32 entry_index, s32 slot, Point3d *position);
+@@ -71 +72 @@
+-s32 fn_1_6588(s32);
++s16 fn_1_6588(s32 route_motion);
+@@ -74 +75 @@
+-f32 fn_1_65A4(s32, s32, s32);
++float fn_1_65A4(s32 side, s32 route, s32 variant);
+@@ -77,3 +78,3 @@
+-f32 fn_1_6768(s32, s32);
+-
+-void fn_1_7F8C(s16, s32, s32);
++float fn_1_6768(s32 route, s32 variant);
++
++void fn_1_7F8C(s32 unused_context, s32 entry_index, s32 slot);
+@@ -346 +346 @@
+-        return;
++        return 0;
+@@ -349 +349 @@
+-        return;
++        return 0;
+@@ -405 +405 @@
+-        return;
++        return 0;
+@@ -408 +408 @@
+-        return;
++        return 0;
+@@ -410,0 +410 @@
++    return 0;
+@@ -419,0 +419,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -712,0 +712,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

@@ -1,0 +1,17 @@
+--- a/src/REL/s03Dll/s03.c
++++ b/src/REL/s03Dll/s03.c
+@@ -0,0 +1,2 @@
++#include "stdio.h"
++#include "mp6_widescreen.h"
+@@ -242,0 +245,7 @@
++    {
++        HU3D_MODELID sky = mbObjModelIDGet(modelId);
++        mp6_widescreen_extend_wall_outer_sides(sky, "s03_m002", 0, 2, 1);
++        /* The two slanted bottom caps must meet the continued sky as well. */
++        mp6_widescreen_extend_floor(sky, "grid12", 0, 0, 0);
++        mp6_widescreen_extend_floor(sky, "grid13", 0, 0, 0);
++    }
+@@ -1181,0 +1191,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

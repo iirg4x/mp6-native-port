@@ -1,0 +1,11 @@
+--- a/src/REL/m613Dll/sequence.c
++++ b/src/REL/m613Dll/sequence.c
+@@ -29 +29 @@
+-extern u8 fn_1_4D38(s16 value);
++extern s32 fn_1_4D38(s16 frame);
+@@ -31 +31 @@
+-extern void fn_1_5038(void);
++extern void fn_1_5038(s16 mode, s16 frameNo);
+@@ -153 +153 @@
+-    fn_1_5038();
++    fn_1_5038(mode, frameNo);

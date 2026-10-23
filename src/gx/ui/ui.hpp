@@ -26,6 +26,16 @@ struct Toast {
     clock::duration duration;
 };
 
+/* [MP6] A centered panel over the game, one at a time. A toast queues in a
+ * corner; a notice belongs to the moment it is shown, so a new one replaces
+ * the old one and it is gone once its duration ends. */
+struct Notice {
+    Rml::String type;
+    Rml::String title;
+    Rml::String content;
+    clock::duration duration;
+};
+
 // TODO PC
 // // Button clicked/pressed
 // constexpr u32 kSoundClick = Z2SE_SY_CURSOR_OK;
@@ -91,6 +101,11 @@ std::vector<std::unique_ptr<Document>> &get_document_stack() noexcept;
 void push_toast(Toast toast) noexcept;
 std::deque<Toast> &get_toasts() noexcept;
 void show_menu_notification() noexcept;
+void show_notice(Notice notice) noexcept;
+/* The notice on screen now, or nullptr once its duration has ended. The
+ * generation changes with every show_notice. */
+const Notice *current_notice() noexcept;
+unsigned notice_generation() noexcept;
 bool consume_menu_notification_request() noexcept;
 
 const char *battery_icon(SDL_PowerState state, int level) noexcept;

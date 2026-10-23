@@ -1,0 +1,32 @@
+--- a/src/REL/m626Dll/effects.c
++++ b/src/REL/m626Dll/effects.c
+@@ -368 +368,5 @@ void fn_1_C70C(OMOBJ *object)
+-            record->color.value = 65280;
++            /* Retail stored 0x0000FF00 big-endian: blue, alpha set below. */
++            record->color.channels.red = 0;
++            record->color.channels.green = 0;
++            record->color.channels.blue = 255;
++            record->color.channels.alpha = 0;
+@@ -408 +412 @@ void fn_1_C8B0(HU3D_MODEL *model, Mtx *view)
+-    u32 color;
++    GXColor color;
+@@ -433 +437,4 @@ void fn_1_C8B0(HU3D_MODEL *model, Mtx *view)
+-            color = record->color.value;
++            color.r = record->color.channels.red;
++            color.g = record->color.channels.green;
++            color.b = record->color.channels.blue;
++            color.a = (u8)record->color.channels.alpha;
+@@ -439 +446 @@ void fn_1_C8B0(HU3D_MODEL *model, Mtx *view)
+-            GXColor1u32(color);
++            GXColor4u8(color.r, color.g, color.b, color.a);
+@@ -443 +450 @@ void fn_1_C8B0(HU3D_MODEL *model, Mtx *view)
+-                GXColor1u32(color);
++                GXColor4u8(color.r, color.g, color.b, color.a);
+@@ -447 +454,2 @@ void fn_1_C8B0(HU3D_MODEL *model, Mtx *view)
+-            GXColor1u32(color);
++            GXColor4u8(color.r, color.g, color.b, color.a);
++            GXEnd();
+@@ -528,0 +537 @@ void fn_1_CCAC(HU3D_MODEL *model, Mtx *view)
++            GXEnd();
+@@ -727,0 +737 @@ void fn_1_D7AC(HU3D_MODEL *model, Mtx *view)
++            GXEnd();

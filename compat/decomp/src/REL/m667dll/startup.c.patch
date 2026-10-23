@@ -1,0 +1,7 @@
+--- a/src/REL/m667dll/startup.c
++++ b/src/REL/m667dll/startup.c
+@@ -18 +17,0 @@
+-void fn_1_148(void);
+@@ -138,0 +138,2 @@
++
++/* Static storage only. Runtime objects keep normal overlay heap ownership. */

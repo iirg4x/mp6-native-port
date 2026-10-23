@@ -22,6 +22,8 @@ public:
 
     bool modified() const override;
     bool disabled() const override;
+    void update() override;
+    bool can_step(int direction) const override { return !disabled() && (direction < 0 ? mGetValue()!=0 : mGetValue()==0); }
 
 protected:
     Rml::String format_value() override;
@@ -32,6 +34,7 @@ private:
     std::function<void(int)> mSetValue;
     std::function<bool()> mIsDisabled;
     std::function<bool()> mIsModified;
+    Rml::Element *mSwitch = nullptr;
 };
 
 } // namespace mp6::ui

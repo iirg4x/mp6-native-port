@@ -4,14 +4,14 @@ import subprocess
 import tempfile
 import unittest
 from tools import build
-from test_engine_pass import function
+from tests.test_engine_pass import function
 
 ROOT=Path(__file__).resolve().parents[1]
 
 
 class OpaquePipeline(unittest.TestCase):
     def test_all_supported_blend_modes_and_write_masks(self):
-        path=ROOT/'build/aurora-release-source/lib/gx/gx.cpp'
+        path=ROOT/'third_party/aurora/lib/gx/gx.cpp'
         if not path.exists():self.skipTest('configured local renderer unavailable')
         text=path.read_text()
         funcs=function(text,'static inline wgpu::BlendFactor to_blend_factor(')+'\n'+function(text,'static inline wgpu::BlendState to_blend_state(')

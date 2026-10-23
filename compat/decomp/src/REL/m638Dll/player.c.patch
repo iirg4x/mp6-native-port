@@ -1,0 +1,15 @@
+--- a/src/REL/m638Dll/player.c
++++ b/src/REL/m638Dll/player.c
+@@ -16,9 +15,0 @@
+-    struct M638TeamSlotsView {
+-        M638PlayerView *players[2];
+-        u8 unknown008[776];
+-        s16 active;
+-        s16 button;
+-        u8 unknown314[36];
+-        s16 variant;
+-        u8 unknown33A[10];
+-    };
+@@ -28 +19 @@
+-    struct M638TeamSlotsView *teams;
++    M638TeamView *teams;

@@ -1,0 +1,35 @@
+--- a/include/REL/micquizseldll/quiz_functions.h
++++ b/include/REL/micquizseldll/quiz_functions.h
+@@ -65 +65 @@
+-    spriteId = (s16)currentProcess->property;
++    spriteId = (s16)(intptr_t)currentProcess->property;
+@@ -537 +537 @@
+-        if ((u32)lbl_1_bss_C != 0) {
++        if (lbl_1_bss_C != 0) {
+@@ -546 +546 @@
+-        if ((u32)lbl_1_bss_C == 0) {
++        if (lbl_1_bss_C == 0) {
+@@ -557 +557 @@
+-        if ((u32)lbl_1_bss_C != 0) {
++        if (lbl_1_bss_C != 0) {
+@@ -567 +567 @@
+-        if ((u32)lbl_1_bss_C != 0) {
++        if (lbl_1_bss_C != 0) {
+@@ -2234 +2234 @@
+-        lbl_1_bss_210 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
+@@ -2236 +2236 @@
+-        lbl_1_bss_210 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 0), 11, (s16)padNo);
+@@ -2238 +2238 @@
+-        lbl_1_bss_210 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 11), 7, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 11), 7, (s16)padNo);
+@@ -2240 +2240 @@
+-        lbl_1_bss_210 = HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 54), 3, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_QUIZ_CHARA, 54), 3, (s16)padNo);
+@@ -2242 +2242 @@
+-        lbl_1_bss_210 = HuMCSelWinItemSet(MESSNUM(MESS_MIC_RETYPING, 118), 9, (s16)padNo);
++        HuMCSelWinItemSet(MESSNUM(MESS_MIC_RETYPING, 118), 9, (s16)padNo);
+@@ -2266 +2266 @@
+-    lbl_1_bss_210 = HuMCSelWinItemSet(messageBase, 11, (s16) padNo);
++    HuMCSelWinItemSet(messageBase, 11, (s16) padNo);

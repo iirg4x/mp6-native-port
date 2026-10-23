@@ -1,0 +1,20 @@
+--- a/src/REL/m662dll/game.c
++++ b/src/REL/m662dll/game.c
+@@ -24 +24 @@
+-#include "REL/m662dll/game.h"
++#include "mp6_m662_native.h"
+@@ -27,9 +26,0 @@
+-void fn_1_984(void), fn_1_AD68(void), fn_1_2670(void);
+-void fn_1_5A5C(void), fn_1_7DE8(void), fn_1_5884(void), fn_1_887C(void);
+-s32 fn_1_58B0(void), fn_1_8754(void);
+-void fn_1_48E8(M662Player *, s16);
+-s16 fn_1_2DA0(f32 *, f32, f32, f32);
+-void *fn_1_2EC0(s32, s32, s32, f32, f32);
+-void fn_1_2F34(void *), fn_1_2F88(void *);
+-s32 fn_1_2F60(MGTIMER *);
+-void fn_1_5008(s16, s16, void *);
+@@ -639,3 +630 @@
+-            /* The curved-path start is fetched even for index -1, before the inactive-path
+-             * checks. */
+-            if (puzzle->pathMode == 0) {
++            if ((puzzle->pathMode == 0) && (puzzle->pathIndex != -1)) {

@@ -1,29 +1,70 @@
 --- a/src/game/colman.c
 +++ b/src/game/colman.c
-@@ -4 +4 @@
+@@ -2 +1,0 @@
+-#define _MATH_H
+@@ -4,5 +2,0 @@
+-
 -extern inline float fabsf(float x)
-+static inline float fabsf(float x)
-@@ -997 +997 @@
--        } else if(vtxDeltaZero) {
+-{
+-    return fabs(x);
+-}
+@@ -1110 +1104 @@
+-        } else if(edgeZero) {
 +        } else {
-@@ -1005 +1005 @@
--            if(temp_f31 < -fabsf(temp_f31*0.0001f)) {
-+            if(temp_f31 < -fabs(temp_f31*0.0001)) {
-@@ -1013 +1013 @@
--        if(fabsf(mag2) < 0.0001f) {
-+        if(fabs(mag2) < 0.0001) {
-@@ -1051 +1051 @@
--            if(temp_f31 < -fabsf(temp_f31*0.0001f)) {
-+            if(temp_f31 < -fabs(temp_f31*0.0001)) {
-@@ -1059 +1059 @@
--        if(fabsf(mag2) < 0.0001f) {
-+        if(fabs(mag2) < 0.0001) {
-@@ -1328 +1328 @@
--                if(temp_f29 < -fabsf(temp_f29*0.0001f)) {
-+                if(temp_f29 < -fabs(temp_f29*0.0001)) {
-@@ -1335 +1335 @@
--            if(fabsf(temp_f26) < 0.0001f) {
-+            if(fabs(temp_f26) < 0.0001) {
-@@ -3242 +3242 @@
+@@ -1118 +1112 @@
+-            if(discriminant < -fabsf(discriminant*0.0001f)) {
++            if(discriminant < -fabs(discriminant*0.0001)) {
+@@ -1126 +1120 @@
+-        if(fabsf(quadraticA) < 0.0001f) {
++        if(fabs(quadraticA) < 0.0001) {
+@@ -1161,2 +1155 @@
+-        quadraticC = (GetVecDot(startFromEdge, startFromEdge) - (startAlongEdge * startAlongEdge)) -
+-                     radiusSquared;
++        quadraticC = (GetVecDot(startFromEdge, startFromEdge)-(startAlongEdge*startAlongEdge))-radiusSquared;
+@@ -1165 +1158 @@
+-            if(discriminant < -fabsf(discriminant*0.0001f)) {
++            if(discriminant < -fabs(discriminant*0.0001)) {
+@@ -1173 +1166 @@
+-        if(fabsf(quadraticA) < 0.0001f) {
++        if(fabs(quadraticA) < 0.0001) {
+@@ -1470 +1463 @@
+-                if(discriminant < -fabsf(discriminant*0.0001f)) {
++                if(discriminant < -fabs(discriminant*0.0001)) {
+@@ -1477 +1470 @@
+-            if(fabsf(quadraticA) < 0.0001f) {
++            if(fabs(quadraticA) < 0.0001) {
+@@ -3575 +3568 @@
 -        return;
 +        return 0;
+@@ -3959,0 +3953,32 @@
++
++/* MP6_GAMEPLAY_TRACE (src/os/gameplay_trace.c): folds the collision world
++ * the minigame plays in -- each mesh's bounds (built from its vertices at
++ * ColMapInit), its live transform, and every body's position -- into an
++ * FNV-1a hash. A view-only feature must leave this identical. */
++static u32 mp6ColHashFloats(u32 hash, const float *values, int count)
++{
++    while (count-- > 0) {
++        u32 bits;
++        memcpy(&bits, values++, sizeof(bits));
++        for (int i = 0; i < 4; ++i, bits >>= 8) hash = (hash ^ (bits & 0xFF)) * 16777619u;
++    }
++    return hash;
++}
++
++u32 mp6_colman_state_hash(u32 hash)
++{
++    COLMESH *meshP;
++    int no;
++    if (!colMapInitF || colMesh == NULL || colWork.body == NULL) return hash;
++    for (meshP = colMesh, no = colMeshCount; no--; meshP++) {
++        hash = mp6ColHashFloats(hash, &meshP->boundsCenter.x, 4);
++        hash = mp6ColHashFloats(hash, &meshP->mtx[0][0], 12);
++    }
++    for (no = 0; no < colWork.bodyNum; ++no) {
++        COLBODY *bodyP = &colWork.body[no];
++        hash = mp6ColHashFloats(hash, &bodyP->pos[0].x, 6);
++        hash = mp6ColHashFloats(hash, &bodyP->oldPos.x, 3);
++    }
++    return hash;
++}

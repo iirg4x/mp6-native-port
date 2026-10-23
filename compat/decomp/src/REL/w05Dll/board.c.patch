@@ -1,0 +1,103 @@
+--- a/src/REL/w05Dll/board.c
++++ b/src/REL/w05Dll/board.c
+@@ -0,0 +1,3 @@
++#include "stdio.h"
++#include "mp6_board_compat.h"
++#include "mp6_board_window.h"
+@@ -215,0 +219 @@
++static W05_DRAW_WORK *lbl_1_bss_surface;
+@@ -782,0 +787,10 @@
++    if (lbl_1_bss_surface != NULL) {
++        if (lbl_1_bss_surface->surfaceHookModel >= 0) {
++            Hu3DModelKill(lbl_1_bss_surface->surfaceHookModel);
++        }
++        if (lbl_1_bss_surface->effectHookModel >= 0) {
++            Hu3DModelKill(lbl_1_bss_surface->effectHookModel);
++        }
++        HuMemDirectFree(lbl_1_bss_surface);
++        lbl_1_bss_surface = NULL;
++    }
+@@ -845 +859 @@
+-    if ((u8) (((*(u8 *)((s8 *)(&GwSystem) + 16)) >> 6U) & 1) == 0) {
++    if (GwSystem.curTime == 0) {
+@@ -874 +888 @@
+-            if ((u8) (((*(u8 *)((s8 *)(&GwSystem) + 16)) >> 6U) & 1) == 0) {
++            if (GwSystem.curTime == 0) {
+@@ -892 +906,2 @@
+-    if ((s32) (*(s32 *)((s8 *)(boardWork) + 704)) != 0) {
++    /* [MP6] GameCube offset 704; named so it follows the native layout. */
++    if (((W05_BOARD_WORK *)boardWork)->particleInitState[0] != 0) {
+@@ -895 +910 @@
+-        (*(s32 *)((s8 *)(boardWork) + 704)) = 0;
++        ((W05_BOARD_WORK *)boardWork)->particleInitState[0] = 0;
+@@ -2291,4 +2306,4 @@
+-    s32 *work = (s32 *)lbl_1_bss_8;
+-
+-    work[124] = playerNo;
+-    work[125] = state;
++    W05_BOARD_WORK *work = lbl_1_bss_8;
++
++    work->firstHookPlayer = playerNo;
++    work->firstHookPlayerPoint = state;
+@@ -2299,4 +2314,4 @@
+-    s32 *work = (s32 *)lbl_1_bss_8;
+-
+-    work[126] = modelId;
+-    work[127] = state;
++    W05_BOARD_WORK *work = lbl_1_bss_8;
++
++    work->firstHookObject = modelId;
++    work->firstHookObjectPoint = state;
+@@ -2307,4 +2322,4 @@
+-    s32 *work = (s32 *)lbl_1_bss_8;
+-
+-    work[128] = playerNo;
+-    work[129] = state;
++    W05_BOARD_WORK *work = lbl_1_bss_8;
++
++    work->secondHookPlayer = playerNo;
++    work->secondHookPlayerPoint = state;
+@@ -2315,4 +2330,4 @@
+-    s32 *work = (s32 *)lbl_1_bss_8;
+-
+-    work[130] = modelId;
+-    work[131] = state;
++    W05_BOARD_WORK *work = lbl_1_bss_8;
++
++    work->secondHookObject = modelId;
++    work->secondHookObjectPoint = state;
+@@ -4974 +4989 @@
+-                mbWinTopInsertMesSet((u32) coinMessage, 0);
++                mp6_board_window_top_insert_text(coinMessage, 0);
+@@ -5747,0 +5763 @@
++    W05_BOARD_WORK *state;
+@@ -5781,2 +5797,9 @@
+-    board = lbl_1_bss_8;
+-    board->modelId = modelId = mbObjCreate(W05SurfaceDataNumGet(DATANUM(DATA_w05, 4)), NULL, FALSE);
++    state = lbl_1_bss_8;
++    board = lbl_1_bss_surface = W05BoardAlloc(sizeof(W05_DRAW_WORK));
++    if (board == NULL) {
++        return;
++    }
++    memset(board, 0, sizeof(W05_DRAW_WORK));
++    board->surfaceHookModel = -1;
++    board->effectHookModel = -1;
++    state->seaModel = modelId = mbObjCreate(W05SurfaceDataNumGet(DATANUM(DATA_w05, 4)), NULL, FALSE);
+@@ -5894,0 +5918,8 @@
++    state->seaTexCoordsAlt = (W05_TEX_COORD *)board->textureCoords;
++    state->seaTexCoordBase = (W05_TEX_COORD *)board->baseWarpCoords;
++    state->seaTexCoords = (W05_TEX_COORD *)board->warpCoords;
++    state->seaVertices = board->positions;
++    state->seaVertexCount = vertexCount;
++    state->seaWaves = (W05_SEA_WAVE *)board->surfaceVertices;
++    state->particleBoundsStart = board->boundsStart;
++    state->particleBoundsSize = board->boundsSize;
+@@ -5960 +5991,4 @@
+-    board = lbl_1_bss_8;
++    board = lbl_1_bss_surface;
++    if (board == NULL) {
++        return;
++    }
+@@ -7194,0 +7229,2 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */

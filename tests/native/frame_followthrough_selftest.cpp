@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 #define ZoneScoped ((void)0)
@@ -59,8 +60,20 @@ struct Uniforms { void append_zeroes(size_t) {} };
 struct FramePacket {
     std::deque<RenderPass> renderPasses;
     std::vector<CommandList> recycledCommands;
+    std::vector<std::shared_ptr<const void>> retainedFrameResources;
     Uniforms uniforms;
 } frame;
+// Retained replay recording is off here; only its bookkeeping types are needed.
+bool g_retainRecording=false;
+int g_retainSuppress=0;
+void retained_note_command(CommandType,uint32_t,size_t) {}
+struct RetainedOp {
+    bool copyClear=false;
+    bool clearColor=false,clearAlpha=false,clearDepth=false;
+    Vec4<float> clearColorValue{};
+    float clearDepthValue=0.f;
+};
+struct { std::vector<RetainedOp> ops; } g_retained;
 FramePacket* g_recordingFrame=&frame;
 uint32_t g_currentRenderPass=0;
 size_t g_recordingFrameSlot=0;

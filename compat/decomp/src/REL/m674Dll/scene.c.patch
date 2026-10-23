@@ -1,0 +1,26 @@
+--- a/src/REL/m674Dll/scene.c
++++ b/src/REL/m674Dll/scene.c
+@@ -45 +45 @@
+-HuVecF *fn_1_13C4();
++HuVecF *fn_1_13C4(void);
+@@ -66 +66 @@
+-f32 *fn_1_277C();
++f32 *fn_1_277C(void);
+@@ -79 +79 @@
+-void fn_1_36BC(void *object);
++s32 fn_1_36BC(void *object);
+@@ -209 +209 @@
+-HuVecF *fn_1_13C4() {
++HuVecF *fn_1_13C4(void) {
+@@ -431 +430,0 @@
+-extern inline float tanf(float x) { return (float)tan(x); }
+@@ -568 +567 @@
+-f32 *fn_1_277C() {
++f32 *fn_1_277C(void) {
+@@ -821,3 +820,3 @@
+-void fn_1_36BC(void *object)
+-{
+-    fn_1_36E8(1, object);
++s32 fn_1_36BC(void *object)
++{
++    return fn_1_36E8(1, object);

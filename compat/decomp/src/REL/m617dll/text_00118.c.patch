@@ -1,0 +1,52 @@
+--- a/src/REL/m617dll/text_00118.c
++++ b/src/REL/m617dll/text_00118.c
+@@ -2,3 +1,0 @@
+-#define HuAudFXPlayVolPan M617UnusedHuAudFXPlayVolPanPrototype
+-#define CharModelVoicePanSet M617UnusedCharModelVoicePanSetPrototype
+-#define CharModelVoiceVolSet M617UnusedCharModelVoiceVolSetPrototype
+@@ -5,0 +3,3 @@
++#include <stdio.h>
++#include "game/audio.h"
++#include "game/charman.h"
+@@ -32,3 +31,0 @@
+-#undef HuAudFXPlayVolPan
+-#undef CharModelVoicePanSet
+-#undef CharModelVoiceVolSet
+@@ -44,2 +40,0 @@
+-void CharModelVoicePanSet();
+-void CharModelVoiceVolSet();
+@@ -71 +66 @@
+-void fn_1_93D0(void);
++s32 fn_1_93D0(void);
+@@ -101,0 +97 @@
++s16 fn_1_A3BC(void);
+@@ -107,0 +104 @@
++s16 fn_1_A3FC(void);
+@@ -113,0 +111 @@
++int fn_1_5C3C(void);
+@@ -119,0 +118 @@
++s32 fn_1_D3CC(void);
+@@ -125,0 +125 @@
++s16 fn_1_D424(void);
+@@ -131,0 +132 @@
++s32 fn_1_D474(void);
+@@ -137,0 +139 @@
++s32 fn_1_D6B0(void);
+@@ -143,0 +146 @@
++s32 fn_1_D6D4(void);
+@@ -725 +727,0 @@
+-extern int printf();
+@@ -833,3 +835,3 @@
+-void fn_1_3054(MGTIMER *timer)
+-{
+-    MgTimerDoneCheck(timer);
++s32 fn_1_3054(MGTIMER *timer)
++{
++    return MgTimerDoneCheck(timer);
+@@ -986 +987,0 @@
+-extern int printf(const char *format, s32 modelId, s32 lightId);
+@@ -1173 +1174 @@
+-    u8 beforeEntries[22]; /* Engine counters, display-list size, animation pointer, and unaccessed
++    u8 beforeEntries[18]; /* Engine counters, display-list size, animation pointer, and unaccessed
+@@ -1174,0 +1176 @@
++    ANIMDATA *animation;

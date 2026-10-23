@@ -4,7 +4,10 @@ import subprocess
 import tempfile
 import unittest
 from tools import build
-from test_frame_replay_batch import replay_test_source
+try:
+    from .test_frame_replay_batch import replay_test_source
+except ImportError:
+    from test_frame_replay_batch import replay_test_source
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,7 +27,7 @@ class FrameCapturePolicy(unittest.TestCase):
             exe = folder/'test.exe'
             result = subprocess.run([build.ZIG, 'cc', '-O2', '-UNDEBUG',
                 '-I'+str(folder), '-I'+str(ROOT/'include'), '-I'+str(ROOT/'src/host'),
-                '-I'+str(ROOT/'build/android-aurora-source/include'),
+                '-I'+str(ROOT/'third_party/aurora/include'),
                 str(ROOT/'tests/native/frame_capture_policy_selftest.c'), '-o', str(exe)],
                 capture_output=True, text=True, timeout=90)
             self.assertEqual(result.returncode, 0, result.stderr)

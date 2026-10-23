@@ -1,0 +1,142 @@
+--- a/src/REL/m649Dll/effect.c
++++ b/src/REL/m649Dll/effect.c
+@@ -2,0 +3 @@
++#include "REL/m649Dll/module_types.h"
+@@ -54,65 +55,10 @@
+-typedef struct M649EffectSlotsView_s {
+-    void *entries[1];
+-} M649EffectSlotsView;
+-
+-typedef struct M649ShadowRecord_s {
+-    s32 active, camera; /* Draw flag and camera index selecting the shadow model. */
+-    float radius; /* Shadow fan radius in world units. */
+-    Vec *position, *offset; /* Live shadow center and the offset added when drawing it. */
+-} M649ShadowRecord;
+-
+-typedef struct M649EffectOwnerWorkView_s {
+-    ANIMDATA *animations[2];
+-} M649EffectOwnerWorkView;
+-
+-typedef struct M649Point_s { Vec position; s16 active, hit; } M649Point;
+-
+-typedef struct M649Motion_s {
+-    s32 id, timer; /* Prop identity and its startup delay in frames. */
+-    float position, speed, targetSpeed; /* Travel distance and current/desired speed. */
+-    s32 mode, group, character, nextPoint; /* Marker mode, color group, character, and next path
+-                                            * slot. */
+-    M649Point points[64];
+-} M649Motion;
+-
+-typedef struct M649EffectOwner_s { ANIMDATA *animations[2]; } M649EffectOwner;
+-
+-typedef struct M649EffectRecordView_s {
+-    s32 visible, generation, phase, spawnDelay, frame; /* Draw flag, trail depth, and update
+-                                                        * state. */
+-    float size; /* Radius of the rendered score effect in world units. */
+-    float *speed; /* Live travel speed of the prop that created this effect. */
+-    Vec position, trailPosition; /* Moving effect position and rising trail center. */
+-    GXColor color; /* Trail color and fading alpha. */
+-} M649EffectRecordView;
+-
+-typedef struct M649EffectRecordView_s_099FC {
+-    s32 visible, generation, phase, spawnDelay, frame; /* Draw flag, trail depth, and update
+-                                                        * state. */
+-    float size; /* Radius of the rendered score effect in world units. */
+-    float *speed; /* Live travel speed of the prop that created this effect. */
+-    Vec position, trailPosition; /* Moving effect position and rising trail center. */
+-    GXColor color; /* Trail color and fading alpha. */
+-} M649EffectRecordView_099FC;
+-
+-typedef struct M649EffectRecord_s {
+-    s32 visible, generation, phase, spawnDelay, frame; /* Draw flag, trail depth, and update
+-                                                        * state. */
+-    float size; /* Radius of the rendered score effect in world units. */
+-    float *speed; /* Live travel speed of the prop that created this effect. */
+-    Vec position, trailPosition; /* Moving effect position and rising trail center. */
+-    GXColor color; /* Trail color and fading alpha. */
+-} M649EffectRecord;
+-
+-typedef struct M649EffectSlotsView_s_0A018 {
+-    M649ShadowRecord *entries[1];
+-} M649EffectSlotsView_0A018;
+-
+-typedef struct M649EffectRecordView_s_0A018 {
+-    s32 visible, generation, phase, spawnDelay, frame; /* Draw flag, trail depth, and update
+-                                                        * state. */
+-    float size; /* Radius of the rendered score effect in world units. */
+-    float *speed; /* Live travel speed of the prop that created this effect. */
+-    Vec position, trailPosition; /* Moving effect position and rising trail center. */
+-    GXColor color; /* Trail color and fading alpha. */
+-} M649EffectRecordView_0A018;
++
++
++
++
++
++
++
++
++
++
+@@ -129,3 +75 @@
+-extern OMOBJ *lbl_1_bss_5A0;
+-
+-extern HUPROCESS *lbl_1_bss_5A4;
++
+@@ -139 +82,0 @@
+-extern s32 fn_1_1218(s32 camera);
+@@ -143 +85,0 @@
+-extern s32 fn_1_1210(s32 resource);
+@@ -149 +90,0 @@
+-void fn_1_A168(s32 type, Vec *position, float *speed, s32 mode);
+@@ -155 +96 @@
+-    void *ownerData;
++    M649EffectOwner *ownerData;
+@@ -159 +100 @@
+-    ownerData = HuMemDirectMallocNum(HEAP_HEAP, 8, HU_MEMNUM_OVL);
++    ownerData = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*ownerData), HU_MEMNUM_OVL);
+@@ -161 +102 @@
+-    memset(ownerData, 0, 8);
++    memset(ownerData, 0, sizeof(*ownerData));
+@@ -188 +129 @@
+-    M649EffectSlotsView *work;
++    M649EffectSlots *work;
+@@ -254 +195 @@
+-    M649EffectOwnerWorkView *work = lbl_1_bss_5A0->data;
++    M649EffectOwner *work = lbl_1_bss_5A0->data;
+@@ -336 +277 @@
+-    M649EffectRecordView *records;
++    M649EffectRecord *records;
+@@ -359 +300 @@
+-    M649EffectRecordView_099FC *record;
++    M649EffectRecord *record;
+@@ -411 +352 @@
+-    M649EffectOwnerWorkView *work = lbl_1_bss_5A0->data;
++    M649EffectOwner *work = lbl_1_bss_5A0->data;
+@@ -417 +358 @@
+-    u32 color;
++    GXColor color;
+@@ -445 +386 @@
+-            color = *(u32 *)&record->color;
++            color = record->color;
+@@ -455 +396 @@
+-                GXColor1u32(color);
++                GXColor4u8(color.r, color.g, color.b, color.a);
+@@ -459 +400 @@
+-            GXColor1u32(color);
++            GXColor4u8(color.r, color.g, color.b, color.a);
+@@ -467 +408 @@
+-                GXColor1u32(color);
++                GXColor4u8(color.r, color.g, color.b, color.a);
+@@ -475 +416 @@
+-void fn_1_A018(void *effect)
++void fn_1_A018(M649ShadowRecord *effect)
+@@ -482 +423 @@
+-    M649EffectSlotsView_0A018 *work;
++    M649EffectSlots *work;
+@@ -518 +459 @@
+-    M649EffectRecordView_0A018 *record;
++    M649EffectRecord *record;
+@@ -535,0 +477,2 @@
++
++/* Native REL storage reset; runtime objects retain normal overlay ownership. */

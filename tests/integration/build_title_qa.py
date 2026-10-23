@@ -1,8 +1,9 @@
 """Observe the real title-attract loop in an isolated native test executable.
 
 No overlay route, state fixture, or altered title timing is used. Only log/event
-probes and a 600-tick budget after entering file select are added to generated
-port-patched sources. Dependency checkouts and normal executables stay intact.
+probes and a bounded budget after entering file select are added to generated
+port-patched sources. Optional file-action tests use the real save UI and their
+own memory cards. Dependency checkouts and normal executables stay intact.
 """
 import argparse
 import hashlib
@@ -46,12 +47,58 @@ def boot_probe(text):
 
 
 def filesel_probe(text):
-    text = '#include "mp6_events.h"\n#include "mp6_boot.h"\n' + text
+    text = '''#include "mp6_events.h"
+#include "mp6_boot.h"
+#include <stdlib.h>
+#include <string.h>
+static void mp6_qa_filesel_done(const char *stage, int slot) {
+    const char *requested = getenv("MP6_FILESEL_QA_STAGE");
+    mp6_event_post("qa.filesel.done", slot, stage);
+    if (requested && strcmp(requested, stage) == 0)
+        mp6_max_ticks = (int)mp6_tick_count + 180;
+}
+''' + text
     marker = 'void ObjectSetup(void)\n{'
-    return replace_once(text, marker, marker + '''
+    text = replace_once(text, marker, marker + '''
     mp6_event_post("title.filesel", 1, "entered");
-    mp6_max_ticks = (int)mp6_tick_count + 600;
+    mp6_max_ticks = (int)mp6_tick_count + (getenv("MP6_FILESEL_QA_STAGE") ? 4000 : 600);
 ''')
+    marker = '    HuWinMesSet(lbl_1_bss_2E0, FILE_SELECT_SELECT_FILE);'
+    text = replace_once(text, marker, '''    {
+        static int visits;
+        mp6_event_post("qa.filesel.ready", ++visits, "ready");
+        printf("[FILESEL-QA] slots=%d,%d,%d selected=%d\\n",
+               lbl_1_bss_D8[0].hasSave, lbl_1_bss_D8[1].hasSave,
+               lbl_1_bss_D8[2].hasSave, sel);
+        fflush(stdout);
+        if (getenv("MP6_FILESEL_QA_STAGE") &&
+            strcmp(getenv("MP6_FILESEL_QA_STAGE"), "verify") == 0)
+            mp6_qa_filesel_done("verify", sel);
+    }
+''' + marker)
+    marker = '                ret = HuWinChoiceGet(lbl_1_bss_2E0, -1);'
+    text = replace_once(text, marker, '''                mp6_event_post("qa.filesel.options", sel, "ready");
+''' + marker + '''
+                mp6_event_post("qa.filesel.choice", ret, "selected");
+''')
+    marker = '                lbl_1_bss_D8[sel].hasSave = 1;'
+    text = replace_once(text, marker, marker + '\n                mp6_qa_filesel_done("create", sel);')
+    for message, event, slot in (
+        ('COPY_DESTINATION', 'qa.filesel.copy', 'arg'),
+        ('ERASE_CONFIRMATION', 'qa.filesel.erase', 'arg0'),
+    ):
+        marker = f'    HuWinMesSet(lbl_1_bss_2E0, FILE_SELECT_{message});'
+        text = replace_once(text, marker, f'    mp6_event_post("{event}", {slot}, "ready");\n' + marker)
+    for message, stage, slot in (('COPY_COMPLETE', 'copy', 'cur'), ('ERASE_COMPLETE', 'erase', 'arg0')):
+        marker = f'            HuWinMesSet(lbl_1_bss_2E0, FILE_SELECT_{message});'
+        text = replace_once(text, marker, f'            mp6_qa_filesel_done("{stage}", {slot});\n' + marker)
+    return text
+
+
+def filename_probe(text):
+    text = '#include "mp6_events.h"\n' + text
+    return replace_once(text, 'L_95A8:\n',
+                        '    mp6_event_post("qa.filesel.name", boxNo, "ready");\nL_95A8:\n')
 
 
 def main():
@@ -80,7 +127,8 @@ def main():
         units = []
         for source, flags, name, flavor in collect_original(*args, **kwargs):
             obj = original_objects / name
-            probe = {'rel_boot.o': boot_probe, 'rel_filesel.o': filesel_probe}.get(name)
+            probe = {'rel_boot.o': boot_probe, 'rel_filesel.o': filesel_probe,
+                     'rel_filename.o': filename_probe}.get(name)
             if probe:
                 contents = probe(Path(source).read_text(encoding='utf-8'))
                 source = str(output / (name[:-2] + '_probe.c'))

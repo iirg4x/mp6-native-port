@@ -105,6 +105,57 @@ def verify_composite_probe(output, installed_hash):
         raise RuntimeError('AO ablation requires this session\'s verified local diagnostic wrapper')
 
 
+def verify_board_benchmark(wrapper_path, installed_hash):
+    """Admit only a locally attested fixed-seed probe, never infer it from flags."""
+    path = Path(wrapper_path).resolve(strict=True)
+    if not path.is_relative_to((ROOT/'build').resolve()):
+        raise RuntimeError('benchmark wrapper must be under the workspace build directory')
+    wrapper = json.loads(path.read_text())
+    native = Path(wrapper.get('native_override') or '').resolve(strict=True)
+    if not native.is_relative_to((ROOT/'build').resolve()):
+        raise RuntimeError('benchmark native library must be under the workspace build directory')
+    probe_path = native.parent.parent/'provenance.json'
+    probe = json.loads(probe_path.read_text())
+    warmup, count = probe.get('warmup_board_age'), probe.get('sample_count')
+    if (wrapper.get('release_asset') is not False or probe.get('release_asset') is not False
+            or wrapper.get('sha256') != installed_hash
+            or probe.get('benchmark') != 'fixed-seed-board'
+            or hashlib.sha256(native.read_bytes()).hexdigest() != probe.get('stripped_sha256')
+            or type(warmup) is not int or warmup < 600
+            or type(count) is not int or count < 120
+            or type(probe.get('gpu_timing_version', 1)) is not int
+            or probe.get('gpu_timing_version', 1) not in (1, 2)
+            or probe.get('last_board_age') != warmup+count-1):
+        raise RuntimeError('installed APK is not the verified fixed-seed board benchmark')
+    return dict(wrapper=str(path), wrapper_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                probe=str(probe_path), probe_sha256=hashlib.sha256(probe_path.read_bytes()).hexdigest(),
+                warmup_board_age=warmup, sample_count=count, last_board_age=warmup+count-1,
+                gpu_timing_version=probe.get('gpu_timing_version', 1))
+
+
+def completed_exit_reason(log, request):
+    """A natural exit alone never proves completion of a timed workload."""
+    if request.get('board_benchmark'):
+        from android_ao_benchmark_metrics import benchmark_result
+        if benchmark_result(log, request)['valid']:
+            return 'attested board benchmark completed'
+    return 'owned process exited'
+
+
+def benchmark_run_evidence(log, request, run):
+    from android_ao_benchmark_metrics import benchmark_result
+    result = benchmark_result(log, request)
+    # Older diagnostic runs allowed captures during measurement. Keep their
+    # execution proof, but never silently promote those timings to a comparison.
+    captures = sorted(path.name for path in run.glob('screen-*.png'))
+    result['screen_captures'] = captures
+    result['uninterrupted_measurement'] = not captures
+    result['performance_comparison_eligible'] = result['valid'] and not captures
+    result['performance_scope'] = ('Execution validation only: screenshot interference; thermal evidence remains separate.'
+                                   if captures else 'Thermal validity and matched-workload evidence must still be checked separately.')
+    return result
+
+
 def main():
     global OUTPUT, DEVICE_ROOT
     parser = argparse.ArgumentParser(description=__doc__)
@@ -115,9 +166,23 @@ def main():
                         help='Separate backup and isolated-data owner for each physical device')
     parser.add_argument('--name', default='baseline')
     parser.add_argument('--ao', type=int, choices=(0, 1, 2), default=0)
+    parser.add_argument('--implementation', choices=('legacy', 'xegtao'), default='legacy',
+                        help='Select the opt-in upstream reference; this alone does not establish device acceptance')
+    parser.add_argument('--xegtao-quality', choices=('low', 'medium', 'high', 'ultra'), default='high',
+                        help='Experimental upstream preset; reference remains high')
+    parser.add_argument('--xegtao-denoise', type=int, choices=(1, 2, 3), default=2,
+                        help='Experimental upstream spatial-denoise count; reference remains 2')
+    parser.add_argument('--xegtao-resolution', choices=('full', 'half'), default='full',
+                        help='Experimental half-resolution bilateral reconstruction; reference remains full')
+    parser.add_argument('--xegtao-prepared-canonical', action='store_true',
+                        help='Explicit full-resolution prepared canonical depth input (opt-in QA seam)')
+    parser.add_argument('--benchmark-wrapper', type=Path,
+                        help='Verify the installed fixed-seed benchmark against its local wrapper provenance')
     parser.add_argument('--fxaa', type=int, choices=(0, 1), default=0)
     parser.add_argument('--vsync', type=int, choices=(0, 1), default=1)
     parser.add_argument('--tick-hz', type=int, choices=(0, 60), default=60)
+    parser.add_argument('--unlocked-fps', type=int, choices=(0, 1), default=1,
+                        help='Explicitly separate 60 Hz simulation-only presentation from interpolated high-refresh work')
     parser.add_argument('--shadow-quality', type=int, choices=(1, 2, 4, 8, 16), default=1)
     parser.add_argument('--ticks', type=int, default=24000)
     parser.add_argument('--seconds', type=int, default=75, choices=range(10, 121), metavar='10..120')
@@ -139,6 +204,16 @@ def main():
     parser.add_argument('--max-window-status', type=int, choices=(0, 1), default=1,
                         help='Highest allowed thermal status during measurement; 0 makes a strict cool window')
     args = parser.parse_args()
+    if args.implementation != 'xegtao' and (args.xegtao_quality != 'high' or args.xegtao_denoise != 2
+                                            or args.xegtao_resolution != 'full'):
+        parser.error('XeGTAO policy overrides require --implementation xegtao')
+    if args.xegtao_prepared_canonical:
+        if args.implementation != 'xegtao':
+            parser.error('XeGTAO prepared-canonical input requires --implementation xegtao')
+        if args.xegtao_resolution != 'full':
+            parser.error('XeGTAO prepared-canonical input requires --xegtao-resolution full')
+        if args.ao <= 0:
+            parser.error('XeGTAO prepared-canonical input requires --ao > 0')
     if args.max_start_status == 2 and args.action != 'launch':
         parser.error('moderate-thermal launch is diagnostic-only; normal measurements retain their cutoff')
     temperature_limits = dict(AP=args.max_start_ap_c, SKIN=args.max_start_skin_c)
@@ -197,8 +272,16 @@ def main():
                    MP6_TICK_HZ=str(args.tick_hz), MP6_VSYNC=str(args.vsync), MP6_ENH_WIDESCREEN='1',
                    MP6_ENH_SHADOW_QUALITY=str(args.shadow_quality), MP6_ENH_AMBIENT_OCCLUSION=str(args.ao),
                    MP6_ENH_AA='2' if args.fxaa else '0', MP6_FXAA=str(args.fxaa),
-                   MP6_UNLOCKED_FPS='1', MP6_TICK_RATE_LOG='1', MP6_PRESENT_RATE_LOG='1',
+                   MP6_UNLOCKED_FPS=str(args.unlocked_fps), MP6_TICK_RATE_LOG='1', MP6_PRESENT_RATE_LOG='1',
                    MP6_GPU_TIMINGS='1', MP6_AO_DIAG='1')
+        env['MP6_AO_XEGTAO'] = str(int(args.implementation == 'xegtao'))
+        env['MP6_AO_XEGTAO_QUALITY'] = args.xegtao_quality
+        env['MP6_AO_XEGTAO_DENOISE'] = str(args.xegtao_denoise)
+        env['MP6_AO_XEGTAO_RESOLUTION'] = args.xegtao_resolution
+        if args.xegtao_prepared_canonical:
+            # Presence itself is the attestation. Never emit an inferred
+            # `=0` selector that could be mistaken for a canonical run.
+            env['MP6_AO_XEGTAO_PREPARED_CANONICAL'] = '1'
         if args.skip_ao_composite:
             env['MP6_PROFILE_SKIP_AO_COMPOSITE'] = '1'
         if args.frame_upload_mode is not None:
@@ -209,11 +292,19 @@ def main():
         tokens += [str(args.ticks), '--input-script',
                    f'period:30;timeout:{args.ticks-1000};pressuntil:a/w01.live/120;wait:120000']
         request = dict(serial=serial, args=tokens, start_time=time.time(),
+                       requested_ao_implementation=args.implementation,
+                       presentation_workload='interpolated high refresh' if args.unlocked_fps else 'simulation frames only',
+                       requested_xegtao_policy=dict(quality=args.xegtao_quality,
+                                                   denoise_passes=args.xegtao_denoise,
+                                                   resolution=args.xegtao_resolution),
+                       requested_xegtao_prepared_canonical=args.xegtao_prepared_canonical,
                        ui_workload='interactive renderer' if args.ui else 'automation renderer (no RmlUi)')
         apk_path = shell(serial, 'pm', 'path', PACKAGE).removeprefix('package:')
         if not apk_path.startswith('/data/app/') or '\n' in apk_path:
             raise RuntimeError('expected exactly one installed MP6 base APK')
         request['apk_sha256'] = shell(serial, 'sha256sum', apk_path).split()[0]
+        if args.benchmark_wrapper:
+            request['board_benchmark'] = verify_board_benchmark(args.benchmark_wrapper, request['apk_sha256'])
         if args.skip_ao_composite:
             verify_composite_probe(OUTPUT, request['apk_sha256'])
             request['diagnostic'] = 'AO composite ablation: not shipping quality or a speedup'
@@ -264,7 +355,8 @@ def main():
                 if time.monotonic() >= end:
                     break
                 if shell(serial, 'pidof', PACKAGE, check=False) != pid:
-                    reason = 'owned process exited'
+                    log = adb(serial, 'logcat', '-d', '--pid='+pid, '-v', 'brief').stdout.decode(errors='replace')
+                    reason = completed_exit_reason(log, request)
                     break
                 time.sleep(min(5, max(0, end-time.monotonic())))
         finally:
@@ -287,13 +379,24 @@ def main():
     if args.action == 'sample':
         output = adb(serial, 'logcat', '-d', '--pid='+pid, '-v', 'brief').stdout
         (run/'logcat.txt').write_bytes(output)
-        (run/'thermal.txt').write_text(shell(serial, 'dumpsys', 'thermalservice'))
+        sample_thermal = shell(serial, 'dumpsys', 'thermalservice')
+        (run/'thermal.txt').write_text(sample_thermal)
+        write_json(run/('thermal-sample-'+str(time.time_ns())+'.json'),
+                   dict(time=time.time(), status=thermal_status(sample_thermal), report=sample_thermal))
+        if request.get('board_benchmark'):
+            result = benchmark_run_evidence(output.decode(errors='replace'), request, run)
+            write_json(run/'benchmark-result.json', result)
+            print('Exact board benchmark valid:', result['valid'])
+            if not result['valid']:
+                print('Benchmark errors:', result['errors'])
         rows = [line for line in output.decode(errors='replace').splitlines()
                 if any(key in line for key in ('MP6-TICKRATE', 'MP6-PRESENTRATE', 'MP6-GPU', 'ENGINE-GPU',
-                                               '[FATAL]', 'MP6-CRASH', 'w01.live', '[MP6-AO]'))]
+                                               '[FATAL]', 'MP6-CRASH', 'w01.live', '[MP6-AO]', 'ANDROID-AO-BENCH'))]
         print('\n'.join(rows[-24:]))
         print('Current PID:', shell(serial, 'pidof', PACKAGE, check=False), 'log bytes:', len(output))
     elif args.action == 'capture':
+        if request.get('board_benchmark'):
+            raise RuntimeError('do not capture during an attested timing run; launch a separate visual-only run')
         if shell(serial, 'pidof', PACKAGE, check=False) != pid:
             raise RuntimeError('owned game process is not running')
         if not mp6_is_foreground(serial):

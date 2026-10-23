@@ -79,7 +79,14 @@ bool enableLodBias = true;
 static std::array<gfx::TextureBind, 8> textures;
 static std::array<gfx::TextureRef, 8> textureRefs;
 static const gfx::TextureBind& get_texture(GXTexMapID index) { return textures[static_cast<size_t>(index)]; }
+// Native builds draw with the projection unchanged; the web viewport clip is not under test.
+static Mat4x4<float> viewport_clip_projection(const Mat4x4<float>& proj) noexcept { return proj; }
 #include "helpers.inc"
+// Retained-replay matrix notes are not under test here.
+namespace fifo {
+static bool g_retainRecording = false;
+static void retained_note_matrix(size_t, u32, bool) {}
+}
 static ByteBuffer* referenceFrame = nullptr;
 static uint64_t copiedBytes = 0;
 [[gnu::noinline]] static gfx::Range reference_push(const uint8_t* bytes, size_t length) {

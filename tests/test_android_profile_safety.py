@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,266 @@ from finish_android_profile import canonical_session_path
 
 
 class AndroidProfileSafety(unittest.TestCase):
+    def test_screenshot_run_retains_execution_proof_but_cannot_count_as_comparison(self):
+        helper = types.SimpleNamespace(benchmark_result=lambda log, request: {'valid': True, 'errors': []})
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(sys.modules, android_ao_benchmark_metrics=helper):
+            run = Path(tmp)
+            self.assertTrue(profile.benchmark_run_evidence('complete', {}, run)['performance_comparison_eligible'])
+            (run/'screen-1.png').write_bytes(b'capture')
+            result = profile.benchmark_run_evidence('complete', {}, run)
+            self.assertTrue(result['valid'])
+            self.assertFalse(result['performance_comparison_eligible'])
+            self.assertFalse(result['uninterrupted_measurement'])
+            self.assertEqual(result['screen_captures'], ['screen-1.png'])
+
+    def test_attested_timing_run_refuses_screenshot_before_device_capture(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(profile, 'ROOT', Path(tmp)):
+            output, _, owner = profile.session_paths('phone', 'SM-S906E', 'safe-session')
+            run = output/'run'
+            run.mkdir(parents=True)
+            (output/'session-owner.json').write_text(json.dumps(owner))
+            (output/'original-manifest.json').write_text('{}')
+            (run/'request.json').write_text(json.dumps(dict(
+                serial='phone', pid='123', board_benchmark={'sample_count': 1200})))
+            argv = ['profile', 'capture', '--serial', 'phone', '--model', 'SM-S906E',
+                    '--session', 'safe-session', '--name', 'run']
+            with patch.object(sys, 'argv', argv), patch.object(profile, 'shell', return_value='SM-S906E'), \
+                 patch.object(profile, 'adb') as adb:
+                with self.assertRaisesRegex(RuntimeError, 'separate visual-only run'):
+                    profile.main()
+                adb.assert_not_called()
+
+    def test_natural_exit_requires_valid_attested_benchmark(self):
+        helper = types.SimpleNamespace(benchmark_result=lambda log, request: {'valid': log == 'complete'})
+        with patch.dict(sys.modules, android_ao_benchmark_metrics=helper):
+            self.assertEqual(profile.completed_exit_reason('complete', {}), 'owned process exited')
+            request = {'board_benchmark': {'sample_count': 1200}}
+            self.assertEqual(profile.completed_exit_reason('incomplete', request), 'owned process exited')
+            self.assertEqual(profile.completed_exit_reason('complete', request), 'attested board benchmark completed')
+
+    def test_attested_completion_preserves_thermal_window_and_does_not_stop_other_process(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(profile, 'ROOT', Path(tmp)):
+            output, _, owner = profile.session_paths('phone', 'SM-S906E', 'safe-session')
+            run = output/'run'
+            run.mkdir(parents=True)
+            (output/'session-owner.json').write_text(json.dumps(owner))
+            (output/'original-manifest.json').write_text('{}')
+            (run/'request.json').write_text(json.dumps(dict(
+                serial='phone', pid='123', board_benchmark={'sample_count': 1200})))
+            pid_reads = 0
+            def fake_shell(serial, *args, **kwargs):
+                nonlocal pid_reads
+                if args[0] == 'getprop': return 'SM-S906E'
+                if args[0] == 'pidof':
+                    pid_reads += 1
+                    return '123' if pid_reads == 1 else '456'
+                if args[:2] == ('dumpsys', 'thermalservice'): return 'Thermal Status: 0\n'
+                if args[:2] == ('dumpsys', 'activity'):
+                    return 'topResumedActivity=ActivityRecord{ com.mp6.game/ }'
+                raise AssertionError(('unowned process must not be affected', args))
+            helper = types.SimpleNamespace(benchmark_result=lambda log, request: {'valid': True, 'errors': []})
+            argv = ['profile', 'measure', '--serial', 'phone', '--model', 'SM-S906E',
+                    '--session', 'safe-session', '--name', 'run', '--seconds', '10']
+            with patch.object(sys, 'argv', argv), patch.object(profile, 'shell', fake_shell), \
+                 patch.object(profile, 'adb', return_value=subprocess.CompletedProcess([], 0, b'complete')), \
+                 patch.dict(sys.modules, android_ao_benchmark_metrics=helper), \
+                 patch.object(profile.time, 'sleep') as sleep:
+                profile.main()
+                sleep.assert_not_called()
+            window = json.loads(next(run.glob('thermal-window-*.json')).read_text())
+            self.assertEqual(window['reason'], 'attested board benchmark completed')
+            self.assertTrue(window['thermal_comparison_valid'])
+            self.assertTrue(json.loads((run/'benchmark-result.json').read_text())['valid'])
+
+    def test_upstream_ao_launch_is_explicit_and_recorded(self):
+        for requested, unlocked, resolution in ((None, 1, 'full'), ('legacy', 1, 'full'),
+                                                 ('xegtao', 1, 'full'), ('xegtao', 0, 'full'),
+                                                 ('xegtao', 1, 'half'), ('xegtao', 0, 'half')):
+            with self.subTest(implementation=requested, unlocked=unlocked, resolution=resolution), tempfile.TemporaryDirectory() as tmp, \
+                 patch.object(profile, 'ROOT', Path(tmp)):
+                output, _, owner = profile.session_paths('phone', 'SM-S906E', 'safe-session')
+                output.mkdir(parents=True)
+                (output/'session-owner.json').write_text(json.dumps(owner))
+                (output/'original-manifest.json').write_text('{}')
+                launch = []
+                def fake_shell(serial, *args, **kwargs):
+                    if args[0] == 'getprop': return 'SM-S906E'
+                    if args[0] == 'pidof': return '123' if launch else ''
+                    if args[:2] == ('dumpsys', 'thermalservice'): return 'Thermal Status: 0\n'
+                    if args[:2] == ('pm', 'path'): return 'package:/data/app/mock/base.apk'
+                    if args[0] == 'sha256sum': return 'abc  /data/app/mock/base.apk'
+                    if args[:2] == ('am', 'start'):
+                        launch.append(args)
+                        return 'Success'
+                    raise AssertionError(args)
+                argv = ['profile', 'launch', '--serial', 'phone', '--model', 'SM-S906E',
+                        '--session', 'safe-session', '--name', 'run', '--ao', '2']
+                if requested is not None: argv += ['--implementation', requested]
+                if not unlocked: argv += ['--unlocked-fps', '0']
+                if resolution != 'full': argv += ['--xegtao-resolution', resolution]
+                with patch.object(sys, 'argv', argv), patch.object(profile, 'shell', fake_shell):
+                    profile.main()
+                request = json.loads((output/'run/request.json').read_text())
+                self.assertEqual(request['requested_ao_implementation'], requested or 'legacy')
+                self.assertIn('MP6_AO_XEGTAO='+str(int(requested == 'xegtao')), request['args'])
+                self.assertIn('MP6_AO_XEGTAO='+str(int(requested == 'xegtao')), launch[0][-1].split())
+                self.assertEqual(request['requested_xegtao_policy'],
+                                 dict(quality='high', denoise_passes=2, resolution=resolution))
+                self.assertIn('MP6_AO_XEGTAO_QUALITY=high', request['args'])
+                self.assertIn('MP6_AO_XEGTAO_DENOISE=2', request['args'])
+                self.assertIn('MP6_AO_XEGTAO_RESOLUTION='+resolution, request['args'])
+                self.assertIn('MP6_AO_XEGTAO_RESOLUTION='+resolution, launch[0][-1].split())
+                self.assertFalse(request['requested_xegtao_prepared_canonical'])
+                self.assertNotIn('MP6_AO_XEGTAO_PREPARED_CANONICAL=0', request['args'])
+                self.assertNotIn('MP6_AO_XEGTAO_PREPARED_CANONICAL=1', request['args'])
+                self.assertNotIn('effective_resolution', request['requested_xegtao_policy'])
+                self.assertIn('MP6_UNLOCKED_FPS='+str(unlocked), request['args'])
+                self.assertEqual(request['presentation_workload'],
+                                 'interpolated high refresh' if unlocked else 'simulation frames only')
+
+    def test_prepared_canonical_launch_rejects_invalid_combinations_before_device_access(self):
+        cases = (
+            ('legacy implementation', ['--xegtao-prepared-canonical']),
+            ('AO off', ['--ao', '0', '--implementation', 'xegtao', '--xegtao-prepared-canonical']),
+            ('half resolution', ['--ao', '2', '--implementation', 'xegtao',
+                                  '--xegtao-resolution', 'half', '--xegtao-prepared-canonical']),
+        )
+        for label, options in cases:
+            argv = ['profile', 'launch', '--serial', 'phone'] + options
+            with self.subTest(case=label), patch.object(sys, 'argv', argv), \
+                 patch.object(profile, 'shell') as shell:
+                with self.assertRaises(SystemExit):
+                    profile.main()
+                shell.assert_not_called()
+
+    def test_prepared_canonical_launch_records_true_and_emits_only_exact_one(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(profile, 'ROOT', Path(tmp)):
+            output, _, owner = profile.session_paths('phone', 'SM-S906E', 'safe-session')
+            output.mkdir(parents=True)
+            (output/'session-owner.json').write_text(json.dumps(owner))
+            (output/'original-manifest.json').write_text('{}')
+            launch = []
+
+            def fake_shell(serial, *args, **kwargs):
+                if args[0] == 'getprop': return 'SM-S906E'
+                if args[0] == 'pidof': return '123' if launch else ''
+                if args[:2] == ('dumpsys', 'thermalservice'): return 'Thermal Status: 0\n'
+                if args[:2] == ('pm', 'path'): return 'package:/data/app/mock/base.apk'
+                if args[0] == 'sha256sum': return 'abc  /data/app/mock/base.apk'
+                if args[:2] == ('am', 'start'):
+                    launch.append(args)
+                    return 'Success'
+                raise AssertionError(args)
+
+            argv = ['profile', 'launch', '--serial', 'phone', '--model', 'SM-S906E',
+                    '--session', 'safe-session', '--name', 'canonical', '--ao', '2',
+                    '--implementation', 'xegtao', '--xegtao-prepared-canonical']
+            with patch.object(sys, 'argv', argv), patch.object(profile, 'shell', fake_shell):
+                profile.main()
+
+            request = json.loads((output/'canonical/request.json').read_text())
+            self.assertTrue(request['requested_xegtao_prepared_canonical'])
+            self.assertEqual(request['args'].count('MP6_AO_XEGTAO_PREPARED_CANONICAL=1'), 1)
+            self.assertNotIn('MP6_AO_XEGTAO_PREPARED_CANONICAL=0', request['args'])
+            launch_tokens = launch[0][-1].split()
+            self.assertEqual(launch_tokens.count('MP6_AO_XEGTAO_PREPARED_CANONICAL=1'), 1)
+            self.assertNotIn('MP6_AO_XEGTAO_PREPARED_CANONICAL=0', launch_tokens)
+
+    def test_ultra_three_pass_launch_is_explicit_and_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(profile, 'ROOT', Path(tmp)):
+            output, _, owner = profile.session_paths('phone', 'SM-S906E', 'safe-session')
+            output.mkdir(parents=True)
+            (output/'session-owner.json').write_text(json.dumps(owner))
+            (output/'original-manifest.json').write_text('{}')
+            launch = []
+
+            def fake_shell(serial, *args, **kwargs):
+                if args[0] == 'getprop': return 'SM-S906E'
+                if args[0] == 'pidof': return '123' if launch else ''
+                if args[:2] == ('dumpsys', 'thermalservice'): return 'Thermal Status: 0\n'
+                if args[:2] == ('pm', 'path'): return 'package:/data/app/mock/base.apk'
+                if args[0] == 'sha256sum': return 'abc  /data/app/mock/base.apk'
+                if args[:2] == ('am', 'start'):
+                    launch.append(args)
+                    return 'Success'
+                raise AssertionError(args)
+
+            argv = [
+                'profile', 'launch', '--serial', 'phone', '--model', 'SM-S906E',
+                '--session', 'safe-session', '--name', 'run', '--ao', '2',
+                '--implementation', 'xegtao', '--xegtao-quality', 'ultra',
+                '--xegtao-denoise', '3', '--xegtao-resolution', 'half',
+            ]
+            with patch.object(sys, 'argv', argv), patch.object(profile, 'shell', fake_shell):
+                profile.main()
+
+            request = json.loads((output/'run/request.json').read_text())
+            expected = dict(quality='ultra', denoise_passes=3, resolution='half')
+            self.assertEqual(request['requested_xegtao_policy'], expected)
+            for token in (
+                'MP6_AO_XEGTAO=1', 'MP6_AO_XEGTAO_QUALITY=ultra',
+                'MP6_AO_XEGTAO_DENOISE=3', 'MP6_AO_XEGTAO_RESOLUTION=half',
+            ):
+                self.assertIn(token, request['args'])
+                self.assertIn(token, launch[0][-1].split())
+
+    def test_board_probe_requires_matching_installed_apk_native_and_window(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(profile, 'ROOT', Path(tmp)):
+            root = Path(tmp)/'build'
+            native = root/'probe/stripped/libmp6game.so'
+            native.parent.mkdir(parents=True)
+            native.write_bytes(b'fixed seed benchmark')
+            probe_path = native.parent.parent/'provenance.json'
+            probe = dict(release_asset=False, benchmark='fixed-seed-board',
+                         warmup_board_age=600, sample_count=1200, last_board_age=1799,
+                         stripped_sha256=hashlib.sha256(native.read_bytes()).hexdigest())
+            probe_path.write_text(json.dumps(probe))
+            wrapper_path = root/'apk/provenance.json'
+            wrapper_path.parent.mkdir()
+            wrapper = dict(release_asset=False, native_override=str(native), sha256='installed')
+            wrapper_path.write_text(json.dumps(wrapper))
+            result = profile.verify_board_benchmark(wrapper_path, 'installed')
+            self.assertEqual(result['last_board_age'], 1799)
+            with self.assertRaises(RuntimeError):
+                profile.verify_board_benchmark(wrapper_path, 'other-apk')
+            for key, value in (('release_asset', True), ('sample_count', 1199),
+                               ('benchmark', 'unknown'), ('warmup_board_age', True)):
+                probe_path.write_text(json.dumps({**probe, key: value}))
+                with self.assertRaises(RuntimeError):
+                    profile.verify_board_benchmark(wrapper_path, 'installed')
+            probe_path.write_text(json.dumps(probe))
+            native.write_bytes(b'stale library')
+            with self.assertRaises(RuntimeError):
+                profile.verify_board_benchmark(wrapper_path, 'installed')
+
+    def test_policy_overrides_cannot_be_labeled_legacy(self):
+        for options in (['--xegtao-quality', 'medium'], ['--xegtao-quality', 'ultra'],
+                        ['--xegtao-denoise', '1'], ['--xegtao-denoise', '3'],
+                        ['--xegtao-resolution', 'half']):
+            argv = ['profile', 'launch', '--serial', 'phone', *options]
+            with self.subTest(options=options), patch.object(sys, 'argv', argv), patch.object(profile, 'shell') as shell:
+                with self.assertRaises(SystemExit):
+                    profile.main()
+                shell.assert_not_called()
+
+    def test_invalid_xegtao_quality_and_denoise_fail_before_device_access(self):
+        for option, value in (('--xegtao-quality', 'cinematic'), ('--xegtao-denoise', '4')):
+            argv = ['profile', 'launch', '--serial', 'phone', '--implementation', 'xegtao', option, value]
+            with self.subTest(option=option), patch.object(sys, 'argv', argv), patch.object(profile, 'shell') as shell:
+                with self.assertRaises(SystemExit):
+                    profile.main()
+                shell.assert_not_called()
+
+    def test_invalid_resolution_fails_before_device_access(self):
+        for resolution in ('quarter', 'Half', ''):
+            argv = ['profile', 'launch', '--serial', 'phone', '--implementation', 'xegtao',
+                    '--xegtao-resolution', resolution]
+            with self.subTest(resolution=resolution), patch.object(sys, 'argv', argv), \
+                    patch.object(profile, 'shell') as shell:
+                with self.assertRaises(SystemExit):
+                    profile.main()
+                shell.assert_not_called()
+
     def test_composite_ablation_requires_exact_local_probe(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp)

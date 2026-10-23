@@ -48,6 +48,9 @@ struct Logger {
     template<class... T> void info(const char*,T...) {}
     template<class... T> void error(const char*,T...) {}
 } Log;
+static bool skipPresent=false; // a hidden (never presented) frame
+static uint64_t endSeq=0;      // aurora.cpp's end_frame sequence (present log)
+static void note_present(uint64_t) {}
 #include "subject.inc"
 int main() {
     for(Status status:{Status::SuccessOptimal,Status::SuccessSuboptimal,Status::Timeout,
@@ -67,6 +70,8 @@ int main() {
     g_surface.valid=true;suppliedTexture=false;presented=refreshes=0;
     present_frame();assert(presented==0&&refreshes==1);
     window::presentable=false;g_surface.valid=true;acquired=presented=0;
+    present_frame();assert(acquired==0&&presented==0);
+    window::presentable=true;skipPresent=true;g_surface.valid=true;acquired=presented=0;
     present_frame();assert(acquired==0&&presented==0);
     puts("PASS: optimal/suboptimal present; recovery statuses and failures preserve behavior");
 }

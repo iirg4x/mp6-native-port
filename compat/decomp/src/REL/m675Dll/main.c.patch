@@ -1,0 +1,119 @@
+--- a/src/REL/m675Dll/main.c
++++ b/src/REL/m675Dll/main.c
+@@ -0,0 +1 @@
++#include "mp6_m675.h"
+@@ -13 +13,0 @@
+-void fn_1_A0(void);
+@@ -16 +16,4 @@
+-s32 lbl_1_bss_3C, lbl_1_bss_38, lbl_1_bss_34, lbl_1_bss_30;
++s32 lbl_1_bss_3C;
++s32 lbl_1_bss_38;
++s32 lbl_1_bss_34;
++s32 lbl_1_bss_30;
+@@ -18 +21,3 @@
+-s32 lbl_1_bss_2C, lbl_1_bss_28, lbl_1_bss_24;
++s32 lbl_1_bss_2C;
++s32 lbl_1_bss_28;
++s32 lbl_1_bss_24;
+@@ -20 +25,4 @@
+-s16 lbl_1_bss_1C[4], lbl_1_bss_14[4], lbl_1_bss_C[4], lbl_1_bss_4[4];
++s16 lbl_1_bss_1C[4];
++s16 lbl_1_bss_14[4];
++s16 lbl_1_bss_C[4];
++s16 lbl_1_bss_4[4];
+@@ -24,13 +32 @@
+-void fn_1_BBC(OMOBJMAN *);
+-void fn_1_C84(OMOBJMAN *, Vec *, Vec *, GXColor *);
+-void fn_1_136C(OMOBJMAN *, u32, f32, f32, f32, f32, OM_CAMERA_VIEW *);
+-s32 fn_1_A38(s32);
+-void fn_1_2414(s32, void *);
+-void fn_1_95C(OMOBJ *, void *, s32);
+-void fn_1_1FC8(void (*callback)(OMOBJ *, void *, s32));
+-void fn_1_2F38(OMOBJMAN *, void *);
+-void fn_1_E9A8(OMOBJMAN *);
+-void fn_1_F118(OMOBJMAN *);
+-void fn_1_4F2C(OMOBJMAN *);
+-void fn_1_7554(OMOBJMAN *);
+-void fn_1_D638(OMOBJMAN *);
++void fn_1_95C(OMOBJ *, u32, s32);
+@@ -38,7 +33,0 @@
+-s32 fn_1_D3BC(void);
+-void fn_1_F004(void);
+-s32 fn_1_F058(s32);
+-void fn_1_766C(void), fn_1_5048(void), fn_1_EA30(void);
+-void fn_1_4BB4(Vec *, Vec *, float, Vec *);
+-void fn_1_1DD8(s32, Vec *, Vec *, float, float);
+-void fn_1_24CC(s32);
+@@ -52,8 +40,0 @@
+-typedef struct M675FogParam_s {
+-    s32 layer; /* Render layer; -1 ends the list. */
+-    u32 cameras; /* Camera mask supplying the clipping distances. */
+-    GXFogType type; /* GX fog projection and falloff mode. */
+-    float start; /* Near fog distance in world units. */
+-    float end; /* Far fog distance before the controller's interpolation. */
+-    GXColor color; /* Fog color passed to GX. */
+-} M675FogParam;
+@@ -67,6 +47,0 @@
+-typedef struct M675AudioConfig_s {
+-    u32 cameras; /* Camera mask; zero ends the list. */
+-    s32 panMin, panMax; /* Pan at the left and right screen edges. */
+-    s32 volumeMin, volumeMiddle, volumeMax; /* Volume at far, middle and near depth. */
+-    float distanceFar, distanceMiddle, distanceNear; /* Camera-space depth in world units. */
+-} M675AudioConfig;
+@@ -75 +50 @@
+-M675AudioConfig lbl_1_data_68[] = {
++M675AudioConfigView lbl_1_data_68[] = {
+@@ -97,17 +72 @@
+-typedef struct M675ShadowEntry {
+-    u8 unmappedBytes00To97[152];
+-    s32 setupState; /* Zero requests the one-time camera-motion stop. */
+-    s32 setupTimer; /* Reset when the entry's setup state advances. */
+-    u8 unmappedBytesA0ToB7[24];
+-} M675ShadowEntry;
+-
+-typedef struct M675ShadowWork {
+-    s32 cameraMask; /* Cameras sharing the shadow setup. */
+-    u8 unmappedBytes04To07[4];
+-    f32 shadowFov; /* Shadow-camera field of view in degrees. */
+-    u8 unmappedBytes0CTo17[12];
+-    u8 shadowColor[4]; /* RGBA shadow tint; this callback applies RGB only. */
+-    u8 unmappedBytes1CTo1F[4];
+-    M675ShadowEntry entries[16]; /* One entry for each camera bit. */
+-    s32 initializationCount; /* Nonzero after the shared shadow setup has run. */
+-} M675ShadowWork;
++
+@@ -440,8 +399,5 @@
+-void fn_1_95C(OMOBJ *object, void *callbackData, s32 entryIndex)
+-{
+-    void *entryByteAddresses[2];
+-    M675ShadowWork *work = object->data;
+-    M675ShadowEntry *entry = &work->entries[entryIndex];
+-
+-    entryByteAddresses[1] = (u8 *) entry + 12;
+-    entryByteAddresses[0] = (u8 *) entry + 40;
++void fn_1_95C(OMOBJ *object, u32 cameraBit, s32 entryIndex)
++{
++    M675CameraWork *work = object->data;
++    M675CameraEntry *entry = &work->entries[entryIndex];
++
+@@ -451 +407 @@
+-        fn_1_1DD8(work->cameraMask, &lbl_1_data_E4, &lbl_1_data_D8,
++        fn_1_1DD8(work->cameras, &lbl_1_data_E4, &lbl_1_data_D8,
+@@ -453,2 +409,2 @@
+-        Hu3DShadowColSet(work->shadowColor[0], work->shadowColor[1],
+-            work->shadowColor[2]);
++        Hu3DShadowColSet(work->shadowColor.r, work->shadowColor.g,
++            work->shadowColor.b);
+@@ -475,2 +431,2 @@
+-void fn_1_A60(void) {
+-    MgSeqTimerValueGet();
++s32 fn_1_A60(void) {
++    return MgSeqTimerValueGet();
+@@ -536,0 +493,2 @@
++
++/* Storage only; omOvlKill owns runtime allocation teardown. */
+@@ -2,0 +2 @@
++#include "mp6_mg_winner.h"
+@@ -340,0 +340,2 @@
++            /* Port addition: name the winners (retail never did; see mp6_mg_winner.h). */
++            mp6_mg_winner_message(lbl_1_bss_14[0], lbl_1_bss_14[1], lbl_1_bss_14[2], lbl_1_bss_14[3]);

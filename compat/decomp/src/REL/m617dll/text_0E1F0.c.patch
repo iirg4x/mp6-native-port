@@ -1,0 +1,18 @@
+--- a/src/REL/m617dll/text_0E1F0.c
++++ b/src/REL/m617dll/text_0E1F0.c
+@@ -2,0 +3 @@
++#include <string.h>
+@@ -44,3 +45,3 @@
+-s32 fn_1_24D8(void);
+-
+-s16 fn_1_5C1C(void);
++void fn_1_24D8(void);
++
++void fn_1_5C1C(void);
+@@ -62,3 +63,3 @@
+-extern s32 fn_1_3CD0(s16 modelId, s16 lightId);
+-
+-extern s16 fn_1_3BB8(s16 modelId, s16 lightId);
++extern s32 fn_1_3CD0(HU3D_MODELID modelId, HU3D_LIGHTID lightId);
++
++extern s16 fn_1_3BB8(HU3D_MODELID modelId, HU3D_LIGHTID lightId);

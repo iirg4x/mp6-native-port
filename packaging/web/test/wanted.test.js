@@ -36,7 +36,8 @@ const WANTED_TABLE = [
     ["mess/foo.bin", true, "prefix match"],
     ["mic/bar.bin", true, "prefix match"],
     ["micro/bar.bin", false, "prefix boundary: micro is not mic"],
-    ["movie/foo.thp", false, "movie/ is not in the wanted set"],
+    ["movie/foo.thp", true, "prefix match"],
+    ["movies/foo.thp", false, "prefix boundary: movies is not movie"],
     ["dll/bootDll.rel", false, "dll/ is not in the wanted set"],
     ["opening.bnr2", false, "exact-match strings must not prefix-match"],
     ["Opening.bnr", false, "case-sensitive, matches C strcmp"],
@@ -51,7 +52,7 @@ for (const [path, expected, reason] of WANTED_TABLE) {
 test("filterWanted: keeps only wanted entries and preserves their shape", () => {
     const input = [
         { path: "opening.bnr", size: 1 },
-        { path: "movie/foo.thp", size: 2 },
+        { path: "dll/bootDll.rel", size: 2 },
         { path: "data/a.bin", size: 3 },
     ];
     const result = filterWanted(input);

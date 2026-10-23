@@ -1,0 +1,5 @@
+--- a/src/REL/m633dll/angle.c
++++ b/src/REL/m633dll/angle.c
+@@ -32,0 +32,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

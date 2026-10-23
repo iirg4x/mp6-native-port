@@ -32,11 +32,44 @@ namespace {
 SelectButton::SelectButton(Rml::Element *parent, Props props)
     : FluentComponent(createRoot(parent))
 {
+    if (parent->Closest("window.party-settings")) {
+        auto *star = append(mRoot, "focus-star");
+        star->SetInnerRML("<story-shape kind=\"star\"/>");
+    }
     mKeyElem = append(mRoot, "key");
     mIconElem = append(mRoot, "icon");
+    if (parent->Closest(".storybook")) {
+        auto *left = append(mRoot, "choice-step");
+        left->SetAttribute("data-step", -1);
+        left->SetInnerRML("<span>&#x2039;</span>");
+        left->SetAttribute("aria-label", "Previous value");
+    }
     mValueElem = append(mRoot, "value");
+    if (parent->Closest(".storybook")) {
+        auto *right = append(mRoot, "choice-step");
+        right->SetAttribute("data-step", 1);
+        right->SetInnerRML("<span>&#x203a;</span>");
+        right->SetAttribute("aria-label", "Next value");
+    }
+    if (parent->Closest("window.party-settings") && props.submit) {
+        auto *arrow = append(mRoot, "icon");
+        arrow->SetClass("choice-arrow", true);
+        arrow->SetInnerRML("&#xe5cc;");
+    }
     update_props(std::move(props));
-    on_nav_command([this](Rml::Event &, NavCommand cmd) { return handle_nav_command(cmd); });
+    on_nav_command([this](Rml::Event &event, NavCommand cmd) {
+        if (cmd == NavCommand::Confirm && event.GetId() == Rml::EventId::Click) {
+            // RmlUi's Closest searches ancestors only. Native mesh hit-testing
+            // dispatches on the arrow itself, rather than its printed span.
+            auto *target = event.GetTargetElement();
+            if (auto *step = target->GetTagName()=="choice-step" ? target : target->Closest("choice-step"))
+                cmd = step->GetAttribute<int>("data-step", 1) < 0 ? NavCommand::Left : NavCommand::Right;
+        }
+        return handle_nav_command(cmd);
+    });
+    listen(Rml::EventId::Mouseover, [this](Rml::Event &) {
+        if (!disabled() && !mRoot->IsPseudoClassSet("focus")) mRoot->Focus();
+    });
 }
 
 bool SelectButton::modified() const
@@ -48,7 +81,7 @@ void SelectButton::set_modified(bool value)
 {
     if (mProps.modified != value) {
         mValueElem->SetClass("modified", value);
-        if (value) {
+        if (value && !mRoot->Closest("window.party-settings")) {
             mValueElem->SetInnerRML(fmt::format("•&nbsp;{}", escape(mProps.value)));
         }
         else {
@@ -61,7 +94,7 @@ void SelectButton::set_modified(bool value)
 void SelectButton::set_value_label(const Rml::String &value)
 {
     if (mProps.value != value) {
-        if (mProps.modified) {
+        if (mProps.modified && !mRoot->Closest("window.party-settings")) {
             mValueElem->SetInnerRML(fmt::format("•&nbsp;{}", escape(value)));
         }
         else {
@@ -107,11 +140,36 @@ void SelectButton::update_props(Props props)
 
 bool SelectButton::handle_nav_command(NavCommand cmd)
 {
+    // The storybook keeps choices inline. A/Enter advances the same value as
+    // the right arrow; never summon the legacy detail pane over the preview.
+    if (cmd == NavCommand::Confirm && mRoot->Closest(".native-storybook")) {
+        if (mStep && can_step(1)) mStep(1);
+        return true;
+    }
+    if (mStep && (cmd == NavCommand::Left || cmd == NavCommand::Right)) {
+        const int direction=cmd == NavCommand::Right ? 1 : -1;
+        if (can_step(direction)) mStep(direction);
+        return true;
+    }
     if (cmd == NavCommand::Confirm && mProps.submit) {
         mRoot->DispatchEvent(Rml::EventId::Submit, {});
         return true;
     }
     return false;
+}
+
+void SelectButton::update()
+{
+    mRoot->SetAttribute("data-can-left",can_step(-1));
+    mRoot->SetAttribute("data-can-right",can_step(1));
+    for(int i=0;i<mRoot->GetNumChildren();++i) {
+        auto *child=mRoot->GetChild(i);
+        if(child->GetTagName()!="choice-step")continue;
+        const bool available=can_step(child->GetAttribute<int>("data-step",1));
+        child->SetPseudoClass("disabled",!available);
+        child->SetAttribute("aria-disabled",available?"false":"true");
+    }
+    FluentComponent::update();
 }
 
 void BaseControlledSelectButton::update()

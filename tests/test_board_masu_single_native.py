@@ -2,8 +2,8 @@
 from pathlib import Path
 import unittest
 
-import test_board_native_abi as native
-from test_frame_resource_lifetimes import function
+import tests.test_board_native_abi as native
+from tests.test_frame_resource_lifetimes import function
 from tools import build
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,9 +32,13 @@ class BoardMasuSingleNative(unittest.TestCase):
         self.compile_run(subject.replace('return mgNo;', 'return 0;'),
                          'board_single_flags_selftest.c', expect_success=False)
 
-    def test_single_uses_recovered_particle_owner_and_explicit_minigame_stub(self):
+    def test_single_uses_recovered_particle_owner_and_real_minigame_call(self):
         source = native.patched('src/board/single.c')
-        self.assertFalse((ROOT/'compat/decomp/src/board/single.c.patch').exists())
+        # The decomp source itself carries this; the port's patch (if any)
+        # only replaces inline PowerPC asm and never the particle owner.
+        single_patch = ROOT/'compat/decomp/src/board/single.c.patch'
+        if single_patch.exists():
+            self.assertNotIn('hookData', single_patch.read_text(encoding='utf-8'))
         particle = function(source, 'SingleParticleDataGet')
         self.assertIn('(MBPARTICLE *)Hu3DData[modelId].hookData', particle)
         init = function(source, 'SingleEffInit')
@@ -46,9 +50,9 @@ class BoardMasuSingleNative(unittest.TestCase):
         sources = [path for path, _ in build.board_sources()]
         self.assertIn('src/board/single.c', sources)
         self.assertIn('src/board/masu.c', sources)
-        self.assertNotIn('src/board/mgcall.c', sources)
-        stub = (ROOT/'src/os/minigame_stub.c').read_text()
-        self.assertRegex(stub, r'\bvoid mbev_MgCallSingle\(int \w+\)')
+        self.assertIn('src/board/mgcall.c', sources)
+        mgcall = native.patched('src/board/mgcall.c')
+        self.assertRegex(mgcall, r'\bvoid mbev_MgCallSingle\(int \w+\)')
 
 
 if __name__ == '__main__':

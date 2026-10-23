@@ -1,0 +1,6 @@
+--- a/src/REL/miraclebookdll/setup.c
++++ b/src/REL/miraclebookdll/setup.c
+@@ -331,0 +332,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

@@ -1,0 +1,15 @@
+--- a/src/REL/m675Dll/score.c
++++ b/src/REL/m675Dll/score.c
+@@ -0,0 +1 @@
++#include "mp6_m675.h"
+@@ -43 +43,0 @@
+-s32 fn_1_A38(s32 dataIndex);
+@@ -58 +58 @@
+-    displayData = HuMemDirectMallocNum(HEAP_HEAP, 116, HU_MEMNUM_OVL);
++    displayData = HuMemDirectMallocNum(HEAP_HEAP, sizeof(ScoreDisplayWork), HU_MEMNUM_OVL);
+@@ -60 +60 @@
+-    memset(displayData, 0, 116);
++    memset(displayData, 0, sizeof(ScoreDisplayWork));
+@@ -334,0 +335,2 @@
++
++/* Storage only; omOvlKill owns runtime allocation teardown. */

@@ -1,0 +1,167 @@
+--- a/src/REL/m649Dll/prop.c
++++ b/src/REL/m649Dll/prop.c
+@@ -0,0 +1 @@
++#include "mp6_widescreen.h"
+@@ -64,16 +65 @@
+-typedef struct M649PropMotionParam_s {
+-    s32 resource;
+-    float blend;
+-    u32 attr;
+-} M649PropMotionParam;
+-
+-typedef struct M649PropParam_s {
+-    s32 count, linkModel, type;
+-    s16 firstId, layer;
+-    u32 attr;
+-    s32 shadow, modelResource;
+-    M649PropMotionParam *motions;
+-    Vec *position;
+-    float rotationY;
+-    OMOBJ_FUNC update;
+-} M649PropParam;
++
+@@ -82,4 +67,0 @@
+-typedef struct M649Point_s {
+-    Vec position;
+-    s16 active, hit;
+-} M649Point;
+@@ -88,6 +69,0 @@
+-typedef struct M649Motion_s {
+-    s32 id, timer;
+-    float position, speed, targetSpeed;
+-    s32 mode, group, character, nextPoint;
+-    M649Point points[64];
+-} M649Motion;
+@@ -96,8 +72 @@
+-typedef struct M649PathView_s {
+-    s32 time;
+-    s32 points[7];
+-} M649PathView;
+-
+-typedef struct M649Scene_s {
+-    s32 phase, delay, direction;
+-} M649Scene;
++
+@@ -106,6 +74,0 @@
+-typedef struct M649EffectView_s {
+-    s32 active; /* Nonzero enables the shadow draw. */
+-    s32 camera; /* Camera index whose shadow hook draws this record. */
+-    float radius; /* World-space radius of the shadow fan. */
+-    Vec *position, *offset;
+-} M649EffectView;
+@@ -114,14 +76,0 @@
+-typedef struct M649PropState_s {
+-    s32 camera;
+-    /* Cleared when the prop is created; no prop callback reads these bytes. */
+-    u8 unknown_04_to_0F[12];
+-    Vec position, velocity, rotation;
+-    /* Cleared when the prop is created; no prop callback reads these bytes. */
+-    u8 unknown_34_to_43[16];
+-    s32 motion, motionTime;
+-    /* Cleared when the prop is created; no prop callback reads these bytes. */
+-    u8 unknown_4C_to_83[56];
+-    s32 motionActive, motionTimer;
+-    /* Cleared when the prop is created; no prop callback reads these bytes. */
+-    u8 unknown_8C_to_E3[88];
+-} M649PropState;
+@@ -130,5 +78,0 @@
+-typedef union M649PropMovement_u {
+-    M649Motion *motion;
+-    float *speed;
+-    s32 *path;
+-} M649PropMovement;
+@@ -137,13 +80,0 @@
+-typedef struct M649PropWork_s {
+-    M649PropState state;
+-    M649PropParam *param;
+-    s32 id, timer;
+-    Vec startPosition;
+-    s32 phase, pathTime;
+-    /* Cleared when the prop is created; no prop callback reads these bytes. */
+-    u8 unknown_104_to_1B3[176];
+-    M649PropMovement movement;
+-    s32 leftSound, rightSound;
+-    s32 childModel;
+-    M649EffectView effect;
+-} M649PropWork;
+@@ -155,5 +86,2 @@
+-extern OMOBJ *lbl_1_bss_39C[128];
+-
+-extern OMOBJ *lbl_1_bss_59C;
+-
+-extern M649PropParam lbl_1_data_248[];
++
++
+@@ -163,5 +91,2 @@
+-extern s32 fn_1_1210(s32 resource);
+-
+-extern s32 fn_1_48DC(s32 resource);
+-
+-extern s32 fn_1_49E4(s32 model, s32 resource);
++
++
+@@ -175,11 +100,5 @@
+-extern float fn_1_4CC4(Vec *from, Vec *to);
+-
+-extern float fn_1_4D60(Vec *from, Vec *to);
+-
+-extern float fn_1_4AF4(float current, float target, float speed);
+-
+-extern s32 fn_1_1234(void);
+-
+-extern s32 lbl_1_bss_398;
+-
+-extern void fn_1_1664(s16 model, void *sequence, s32 mode);
++
++
++
++
++
+@@ -189,3 +108 @@
+-extern s32 fn_1_6958(s32 group);
+-
+-extern void fn_1_A0BC(M649Motion *motion);
++
+@@ -195 +111,0 @@
+-extern OMOBJ *lbl_1_bss_368[12], *lbl_1_bss_338[12];
+@@ -203 +118,0 @@
+-extern s32 fn_1_1218(s32 camera);
+@@ -209,5 +124,2 @@
+-extern void fn_1_A018(M649EffectView *effect);
+-
+-void fn_1_83BC(OMOBJ *object);
+-
+-extern void fn_1_A5A4(s32 player, s32 score);
++
++
+@@ -217 +128,0 @@
+-extern void fn_1_A168(s32 type, Vec *position, float *speed, s32 generation);
+@@ -417 +328 @@
+-    void *managerData;
++    M649Scene *managerData;
+@@ -430 +341 @@
+-    managerData = HuMemDirectMallocNum(HEAP_HEAP, 12, HU_MEMNUM_OVL);
++    managerData = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*managerData), HU_MEMNUM_OVL);
+@@ -432,2 +343,2 @@
+-    memset(managerData, 0, 12);
+-    (*(s32 *)((s8 *)(managerData) + (8))) = (s32)(frand() & 1);
++    memset(managerData, 0, sizeof(*managerData));
++    managerData->direction = (s32)(frand() & 1);
+@@ -492,0 +404,5 @@
++        /* Resource 5 owns the checker floor and a separate central pedestal.
++         * Continue only its floor perimeter for the expanding winner camera. */
++        if (model >= 0 && param->modelResource == 5) {
++            mp6_widescreen_extend_terrain_outer_sides(model, "grid1", 0.0f, 1.0f, 1);
++        }
+@@ -671 +587 @@
+-void fn_1_7288(void)
++void fn_1_7288(OMOBJ *object)
+@@ -682 +598 @@
+-    fn_1_1664(model, "inf_light1", 1);
++    fn_1_1664(model, "inf_light1");
+@@ -1077 +993 @@
+-    M649EffectView *effect;
++    M649ShadowRecord *effect;
+@@ -1372,0 +1289,2 @@
++
++/* Native REL storage reset; runtime objects retain normal overlay ownership. */

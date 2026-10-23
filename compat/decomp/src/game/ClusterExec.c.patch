@@ -1,6 +1,6 @@
 --- a/src/game/ClusterExec.c
 +++ b/src/game/ClusterExec.c
-@@ -122,0 +123,7 @@
+@@ -148,0 +149,7 @@
 +                    /* Defensive fallback-tolerance (never crash on
 +                     * malformed data): a well-formed cluster always
 +                     * targets a real mesh object with a resolved part, but
@@ -8,9 +8,9 @@
 +                     * cluster->part NULL -- SetClusterMain (and the
 +                     * Vertextop fetch just below) would fault. */
 +                    if (obj->mesh.vertex == NULL || cluster->part == NULL) { continue; }
-@@ -165,2 +172,10 @@
+@@ -198,2 +205,10 @@
 -                        cluster = &hsf->cluster[track->cluster];
--                        cluster->index = GetClusterCurve(track, t);
+-                        cluster->index = GetClusterCurve(track, motionTime);
 +                        /* Same reasoning as the hsfmotion.c.patch guard on
 +                         * Hu3DMotionExec's own HSF_TRACK_CLUSTER case: a
 +                         * cluster track whose name didn't resolve leaves
@@ -19,15 +19,16 @@
 +                         * own -- a genuine out-of-bounds otherwise. */
 +                        if (track->cluster >= 0 && track->cluster < hsf->clusterNum) {
 +                            cluster = &hsf->cluster[track->cluster];
-+                            cluster->index = GetClusterCurve(track, t);
++                            cluster->index = GetClusterCurve(track, motionTime);
 +                        }
-@@ -170,2 +185,7 @@
+@@ -203,3 +218,7 @@
 -                        cluster = &hsf->cluster[weightTrack->cluster];
--                        cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, t);
+-                        cluster->weight[weightTrack->clusterWeight] =
+-                            GetClusterCurve(weightTrack, motionTime);
 +                        /* Same guard as HSF_TRACK_CLUSTER immediately
 +                         * above. */
 +                        if (weightTrack->cluster >= 0 && weightTrack->cluster < hsf->clusterNum
 +                                && weightTrack->clusterWeight >= 0 && weightTrack->clusterWeight < 32) {
 +                            cluster = &hsf->cluster[weightTrack->cluster];
-+                            cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, t);
++                            cluster->weight[weightTrack->clusterWeight] = GetClusterCurve(weightTrack, motionTime);
 +                        }

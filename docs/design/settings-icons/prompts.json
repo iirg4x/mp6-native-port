@@ -1,0 +1,42 @@
+{
+  "tool": "Built-in image_gen",
+  "date": "2026-10-01",
+  "transparent_background": true,
+  "assets": [
+    {
+      "name": "picture",
+      "prompt": "Use case: stylized-concept.\nAsset type: one production settings-menu icon for a cheerful Mario Party 6 native port.\nStyle: polished hand-illustrated glossy 3D cartoon, chunky rounded toy-like bevels, saturated colors, smooth clean surfaces, warm upper-left highlights, simple silhouette readable at 40 pixels. Joyful Nintendo-era party-game aesthetic, not a flat glyph or photoreal object.\nComposition: exactly one centered icon on a square canvas, entire silhouette visible, icon fills about 82% of the canvas, balanced transparent padding. Genuine transparent background. No backdrop, panel, checkerboard, ground plane, cast ground shadow, text, letters, numbers, watermark, or additional decorative objects.\nSubject: A thick golden rounded picture frame, slightly three dimensional but facing the viewer, containing a simple blue sky, green hills and one white cloud. A small gold five-point star is integrated into the frame's top center. Bright inviting video settings symbol.",
+      "source": "exec-7d5a791f-3b7b-48ba-b7d2-a7ed63d8b676.png"
+    },
+    {
+      "name": "sound",
+      "prompt": "Use case: stylized-concept.\nAsset type: one production settings-menu icon for a cheerful Mario Party 6 native port.\nStyle: polished hand-illustrated glossy 3D cartoon, chunky rounded toy-like bevels, saturated colors, smooth clean surfaces, warm upper-left highlights, simple silhouette readable at 40 pixels. Joyful Nintendo-era party-game aesthetic, not a flat glyph or photoreal object.\nComposition: exactly one centered icon on a square canvas, entire silhouette visible, icon fills about 82% of the canvas, balanced transparent padding. Genuine transparent background. No backdrop, panel, checkerboard, ground plane, cast ground shadow, text, letters, numbers, watermark, or additional decorative objects.\nSubject: A friendly bright cobalt-blue loudspeaker viewed at a slight three-quarter angle, with a light blue circular cone facing right, and exactly two thick coral-red curved sound-wave arcs floating immediately to its right. Compact balanced silhouette.",
+      "source": "exec-a7e76fc2-c060-4382-b629-36da52cb7d28.png"
+    },
+    {
+      "name": "controls",
+      "prompt": "Use case: stylized-concept.\nAsset type: one production settings-menu icon for a cheerful Mario Party 6 native port.\nStyle: polished hand-illustrated glossy 3D cartoon, chunky rounded toy-like bevels, saturated colors, smooth clean surfaces, warm upper-left highlights, simple silhouette readable at 40 pixels. Joyful Nintendo-era party-game aesthetic, not a flat glyph or photoreal object.\nComposition: exactly one centered icon on a square canvas, entire silhouette visible, icon fills about 82% of the canvas, balanced transparent padding. Genuine transparent background. No backdrop, panel, checkerboard, ground plane, cast ground shadow, text, letters, numbers, watermark, or additional decorative objects.\nSubject: A glossy emerald-green GameCube-inspired game controller with two rounded downward grips, front face tilted very slightly toward the viewer. One light gray left analog stick, a small white plus-shaped D-pad below it, yellow right analog stick, large pale-green action button and smaller coral-red action button. Buttons have NO letters. No cable. Simple compact joyful controller icon, not a realistic product photo.",
+      "source": "exec-fc5855ae-8003-4680-b9a5-612505daa46f.png"
+    },
+    {
+      "name": "game",
+      "prompt": "Use case: stylized-concept.\nAsset type: one production settings-menu icon for a cheerful Mario Party 6 native port.\nStyle: polished hand-illustrated glossy 3D cartoon, chunky rounded toy-like bevels, saturated colors, smooth clean surfaces, warm upper-left highlights, simple silhouette readable at 40 pixels. Joyful Nintendo-era party-game aesthetic, not a flat glyph or photoreal object.\nComposition: exactly one centered icon on a square canvas, entire silhouette visible, icon fills about 82% of the canvas, balanced transparent padding. Genuine transparent background. No backdrop, panel, checkerboard, ground plane, cast ground shadow, text, letters, numbers, watermark, or additional decorative objects.\nSubject: A cheerful Super Mushroom: chunky glossy red mushroom cap with large cream-white round spots, short warm cream stem with two simple dark oval eyes. Straight-on view. Rounded friendly proportions, no mouth, no arms or legs.",
+      "source": "exec-b350389c-2665-4deb-8d1e-2a1b7d9fd92f.png"
+    },
+    {
+      "name": "extras",
+      "prompt": "Use case: stylized-concept.\nAsset type: one production settings-menu icon for a cheerful Mario Party 6 native port.\nStyle: polished hand-illustrated glossy 3D cartoon, chunky rounded toy-like bevels, saturated colors, smooth clean surfaces, warm upper-left highlights, simple silhouette readable at 40 pixels. Joyful Nintendo-era party-game aesthetic, not a flat glyph or photoreal object.\nComposition: exactly one centered icon on a square canvas, entire silhouette visible, icon fills about 82% of the canvas, balanced transparent padding. Genuine transparent background. No backdrop, panel, checkerboard, ground plane, cast ground shadow, text, letters, numbers, watermark, or additional decorative objects.\nSubject: A single rounded plump five-point pink star, facing viewer, with two tiny dark oval eyes centered in its upper middle and a small cheerful smile. Bright rose-pink face, darker magenta beveled edge and soft cream-pink top-left highlights. Extremely simple clean silhouette.",
+      "source": "exec-0dfd2adb-9dc6-4a7c-8198-046fe5e68771.png"
+    },
+    {
+      "name": "day-night",
+      "prompt": "Use case: stylized-concept.\nAsset type: one production settings-menu icon for a cheerful Mario Party 6 native port.\nStyle: polished hand-illustrated glossy 3D cartoon, chunky rounded toy-like bevels, saturated colors, smooth clean surfaces, warm upper-left highlights, simple silhouette readable at 40 pixels. Joyful Nintendo-era party-game aesthetic, not a flat glyph or photoreal object.\nComposition: exactly one centered icon on a square canvas, entire silhouette visible, icon fills about 82% of the canvas, balanced transparent padding. Genuine transparent background. No backdrop, panel, checkerboard, ground plane, cast ground shadow, text, letters, numbers, watermark, or additional decorative objects.\nSubject: One compact combined sun-and-moon emblem. On the left a happy golden circular sun face with orange triangular rays, two warm dark oval eyes and a little smile. Overlapping just behind it on the right a cobalt-blue crescent moon with yellow inner crescent and a tiny sleepy friendly face. Equal visual weight, coherent single emblem, friendly simple faces readable at 60 pixels.",
+      "source": "exec-e86c51b3-cf40-4138-8d90-dce832aac0d0.png"
+    },
+    {
+      "name": "star",
+      "prompt": "Use case: stylized-concept.\nAsset type: one production settings-menu icon for a cheerful Mario Party 6 native port.\nStyle: polished hand-illustrated glossy 3D cartoon, chunky rounded toy-like bevels, saturated colors, smooth clean surfaces, warm upper-left highlights, simple silhouette readable at 40 pixels. Joyful Nintendo-era party-game aesthetic, not a flat glyph or photoreal object.\nComposition: exactly one centered icon on a square canvas, entire silhouette visible, icon fills about 82% of the canvas, balanced transparent padding. Genuine transparent background. No backdrop, panel, checkerboard, ground plane, cast ground shadow, text, letters, numbers, watermark, or additional decorative objects.\nSubject: A single golden yellow plump five-point star selection cursor, front-facing, slightly playful tilted pose, two small dark oval eyes and a tiny cheerful smile. Bright yellow face, warm orange beveled outer rim, crisp edge, white-gold highlight upper left. Strong silhouette readable at 32 pixels on a pale gold selection bar. No glow beyond the edge.",
+      "source": "exec-b96281ef-6c6b-4123-b2f0-caef1e661c8b.png"
+    }
+  ]
+}

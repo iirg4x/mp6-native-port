@@ -55,6 +55,13 @@ typedef struct Mp6Mutex {
     void *opaque[8];
 } Mp6Mutex;
 
+/* A counting semaphore with caller-provided storage, for worker threads
+ * that sleep until there is work (mp6_host_sem_* below). Same rules as
+ * Mp6Mutex: call mp6_host_sem_init exactly once first. */
+typedef struct Mp6Sem {
+    void *opaque[24];
+} Mp6Sem;
+
 /* Local wall-clock ("RTC") calendar time. Fields mirror what the one
  * consumer (shims_manual.c's OSGetTime/OSGetTick RTC seed) needs: local
  * time, no zone info, msec 0-999, mon 1-12, day 1-31, year AD
@@ -125,6 +132,19 @@ uint64_t mp6_host_monotonic_ns(void);
  * the same "coarse is fine" contract. */
 void mp6_host_sleep_ns(uint64_t ns);
 
+/* Precise absolute-deadline sleep (deadline on the mp6_host_monotonic_ns
+ * clock) for the tick throttle: blocks in the OS until just before the
+ * deadline, aiming early by the timer's measured wake-up lateness
+ * (host_precise_sleep.h), so the caller spins only a short tail instead of
+ * the last couple of milliseconds. Returns 1 when it handled the wait (it
+ * may return at once when the deadline is already within that margin), 0
+ * when this host has no precise sleep or it is switched off -- the caller
+ * then keeps its coarse sleep plus spin. win32: a high-resolution waitable
+ * timer, on by default. android: clock_nanosleep(TIMER_ABSTIME), off by
+ * default (sleeping inside the tick lets the S22+'s governor drop clocks).
+ * web: none. MP6_PRECISE_SLEEP=0/1 overrides the default. */
+int mp6_host_sleep_until_ns(uint64_t deadlineNs);
+
 /* Local wall-clock calendar time, for the one RTC-seed consumer
  * (OSGetTime's "ticks since 2000-01-01 local" base). win32: GetLocalTime.
  * android: localtime_r. Local -- not UTC -- deliberately: the GC RTC
@@ -133,13 +153,21 @@ void mp6_host_sleep_ns(uint64_t ns);
 void mp6_host_wallclock(Mp6DateTime *out);
 
 /* ---------------------------------------------------------------------
- * Memory (2)
+ * Memory
  * --------------------------------------------------------------------- */
+
+#ifdef _WIN32
+/* Reserve address space for the largest game arena and coroutine pool before
+ * graphics/launcher allocations can fragment the low 4 GB. No heap setting is
+ * latched and no pages committed here. Idempotent; zero means reservation failed. */
+int mp6_host_memory_prepare(void);
+#endif
 
 /* Reserve+commit a game-visible arena, preferring the fixed low candidate bases
  * (0x80000000 first -- game/memory.c's BLOCK_CHECK high-bit check; full
- * candidate list and rationale in the backends). Falls back to an
- * OS-chosen address if every candidate is taken, but accepts it only when
+ * candidate list and rationale in the backends). Windows consumes its early
+ * reservations; other requests also search free low-address regions. An
+ * OS-chosen fallback is accepted only when
  * the ENTIRE reservation remains below 4 GB. Returns NULL when allocation
  * fails or that invariant cannot be met; callers keep their own
  * [FATAL]+exit policy. win32:
@@ -206,6 +234,18 @@ void  *mp6_coro_slot_addr(int slot);
  * without arming that lever and without waiting for exit. The fiber backend
  * has no pool, and reports 0 for the same reason it reports an empty pool. */
 int    mp6_coro_slots_peak(void);
+/* Savestate hooks around the coroutine backend's host runtime state: called
+ * before a capture snapshots memory and right after a restore commits it.
+ * The web build records and re-applies asyncify's resume ids there
+ * (coro_arena.c); elsewhere both do nothing. Rehydrate returns 0 on
+ * success. */
+void   mp6_coro_savestate_precapture(void);
+int    mp6_coro_savestate_rehydrate(void);
+/* Web dev builds: the startup block holding the first coroutine slots
+ * (host_emscripten.c), or NULL; and a slot's memory, allocated on first use
+ * (NULL when out of memory). */
+void  *mp6_host_web_coro_pool(void);
+void  *mp6_host_web_coro_slot(int slot);
 /* NOTE (review C18): two further accessors (slot_of / from_slot) existed
  * here with a comment claiming process_native.c serializes its coroutine
  * handles as slot indices. It does not, and never needed to: the wrapper
@@ -336,6 +376,44 @@ void mp6_host_mutex_unlock(Mp6Mutex *m);
  * handle count is an observable diagnostic (leakgate.py samples it), and
  * these process-lifetime threads keep a stable count either way. */
 int mp6_host_thread_start(void (*fn)(void *), void *arg);
+
+/* Counting semaphore for background workers (src/os/decode_ahead.c).
+ * Returns 0 from init when the platform has no threads (the web build),
+ * and callers then do the work on the calling thread instead. post adds
+ * one count; wait blocks until a count is available and takes it. */
+int mp6_host_sem_init(Mp6Sem *s);
+void mp6_host_sem_post(Mp6Sem *s);
+void mp6_host_sem_wait(Mp6Sem *s);
+
+/* Logical CPUs this process may run on (its affinity mask), at least 1. */
+int mp6_host_cpu_count(void);
+
+/* ---------------------------------------------------------------------
+ * Read-only content files (5) -- the disc layer (src/dvd/dvd_files.c)
+ * --------------------------------------------------------------------- */
+
+/* An open read-only file. Reads are positional, so one handle serves any
+ * number of readers and needs no seek state; the disc layer keeps one open
+ * per disc file instead of reopening it for every DVDOpen.
+ * win32: CreateFileW + ReadFile at an OVERLAPPED offset. android: open +
+ * pread. web: the page's content provider (src/web/web_content.c) for
+ * paths it serves, else open + pread. */
+typedef struct Mp6HostFile Mp6HostFile;
+
+/* NULL when the file cannot be opened. utf8Path is an operational path. */
+Mp6HostFile *mp6_host_file_open(const char *utf8Path);
+/* Size in bytes, or -1. */
+int64_t mp6_host_file_size(Mp6HostFile *f);
+/* Reads up to len bytes at offset into dst; returns the count read (short
+ * only at end of file) or -1 on error. */
+int64_t mp6_host_file_read_at(Mp6HostFile *f, void *dst, size_t len, uint64_t offset);
+void mp6_host_file_close(Mp6HostFile *f);
+/* Starts fetching [offset, offset+len) of utf8Path ahead of the reads that
+ * will want it, without waiting. Returns 1 when the host acted on it -- the
+ * web build, where every read is a round trip to the page's content
+ * provider -- and 0 where reads are local and nothing is gained (win32,
+ * android). With a NULL path, only answers whether the host prefetches. */
+int mp6_host_file_prefetch(const char *utf8Path, uint64_t offset, uint64_t len);
 
 /* ---------------------------------------------------------------------
  * Diagnostics (1)

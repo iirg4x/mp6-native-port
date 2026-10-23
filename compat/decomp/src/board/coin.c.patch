@@ -1,8 +1,9 @@
 --- a/src/board/coin.c
 +++ b/src/board/coin.c
-@@ -0,0 +1 @@
+@@ -1 +1 @@
+-/* Board coin models, particles, and the floating coin-count display. */
 +#include <stdlib.h>
-@@ -199,0 +201,23 @@
+@@ -167,0 +168,23 @@
 +
 +/* MP6_NATIVE_PORT retail-overread shim (board-opening coin-shower crash):
 + * mbCoinEffCreate indexes coinEffBankTbl[] (u8[16]) with mbRandMod(32).

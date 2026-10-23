@@ -1,0 +1,14 @@
+--- a/src/REL/ttwarsdll/game.c
++++ b/src/REL/ttwarsdll/game.c
+@@ -168 +168 @@
+-        *(s32 *)(void *)((u8 *)(void *)lbl_1_bss_1464 + i * 4) = 0;
++        lbl_1_bss_1464[i] = NULL;
+@@ -580 +580 @@
+-    obj->data = HuMemDirectMallocNum(HEAP_HEAP, 36, HU_MEMNUM_OVL);
++    obj->data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(TTWarsObjectData), HU_MEMNUM_OVL);
+@@ -697,3 +697,2 @@
+-            break;
+-    }
+-    // This transform write also runs after state 3 deletes the object and frees the saved data.
++            return; /* omDelObjEx frees the piece data immediately. */
++    }

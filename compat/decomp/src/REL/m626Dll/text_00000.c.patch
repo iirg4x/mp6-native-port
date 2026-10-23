@@ -1,0 +1,42 @@
+--- a/src/REL/m626Dll/text_00000.c
++++ b/src/REL/m626Dll/text_00000.c
+@@ -41 +41 @@
+-extern void fn_1_3AC(s16 mode, s16 frameNo);
++extern void fn_1_3AC(short mode, short state);
+@@ -43,6 +43,5 @@
+-extern void fn_1_AD0(OMOBJMAN *manager, void *lightPosition, void *lightTarget, void *lightColor);
+-extern void fn_1_EEC(OMOBJMAN *manager, void *fogParameters);
+-extern void fn_1_11B8(OMOBJMAN *manager, s32 cameras, f32 fieldOfView, f32 nearPlane,
+-                       f32 farPlane, f32 shadowRadius, void *cameraView);
+-extern void fn_1_1F4C(s32 red, s32 green, s32 blue);
+-extern void fn_1_1F84(s32 cameras, void *motionData);
++extern void fn_1_AD0(OMOBJMAN *manager, Vec *position, Vec *target, GXColor *color);
++extern void fn_1_EEC(OMOBJMAN *manager, M626FogParameters *parameters);
++extern void fn_1_11B8(OMOBJMAN *manager, u32 cameras, f32 fov, f32 nearPlane, f32 farPlane, f32 shadowRadius, OM_CAMERA_VIEW *view);
++extern void fn_1_1F4C(u8 r, u8 g, u8 b);
++extern void fn_1_1F84(u32 cameras, void *data);
+@@ -50 +49 @@
+-extern void fn_1_2608(OMOBJMAN *manager, void *audioConfig);
++extern void fn_1_2608(HUPROCESS *process, M626AudioParameters *audioConfig);
+@@ -52,3 +51,3 @@
+-extern void fn_1_42DC(OMOBJMAN *manager);
+-extern void fn_1_8C50(OMOBJMAN *manager);
+-extern void fn_1_BA34(OMOBJMAN *manager);
++extern void fn_1_42DC(HUPROCESS *process);
++extern void fn_1_8C50(HUPROCESS *process);
++extern void fn_1_BA34(HUPROCESS *process);
+@@ -63 +62 @@
+-void fn_1_7C4(s16 mode, s16 frameNo);
++void fn_1_7C4(short mode, short state);
+@@ -130 +129 @@
+-        fn_1_EEC(lbl_1_bss_34, &lbl_1_data_38);
++        fn_1_EEC(lbl_1_bss_34, lbl_1_data_38);
+@@ -132 +131 @@
+-        fn_1_EEC(lbl_1_bss_34, &lbl_1_data_80);
++        fn_1_EEC(lbl_1_bss_34, lbl_1_data_80);
+@@ -138 +137 @@
+-    fn_1_2608(lbl_1_bss_34, &lbl_1_data_C8);
++    fn_1_2608(lbl_1_bss_34, lbl_1_data_C8);
+@@ -184 +183 @@
+-s32 fn_1_8B58(s32 index);
++u32 fn_1_8B58(s32 index);

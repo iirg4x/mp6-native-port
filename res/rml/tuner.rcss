@@ -10,9 +10,10 @@ body {
     height: 100%;
     margin: 0;
     padding: 0;
-    font-family: "Inter";
+    font-family: "Titan One";
+    font-weight: normal;
     font-size: 20dp;
-    color: #FFFFFF;
+    color: #17100b;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -26,7 +27,8 @@ body {
     flex-direction: column;
     justify-content: flex-end;
     align-items: stretch;
-    decorator: vertical-gradient(#00000000 #151610F2);
+    background-color: #fff9e7;
+    border-top: 3dp #dfbd60;
     filter: opacity(0);
     transition: filter 0.2s linear-in-out;
 }
@@ -74,12 +76,12 @@ body {
 .description {
     font-size: 14dp;
     line-height: 22dp;
-    color: rgba(255, 255, 255, 50%);
+    color: #0900ed;
 }
 
 .divider {
     margin: 1dp 0;
-    border-top: 1dp rgba(217, 217, 217, 50%);
+    border-top: 1dp #dfbd60;
 }
 
 .footer {
@@ -94,14 +96,15 @@ footer-button {
     width: 100%;
     max-width: 220dp;
     border: 0;
-    padding: 0;
-    background-color: transparent;
-    font-family: "Inter";
-    font-weight: bold;
+    padding: 8dp 12dp;
+    border-radius: 8dp;
+    background-color: #f3e7bd;
+    font-family: "Titan One";
+    font-weight: normal;
     font-size: 16dp;
     line-height: 24dp;
-    text-transform: uppercase;
-    color: #FFFFFF;
+    text-transform: none;
+    color: #17100b;
     opacity: 1;
     cursor: pointer;
 }
@@ -123,8 +126,8 @@ footer-button.reset {
     min-width: 246dp;
     padding: 0;
     background-color: transparent;
-    font-family: "Inter";
-    font-weight: bold;
+    font-family: "Titan One";
+    font-weight: normal;
 }
 
 .stepped-carousel-value {
@@ -146,4 +149,12 @@ footer-button.reset {
     cursor: pointer;
     font-family: "Material Symbols Rounded";
     font-weight: normal;
+    color: #d49a00;
 }
+
+footer-button:hover, footer-button:focus-visible {
+    background-color: #e92313;
+    color: #ffffff;
+}
+.stepped-carousel-arrow:hover, .stepped-carousel-arrow:focus-visible { color: #df200c; }
+.stepped-carousel-arrow:disabled { color: #817b70; cursor: default; }

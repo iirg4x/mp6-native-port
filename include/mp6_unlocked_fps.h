@@ -19,8 +19,12 @@
  *     (camera, model slot, creation generation, sub, ordinal)
  *
  * and NEVER by its position in the retained stream.  `sub` names the EMISSION
- * BRACKET: 0xFFFF for a matrix emitted inside the model bracket itself,
- * otherwise the deferred draw object's PUSH-ORDER rank within that model.
+ * BRACKET: 0xFFFF for an ordinary matrix emitted inside the model bracket,
+ * or the deferred draw object's PUSH-ORDER rank. HSF mesh matrix loads have
+ * stronger identities: 0x4000 + authored object index for the visible draw,
+ * and 0x8000 + the same index for its private AO copies (indices < 0x4000).
+ * A one-shot hint labels only the mesh matrix load, not material hooks or
+ * subsequent unrelated commands.
  * It is not optional.  Hu3DDraw does not emit every object where it decides to
  * draw it -- translucent / NEAR / ALTBLEND / z-compare-off objects and every
  * hook-func (particle) model are pushed onto the z-sorted DrawObjData list and
@@ -29,6 +33,13 @@
  * Reserving identity at push time, where the model bracket is still open, and
  * ranking it by push order is what makes pairing immune to that depth sort,
  * which re-permutes emission order on every camera move.
+ *
+ * Authored object keys use a per-object integrity group, so an unrelated mesh
+ * entering/leaving the camera cannot pin a still-visible object to tick N.
+ * The visible mesh and AO copies share the same group. Missing/duplicate
+ * members or different visible/private matrix payloads reject the whole
+ * group; their interpolation decisions must never diverge. Hook and other
+ * ordinal-based keys retain the conservative whole-model count guard.
  *
  * Layer hooks (Hu3DLayerHookSet) draw inside a camera but own no model slot;
  * they take a pseudo-slot identity above HU3D_MODEL_MAX, generation-stamped
@@ -116,6 +127,16 @@
  *   MP6_FI_NO_RESIDUAL=1   drop the residual carry (reinstates the defect).
  *   MP6_FI_NO_SCALE_HOLD=1 drop the scale hold (reinstates the bloom overshoot).
  *   MP6_FI_SCALE_SNAP=<r>  override FI_SCALE_SNAP_RATIO for a calibration sweep.
+ *   MP6_FI_RETAINED=0      decode every replay through the FIFO (no reuse).
+ *   MP6_FI_RETAINED_VERIFY=1 decode every would-be reuse anyway and count
+ *                          any difference from the reused result.
+ *
+ * Retained replay (compat/aurora/windows/0006): a replay without AO hooks is
+ * handed to aurora_gx_replay_stream as one stream. The first replay of a tick
+ * decodes and records it; later replays of the same tick re-emit those draws
+ * with only the matrix uniforms patched, when aurora can show that equals a
+ * full decode (stream bytes outside the matrix payloads, starting GX state and
+ * frame position all unchanged). MP6_FI_DIAG>=1 prints the reuse census.
  * MP6_FI_DIAG>=3 reports, per replay, maxResid (the shear being carried),
  * maxA0Err (|O(0) - B|, which must stay at zero), maxScale with the model that
  * produced it, scaleHold (pairs the scale gate acted on), and a six-bucket
@@ -133,6 +154,28 @@ extern "C" {
 #endif
 
 int mp6_unlocked_fps_enabled(void);
+
+/* How long the real tick frame waited to open (aurora_begin_frame / the
+ * Android frame gate). Replays that keep the render queue full make the
+ * tick frame wait for a free slot, which delays it and makes tick frames
+ * land at uneven times; frame_interp.c reserves that much of the replay
+ * window so the queue has drained by the deadline. */
+void mp6_fi_note_begin_wait(int64_t waitNs);
+
+/* When this tick's game slice started (the previous VIWaitForRetrace
+ * return) and ended (this one's entry); recorded with the tick frame. */
+void mp6_fi_note_tick_times(int64_t gameStartNs, int64_t gameEndNs);
+
+/* Smooth mode (MP6_FI_SMOOTH=1). Called right before the real tick frame's
+ * begin; returns 1 when that frame should be hidden (aurora_hide_next_frame:
+ * recorded, but passes nothing reads are dropped and nothing is presented). The display then runs one tick
+ * behind: tick N's window shows replays interpolated BETWEEN ticks N-1 and N
+ * (t = alpha) instead of extrapolated past N (t = 1+alpha), so nothing is
+ * predicted and nothing overshoots, for one tick of extra latency. Smooth
+ * mode starts once a window presents a replay and stops after 4 windows in a
+ * row without one, so a scene too heavy for replays falls back to showing
+ * every tick frame without flipping between the two modes tick to tick. */
+int mp6_fi_smooth_hide_tick(void);
 
 /* Resolved scheduler policy, not the saved Unlocked FPS preference. Free-run
  * has no replay window, so retain no FIFO stream until pacing resumes. */

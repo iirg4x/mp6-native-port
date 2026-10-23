@@ -3,6 +3,7 @@
 // Credits: TwilitRealm
 
 #include "button.hpp"
+#include "../../audio/menu_sfx.hpp"
 
 #include "ui.hpp"
 
@@ -48,7 +49,9 @@ Button::Button(Rml::Element *parent, Props props, const Rml::String &tagName)
 void Button::set_text(const Rml::String &text)
 {
     if (mProps.text != text) {
-        mRoot->SetInnerRML(escape(text));
+        const bool partyRow = mRoot->GetTagName() == "button" && mRoot->Closest("window.party-settings");
+        mRoot->SetInnerRML(Rml::String(partyRow ? "<focus-star><story-shape kind=\"star\"/></focus-star>" : "") +
+            "<span>" + escape(text) + "</span>");
         mProps.text = text;
     }
 }
@@ -58,9 +61,11 @@ Button &Button::on_pressed(ButtonCallback callback)
     if (!callback) {
         return *this;
     }
+    mHasAction = true;
     // TODO: convert this to a FluentComponent method?
-    on_nav_command([callback = std::move(callback)](Rml::Event &, NavCommand cmd) {
+    on_nav_command([this, callback = std::move(callback)](Rml::Event &, NavCommand cmd) {
         if (cmd == NavCommand::Confirm) {
+            if(!mRoot->Closest("settings-footer")) audio::play_menu_sound(audio::MenuSound::Confirm);
             callback();
             return true;
         }

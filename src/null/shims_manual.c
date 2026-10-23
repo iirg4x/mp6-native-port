@@ -4,9 +4,11 @@
  * src/null/shims_generated.c.
  */
 #include "dolphin.h"
-#include "dolphin/mic.h" /* MICProbeEx/MICMount, see their own comment below */
+#include "mp6_mic.h" /* mp6_mic_host_pump, the headless VIWaitForRetrace below */
 #include "mp6_shim_log.h"
 #include "mp6_boot.h"
+#include "mp6_ambient_occlusion.h"
+#include "mp6_unlocked_fps.h"
 #include "mp6_widescreen.h" /* Headless has no window --
                              * fixed-native stand-ins, see below */
 #include "host.h" /* mp6_host_monotonic_ns/mp6_host_wallclock (the OSGetTime
@@ -22,6 +24,9 @@
 #include "zlib.h"
 #include "mp6_savestate.h" /* mp6_savestate_tick() -- per-tick hook below */
 #include "mp6_time_rebase.h"
+#include "mp6_load_trace.h"
+#include "mp6_gameplay_trace.h"
+#include "mp6_decode_ahead.h"
 #include "mp6_parse.h"
 #include "mp6_events.h" /* OSReport tap -> the game-event bus, see OSReport below */
 #ifdef MP6_LEAKHUNT_DEBUG
@@ -464,6 +469,13 @@ u32 PADRead(PADStatus *status)
     }
     return 0;
 }
+
+/* No renderer, so no pipelines to prewarm (src/os/dll_bridge.c names each
+ * scene as it loads for Aurora's unified pipeline cache). */
+void aurora_set_pipeline_scene(uint32_t scene)
+{
+    (void)scene;
+}
 #endif /* MP6_HEADLESS_BUILD */
 
 void mp6_shims_savestate_capture_host_config(Mp6SsShimHostConfig *out)
@@ -490,6 +502,8 @@ void mp6_shims_savestate_apply_host_config(const Mp6SsShimHostConfig *in)
 int mp6_tick_advance(void)
 {
     mp6_tick_count++;
+    mp6_load_trace_tick(mp6_tick_count - 1); /* MP6_LOAD_TRACE: the tick that just ended */
+    mp6_decode_ahead_tick();
     mp6_rss_watchdog_check();
     mp6_alloc_census_tick_check(); /* leak hunt -- see mp6_boot.h/malloc_direct.c */
     mp6_motion_leaktest_tick(); /* motion-bank ownership probe -- see mp6_boot.h;
@@ -503,6 +517,7 @@ int mp6_tick_advance(void)
      * the scripted path but not for the hotkey. Silent no-op unless a
      * savestate was actually requested. */
     mp6_savestate_tick();
+    mp6_gameplay_trace_tick(); /* MP6_GAMEPLAY_TRACE (mp6_gameplay_trace.h) */
     if (mp6_ticks_unlimited) return 0;
     return mp6_tick_count >= mp6_max_ticks;
 }
@@ -529,6 +544,35 @@ void mp6_tick_and_maybe_exit(void)
  * behavior, with zero risk of ever silently picking up an Aurora symbol
  * by accident.
  * ------------------------------------------------------------------- */
+
+/* Headless has neither a renderer nor interpolated presentation frames.
+ * Keep renderer feature probes disabled and accept the Aurora extension as
+ * a no-op so common game sources can link without enabling graphics work. */
+int mp6_ao_foliage_uses_msaa_seed(void)
+{
+    return 0;
+}
+
+void GX2SetPolygonOffset(f32 frontOffset, f32 frontScale,
+                         f32 backOffset, f32 backScale, f32 clamp)
+{
+    (void)frontOffset;
+    (void)frontScale;
+    (void)backOffset;
+    (void)backScale;
+    (void)clamp;
+}
+
+int mp6_unlocked_fps_enabled(void)
+{
+    return 0;
+}
+
+int mp6_tick_interpolation_possible(void)
+{
+    return 0;
+}
+
 void VIInit(void)
 {
     MP6_LOG_ONCE("VI", "VIInit");
@@ -579,6 +623,7 @@ void VIWaitForRetrace(void)
     if (g_hlPreRetraceCB) {
         g_hlPreRetraceCB((u32)mp6_tick_count);
     }
+    mp6_mic_host_pump(); /* the GameCube Mic's backend (MP6_MIC_SCRIPT here) */
     if (g_hlPostRetraceCB) {
         g_hlPostRetraceCB((u32)mp6_tick_count);
     }
@@ -842,9 +887,12 @@ void ARQPostRequest(ARQRequest *request, u32 owner, u32 type, u32 priority, u32 
         } else if (type == ARQ_TYPE_MRAM_TO_ARAM
                    && (uint64_t)dest + (uint64_t)length <= (uint64_t)MP6_FAKE_ARAM_SIZE) {
             memcpy(aram + dest, (const void *)(uintptr_t)source, length);
+            /* Archives the game keeps in ARAM get decoded while they wait. */
+            mp6_decode_ahead_copy(aram + dest, (const void *)(uintptr_t)source, length, 1);
         } else if (type == ARQ_TYPE_ARAM_TO_MRAM
                    && (uint64_t)source + (uint64_t)length <= (uint64_t)MP6_FAKE_ARAM_SIZE) {
             memcpy((void *)(uintptr_t)dest, aram + source, length);
+            mp6_decode_ahead_copy((void *)(uintptr_t)dest, aram + source, length, 0);
         } else {
             fprintf(stderr,
                     "[WARN] ARQPostRequest: type=%u source=%#x dest=%#x length=%u out of the fake "
@@ -889,9 +937,8 @@ u32 __OSFpscrEnableBits;
  *     hardware, and that level of float-precision fidelity does not
  *     matter here.
  *   - gsapi_EngineGetParam: a 3rd-party voice-recognition/speech engine
- *     call (mic-driven minigames), not part of the Dolphin SDK at all --
- *     no header, anywhere, declares it. Single call site; a no-op stub
- *     matching its K&R-implicit-declaration call shape is enough to link.
+ *     call, not part of the Dolphin SDK at all. src/mic/mic_engine.c
+ *     implements it with the rest of the gsapi_* engine.
  * ------------------------------------------------------------------- */
 double __frsqrte(double x)
 {
@@ -924,15 +971,6 @@ void HuSetVecF(Vec *vec, float x, float y, float z)
     vec->x = x;
     vec->y = y;
     vec->z = z;
-}
-
-int gsapi_EngineGetParam(void *engine, int param, void *out)
-{
-    MP6_LOG_ONCE("OS", "gsapi_EngineGetParam");
-    (void)engine;
-    (void)param;
-    (void)out;
-    return 0;
 }
 
 /* -------------------------------------------------------------------
@@ -1107,41 +1145,10 @@ s32 CARDGetSectorSize(s32 chan, u32 *size)
 }
 #endif /* MP6_HEADLESS_BUILD -- CARD no-card gates */
 
-/* -------------------------------------------------------------------
- * MICProbeEx/MICMount -- the exact same "auto-stub dishonestly claims
- * success" shape as CARDProbeEx/CARDMount above (see tools/gen_shims.py's
- * MANUAL_SYMBOLS entry for the full call-chain trace: an auto-generated
- * `return 0` default would make game/mic.c's HuMCProbe report
- * MIC_RESULT_READY, which every one of its 3 real call sites treats as "a
- * mic really is plugged in", taking a full HuMCInit/HuMCMount path that
- * ends in a real, deterministic access violation inside HuMCInit's own
- * MCDVDRead -- confirmed via this project's own crash-handler
- * symbolication, reached from REL/fileseldll/filesel.c's fn_1_680, itself
- * called from FileselMain's own "no save flag" teardown branch, i.e.
- * squarely on the file-select -> mode-select path, not a contrived
- * route). Fixed the same honest way:
- * MIC_RESULT_NOCARD (-3) -- HuMCProbe's own retry loop
- * (`while(...) { result = MICProbeEx(...); if (result != -1) break; }`)
- * only continues past MIC_RESULT_BUSY (-1), so this also returns
- * immediately instead of paying its up-to-500ms busy-wait first. No mic/
- * bongos peripheral support is invented here, only reported truthfully --
- * matching every real call site's own existing, correct "no mic" branch. */
-s32 MICProbeEx(s32 chan)
-{
-    MP6_LOG_ONCE("MIC", "MICProbeEx");
-    (void)chan;
-    return MIC_RESULT_NOCARD;
-}
-
-s32 MICMount(s32 chan, s16 *buffer, s32 size, MICCallback detachCallback)
-{
-    MP6_LOG_ONCE("MIC", "MICMount");
-    (void)chan;
-    (void)buffer;
-    (void)size;
-    (void)detachCallback;
-    return MIC_RESULT_NOCARD;
-}
+/* MICProbeEx/MICMount and the rest of slot B's Microphone live in
+ * src/mic/mic_engine.c now (include/mp6_mic.h). With the setting off or no
+ * recognizer available, MICProbeEx still answers MIC_RESULT_NOCARD, which
+ * every real call site treats as "no mic plugged in". */
 
 /* The ANDROID builds rename decomp's
  * PADControlMotor call sites to mp6_PADControlMotor (dolphin_compat.h,
@@ -1165,3 +1172,41 @@ void mp6_PADControlMotor(s32 chan, u32 cmd)
     (void)cmd;
 }
 #endif
+
+#ifdef MP6_HEADLESS_BUILD
+/* SDK calls first reached by the recently integrated native overlays
+ * (m643DLL, m649Dll, m675Dll, s02Dll). tools/gen_shims.py cannot regenerate
+ * shims_generated.c without the planning/sdk_surface.json inventory, which
+ * is not part of this repository, so these follow its output format by
+ * hand: the same weak, log-once no-ops the generator emits for every other
+ * GX/MTX symbol (the windowed build links Aurora's real definitions). */
+__attribute__((weak)) void GXSetVtxDescv(const GXVtxDescList* list)
+{
+    MP6_LOG_ONCE("GX", "GXSetVtxDescv");
+}
+
+__attribute__((weak)) void GXSetVtxAttrFmtv(GXVtxFmt vtxfmt, const GXVtxAttrFmtList* list)
+{
+    MP6_LOG_ONCE("GX", "GXSetVtxAttrFmtv");
+}
+
+__attribute__((weak)) void GXSetLineWidth(u8 width, GXTexOffset texOffsets)
+{
+    MP6_LOG_ONCE("GX", "GXSetLineWidth");
+}
+
+__attribute__((weak)) void GXColor1u16(u16 clr)
+{
+    MP6_LOG_ONCE("GX", "GXColor1u16");
+}
+
+__attribute__((weak)) void PSMTXMultVecArraySR(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count)
+{
+    MP6_LOG_ONCE("MTX", "PSMTXMultVecArraySR");
+}
+
+__attribute__((weak)) void PSMTXTransApply(const Mtx src, Mtx dst, f32 xT, f32 yT, f32 zT)
+{
+    MP6_LOG_ONCE("MTX", "PSMTXTransApply");
+}
+#endif /* MP6_HEADLESS_BUILD */

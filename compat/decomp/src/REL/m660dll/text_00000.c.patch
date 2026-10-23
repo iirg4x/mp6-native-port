@@ -1,0 +1,31 @@
+--- a/src/REL/m660dll/text_00000.c
++++ b/src/REL/m660dll/text_00000.c
+@@ -35,0 +36 @@
++#include <stdio.h>
+@@ -86 +86,0 @@
+-extern int printf();
+@@ -99 +99 @@
+-void fn_1_3040(MGTIMER *timer);
++s32 fn_1_3040(MGTIMER *timer);
+@@ -137 +137 @@
+-void fn_1_A3E4(void);
++s32 fn_1_A3E4(void);
+@@ -139,5 +139,5 @@
+-s32 fn_1_A9B0(void);
+-s32 fn_1_A9F0(void);
+-s32 fn_1_6F58(void);
+-s32 fn_1_D29C(void);
+-s32 fn_1_D2E8(void);
++s16 fn_1_A9B0(void);
++s16 fn_1_A9F0(void);
++s16 fn_1_6F58(void);
++int fn_1_D29C(void);
++s16 fn_1_D2E8(void);
+@@ -844,2 +844,2 @@
+-void fn_1_3040(MGTIMER *timer) {
+-    MgTimerDoneCheck(timer);
++s32 fn_1_3040(MGTIMER *timer) {
++    return MgTimerDoneCheck(timer);
+@@ -1776,2 +1775,0 @@
+-    /* This legacy call accepts full-width volume and pan arguments. */
+-    int HuAudFXPlayVolPan();

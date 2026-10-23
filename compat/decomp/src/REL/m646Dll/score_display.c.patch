@@ -1,0 +1,19 @@
+--- a/src/REL/m646Dll/score_display.c
++++ b/src/REL/m646Dll/score_display.c
+@@ -8 +8 @@
+-#define M646_SCORE_WORK_BYTES 144
++#define M646_SCORE_WORK_BYTES sizeof(M646ScoreboardWork)
+@@ -51 +50,0 @@
+-void fn_1_8E78(OMOBJMAN *objman);
+@@ -53,2 +51,0 @@
+-void fn_1_8F04(s32 playerIndex, s32 scorePoints);
+-void fn_1_8F5C(s32 playerIndex);
+@@ -56 +52,0 @@
+-u16 fn_1_8FD4(void);
+@@ -58,3 +53,0 @@
+-s32 fn_1_9024(void);
+-void fn_1_9118(void);
+-s32 fn_1_9380(void);
+@@ -329,0 +323,2 @@
++
++/* Storage only; runtime allocations are freed by normal overlay teardown. */

@@ -1,0 +1,5 @@
+#include "mp6_rel_state.h"
+#define MP6_M620_TEXT_0B7D4_BSS(X)
+#define MP6_M620_TEXT_0B7D4_DATA(X) \
+    X(lbl_1_data_6D0)
+MP6_REL_RESET_DEFINE(mp6_m620_text_0B7D4_reset, MP6_M620_TEXT_0B7D4_BSS, MP6_M620_TEXT_0B7D4_DATA)

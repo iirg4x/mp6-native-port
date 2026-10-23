@@ -1,0 +1,30 @@
+--- a/src/REL/m633dll/input_model.c
++++ b/src/REL/m633dll/input_model.c
+@@ -1,0 +2 @@
++#include "mp6_widescreen.h"
+@@ -174,4 +175,4 @@
+-    *stageObject->mdlId =
+-        Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m633, 0), HU_MEMNUM_OVL, HEAP_MODEL));
+-    collisionModelId =
+-        Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m633, 2), HU_MEMNUM_OVL, HEAP_MODEL));
++    *stageObject->mdlId = Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m633, 0), HU_MEMNUM_OVL, HEAP_MODEL));
++    /* Extend only the decorative floor's outside rim, never the arena. */
++    mp6_widescreen_extend_floor(*stageObject->mdlId, "633stageA", 170.0f, 0.0f, 0.0f);
++    collisionModelId = Hu3DModelCreate(HuDataSelHeapReadNum(DATANUM(DATA_m633, 2), HU_MEMNUM_OVL, HEAP_MODEL));
+@@ -179,12 +180,4 @@
+-    stageObject->mtnId[0] =
+-        Hu3DJointMotion(*stageObject->mdlId,
+-                        HuDataSelHeapReadNum(DATANUM(DATA_m633, 4), HU_MEMNUM_OVL, HEAP_MODEL));
+-    stageObject->mtnId[1] =
+-        Hu3DJointMotion(*stageObject->mdlId,
+-                        HuDataSelHeapReadNum(DATANUM(DATA_m633, 5), HU_MEMNUM_OVL, HEAP_MODEL));
+-    stageObject->mtnId[2] =
+-        Hu3DJointMotion(*stageObject->mdlId,
+-                        HuDataSelHeapReadNum(DATANUM(DATA_m633, 6), HU_MEMNUM_OVL, HEAP_MODEL));
+-    stageObject->mtnId[3] =
+-        Hu3DJointMotion(*stageObject->mdlId,
+-                        HuDataSelHeapReadNum(DATANUM(DATA_m633, 7), HU_MEMNUM_OVL, HEAP_MODEL));
++    stageObject->mtnId[0] = Hu3DJointMotion(*stageObject->mdlId, HuDataSelHeapReadNum(DATANUM(DATA_m633, 4), HU_MEMNUM_OVL, HEAP_MODEL));
++    stageObject->mtnId[1] = Hu3DJointMotion(*stageObject->mdlId, HuDataSelHeapReadNum(DATANUM(DATA_m633, 5), HU_MEMNUM_OVL, HEAP_MODEL));
++    stageObject->mtnId[2] = Hu3DJointMotion(*stageObject->mdlId, HuDataSelHeapReadNum(DATANUM(DATA_m633, 6), HU_MEMNUM_OVL, HEAP_MODEL));
++    stageObject->mtnId[3] = Hu3DJointMotion(*stageObject->mdlId, HuDataSelHeapReadNum(DATANUM(DATA_m633, 7), HU_MEMNUM_OVL, HEAP_MODEL));

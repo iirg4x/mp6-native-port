@@ -7,7 +7,7 @@ from tools import build
 from tests.test_frame_resource_lifetimes import function
 
 ROOT = Path(__file__).resolve().parents[1]
-RENDERER = ROOT / 'build/android-aurora-source'
+RENDERER = ROOT / 'third_party/aurora'
 
 
 class FrameFollowthrough(unittest.TestCase):
@@ -67,7 +67,7 @@ class FrameFollowthrough(unittest.TestCase):
         for unit in ('lib/gfx/common.cpp', 'lib/aurora.cpp', 'lib/gfx/depth_peek.cpp',
                      'lib/gfx/depth_peek.hpp'):
             self.assertEqual((RENDERER/unit).read_text(),
-                             (ROOT/'build/aurora-release-source'/unit).read_text(), unit)
+                             (ROOT/'third_party/aurora'/unit).read_text(), unit)
 
 
 if __name__ == '__main__':

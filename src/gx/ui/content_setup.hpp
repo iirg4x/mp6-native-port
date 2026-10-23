@@ -33,7 +33,10 @@ namespace mp6::ui {
 
 class ContentSetup : public WindowSmall {
 public:
-    ContentSetup();
+    /* addMovies: the linked content predates the movie/ import. The disc
+     * image or folder it came from is imported again when it was remembered
+     * (sys/.mp6-content-source); otherwise the user is asked to pick it. */
+    explicit ContentSetup(bool addMovies = false);
     ~ContentSetup() override;
 
     void update() override;
@@ -61,10 +64,15 @@ private:
     void show_error(const std::string &message);
     void finish_success();
     std::string dest_disc_root();
+    bool reimport_remembered_source();
+    void remember_source();
 
     Stage mStage = Stage::Choose;
     bool mCancelRequested = false;
     bool mUsingSafTree = false; /* android folder import runs on the Java side */
+    bool mAddMovies = false;
+    char mSourceKind = 0; /* 'i' disc image, 'f' folder, 't' Android SAF tree */
+    std::string mSource;
 
     Rml::Element *mTitle = nullptr;
     Rml::Element *mMessage = nullptr;

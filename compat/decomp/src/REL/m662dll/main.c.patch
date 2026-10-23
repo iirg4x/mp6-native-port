@@ -1,0 +1,63 @@
+--- a/src/REL/m662dll/main.c
++++ b/src/REL/m662dll/main.c
+@@ -24 +24,2 @@
+-#include "REL/m662dll/game.h"
++#include "mp6_m662_native.h"
++#include <stdio.h>
+@@ -41,15 +41,0 @@
+-extern void fn_1_1DC8(s16);
+-extern void fn_1_1DFC(void), fn_1_223C(void), fn_1_8B34(void), fn_1_4D04(void);
+-extern s32 fn_1_8B8C(void), fn_1_8BCC(void), fn_1_57C8(void), fn_1_A430(void);
+-extern s32 fn_1_A4B0(void), fn_1_A758(void), fn_1_A780(void);
+-void fn_1_1918(s16);
+-void fn_1_A0(void);
+-void fn_1_130(s16, s16);
+-void fn_1_260(s16, s16);
+-void fn_1_28C(s16, s16);
+-void fn_1_2B8(s16, s16);
+-void fn_1_2E4(s16, s16);
+-void fn_1_310(s16, s16);
+-void fn_1_33C(s16, s16);
+-void fn_1_368(s16, s16);
+-void fn_1_394(s16, s16);
+@@ -99,10 +85,10 @@
+-    memset(&lbl_1_bss_B08, 0, 328);
+-    memset(&lbl_1_bss_ACC, 0, 60);
+-    memset(&lbl_1_bss_A7C, 0, 80);
+-    memset(&lbl_1_bss_A74, 0, 8);
+-    memset(&lbl_1_bss_4B4, 0, 1472);
+-    memset(&lbl_1_bss_3F4, 0, 192);
+-    memset(&lbl_1_bss_2F4, 0, 256);
+-    memset(&lbl_1_bss_210, 0, 228);
+-    memset(&lbl_1_bss_D0, 0, 320);
+-    memset(&lbl_1_bss_0, 0, 208);
++    memset(&lbl_1_bss_B08, 0, sizeof(lbl_1_bss_B08));
++    memset(&lbl_1_bss_ACC, 0, sizeof(lbl_1_bss_ACC));
++    memset(&lbl_1_bss_A7C, 0, sizeof(lbl_1_bss_A7C));
++    memset(&lbl_1_bss_A74, 0, sizeof(lbl_1_bss_A74));
++    memset(&lbl_1_bss_4B4, 0, sizeof(lbl_1_bss_4B4));
++    memset(&lbl_1_bss_3F4, 0, sizeof(lbl_1_bss_3F4));
++    memset(&lbl_1_bss_2F4, 0, sizeof(lbl_1_bss_2F4));
++    memset(&lbl_1_bss_210, 0, sizeof(lbl_1_bss_210));
++    memset(&lbl_1_bss_D0, 0, sizeof(lbl_1_bss_D0));
++    memset(&lbl_1_bss_0, 0, sizeof(lbl_1_bss_0));
+@@ -262 +248 @@
+-            memset(lbl_1_bss_2F4 + index, 0, 20);
++            memset(&lbl_1_bss_2F4[index].input, 0, sizeof(lbl_1_bss_2F4[index].input));
+@@ -492,4 +477,0 @@
+-void fn_1_1FD0(void), fn_1_234C(void), fn_1_10F0(void);
+-void fn_1_3258(s16, s16);
+-void fn_1_4470(HU3D_MODEL *, HU3D_PARTICLE *, Mtx);
+-s16 fn_1_4270(s16, s16, Vec, Vec, f32, s16, M662ParticleParameters *);
+@@ -540 +522 @@
+-inline void fn_1_1FD0(void) {
++void fn_1_1FD0(void) {
+@@ -588 +570 @@
+-inline void fn_1_234C(void)
++void fn_1_234C(void)
+@@ -958 +940 @@
+-            HEAP_HEAP, maximumCount[effectIndex] * 60, HU_MEMNUM_OVL);
++            HEAP_HEAP, maximumCount[effectIndex] * sizeof(M662ParticleParameters), HU_MEMNUM_OVL);
+@@ -1159 +1141 @@
+-                               particle->maxCnt * 72);
++                               particle->maxCnt * sizeof(*particle->data));

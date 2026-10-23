@@ -1,5 +1,21 @@
 # Ambient occlusion (port-owned)
 
+## Current implementation and historical scope
+
+Windows now selects the pinned upstream XeGTAO implementation by default when
+AO is enabled. Android retains its previous legacy/default-off policy pending
+device validation. See [XEGTAO_IMPLEMENTATION_PLAN.md](XEGTAO_IMPLEMENTATION_PLAN.md)
+for current implementation, integration deviations, desktop build receipts and
+the explicit, still-unverified Android acceptance budgets.
+
+The implementation and dated measurements below describe the **legacy custom
+GTAO path and its history**, not the current Windows sampling/denoising policy.
+In particular, its 960-pixel Android working cap is a resolution limit, not a
+frame-time or sustained-performance guarantee. Older descriptions of snapshots
+and pass setup are not a substitute for the current integration contracts.
+
+## Legacy implementation
+
 Optional port-owned GTAO; no decomp gameplay or shared Aurora checkout changes.
 The Video setting is Off/Subtle/Strong, live on Windows and Android. All preset
 defaults are Off, so older configs and ordinary automation retain original lighting.
@@ -627,8 +643,9 @@ hardware; desktop timings cannot identify its remaining bottleneck.
 The board's existing exact decal-removal pass now also converts its output to
 linear view depth. It remains **R32Float at full framebuffer resolution**.
 Horizon sampling, normal reconstruction, both denoise passes and the final
-composite reuse this conversion. Cameras without decal brackets retain the
-original raw-depth path; they do not pay for an extra preparation pass.
+composite reuse this conversion. Cameras without decal brackets still run the
+full-resolution R32 preparation pass; they omit only the two decal texture
+bindings.
 The original 24 samples, radius, strength, contact bias, depth precision,
 resolution budgets, water exclusion and premultiplied foliage protection are
 unchanged. Raw/prepared composite pipelines are keyed separately, and all new

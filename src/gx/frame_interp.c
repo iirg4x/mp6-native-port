@@ -77,6 +77,34 @@ extern void aurora_gx_set_drain_capture(void (*fn)(const void *data, uint32_t si
 extern void aurora_gx_submit_raw(const void *data, uint32_t size);
 extern void aurora_gx_export_vtx_layout(uint8_t *vtxDescOut /*21*/, uint8_t *vatCntOut /*8x21*/,
                                         uint8_t *vatTypeOut /*8x21*/);
+#ifdef MP6_AURORA_RETAINED_REPLAY
+/* --- aurora retained replay (compat/aurora/windows/0006; optimized Windows
+ * backend only, which tools/build.py marks with MP6_AURORA_RETAINED_REPLAY) ---
+ * Decodes one replay stream into the open frame, or re-emits the previous
+ * replay's recorded draws with only their matrix uniforms patched when that is
+ * byte-for-byte what the decode would produce. Returns 1 on reuse. */
+extern int aurora_gx_replay_stream(const void *data, uint32_t size, int record);
+extern void aurora_gx_replay_invalidate(void);
+/* compat/aurora/windows/0010: host hooks inside a retained replay. */
+extern int aurora_gx_replay_stream_hooked(const void *data, uint32_t size, int record,
+                                          const uint32_t *offsets, uint32_t count,
+                                          void (*hook)(uint32_t index, void *user), void *user);
+extern void aurora_gx_replay_stats(uint64_t *out /*6*/);
+extern void aurora_gx_replay_set_verify(int on);
+extern void aurora_gx_replay_verify_stats(uint64_t *ok, uint64_t *fail);
+#endif
+
+#ifdef __ANDROID__
+extern void mp6_adpf_report_tick(int64_t workNs, int64_t targetNs); /* src/android/adpf_hint.c */
+extern void mp6_android_frame_rate_tick(int wantHigh);                /* src/android/adpf_hint.c */
+extern float mp6_android_display_refresh_hz(void);                    /* src/android/adpf_hint.c */
+#endif
+
+#ifdef MP6_FI_TELEMETRY
+/* src/android/fi_telemetry.c (test builds only): one record per present. */
+extern void mp6_fi_tel_record(int kind, long tick, int64_t sealNs, int64_t t0Ns, int64_t endNs,
+                              double alpha, int interp);
+#endif
 
 /* --- launcher/bridge seams --- */
 extern void mp6_launcher_frame_overlay(void);   /* launcher_core.cpp; replay frames draw the
@@ -266,6 +294,24 @@ static double fi_scale_snap_ratio(void)
     return s_val;
 }
 
+/* MP6_FI_RETAINED=0 replays through the plain FIFO path (A/B lever for the
+ * retained replay; aurora proves each reuse exact, so this is for measuring). */
+#ifdef MP6_AURORA_RETAINED_REPLAY
+static int fi_retained(void)
+{
+    static int s_env = -1;
+    if (s_env < 0) {
+        const char *env = getenv("MP6_FI_RETAINED");
+        const char *verify = getenv("MP6_FI_RETAINED_VERIFY");
+        s_env = (env != NULL && *env == '0') ? 0 : 1;
+        /* Proof mode: every would-be reuse decodes in full and aurora checks
+         * the two results are identical (counts in the census line). */
+        aurora_gx_replay_set_verify(verify != NULL && *verify == '1');
+    }
+    return s_env;
+}
+#endif
+
 /* MP6_FI_MARGIN_DIV -- pacing A/B lever for the admission margin (period/N).
  * Clamped to a sane band so a typo cannot disable admission or remove the pad
  * entirely. See the margin computation in mp6_fi_idle_present. */
@@ -333,12 +379,14 @@ int mp6_unlocked_fps_enabled(void)
 
 /* Pairing identity for one GXLoadPosMtxImm.
  *
- * (camera, model, generation) is the identity GROUP -- one model instance under
- * one camera, across its whole frame.  Inside the group a matrix is named by
- * (sub, ordinal):
+ * Legacy emission-index keys share a (camera, model, generation) group.
+ * Authored HSF object keys and their AO copies instead share an object group
+ * within that model. Inside a group a matrix is named by (sub, ordinal):
  *   sub     -- WHICH EMISSION BRACKET.  0xFFFF is the immediate pass (the
- *              matrices Hu3DDraw emits while the model bracket is open); any
- *              other value is a deferred draw object's PUSH-ORDER rank within
+ *              matrices Hu3DDraw emits while the model bracket is open);
+ *              0x4000..0x7FFF names a visible HSF object by authored index,
+ *              0x8000..0xBFFF names its private AO copies. Other values are
+ *              a deferred draw object's PUSH-ORDER rank within
  *              that model, reserved by mp6_fi_capture_defer_push() while the
  *              bracket was still open and re-installed by Hu3DDrawPost.  This
  *              is what makes pairing immune to the deferred pass's DEPTH sort:
@@ -403,19 +451,93 @@ typedef struct {
 } FiStream;
 
 static FiStream s_streams[2];
+
+/* The current-side key census is also the previous-side census on the next
+ * real tick. Retain only its identity, never a dereferenced stream owner: a
+ * reset/free invalidates this tuple before the storage can go away. */
+typedef struct {
+    const FiStream *stream;
+    long tick;
+    const FiPosKey *posKey;
+    uint32_t keyCount;
+    int valid;
+} FiCensusOwner;
+static FiCensusOwner s_censusOwner;
+
+static void fi_census_owner_invalidate(void)
+{
+    s_censusOwner.valid = 0;
+}
+
+static void fi_census_owner_invalidate_stream(const FiStream *stream)
+{
+    if (s_censusOwner.valid && s_censusOwner.stream == stream)
+        s_censusOwner.valid = 0;
+}
+
 /* Only the latest sealed window can replay. Cache its immutable endpoints,
  * lazily, with a bounded allocation; overflow/allocation failure uses the
  * original calculation. The state bytes avoid clearing the large records. */
 #define FI_PAIR_CACHE_MAX 4096u
+static uint64_t s_pairEpoch;
 static FiPreparedPair *s_pairCache;
 static uint8_t *s_pairState;
 static uint32_t s_pairCacheCap, s_pairStateCap, s_pairCacheCount;
 static const FiStream *s_pairCacheCur, *s_pairCachePrev;
 
+enum {
+    FI_REPLAY_BUF_NONE = 0,
+    FI_REPLAY_BUF_FULL,
+    FI_REPLAY_BUF_PLAN,
+    FI_REPLAY_BUF_MEMO
+};
+static int s_replayBufOwner;
+
+/* One sealed-window replay image.  The bytes stay in s_replayBuf; this memo
+ * only retains the length and AO marker offsets needed to submit that same
+ * image again.  Keeping one entry bounds both memory and lifetime: a new
+ * stream, pairing, walk, lifecycle transition, or failed capture retires it
+ * before a rebuild can overwrite the shared buffer. */
+typedef struct {
+    const FiStream *cur;
+    const FiStream *prev;
+    long curTick;
+    long prevTick;
+    uint32_t curSize;
+    uint32_t curCommandCount;
+    uint32_t curPosCount;
+    uint32_t prevPosCount;
+    uint32_t length;
+    uint32_t aoCount;
+    uint32_t cameraMask;
+    int curSealed;
+    int prevSealed;
+    int interp;
+    int valid;
+    FiAoMarker ao[FI_AO_MAX];
+} FiReplayMemo;
+static FiReplayMemo s_replayMemo;
+#ifdef MP6_FI_REPLAY_TEST
+/* Test-only counters; production builds pay no counter increment. */
+static uint32_t s_replayMemoBuilds, s_replayMemoHits;
+#endif
+
+static void fi_replay_memo_invalidate(void)
+{
+    s_replayMemo.valid = 0;
+    if (s_replayBufOwner == FI_REPLAY_BUF_MEMO)
+        s_replayBufOwner = FI_REPLAY_BUF_NONE;
+}
+
+static void fi_replay_plan_invalidate(void);
+
 static void fi_pair_cache_invalidate(void)
 {
+    fi_replay_plan_invalidate();
     s_pairCacheCur = s_pairCachePrev = NULL;
     s_pairCacheCount = 0;
+    if (++s_pairEpoch == 0) s_pairEpoch = 1;
+    fi_replay_memo_invalidate();
 }
 static FiAoMarker s_replayAo[FI_AO_MAX];
 static uint32_t s_replayAoCount;
@@ -476,6 +598,95 @@ static int64_t s_costBuildSumNs, s_costBuildMaxNs, s_costBuildLastNs;
 static int64_t s_costPresentSumNs, s_costPresentMaxNs;
 static long s_costSamples;
 
+#ifdef MP6_AURORA_RETAINED_REPLAY
+/* Census only: wall time of aurora_gx_replay_stream by outcome. */
+static int64_t s_retReuseNs, s_retDecodeNs;
+/* Latency compensation. A replay's motion is evaluated at alpha, but it is
+ * seen when its submit completes, and a decoded replay completes much later
+ * than a reused one. Evaluating every replay at its PREDICTED completion time
+ * keeps consecutive presents evenly spaced in content time; evaluating them
+ * at their start made decoded and reused frames alternate between lagging
+ * and leading, which reads as stutter however high the present rate is.
+ * EMAs of start -> end_frame return, per path. */
+static int64_t s_lagDecodeNs, s_lagReuseNs;
+static int s_recordedThisWindow; /* a reusable recording exists for this tick */
+
+static long s_retReuseN, s_retDecodeN;
+#endif
+
+/* Start -> end_frame return of FIFO-path replays (see the retained lags
+ * below for why replays are evaluated at their predicted completion). */
+static int64_t s_lagFifoNs;
+static int s_replayPath; /* this replay: 0 FIFO path, 1 decoded, 2 reused */
+
+/* Queue reserve (include/mp6_unlocked_fps.h, mp6_fi_note_begin_wait). Raised
+ * at once by any real-frame wait, released slowly while tick frames open
+ * without waiting, and added to the admission margin, so the last replay of
+ * a window ends early enough for its GPU work to drain before the next tick
+ * frame needs a slot. Measured on a Galaxy S22+: without it tick frames
+ * opened 7-26 ms apart instead of every 16.7 ms. */
+static int64_t s_queueReserveNs;
+static int64_t s_lastBeginWaitNs;
+static int64_t s_tickGameStartNs, s_tickGameEndNs;
+/* Active replay time since the last seal and the last tick period seen,
+ * for the Android performance hint (src/android/adpf_hint.c). */
+static int64_t s_windowReplayWorkNs, s_lastPeriodNs;
+
+/* Smooth mode (include/mp6_unlocked_fps.h, mp6_fi_smooth_hide_tick).
+ * s_smoothWindow: the tick frame that opened the current window was hidden,
+ * so its replays evaluate between N-1 and N. Every evaluation site keeps its
+ * extrapolation form N + e*(N - (N-1)); smooth mode passes e = alpha - 1,
+ * which runs from N-1 (e = -1) to N (e = 0), and slerp t = 1 + e. */
+static int s_smoothWindow, s_smoothPending, s_smoothBackoff, s_smoothBackoffLen, s_smoothOkRun;
+
+extern int mp6_launcher_cfg_smooth_frames(void); /* launcher_core.cpp; -1 = not in launcher mode */
+
+static int fi_smooth_enabled(void)
+{
+    static int s_env = -1;
+    static int s_envSet = -1;
+    if (s_envSet < 0) {
+        const char *env = getenv("MP6_FI_SMOOTH");
+        s_envSet = (env != NULL && *env != 0) ? 1 : 0;
+    }
+    if (!s_envSet) { /* the live Settings toggle, when there is one */
+        int cfg = mp6_launcher_cfg_smooth_frames();
+        if (cfg >= 0) return cfg;
+    }
+    if (s_env < 0) {
+        const char *env = getenv("MP6_FI_SMOOTH");
+#ifdef MP6_FI_SMOOTH_DEFAULT
+        s_env = (env != NULL && *env != '\0') ? (*env != '0') : MP6_FI_SMOOTH_DEFAULT;
+#else
+        s_env = (env != NULL && *env != '\0') ? (*env != '0') : 1; /* Smooth is the default */
+#endif
+    }
+    return s_env;
+}
+
+void mp6_fi_note_tick_times(int64_t gameStartNs, int64_t gameEndNs)
+{
+    s_tickGameStartNs = gameStartNs;
+    s_tickGameEndNs = gameEndNs;
+}
+
+void mp6_fi_note_begin_wait(int64_t waitNs)
+{
+    const int64_t threshold = 250000; /* below this the slot was simply free */
+    if (waitNs < 0) waitNs = 0;
+    s_lastBeginWaitNs = waitNs;
+    if (!s_active) {
+        s_queueReserveNs = 0;
+        return;
+    }
+    if (waitNs > threshold) {
+        s_queueReserveNs += waitNs;
+        if (s_queueReserveNs > 12000000) s_queueReserveNs = 12000000; /* never the whole window */
+    } else {
+        s_queueReserveNs -= s_queueReserveNs / 32;
+    }
+}
+
 static void fi_cost_observe(int64_t buildNs, int64_t totalNs)
 {
     int64_t presentNs = (totalNs > buildNs) ? totalNs - buildNs : 0;
@@ -486,9 +697,18 @@ static void fi_cost_observe(int64_t buildNs, int64_t totalNs)
     s_costSamples++;
 }
 
+#ifdef MP6_FI_TELEMETRY
+static int s_telDeclReason = -1;
+static int64_t s_telDeclNs;
+#endif
+
 static int fi_decline(int reason)
 {
     s_declCount[reason]++;
+#ifdef MP6_FI_TELEMETRY
+    s_telDeclReason = reason; /* the window's last decline, recorded at seal */
+    s_telDeclNs = (int64_t)mp6_host_monotonic_ns();
+#endif
     return 0;
 }
 
@@ -528,6 +748,7 @@ static void fi_budget_decay(void)
 
 static void fi_stream_reset(FiStream *s)
 {
+    fi_census_owner_invalidate_stream(s);
     fi_pair_cache_invalidate();
     s->aoCount = 0;
     s->size = 0;
@@ -545,6 +766,8 @@ static void fi_stream_reset(FiStream *s)
  * over the newer real frame N merely because one grow allocation failed. */
 static void fi_capture_fail(void)
 {
+    fi_census_owner_invalidate();
+    fi_pair_cache_invalidate();
     s_cur = -1;
     s_latest = -1;
     s_prev = -1;
@@ -857,6 +1080,105 @@ struct FiCmd {
     uint32_t xfCount;  /* XF word count (opcode 0x10 only) */
 };
 
+/* One immutable sealed window owns the filtered byte layout and matrix-action
+ * order. Replays reuse that layout, but evaluate the original matrix/camera
+ * rules at every alpha. Pair invalidation retires the layout before reuse. */
+enum { FI_PLAN_POS = 1, FI_PLAN_NRM = 2 };
+typedef struct {
+    uint8_t kind;
+    FiCmd cmd;
+    uint32_t outOffset;
+    uint32_t streamPosIdx;
+} FiReplayPlanAction;
+typedef struct {
+    const FiStream *cur;
+    const FiStream *prev;
+    const uint8_t *curData;
+    const uint8_t *prevData;
+    const uint32_t *curPosOff;
+    const uint32_t *prevPosOff;
+    const FiPosKey *curPosKey;
+    const FiPosKey *prevPosKey;
+    const int32_t *curPrevPos;
+    const FiCmd *curCommands;
+    long curTick;
+    long prevTick;
+    uint32_t curSize;
+    uint32_t curCommandCount;
+    uint32_t curPosCount;
+    uint32_t curKeyCount;
+    uint32_t prevPosCount;
+    uint32_t prevKeyCount;
+    uint32_t length;
+    uint32_t actionCount;
+    uint32_t actionCap;
+    uint32_t templateCap;
+    uint32_t aoCount;
+    uint64_t pairEpoch;
+    int curSealed;
+    int prevSealed;
+    int interp;
+    int noResidual;
+    int noScaleHold;
+    double scaleSnapRatio;
+    int valid;
+    /* Retained filtered-layout fallback, bounded by
+     * FI_REPLAY_PLAN_CACHE_MAX_BYTES below. A fresh plan copies its layout
+     * here once at commit, so a memo/full-build or lifecycle transition can
+     * restore a known image. Normal plan replays keep the resident owner and
+     * do not recopy this template; its capacity and per-new-window copy cost
+     * are deliberate recovery safety net, not a claimed performance win. */
+    uint8_t *templateData;
+    FiReplayPlanAction *actions;
+    FiAoMarker ao[FI_AO_MAX];
+} FiReplayPlan;
+#define FI_REPLAY_PLAN_CACHE_MAX_BYTES (1024u * 1024u)
+#define FI_REPLAY_PLAN_CACHE_MAX_ACTIONS 4096u
+static FiReplayPlan s_replayPlan;
+
+/* s_replayBuf is shared by the memo, plan and full-builder paths. Keeping its
+ * producer explicit is what makes in-place plan replay safe: a plan may
+ * restore only its matrix actions when the filtered layout is still resident.
+ * The retained template is a deliberate recovery fallback for ownership
+ * transitions, malformed/partial builds, and lifecycle resets; current normal
+ * full-build/plan flow leaves the plan layout resident after commit. The enum
+ * is deliberately separate from s_replayPlan.valid: a valid plan can describe
+ * a layout that was temporarily replaced by a memo hit. */
+#ifdef MP6_FI_REPLAY_TEST
+static uint32_t s_replayPlanBuilds, s_replayPlanHits;
+static uint32_t s_replayPlanMisses, s_replayPlanInvalidates;
+static uint32_t s_replayPlanTemplateCopies;
+#endif
+
+static void fi_replay_plan_invalidate(void)
+{
+    uint8_t *templateData = s_replayPlan.templateData;
+    FiReplayPlanAction *actions = s_replayPlan.actions;
+    uint32_t templateCap = s_replayPlan.templateCap;
+    uint32_t actionCap = s_replayPlan.actionCap;
+#ifdef MP6_FI_REPLAY_TEST
+    if (s_replayPlan.valid || actions != NULL || templateData != NULL)
+        ++s_replayPlanInvalidates;
+#endif
+    if (s_replayBufOwner == FI_REPLAY_BUF_PLAN)
+        s_replayBufOwner = FI_REPLAY_BUF_NONE;
+    /* Ordinary pair/stream invalidation clears identity and counts but retains
+     * bounded storage; explicit lifecycle reset releases both buffers. */
+    memset(&s_replayPlan, 0, sizeof(s_replayPlan));
+    s_replayPlan.templateData = templateData;
+    s_replayPlan.actions = actions;
+    s_replayPlan.templateCap = templateCap;
+    s_replayPlan.actionCap = actionCap;
+}
+
+static void fi_replay_plan_release(void)
+{
+    free(s_replayPlan.templateData);
+    free(s_replayPlan.actions);
+    memset(&s_replayPlan, 0, sizeof(s_replayPlan));
+    s_replayBufOwner = FI_REPLAY_BUF_NONE;
+}
+
 /* Walk one command at data[pos]. Returns consumed size (>0) and fills cmd,
  * or 0 on any structural surprise (unknown opcode/subcommand, overrun,
  * unknown stride). Exactly mirrors process()'s framing. */
@@ -1016,6 +1338,13 @@ static int fi_is_pos_load(const FiCmd *c)
     return c->op == GX_LOAD_XF_REG && c->xfAddr <= 0x77u && c->xfCount == 12;
 }
 /* GXLoadNrmMtxImm: addr in the nrm bank, repacked 3x3 (9 floats). */
+/* GXLoadTexMtxImm into the texture-matrix bank (2x4 or 3x4). */
+static int fi_is_tex_load(const FiCmd *c)
+{
+    return c->op == GX_LOAD_XF_REG && c->xfAddr >= 0x78u && c->xfAddr < 0xF0u &&
+           (c->xfAddr - 0x78u) % 12u == 0 && (c->xfCount == 8 || c->xfCount == 12);
+}
+
 static int fi_is_nrm_load(const FiCmd *c)
 {
     return c->op == GX_LOAD_XF_REG && c->xfAddr >= 0x400u && c->xfAddr <= 0x459u && c->xfCount == 9;
@@ -1031,6 +1360,7 @@ static void fi_walk_stream(FiStream *s)
 {
     FiVtxState vs;
     uint32_t pos = 0, chunkIdx = 0, aoIdx = 0;
+    fi_census_owner_invalidate_stream(s);
     fi_pair_cache_invalidate();
     s->walked = 1;
     s->walkOk = 0;
@@ -1043,7 +1373,48 @@ static void fi_walk_stream(FiStream *s)
         int markerBoundary = aoIdx < s->aoCount && s->ao[aoIdx].offset == pos;
         while (aoIdx < s->aoCount && s->ao[aoIdx].offset == pos) ++aoIdx;
         if (aoIdx < s->aoCount && s->ao[aoIdx].offset < pos) return;
-        uint32_t n = fi_walk_one(s->data, pos, s->size, &vs, &c);
+        uint32_t n;
+        /* The stream contains long runs of raw NOP bytes.  They have no
+         * vertex-state effect and the old one-byte walk only used each byte
+         * to extend the same verbatim command.  Batch a run, but stop at
+         * every observable boundary: an AO marker must remain a command
+         * boundary, and stopping at a drain-chunk end preserves the legacy
+         * "each NOP is aligned" chunk diagnostic.  In particular, do not
+         * treat 0x48 (GX_CMD_INVL_VC) as a raw NOP: fi_walk_one owns that
+         * opcode's framing and validation.
+         */
+        if (s->data[pos] < 8u) {
+            uint32_t runLimit = s->size;
+            uint32_t run = 1;
+            if (aoIdx < s->aoCount && s->ao[aoIdx].offset > pos &&
+                s->ao[aoIdx].offset < runLimit) {
+                runLimit = s->ao[aoIdx].offset;
+            }
+            if (chunkIdx < s->chunkCount) {
+                /* A stale/zero end is consumed only after this command by the
+                 * legacy loop. Limit this iteration to one byte so a boundary
+                 * exactly at the next position is still classified aligned. */
+                if (s->chunkEnd[chunkIdx] <= pos) {
+                    runLimit = pos + 1;
+                } else if (s->chunkEnd[chunkIdx] < runLimit) {
+                    runLimit = s->chunkEnd[chunkIdx];
+                }
+            }
+            while (run < runLimit - pos && s->data[pos + run] < 8u) ++run;
+
+            /* Match fi_walk_one's initialization exactly for the first byte;
+             * only size is widened to the contiguous span. */
+            c.offset = pos;
+            c.op = s->data[pos];
+            c.auroraSub = 0xFFFF;
+            c.bpReg = 0xFF;
+            c.xfAddr = 0xFFFFFFFFu;
+            c.xfCount = 0;
+            c.size = run;
+            n = run;
+        } else {
+            n = fi_walk_one(s->data, pos, s->size, &vs, &c);
+        }
         if (n == 0) {
             if (fi_diag()) {
                 fprintf(stderr, "[MP6-FI] walk FAIL tick=%ld at offset %u (op 0x%02X sub 0x%04X) size=%u\n",
@@ -1101,11 +1472,22 @@ static int fi_key_equal(const FiPosKey *a, const FiPosKey *b)
            a->sub == b->sub && a->ordinal == b->ordinal;
 }
 
-/* Same identity GROUP: one model instance under one camera (ordinal ignored). */
+/* HSF meshes have authored object identities, unlike hook/immediate ordinals
+ * and deferred push ranks. Keep a mesh and all of its private AO copies in
+ * one group, without letting unrelated culled meshes interrupt its motion. */
+static uint16_t fi_key_object_group(const FiPosKey *key)
+{
+    if (key->sub >= 0x4000u && key->sub < 0xC000u)
+        return (uint16_t)(0x4000u + (key->sub & 0x3FFFu));
+    return 0;
+}
+
+/* Legacy emission-index keys retain the whole-model integrity guard. */
 static int fi_key_same_group(const FiPosKey *a, const FiPosKey *b)
 {
     return a->valid && b->valid && a->model == b->model &&
-           a->camera == b->camera && a->generation == b->generation;
+           a->camera == b->camera && a->generation == b->generation &&
+           fi_key_object_group(a) == fi_key_object_group(b);
 }
 
 /* --- Key census tables ---------------------------------------------------
@@ -1125,13 +1507,14 @@ static int fi_key_same_group(const FiPosKey *a, const FiPosKey *b)
  * spending a quarter of its own budget deciding what to do with it.
  *
  * Hashing the keys once per stream makes every one of those questions a
- * lookup, so pairing is linear.  Scratch only: rebuilt from scratch each
- * tick, grow-only like the retained streams, and carrying no meaning across
- * ticks (nothing here needs invalidating on a savestate load). */
+ * lookup, so pairing is linear.  The current side is rebuilt each tick; the
+ * prior sealed side may be carried forward by a bounded owner tuple.  The
+ * tuple is invalidated with the stream lifecycle and on global resets. */
 typedef struct {
     FiPosKey *slot;   /* slot[i].valid == 0 marks an empty bucket */
     uint32_t *count;  /* keys hashing equal to this bucket's key */
     int32_t  *first;  /* lowest stream index carrying it */
+    uint8_t  *rejected; /* group-wide visible/private-copy coherence guard */
     uint32_t  cap;    /* power of two, or 0 when unbuilt */
     int       ok;
 } FiKeyTable;
@@ -1145,6 +1528,8 @@ static uint32_t fi_key_hash(const FiPosKey *k, int withName)
     if (withName) {
         h = (h ^ k->sub) * 16777619u;
         h = (h ^ k->ordinal) * 16777619u;
+    } else {
+        h = (h ^ fi_key_object_group(k)) * 16777619u;
     }
     return h;
 }
@@ -1165,29 +1550,39 @@ static uint32_t fi_table_probe(const FiKeyTable *t, const FiPosKey *k, int withN
     return i;
 }
 
+#ifdef MP6_FI_REPLAY_TEST
+static unsigned s_fiTableBuilds;
+#endif
+
 /* Build the table over `keys[0..n)`. Invalid keys are never inserted: they
  * have no identity, so they belong to no group and name nothing. */
 static void fi_table_build(FiKeyTable *t, const FiPosKey *keys, uint32_t n, int withName)
 {
     uint32_t need = 64, j;
+#ifdef MP6_FI_REPLAY_TEST
+    ++s_fiTableBuilds;
+#endif
     t->ok = 0;
     while ((uint64_t)need < (uint64_t)n * 2u) {
         if (need > UINT32_MAX / 2u) return;
         need *= 2u;
     }
     if (need > t->cap) {
-        uint32_t capKey = t->cap, capCount = t->cap, capFirst = t->cap;
+        uint32_t capKey = t->cap, capCount = t->cap, capFirst = t->cap, capRejected = t->cap;
         if (!fi_grow((void **)&t->slot, &capKey, need, sizeof(FiPosKey)) ||
             !fi_grow((void **)&t->count, &capCount, need, sizeof(uint32_t)) ||
-            !fi_grow((void **)&t->first, &capFirst, need, sizeof(int32_t))) {
+            !fi_grow((void **)&t->first, &capFirst, need, sizeof(int32_t)) ||
+            !fi_grow((void **)&t->rejected, &capRejected, need, sizeof(uint8_t))) {
             return;
         }
-        /* fi_grow rounds each independently; the table indexes all three with
+        /* fi_grow rounds each independently; the table indexes all four with
          * one mask, so adopt the smallest common power of two it produced. */
         t->cap = capKey < capCount ? capKey : capCount;
         if (capFirst < t->cap) t->cap = capFirst;
+        if (capRejected < t->cap) t->cap = capRejected;
     }
     memset(t->slot, 0, (size_t)t->cap * sizeof(FiPosKey));
+    memset(t->rejected, 0, (size_t)t->cap);
     for (j = 0; j < n; ++j) {
         uint32_t at;
         if (!keys[j].valid) continue;
@@ -1216,8 +1611,81 @@ static uint32_t fi_table_lookup(const FiKeyTable *t, const FiPosKey *k, int with
     return t->count[at];
 }
 
-/* Per-side scratch, reused every tick (grow-only). */
+/* Per-side grow-only scratch; the two banks rotate when the previous census
+ * owner is reused. */
 static FiKeyTable s_curGroupTab, s_curNameTab, s_prevGroupTab, s_prevNameTab;
+
+static int fi_census_owner_matches(const FiStream *prev)
+{
+    return prev != NULL && prev->sealed && prev->walkOk &&
+           s_censusOwner.valid && s_censusOwner.stream == prev &&
+           s_censusOwner.tick == prev->tick &&
+           s_censusOwner.posKey == prev->posKey &&
+           s_censusOwner.keyCount == prev->keyCount &&
+           s_curGroupTab.ok && s_curNameTab.ok;
+}
+
+static void fi_census_owner_record(const FiStream *cur)
+{
+    if (cur != NULL && cur->sealed && cur->walkOk &&
+        s_curGroupTab.ok && s_curNameTab.ok) {
+        s_censusOwner.stream = cur;
+        s_censusOwner.tick = cur->tick;
+        s_censusOwner.posKey = cur->posKey;
+        s_censusOwner.keyCount = cur->keyCount;
+        s_censusOwner.valid = 1;
+    } else {
+        fi_census_owner_invalidate();
+    }
+}
+
+static void fi_census_tables_swap(void)
+{
+    FiKeyTable table;
+    table = s_curGroupTab;
+    s_curGroupTab = s_prevGroupTab;
+    s_prevGroupTab = table;
+    table = s_curNameTab;
+    s_curNameTab = s_prevNameTab;
+    s_prevNameTab = table;
+}
+
+/* A private AO draw must advance exactly like its visible HSF mesh. Validate
+ * the entire object group once per seal, before pairing any member. A missing
+ * or duplicate member, duplicate visible instance, or different saved matrix
+ * snaps BOTH populations, never just the mask. Hash lookups keep this O(n).
+ * Legacy ordinal groups keep their existing conservative policy unchanged. */
+static void fi_validate_object_groups(const FiStream *cur, const FiStream *prev)
+{
+    uint32_t i;
+    if (!s_curGroupTab.ok || !s_curNameTab.ok ||
+        !s_prevGroupTab.ok || !s_prevNameTab.ok) return;
+    for (i = 0; i < cur->posCount; ++i) {
+        const FiPosKey *key = &cur->posKey[i];
+        uint16_t object = fi_key_object_group(key);
+        uint32_t at;
+        FiPosKey visible;
+        int32_t mainCur = -1, mainPrev = -1, copyPrev = -1;
+        if (!key->valid || !object) continue;
+        at = fi_table_probe(&s_curGroupTab, key, 0);
+        if (s_curGroupTab.rejected[at]) continue;
+        visible = *key;
+        visible.sub = object;
+        visible.ordinal = 0;
+        if (fi_table_lookup(&s_curNameTab, &visible, 1, &mainCur) != 1 ||
+            fi_table_lookup(&s_prevNameTab, &visible, 1, &mainPrev) != 1 ||
+            fi_table_lookup(&s_curNameTab, key, 1, NULL) != 1 ||
+            fi_table_lookup(&s_prevNameTab, key, 1, &copyPrev) != 1 ||
+            mainCur < 0 || (uint32_t)mainCur >= cur->posCount ||
+            mainPrev < 0 || (uint32_t)mainPrev >= prev->posCount ||
+            copyPrev < 0 || (uint32_t)copyPrev >= prev->posCount ||
+            (key->sub < 0x8000u && key->ordinal != 0) ||
+            memcmp(cur->data + cur->posOff[i], cur->data + cur->posOff[mainCur], 48) ||
+            memcmp(prev->data + prev->posOff[copyPrev], prev->data + prev->posOff[mainPrev], 48)) {
+            s_curGroupTab.rejected[at] = 1;
+        }
+    }
+}
 
 /* The linear REFERENCE census the tables replaced: counts keys in
  * `keys[0..n)` belonging to key `k`'s group, and how many carry k's exact
@@ -1245,10 +1713,12 @@ static void fi_group_census(const FiPosKey *k, const FiPosKey *keys, uint32_t n,
  *
  * PAIRING RULE (see also include/mp6_unlocked_fps.h).  A matrix is named
  * by (camera, model, generation, sub, ordinal) and NEVER by its position in the
- * stream.  `sub` distinguishes the emission bracket -- the immediate in-model
- * pass from each deferred draw object's per-model PUSH-ORDER rank -- so the
- * deferred pass's depth sort, which re-permutes emission order on every camera
- * move, cannot shift what a key names.  Every pos load emitted inside an
+ * stream. For authored HSF mesh loads, `sub` names the object and its visible
+ * or private AO population. Otherwise it distinguishes the emission bracket:
+ * the immediate in-model pass from each deferred draw object's per-model
+ * PUSH-ORDER rank. The deferred pass's depth sort, which re-permutes emission
+ * order on every camera move, therefore cannot shift what a key names.
+ * Every pos load emitted inside an
  * Hu3DExec camera+model bracket carries this key, including the ones
  * Hu3DDrawPost emits after the bracket closed; matrices with no key at all
  * (sprites, wipes, the shadow/reflect passes) are presented at tick N verbatim.
@@ -1274,10 +1744,13 @@ static void fi_group_census(const FiPosKey *k, const FiPosKey *keys, uint32_t n,
  *
  * The guard: a pair may interpolate only when its (camera, model,
  * generation) group has the SAME pos-load count in N-1 and N, and its exact
- * key is UNIQUE on both sides.  A group whose membership changed presents at
- * tick N verbatim for that one window (exactly feature-off for one tick,
- * imperceptible) and re-pairs on the next tick when N-1/N agree again.
- * A same-count membership SWAP inside one model in one tick remains
+ * key is UNIQUE on both sides. Authored HSF meshes use a per-object group
+ * instead: unrelated mesh culling must not snap a still-visible object during
+ * a camera move. Its visible matrix and AO copies share that group, with an
+ * additional byte-equality/uniqueness check before any member may advance.
+ * A group whose membership changed presents at
+ * tick N verbatim for that one window and re-pairs when N-1/N agree again.
+ * A same-count membership SWAP inside one legacy ordinal model in one tick remains
  * theoretically pairable-wrong (nothing distinguishes it from motion); it
  * requires a simultaneous add+remove in the same bracket in one tick, which
  * no observed scene does. */
@@ -1293,26 +1766,46 @@ static void fi_pair_stream(FiStream *cur, const FiStream *prev)
      * the whole defect -- see the pan-phase section of
      * docs/history/F3_LEAF_STROBE.md. */
     uint32_t diagNoKey = 0, diagNoPrevGroup = 0, diagCountDiff = 0, diagDup = 0;
+    uint32_t diagObjectSnap = 0;
     uint32_t diagNoKeyInCam = 0; /* of those, the ones inside a 3D camera */
     uint32_t diagNoPrev = 0;     /* no usable predecessor stream at all */
     fi_pair_cache_invalidate();
-    if (!cur->walkOk) return;
+    if (!cur->walkOk) {
+        fi_census_owner_invalidate_stream(cur);
+        return;
+    }
     if (!fi_grow((void **)&cur->prevPos, &cur->prevPosCap,
                  cur->posCount, sizeof(int32_t))) {
         cur->walkOk = 0;
+        fi_census_owner_invalidate_stream(cur);
         return;
     }
     if (prev != NULL && prev->walkOk) {
-        fi_table_build(&s_curGroupTab, cur->posKey, cur->keyCount, 0);
-        fi_table_build(&s_curNameTab, cur->posKey, cur->keyCount, 1);
-        fi_table_build(&s_prevGroupTab, prev->posKey, prev->keyCount, 0);
-        fi_table_build(&s_prevNameTab, prev->posKey, prev->keyCount, 1);
+        if (cur->sealed && fi_census_owner_matches(prev)) {
+            /* The old current tables are exactly `prev`'s census. Move those
+             * table structs to the previous-bank slots, then rebuild only the
+             * new current side. No key/table bytes are copied. */
+            fi_census_tables_swap();
+            fi_table_build(&s_curGroupTab, cur->posKey, cur->keyCount, 0);
+            fi_table_build(&s_curNameTab, cur->posKey, cur->keyCount, 1);
+        } else {
+            fi_table_build(&s_curGroupTab, cur->posKey, cur->keyCount, 0);
+            fi_table_build(&s_curNameTab, cur->posKey, cur->keyCount, 1);
+            fi_table_build(&s_prevGroupTab, prev->posKey, prev->keyCount, 0);
+            fi_table_build(&s_prevNameTab, prev->posKey, prev->keyCount, 1);
+        }
+        fi_validate_object_groups(cur, prev);
+        fi_census_owner_record(cur);
+    } else {
+        fi_census_owner_invalidate_stream(cur);
     }
     for (i = 0; i < cur->posCount; ++i) {
         uint32_t gCur, oCur, gPrev, oPrev;
         int32_t prevAt;
         cur->prevPos[i] = -1;
         if (!prev || !prev->walkOk) { diagNoPrev++; continue; }
+        if (!s_curGroupTab.ok || !s_curNameTab.ok ||
+            !s_prevGroupTab.ok || !s_prevNameTab.ok) { diagNoPrev++; continue; }
         if (!cur->posKey[i].valid) {
             diagNoKey++;
             if (cur->posKey[i].camera >= 0) diagNoKeyInCam++;
@@ -1354,6 +1847,12 @@ static void fi_pair_stream(FiStream *cur, const FiStream *prev)
             if (fi_diag() && gPrev != 0) diagGroupSnap++;
             continue;
         }
+        if (fi_key_object_group(&cur->posKey[i]) &&
+            s_curGroupTab.rejected[fi_table_probe(&s_curGroupTab, &cur->posKey[i], 0)]) {
+            diagObjectSnap++;
+            if (fi_diag()) diagGroupSnap++;
+            continue;
+        }
         if (i < prev->posCount && fi_key_equal(&cur->posKey[i], &prev->posKey[i])) {
             cur->prevPos[i] = (int32_t)i;
             continue;
@@ -1366,12 +1865,12 @@ static void fi_pair_stream(FiStream *cur, const FiStream *prev)
     if (fi_diag() >= 3) {
         fprintf(stderr, "[MP6-FI] pair tick=%ld pos=%u paired=%u reordered=%u | unpaired: "
                         "nokey=%u (incam=%u) noprev=%u noprevgroup=%u countdiff=%u dup=%u "
-                        "unmatched=%u\n",
+                        "unmatched=%u objectSnap=%u\n",
                 cur->tick, cur->posCount,
                 cur->posCount - (diagNoKey + diagNoPrev + diagNoPrevGroup + diagCountDiff +
-                                 diagDup + diagUnmatched),
+                                 diagDup + diagUnmatched + diagObjectSnap),
                 diagReordered, diagNoKey, diagNoKeyInCam, diagNoPrev, diagNoPrevGroup,
-                diagCountDiff, diagDup, diagUnmatched);
+                diagCountDiff, diagDup, diagUnmatched, diagObjectSnap);
     } else if (fi_diag() && (diagReordered || diagGroupSnap)) {
         fprintf(stderr, "[MP6-FI] pair tick=%ld pos=%u reordered=%u unmatched=%u groupsnap=%u\n",
                 cur->tick, cur->posCount, diagReordered, diagUnmatched, diagGroupSnap);
@@ -1658,6 +2157,7 @@ static int fi_pair_cache_begin(const FiStream *cur, const FiStream *prev)
 
 static void fi_set_active(int on)
 {
+    if (!on) fi_census_owner_invalidate();
     if (on && !s_active) {
         aurora_gx_set_drain_capture(fi_capture_sink, NULL);
         s_active = 1;
@@ -1665,6 +2165,7 @@ static void fi_set_active(int on)
     } else if (!on && s_active) {
         aurora_gx_set_drain_capture(NULL, NULL);
         s_active = 0;
+        fi_pair_cache_invalidate();
         s_cur = -1;
         s_latest = -1;
         s_prev = -1; /* retention invalidated; buffers kept (grow-only) */
@@ -1673,13 +2174,257 @@ static void fi_set_active(int on)
     }
 }
 
+/* =======================================================================
+ * CPU-deformed vertex buffers (include/mp6_fi_model.h).
+ *
+ * Shape morphs, clusters and envelope skinning animate by rewriting vertex
+ * and normal buffers in place each tick; the matrices in the stream stay
+ * fixed, so the matrix rewrite cannot move them and those models (the
+ * file-select storybook opening is the measured case) advanced only on
+ * tick frames. At each seal the buffers Hu3DExec reported are snapshotted;
+ * a replay blends the live buffers to N + alpha * (N - (N-1)), the same
+ * forward evaluation the matrices use, and restores tick N's contents once
+ * aurora has copied them. A buffer whose largest component move reaches
+ * the translation gate is a cut or respawn and stays at tick N.
+ * ======================================================================= */
+typedef struct {
+    float *data;
+    uint32_t floats;
+    uint32_t offset; /* into the slot's snapshot arena, in floats */
+    uint32_t prevOffset; /* the same buffer in the previous slot's arena */
+} FiDefBuf;
+
+typedef struct {
+    FiDefBuf *bufs;
+    uint32_t count, bufCap;
+    float *arena;
+    uint32_t used, arenaCap;
+    /* Buffers that moved between the previous seal and this one, by less
+     * than the translation gate: the only ones a replay blends and restores.
+     * Both snapshots stay fixed until the next seal, so this is decided once
+     * per tick instead of rescanning every buffer on every replay. */
+    uint32_t *moving;
+    uint32_t movingCount, movingCap;
+} FiDefSet;
+
+static FiDefSet s_def[2];
+
+/* =======================================================================
+ * Texture-matrix interpolation.
+ *
+ * Scrolling and animated textures (the file-select swirl, water, signs)
+ * move through GXLoadTexMtxImm, which the pos-matrix rewrite never touches,
+ * so they advanced only on tick frames. At each seal the texture-matrix
+ * loads of N and N-1 are paired by order when both streams load the same
+ * banks in the same sequence; a replay writes N + alpha * (N - (N-1)) into
+ * its copy of each load. A matrix with any element moving 0.5 or more in
+ * one tick (a scroll wrapping around, a cut) stays at tick N.
+ *
+ * So does a flipbook: an effect that steps its UVs through the cells of a
+ * sprite sheet. Its in-between offsets land between two cells, so a replay
+ * drew half of each, or the empty gap beside them, and the effect flickered
+ * on every interpolated present. Pokey Punch-out's spawn dust steps 1/3 a
+ * tick and Shy Guy's Jungle Jam (w03) has an 8-cell sheet at 1/8 a tick.
+ * Real scrolls move far less: across w01, w03 and m621 every smooth scroll
+ * moved under 0.05 a tick, so a step of 0.1 or more is taken as a cell
+ * change, and so is any smaller step that is exactly one cell of a sheet up
+ * to 32 cells wide and lands on that grid.
+ * ======================================================================= */
+#define FI_TEX_STEP_SNAP 0.1f
+
+/* d = n1 - n0 is one cell of a sheet of 2..32 cells and both values sit on
+ * that grid. */
+static int fi_tex_cell_step(float n0, float n1)
+{
+    const float eps = 1e-4f;
+    float d = fabsf(n1 - n0), cells, q0, q1;
+    if (d < 1.0f / 32.0f - eps) return 0;
+    cells = 1.0f / d;
+    if (fabsf(cells - roundf(cells)) > cells * cells * eps) return 0;
+    q0 = n0 / d;
+    q1 = n1 / d;
+    return fabsf(q0 - roundf(q0)) < 1e-3f && fabsf(q1 - roundf(q1)) < 1e-3f;
+}
+typedef struct {
+    uint32_t cmd;  /* command index in the stream the replay was built from */
+    uint32_t out;  /* offset of that command in s_replayBuf */
+} FiTexOut;
+
+static uint8_t *s_replayBuf;   /* defined with the replay builder below */
+static uint32_t s_replayCap;
+static FiTexOut *s_texOut;           /* recorded by the last full replay build */
+static uint32_t s_texOutCount, s_texOutCap;
+static uint32_t *s_texCur, *s_texPrev; /* paired command indices, by order */
+static uint32_t s_texCurCap, s_texPrevCap, s_texPairCount;
+
+static void fi_tex_pair(const FiStream *cur, const FiStream *prev)
+{
+    uint32_t i, nc = 0, np = 0;
+    s_texPairCount = 0;
+    if (cur == NULL || prev == NULL || !cur->walkOk || !prev->walkOk) return;
+    for (i = 0; i < cur->commandCount; ++i) nc += (uint32_t)fi_is_tex_load(&cur->commands[i]);
+    for (i = 0; i < prev->commandCount; ++i) np += (uint32_t)fi_is_tex_load(&prev->commands[i]);
+    if (nc == 0 || nc != np) return;
+    if (!fi_grow((void **)&s_texCur, &s_texCurCap, nc, sizeof(uint32_t)) ||
+        !fi_grow((void **)&s_texPrev, &s_texPrevCap, nc, sizeof(uint32_t)))
+        return;
+    nc = np = 0;
+    for (i = 0; i < cur->commandCount; ++i)
+        if (fi_is_tex_load(&cur->commands[i])) s_texCur[nc++] = i;
+    for (i = 0; i < prev->commandCount; ++i)
+        if (fi_is_tex_load(&prev->commands[i])) s_texPrev[np++] = i;
+    for (i = 0; i < nc; ++i) {
+        const FiCmd *a = &cur->commands[s_texCur[i]], *b = &prev->commands[s_texPrev[i]];
+        if (a->xfAddr != b->xfAddr || a->xfCount != b->xfCount) return; /* different structure */
+    }
+    s_texPairCount = nc;
+}
+
+static void fi_tex_rewrite(const FiStream *cur, const FiStream *prev, double alpha)
+{
+    uint32_t i, k = 0;
+    if (s_texPairCount == 0 || prev == NULL || alpha == 0.0) return;
+    for (i = 0; i < s_texOutCount; ++i) {
+        const FiTexOut *e = &s_texOut[i];
+        const FiCmd *c, *p;
+        uint32_t j;
+        int snap = 0;
+        while (k < s_texPairCount && s_texCur[k] < e->cmd) ++k;
+        if (k >= s_texPairCount || s_texCur[k] != e->cmd) continue;
+        c = &cur->commands[e->cmd];
+        p = &prev->commands[s_texPrev[k]];
+        if (e->out + c->size > s_replayCap || memcmp(s_replayBuf + e->out, cur->data + c->offset, 5) != 0)
+            return; /* layout no longer matches the recorded offsets */
+        for (j = 0; j < c->xfCount; ++j) {
+            float n1 = rd_bef32(cur->data + c->offset + 5 + 4 * j);
+            float n0 = rd_bef32(prev->data + p->offset + 5 + 4 * j);
+            if (!(fabsf(n1 - n0) < FI_TEX_STEP_SNAP) || (n1 != n0 && fi_tex_cell_step(n0, n1))) {
+                snap = 1;
+                break;
+            }
+        }
+        for (j = 0; j < c->xfCount; ++j) {
+            float n1 = rd_bef32(cur->data + c->offset + 5 + 4 * j);
+            float n0 = rd_bef32(prev->data + p->offset + 5 + 4 * j);
+            wr_bef32(s_replayBuf + e->out + 5 + 4 * j, snap ? n1 : (float)(n1 + alpha * (n1 - n0)));
+        }
+    }
+}
+static int s_defLatest = -1, s_defPrev = -1;
+static uint32_t s_defBlended; /* buffers blended by the replay in flight */
+static int s_defBlendedThisWindow; /* this tick's replays decode (no reuse) */
+
+static int fi_def_cmp(const void *a, const void *b)
+{
+    const FiDefBuf *x = (const FiDefBuf *)a, *y = (const FiDefBuf *)b;
+    return (x->data > y->data) - (x->data < y->data);
+}
+
+static void fi_def_find_moving(FiDefSet *cur, const FiDefSet *prev)
+{
+    uint32_t i;
+    for (i = 0; i < cur->count; ++i) {
+        FiDefBuf *b = &cur->bufs[i];
+        const FiDefBuf *p = NULL;
+        uint32_t lo = 0, hi = prev->count, k;
+        const float *n1, *n0;
+        float maxMove = 0.0f;
+        while (lo < hi) {
+            uint32_t mid = (lo + hi) / 2;
+            if (prev->bufs[mid].data < b->data) lo = mid + 1; else hi = mid;
+        }
+        if (lo < prev->count && prev->bufs[lo].data == b->data) p = &prev->bufs[lo];
+        if (p == NULL || p->floats != b->floats) continue;
+        n1 = cur->arena + b->offset;
+        n0 = prev->arena + p->offset;
+        for (k = 0; k < b->floats; ++k) {
+            float d = fabsf(n1[k] - n0[k]);
+            if (d > maxMove) maxMove = d;
+        }
+        if (maxMove == 0.0f || maxMove >= (float)FI_TRANS_SNAP_U) continue;
+        b->prevOffset = p->offset;
+        cur->moving[cur->movingCount++] = i;
+    }
+}
+
+static void fi_def_seal(void)
+{
+    const Mp6FiDeformed *list;
+    int n = mp6_fi_deformed_list(&list), i;
+    int slot = (s_defLatest == 0) ? 1 : 0;
+    FiDefSet *set = &s_def[slot];
+    uint32_t total = 0;
+    set->count = 0;
+    set->used = 0;
+    for (i = 0; i < n; ++i) total += list[i].bytes / 4;
+    if (n > 0 && (!fi_grow((void **)&set->bufs, &set->bufCap, (uint32_t)n, sizeof(FiDefBuf)) ||
+                  !fi_grow((void **)&set->arena, &set->arenaCap, total, sizeof(float)))) {
+        s_defPrev = s_defLatest = -1;
+        return;
+    }
+    for (i = 0; i < n; ++i) {
+        FiDefBuf *b = &set->bufs[set->count++];
+        b->data = (float *)list[i].data;
+        b->floats = list[i].bytes / 4;
+        b->offset = set->used;
+        memcpy(set->arena + set->used, b->data, (size_t)b->floats * sizeof(float));
+        set->used += b->floats;
+    }
+    qsort(set->bufs, set->count, sizeof(FiDefBuf), fi_def_cmp);
+    set->movingCount = 0;
+    if (s_defLatest >= 0 && set->count > 0 &&
+        !fi_grow((void **)&set->moving, &set->movingCap, set->count, sizeof(uint32_t))) {
+        s_defPrev = s_defLatest = -1;
+        return;
+    }
+    if (s_defLatest >= 0) fi_def_find_moving(set, &s_def[s_defLatest]);
+    s_defPrev = s_defLatest;
+    s_defLatest = slot;
+}
+
+/* Blend the live buffers for one replay; returns how many it changed. */
+static uint32_t fi_def_blend(double alpha)
+{
+    const FiDefSet *cur, *prev;
+    uint32_t i;
+    float a = (float)alpha;
+    if (s_defLatest < 0 || s_defPrev < 0 || alpha == 0.0) return 0;
+    cur = &s_def[s_defLatest];
+    prev = &s_def[s_defPrev];
+    for (i = 0; i < cur->movingCount; ++i) {
+        const FiDefBuf *b = &cur->bufs[cur->moving[i]];
+        const float *n1 = cur->arena + b->offset, *n0 = prev->arena + b->prevOffset;
+        uint32_t k;
+        for (k = 0; k < b->floats; ++k) b->data[k] = n1[k] + a * (n1[k] - n0[k]);
+    }
+    return cur->movingCount;
+}
+
+/* Put tick N's contents back once the replay's draws have been copied. */
+static void fi_def_restore(void)
+{
+    const FiDefSet *cur;
+    uint32_t i;
+    if (s_defBlended == 0 || s_defLatest < 0) return;
+    cur = &s_def[s_defLatest];
+    for (i = 0; i < cur->movingCount; ++i) {
+        const FiDefBuf *b = &cur->bufs[cur->moving[i]];
+        memcpy(b->data, cur->arena + b->offset, (size_t)b->floats * sizeof(float));
+    }
+    s_defBlended = 0;
+}
+
 void mp6_fi_note_frame_begin(void)
 {
     int enabled;
     mp6_ao_begin_frame(); /* even when Unlocked FPS itself is disabled */
+    mp6_fi_deformed_reset(); /* this tick's Hu3DExec reports its own buffers */
     enabled = mp6_unlocked_fps_enabled() && mp6_tick_interpolation_possible();
     fi_set_active(enabled);
-    if (!enabled) return;
+    if (!enabled) {
+        s_defLatest = s_defPrev = -1; /* never blend across an inactive gap */
+        return;
+    }
     /* Arm capture for the new tick into the stream slot NOT holding N
      * (which the idle window may still be replaying from -- N-1's slot is
      * the one being retired, exactly the decided N-1/N retention bound). */
@@ -1710,6 +2455,18 @@ void mp6_fi_note_frame_end(void)
         mp6_fi_model_animlog(++s_animTick);
     }
 
+#ifdef __ANDROID__
+    /* The game thread's work for this tick: game logic, the real frame's
+     * submit, and the replays of the window before it -- never the waits. */
+    if (s_tickGameStartNs > 0 && s_tickGameEndNs > s_tickGameStartNs) {
+        int64_t now = (int64_t)mp6_host_monotonic_ns();
+        int64_t work = (s_tickGameEndNs - s_tickGameStartNs) + (now - s_tickGameEndNs) + s_windowReplayWorkNs;
+        mp6_adpf_report_tick(work, s_lastPeriodNs > 0 ? s_lastPeriodNs : 16666667);
+    }
+    mp6_android_frame_rate_tick(mp6_unlocked_fps_enabled() && mp6_tick_interpolation_possible());
+#endif
+    s_windowReplayWorkNs = 0;
+
     if (!s_active || s_cur < 0) return;
     s = &s_streams[s_cur];
     s->sealed = 1;
@@ -1722,9 +2479,31 @@ void mp6_fi_note_frame_end(void)
     if (!s->walkOk) s_censusSealWalkFail++;
     if (s_prev < 0 || !s_streams[s_prev].walkOk) s_censusSealNoPrev++;
     mp6_fi_model_snapshot();
+    fi_def_seal();
+    fi_tex_pair(s, s_prev >= 0 ? &s_streams[s_prev] : NULL);
+    s_defBlendedThisWindow = 0;
     s_cur = -1;
     s_lastSealNs = (int64_t)mp6_host_monotonic_ns();
-    s_lastPresentNs = s_lastSealNs; /* the real present anchors the spacing grid */
+    /* The real present anchors the spacing grid -- unless it was hidden, in
+     * which case the last replay still is the latest thing on screen. */
+    if (!s_smoothPending || s_lastPresentNs == 0) s_lastPresentNs = s_lastSealNs;
+    s_smoothWindow = s_smoothPending;
+    s_smoothPending = 0;
+#ifdef MP6_FI_TELEMETRY
+    /* Tick frames: t0 = game slice start, end = game slice end (the
+     * submit runs from there to the seal), alpha = the open wait in ms. */
+    /* Kind 4: the previous window's last decline -- t0 = when, end = the
+     * replay budget then (ns), alpha = queue reserve (ms), interp = reason. */
+    if (s_telDeclReason >= 0)
+        mp6_fi_tel_record(4, mp6_tick_count, s_lastSealNs, s_telDeclNs, s_replayBudgetNs,
+                          (double)s_queueReserveNs / 1e6, s_telDeclReason);
+    s_telDeclReason = -1;
+    mp6_fi_tel_record(0, mp6_tick_count, s_lastSealNs, s_tickGameStartNs, s_tickGameEndNs,
+                      (double)s_lastBeginWaitNs / 1e6, s_smoothWindow); /* interp=1: hidden */
+#endif
+#ifdef MP6_AURORA_RETAINED_REPLAY
+    s_recordedThisWindow = 0;
+#endif
     s_replaysThisWindow = 0;
     if (fi_diag() && (s->tick % 300) == 0) {
         /* posChanged: how many paired pos-matrix loads actually moved this
@@ -1783,6 +2562,32 @@ static void mp6_fi_census_log(long tick)
             s_costSamples ? (double)s_costPresentSumNs / (double)s_costSamples / 1e6 : 0.0,
             (double)s_costPresentMaxNs / 1e6, s_costSamples,
             s_censusSeals, s_censusSealWalkFail, s_censusSealNoPrev);
+#ifdef MP6_AURORA_RETAINED_REPLAY
+    {   /* retained replay (aurora_gx_replay_stream): deltas over the window */
+        static uint64_t s_base[6];
+        uint64_t now[6];
+        aurora_gx_replay_stats(now);
+        fprintf(stderr, "[MP6-FI-RETAINED] vitick=%ld reused=%llu decoded=%llu refused=%llu "
+                        "streamDiff=%llu stateDiff=%llu gfxDiff=%llu\n",
+                mp6_tick_count, (unsigned long long)(now[0] - s_base[0]),
+                (unsigned long long)(now[1] - s_base[1]), (unsigned long long)(now[2] - s_base[2]),
+                (unsigned long long)(now[3] - s_base[3]), (unsigned long long)(now[4] - s_base[4]),
+                (unsigned long long)(now[5] - s_base[5]));
+        fprintf(stderr, "[MP6-FI-RETAINED] submit-ms reuse avg=%.3f (n=%ld) decode avg=%.3f (n=%ld)\n",
+                s_retReuseN ? (double)s_retReuseNs / (double)s_retReuseN / 1e6 : 0.0, s_retReuseN,
+                s_retDecodeN ? (double)s_retDecodeNs / (double)s_retDecodeN / 1e6 : 0.0, s_retDecodeN);
+        s_retReuseNs = s_retDecodeNs = 0;
+        s_retReuseN = s_retDecodeN = 0;
+        memcpy(s_base, now, sizeof(s_base));
+        {
+            uint64_t ok, fail;
+            aurora_gx_replay_verify_stats(&ok, &fail);
+            if (ok || fail)
+                fprintf(stderr, "[MP6-FI-RETAINED] verify ok=%llu mismatch=%llu (cumulative)\n",
+                        (unsigned long long)ok, (unsigned long long)fail);
+        }
+    }
+#endif
     fflush(stderr);
     for (i = 0; i < FI_DECL_COUNT; ++i) s_declWindowBase[i] = s_declCount[i];
     s_declSlackSumNs = 0;
@@ -1853,6 +2658,70 @@ void mp6_fi_stats_get(Mp6FiStats *out)
 static uint8_t *s_replayBuf;
 static uint32_t s_replayCap;
 
+static int fi_replay_memo_hit(const FiStream *cur, const FiStream *prev, int interp)
+{
+    uint32_t camera;
+    if (cur == NULL || !cur->walkOk || cur->size == 0 ||
+        (interp && (prev == NULL || !prev->walkOk)) ||
+        !s_replayMemo.valid || fi_diag() != 0 || s_replayBuf == NULL ||
+        s_replayMemo.cur != cur || s_replayMemo.prev != prev ||
+        s_replayMemo.curTick != cur->tick ||
+        s_replayMemo.prevTick != (prev != NULL ? prev->tick : 0) ||
+        s_replayMemo.curSize != cur->size ||
+        s_replayMemo.curCommandCount != cur->commandCount ||
+        s_replayMemo.curPosCount != cur->posCount ||
+        s_replayMemo.prevPosCount != (prev != NULL ? prev->posCount : 0) ||
+        s_replayMemo.curSealed != cur->sealed ||
+        s_replayMemo.prevSealed != (prev != NULL ? prev->sealed : 0) ||
+        s_replayMemo.interp != interp ||
+        s_replayMemo.length > s_replayCap ||
+        (s_replayBufOwner != FI_REPLAY_BUF_PLAN &&
+         s_replayBufOwner != FI_REPLAY_BUF_MEMO)) {
+        return 0;
+    }
+    /* The memo is admitted only after every consulted paired matrix was
+     * camera-stable. Recheck the bounded camera census so a cut/state change
+     * cannot reuse a stale diagnostic gate; this is O(number of cameras), not
+     * a source-byte equality scan. */
+    for (camera = 0; camera < 32; ++camera) {
+        if ((s_replayMemo.cameraMask & (1u << camera)) != 0 &&
+            !mp6_fi_model_camera_stable((int)camera)) {
+            return 0;
+        }
+    }
+    s_replayAoCount = s_replayMemo.aoCount;
+    memcpy(s_replayAo, s_replayMemo.ao,
+           (size_t)s_replayAoCount * sizeof(s_replayAo[0]));
+#ifdef MP6_FI_REPLAY_TEST
+    s_replayMemoHits++;
+#endif
+    return 1;
+}
+
+static void fi_replay_memo_commit(const FiStream *cur, const FiStream *prev,
+                                  int interp, uint32_t length,
+                                  uint32_t cameraMask)
+{
+    s_replayMemo.cur = cur;
+    s_replayMemo.prev = prev;
+    s_replayMemo.curTick = cur->tick;
+    s_replayMemo.prevTick = prev != NULL ? prev->tick : 0;
+    s_replayMemo.curSize = cur->size;
+    s_replayMemo.curCommandCount = cur->commandCount;
+    s_replayMemo.curPosCount = cur->posCount;
+    s_replayMemo.prevPosCount = prev != NULL ? prev->posCount : 0;
+    s_replayMemo.curSealed = cur->sealed;
+    s_replayMemo.prevSealed = prev != NULL ? prev->sealed : 0;
+    s_replayMemo.interp = interp;
+    s_replayMemo.length = length;
+    s_replayMemo.aoCount = s_replayAoCount;
+    s_replayMemo.cameraMask = cameraMask;
+    memcpy(s_replayMemo.ao, s_replayAo,
+           (size_t)s_replayAoCount * sizeof(s_replayAo[0]));
+    s_replayMemo.valid = 1;
+    s_replayBufOwner = FI_REPLAY_BUF_MEMO;
+}
+
 static void fi_flush_replay_copy(const uint8_t *source, uint32_t from, uint32_t to, uint32_t *bytes)
 {
     if (*bytes) {
@@ -1914,20 +2783,365 @@ static int s_dbgRoundTripModel, s_dbgRoundTripOrd;
 static double s_dbgMaxAlpha0Err;
 static int s_dbgAlpha0Model, s_dbgAlpha0Ord;
 
-/* Build the skip-filtered, matrix-rewritten replay image of stream `cur`
- * (paired against `prev` when interp != 0). Returns length, 0 on failure. */
-static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int interp, double alpha)
-{
-    FiMtx lastPos[10];       /* interpolated pos 3x4 per PN slot (id/3) */
-    uint8_t lastPosState[10]; /* 0 = untouched/verbatim, 1 = rewritten */
-    uint32_t pos = 0, out = 0, posIdx = 0, commandIdx = 0;
-    uint32_t copyFrom = 0, copyTo = 0, copyBytes = 0;
-    uint32_t aoIdx = 0;
-    int skipDepthOffscreen = 0;
-    int pairCache;
 
-    memset(lastPosState, 0, sizeof(lastPosState));
-    s_replayAoCount = 0;
+/* Shared by the full stream builder and its cached action list. Keep the
+ * camera, motion, residual and normal-slot rules identical on both paths. */
+static int fi_replay_process_pos(const FiStream *cur, const FiStream *prev,
+                                 int interp, double alpha, int pairCache,
+                                 const FiCmd *cmd, uint32_t outOffset,
+                                 uint32_t streamPosIdx, FiMtx lastPos[10],
+                                 uint8_t lastPosState[10],
+                                 uint32_t *memoCameraMaskOut,
+                                 int *memoEligibleOut,
+                                 uint32_t *copyFromOut,
+                                 uint32_t *copyToOut,
+                                 uint32_t *copyBytesOut)
+{
+    FiCmd c = *cmd;
+    uint32_t out = outOffset;
+    uint32_t copyFrom = copyFromOut ? *copyFromOut : 0;
+    uint32_t copyTo = copyToOut ? *copyToOut : 0;
+    uint32_t copyBytes = copyBytesOut ? *copyBytesOut : 0;
+    uint32_t memoCameraMask = memoCameraMaskOut ? *memoCameraMaskOut : 0;
+    int memoEligible = memoEligibleOut ? *memoEligibleOut : 1;
+    int rewrittenResult = 0;
+
+    if (fi_is_pos_load(&c)) {
+        uint32_t slot = c.xfAddr / 4 / 3; /* addr = id*4, id = slot*3 (GX_PNMTX0..9) */
+        uint8_t *payload = s_replayBuf + out + 5;
+        rewrittenResult = 0;
+        /* Hoisted so the decline census can NAME which of the two
+         * pre-conditions failed instead of one of them vanishing into a
+         * silent fall-through, and so camera_stable is still evaluated
+         * exactly once, only for a paired matrix. */
+        int paired = interp && streamPosIdx < cur->posCount &&
+                     cur->prevPos[streamPosIdx] >= 0;
+        int camStable = paired &&
+            mp6_fi_model_camera_stable(cur->posKey[streamPosIdx].camera);
+        s_dbgPosSeen++;
+        if (paired) {
+            int camera = (int)cur->posKey[streamPosIdx].camera;
+            if (!camStable || camera < 0 || camera >= 32) {
+                memoEligible = 0;
+            } else {
+                memoCameraMask |= 1u << (unsigned)camera;
+            }
+        }
+        if (camStable) {
+            uint32_t prevIdx = (uint32_t)cur->prevPos[streamPosIdx];
+            const uint8_t *pa = prev->data + prev->posOff[prevIdx];
+            const uint8_t *pb = cur->data + c.offset + 5;
+            FiPreparedPair fallback;
+            FiPreparedPair *pair = pairCache && streamPosIdx < s_pairCacheCount ?
+                                   &s_pairCache[streamPosIdx] : &fallback;
+            uint8_t state = pair == &fallback ? FI_PAIR_EMPTY : s_pairState[streamPosIdx];
+            if (state == FI_PAIR_EMPTY) {
+                state = fi_prepare_pair(pa, pb, pair);
+                if (pair != &fallback) s_pairState[streamPosIdx] = state;
+            }
+            if (state != FI_PAIR_EQUAL) memoEligible = 0;
+            if (state == FI_PAIR_EQUAL) s_dbgVerbatimEq++;
+            if (state != FI_PAIR_EQUAL) {
+                FiMtx O;
+                FiTrs to;
+                const FiTrs *ta = &pair->a, *tb = &pair->b;
+                const FiMtx *B = &pair->current, *RB = &pair->rebuilt;
+                if (state == FI_PAIR_INVALID) {
+                    s_dbgSnapDecompose++;
+                } else {
+                    double distanceSq = pair->distanceSq;
+                    double qdot = pair->qdot;
+                    /* Scale is the third TRS channel and the only one
+                     * that had no gate. Measured for every pair
+                     * (attributed, so a log names the model), and gated
+                     * by a CHANNEL HOLD rather than a snap. */
+                    double sratio = pair->scaleRatio;
+                    int holdScale = !fi_no_scale_hold() &&
+                                    sratio >= fi_scale_snap_ratio();
+                    /* Per-pair gate (FI_TRANS_SNAP_U / FI_ROT_SNAP_QDOT):
+                     * a replay advances this matrix one tick FORWARD, so
+                     * interpolate only when the tick's motion is small
+                     * enough that the overshoot is imperceptible. A fast
+                     * translation (spawn/despawn/scene cut) or fast
+                     * rotation (menu portrait flip) extrapolates into a
+                     * visible smear -- the reported flicker -- so those
+                     * pairs pass through stream N's matrix verbatim
+                     * (snapped, i.e. that object stays at the tick rate)
+                     * while the genuinely-smooth remainder interpolates. */
+                    double dmag = pair->distance;
+                    if (dmag > s_dbgMaxTrans) s_dbgMaxTrans = dmag;
+                    if (qdot < s_dbgMinQdot) s_dbgMinQdot = qdot;
+                    if (sratio > s_dbgMaxScaleRatio) {
+                        s_dbgMaxScaleRatio = sratio;
+                        s_dbgScaleModel = (int)cur->posKey[streamPosIdx].model;
+                        s_dbgScaleOrd = (int)cur->posKey[streamPosIdx].ordinal;
+                    }
+                    if (distanceSq >= FI_TRANS_SNAP_U * FI_TRANS_SNAP_U ||
+                        qdot <= FI_ROT_SNAP_QDOT) {
+                        s_dbgSnapGate++;
+                    }
+                    if (distanceSq < FI_TRANS_SNAP_U * FI_TRANS_SNAP_U &&
+                        qdot > FI_ROT_SNAP_QDOT) {
+                        int rr, cc;
+                        if (fi_diag() && (uint32_t)cur->prevPos[streamPosIdx] != streamPosIdx) {
+                            /* fallback-matched pair that will interpolate: if the
+                             * key search bound two DIFFERENT nodes (membership
+                             * shift), this is the mispair-flash mechanism. */
+                            fprintf(stderr, "[MP6-FI] interp-fallback tick=%ld model=%d sub=%u ord=%u "
+                                    "pairIdx %u->%d dTrans=%.2f qdot=%.5f\n",
+                                    cur->tick, (int)cur->posKey[streamPosIdx].model,
+                                    (unsigned)cur->posKey[streamPosIdx].sub,
+                                    (unsigned)cur->posKey[streamPosIdx].ordinal,
+                                    streamPosIdx, cur->prevPos[streamPosIdx],
+                                    pair->distance, qdot);
+                        }
+                        if (fi_diag() >= 3 &&
+                            distanceSq > 1.0) {
+                            /* Level 3: every pair that actually gets
+                             * displaced, with both sides' identity.
+                             * A static object appearing here at all is
+                             * a mispair by construction. */
+                            fprintf(stderr,
+                                    "[MP6-FI] rewrite vitick=%ld tick=%ld prevTick=%ld alpha=%.3f "
+                                    "idx %u->%u cam=%d model=%d gen=%u sub=%u ord=%u "
+                                    "prevCam=%d prevModel=%d prevGen=%u prevSub=%u prevOrd=%u "
+                                    "dTrans=%.2f qdot=%.5f\n",
+                                    mp6_tick_count, cur->tick, prev->tick, alpha,
+                                    streamPosIdx, prevIdx,
+                                    (int)cur->posKey[streamPosIdx].camera,
+                                    (int)cur->posKey[streamPosIdx].model,
+                                    (unsigned)cur->posKey[streamPosIdx].generation,
+                                    (unsigned)cur->posKey[streamPosIdx].sub,
+                                    (unsigned)cur->posKey[streamPosIdx].ordinal,
+                                    (int)prev->posKey[prevIdx].camera,
+                                    (int)prev->posKey[prevIdx].model,
+                                    (unsigned)prev->posKey[prevIdx].generation,
+                                    (unsigned)prev->posKey[prevIdx].sub,
+                                    (unsigned)prev->posKey[prevIdx].ordinal,
+                                    pair->distance, qdot);
+                        }
+                        /* ---- RESIDUAL CARRY --------------------------
+                         * fi_decompose/fi_compose is lossy on any
+                         * sheared modelview (see fi_decompose): the
+                         * round trip alone re-poses the object even
+                         * with alpha taken out, which is what made
+                         * mode select's right bridge (model 30 ord 3,
+                         * bridge4) shear on EVERY interpolated present
+                         * and snap back on the next tick frame -- an
+                         * A-B-A flicker whose amplitude is set by the
+                         * decomposition error, not by object motion,
+                         * so no motion gate above can ever catch it.
+                         *
+                         * Split B into the part the TRS model can
+                         * represent (RB) and the part it cannot
+                         * (B - RB, the shear). Interpolate only the
+                         * first and add the second back unchanged:
+                         *
+                         *   O = compose(advance(A,B,alpha)) + (B - RB)
+                         *
+                         * At alpha = 0 advance() returns B's own TRS,
+                         * so O == B EXACTLY: a replay frame can never
+                         * disagree with the tick frame it was built
+                         * from. That removes the whole defect class
+                         * rather than one object, and every object
+                         * keeps interpolating (no new snap gate, so
+                         * the smoothness the feature exists for is
+                         * preserved). The residual is a small constant
+                         * in eye space; over a single tick's gated
+                         * rotation (<=10 deg) its failure to rotate
+                         * with the object is second-order.
+                         * Column 3 needs no correction: decompose
+                         * copies the translation verbatim, so the
+                         * residual there is identically zero. */
+                        fi_advance(ta, tb, alpha, holdScale, &to);
+                        fi_compose(&to, &O);
+                        if (holdScale) {
+                            s_dbgScaleHold++;
+                            if (sratio > s_dbgMaxHeldScale) {
+                                s_dbgMaxHeldScale = sratio;
+                                s_dbgHeldModel = (int)cur->posKey[streamPosIdx].model;
+                                s_dbgHeldOrd = (int)cur->posKey[streamPosIdx].ordinal;
+                            }
+                        }
+                        if (!fi_no_residual()) {
+                            for (rr = 0; rr < 3; ++rr) {
+                                for (cc = 0; cc < 3; ++cc) {
+                                    O.m[rr][cc] += B->m[rr][cc] - RB->m[rr][cc];
+                                }
+                            }
+                        }
+                        if (fi_diag() >= 3) {
+                            /* maxResid: how much shear the TRS model
+                             * cannot represent (this is what USED to be
+                             * injected as displacement -- it is now
+                             * carried).  maxA0: the real self-check --
+                             * run the whole rewrite at alpha = 0 and
+                             * measure |O0 - B|, which must be 0. */
+                            FiTrs t0chk;
+                            FiMtx O0;
+                            /* Same holdScale the real rewrite used: the
+                             * self-check must exercise the code path
+                             * that shipped, not a second variant of it.
+                             * (alphaS = 0 is a no-op at alpha = 0, so
+                             * maxA0Err must stay 0 either way -- that
+                             * is the property being checked.) */
+                            fi_advance(ta, tb, 0.0, holdScale, &t0chk);
+                            fi_compose(&t0chk, &O0);
+                            for (rr = 0; rr < 3; ++rr) {
+                                for (cc = 0; cc < 4; ++cc) {
+                                    double e = RB->m[rr][cc] - B->m[rr][cc];
+                                    double e0;
+                                    if (cc < 3 && !fi_no_residual())
+                                        O0.m[rr][cc] += B->m[rr][cc] - RB->m[rr][cc];
+                                    e0 = O0.m[rr][cc] - B->m[rr][cc];
+                                    if (e < 0.0) e = -e;
+                                    if (e0 < 0.0) e0 = -e0;
+                                    if (e > s_dbgMaxRoundTrip) {
+                                        s_dbgMaxRoundTrip = e;
+                                        s_dbgRoundTripModel = (int)cur->posKey[streamPosIdx].model;
+                                        s_dbgRoundTripOrd = (int)cur->posKey[streamPosIdx].ordinal;
+                                    }
+                                    if (e0 > s_dbgMaxAlpha0Err) {
+                                        s_dbgMaxAlpha0Err = e0;
+                                        s_dbgAlpha0Model = (int)cur->posKey[streamPosIdx].model;
+                                        s_dbgAlpha0Ord = (int)cur->posKey[streamPosIdx].ordinal;
+                                    }
+                                }
+                            }
+                        }
+                        fi_flush_replay_copy(cur->data, copyFrom, copyTo, &copyBytes);
+                        fi_write_mtx(payload, &O);
+                        if (slot < 10) {
+                            lastPos[slot] = O;
+                            lastPosState[slot] = 1;
+                        }
+                        rewrittenResult = 1;
+                    }
+                }
+            }
+        }
+        /* Exhaustive by construction: rewrittenResult / unpaired / camera-cut
+         * / byte-equal / decompose-refused / motion-gated are disjoint
+         * and cover every pos load counted in s_dbgPosSeen. The sum is
+         * checked below so a later edit cannot reintroduce a silent
+         * class. */
+        if (rewrittenResult) {
+            s_dbgRewritten++;
+        } else if (!paired) {
+            s_dbgSnapUnpaired++;
+        } else if (!camStable) {
+            s_dbgSnapCamera++;
+        }
+        if (!rewrittenResult && slot < 10) {
+            lastPosState[slot] = 0; /* verbatim pos -> leave its nrm verbatim too */
+        }
+    }
+    if (memoCameraMaskOut) *memoCameraMaskOut = memoCameraMask;
+    if (memoEligibleOut) *memoEligibleOut = memoEligible;
+    if (copyFromOut) *copyFromOut = copyFrom;
+    if (copyToOut) *copyToOut = copyTo;
+    if (copyBytesOut) *copyBytesOut = copyBytes;
+    return rewrittenResult;
+}
+
+static int fi_replay_plan_record_action(const FiCmd *cmd, uint32_t outOffset,
+                                        uint32_t streamPosIdx, uint8_t kind,
+                                        uint32_t actionLimit)
+{
+    FiReplayPlanAction *a;
+    if (s_replayPlan.actionCount >= FI_REPLAY_PLAN_CACHE_MAX_ACTIONS) return 0;
+    if (cmd == NULL || actionLimit == 0 ||
+        s_replayPlan.actionCount >= actionLimit)
+        return 0;
+    if (!fi_grow((void **)&s_replayPlan.actions, &s_replayPlan.actionCap,
+                 s_replayPlan.actionCount + 1, sizeof(*s_replayPlan.actions)))
+        return 0;
+    a = &s_replayPlan.actions[s_replayPlan.actionCount++];
+    a->kind = kind;
+    a->cmd = *cmd;
+    a->outOffset = outOffset;
+    a->streamPosIdx = streamPosIdx;
+    return 1;
+}
+
+static void fi_replay_plan_begin_build(void)
+{
+    fi_replay_plan_invalidate();
+}
+
+static int fi_replay_plan_match(const FiStream *cur, const FiStream *prev,
+                                int interp)
+{
+    if (!s_replayPlan.valid || fi_diag() != 0 || cur == NULL ||
+        !cur->walkOk || !cur->sealed || cur->size == 0 ||
+        (interp && (prev == NULL || !prev->walkOk || !prev->sealed)) ||
+        s_replayBuf == NULL || s_replayPlan.templateData == NULL ||
+        (s_replayPlan.actionCount != 0 && s_replayPlan.actions == NULL) ||
+        s_replayPlan.aoCount > FI_AO_MAX ||
+        s_replayPlan.actionCount > FI_REPLAY_PLAN_CACHE_MAX_ACTIONS ||
+        s_replayPlan.actionCount > cur->commandCount ||
+        s_replayPlan.length > s_replayCap ||
+        s_replayPlan.length > s_replayPlan.templateCap ||
+        s_replayPlan.cur != cur || s_replayPlan.prev != prev ||
+        s_replayPlan.curData != cur->data ||
+        s_replayPlan.prevData != (prev != NULL ? prev->data : NULL) ||
+        s_replayPlan.curPosOff != cur->posOff ||
+        s_replayPlan.prevPosOff != (prev != NULL ? prev->posOff : NULL) ||
+        s_replayPlan.curPosKey != cur->posKey ||
+        s_replayPlan.prevPosKey != (prev != NULL ? prev->posKey : NULL) ||
+        s_replayPlan.curPrevPos != cur->prevPos ||
+        s_replayPlan.curCommands != cur->commands ||
+        s_replayPlan.curTick != cur->tick ||
+        s_replayPlan.prevTick != (prev != NULL ? prev->tick : 0) ||
+        s_replayPlan.curSize != cur->size ||
+        s_replayPlan.curCommandCount != cur->commandCount ||
+        s_replayPlan.curPosCount != cur->posCount ||
+        s_replayPlan.curKeyCount != cur->keyCount ||
+        s_replayPlan.prevPosCount != (prev != NULL ? prev->posCount : 0) ||
+        s_replayPlan.prevKeyCount != (prev != NULL ? prev->keyCount : 0) ||
+        s_replayPlan.curSealed != cur->sealed ||
+        s_replayPlan.prevSealed != (prev != NULL ? prev->sealed : 0) ||
+        s_replayPlan.interp != interp || s_replayPlan.pairEpoch != s_pairEpoch ||
+        s_replayPlan.noResidual != fi_no_residual() ||
+        s_replayPlan.noScaleHold != fi_no_scale_hold() ||
+        s_replayPlan.scaleSnapRatio != fi_scale_snap_ratio())
+        return 0;
+    return 1;
+}
+
+/* Validate the two payload spans before a plan replay mutates the shared
+ * output.  The command header is retained in the action, while the payload is
+ * restored from the current stream on every replay.  Keeping this check in one
+ * place protects the in-place path and its template-copy fallback equally. */
+static int fi_replay_plan_action_span(const FiReplayPlanAction *action,
+                                      const FiStream *cur, uint32_t length,
+                                      uint32_t *bytesOut)
+{
+    uint32_t bytes;
+    if (action == NULL || cur == NULL) return 0;
+    if (action->kind == FI_PLAN_POS) {
+        if (!fi_is_pos_load(&action->cmd) ||
+            action->streamPosIdx >= cur->posCount)
+            return 0;
+        bytes = 48;
+    } else if (action->kind == FI_PLAN_NRM) {
+        if (!fi_is_nrm_load(&action->cmd) ||
+            action->streamPosIdx != UINT32_MAX)
+            return 0;
+        bytes = 36;
+    } else return 0;
+    if (action->cmd.offset > cur->size ||
+        action->cmd.size < 5u + bytes ||
+        5u + bytes > cur->size - action->cmd.offset ||
+        action->outOffset > length ||
+        5u + bytes > length - action->outOffset)
+        return 0;
+    if (bytesOut != NULL) *bytesOut = bytes;
+    return 1;
+}
+
+static void fi_replay_plan_debug_reset(void)
+{
     s_dbgPosSeen = s_dbgRewritten = s_dbgSnapUnpaired = s_dbgSnapGate = s_dbgVerbatimEq = 0;
     s_dbgSnapCamera = s_dbgSnapDecompose = 0;
     s_dbgDropOffscreen = s_dbgDropCopyBind = s_dbgDropCopyExec = s_dbgDropDestroy = 0;
@@ -1943,24 +3157,304 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
     s_dbgRoundTripModel = s_dbgRoundTripOrd = -1;
     s_dbgMaxAlpha0Err = 0.0;
     s_dbgAlpha0Model = s_dbgAlpha0Ord = -1;
-    if (!cur->walkOk || !fi_grow((void **)&s_replayBuf, &s_replayCap, cur->size, 1)) return 0;
+}
+
+static uint32_t fi_replay_plan_replay(const FiStream *cur, const FiStream *prev,
+                                      int interp, double alpha)
+{
+    FiMtx lastPos[10];
+    uint8_t lastPosState[10];
+    uint32_t i;
+    uint32_t bytes;
+    int pairCache;
+    if (!fi_replay_plan_match(cur, prev, interp)) {
+#ifdef MP6_FI_REPLAY_TEST
+        ++s_replayPlanMisses;
+#endif
+        return 0;
+    }
+    /* Validate every action before touching s_replayBuf.  A malformed action
+     * must fall through to the full builder with both the memo and resident
+     * layout untouched. */
+    for (i = 0; i < s_replayPlan.actionCount; ++i) {
+        if (!fi_replay_plan_action_span(&s_replayPlan.actions[i], cur,
+                                        s_replayPlan.length, NULL)) {
+#ifdef MP6_FI_REPLAY_TEST
+            ++s_replayPlanMisses;
+#endif
+            return 0;
+        }
+    }
     pairCache = interp && fi_pair_cache_begin(cur, prev);
+    if (interp && !pairCache) {
+#ifdef MP6_FI_REPLAY_TEST
+        ++s_replayPlanMisses;
+#endif
+        return 0;
+    }
+    /* Any matrix restore below mutates the output bytes. Retire the memo
+     * before doing so; a later memo hit must never return a buffer whose owner
+     * has changed underneath it. If the previous producer was not this plan,
+     * restore the filtered command layout once from the retained safety-net
+     * template. This is the ownership-transition fallback; normal consecutive
+     * plan replays keep that layout resident and only touch actions. */
+    fi_replay_memo_invalidate();
+    if (s_replayBufOwner != FI_REPLAY_BUF_PLAN) {
+        memcpy(s_replayBuf, s_replayPlan.templateData, s_replayPlan.length);
+#ifdef MP6_FI_REPLAY_TEST
+        ++s_replayPlanTemplateCopies;
+#endif
+    }
+    s_replayBufOwner = FI_REPLAY_BUF_PLAN;
+    s_replayAoCount = s_replayPlan.aoCount;
+    memcpy(s_replayAo, s_replayPlan.ao,
+           (size_t)s_replayAoCount * sizeof(s_replayAo[0]));
+    memset(lastPosState, 0, sizeof(lastPosState));
+    fi_replay_plan_debug_reset();
+    for (i = 0; i < s_replayPlan.actionCount; ++i) {
+        const FiReplayPlanAction *a = &s_replayPlan.actions[i];
+        bytes = a->kind == FI_PLAN_POS ? 48u : 36u;
+        /* The resident layout contains the prior replay's matrix bytes.  Put
+         * back the exact current-frame payload first, then let the shared POS
+         * or NRM rule overwrite it only when that action is rewritten. */
+        memcpy(s_replayBuf + a->outOffset + 5,
+               cur->data + a->cmd.offset + 5, bytes);
+        if (a->kind == FI_PLAN_POS) {
+            (void)fi_replay_process_pos(cur, prev, interp, alpha, pairCache,
+                                        &a->cmd, a->outOffset, a->streamPosIdx,
+                                        lastPos, lastPosState, NULL, NULL,
+                                        NULL, NULL, NULL);
+        } else {
+            uint32_t slot = (a->cmd.xfAddr - 0x400u) / 3 / 3;
+            if (slot < 10 && lastPosState[slot])
+                (void)fi_write_nrm_from_pos(s_replayBuf + a->outOffset + 5,
+                                             &lastPos[slot]);
+        }
+    }
+#ifdef MP6_FI_REPLAY_TEST
+    ++s_replayPlanHits;
+#endif
+    return s_replayPlan.length;
+}
+
+static void fi_replay_plan_commit(const FiStream *cur, const FiStream *prev,
+                                  int interp, uint32_t length)
+{
+    uint32_t i;
+    if (length > FI_REPLAY_PLAN_CACHE_MAX_BYTES ||
+        s_replayPlan.actionCount > FI_REPLAY_PLAN_CACHE_MAX_ACTIONS) {
+        fi_replay_plan_invalidate();
+        return;
+    }
+    if (cur == NULL || !cur->walkOk || !cur->sealed || cur->size == 0 ||
+        (interp && (prev == NULL || !prev->walkOk || !prev->sealed)) ||
+        fi_diag() != 0 || s_replayPlan.actionCount > cur->commandCount)
+        return;
+    if (!fi_grow((void **)&s_replayPlan.templateData,
+                 &s_replayPlan.templateCap, length, 1)) {
+        fi_replay_plan_invalidate();
+        return;
+    }
+    /* Keep one bounded recovery image for a future ownership transition. This
+     * per-new-plan/window copy is intentional capacity for reset/fallback
+     * correctness, not part of the steady-state replay win. */
+    memcpy(s_replayPlan.templateData, s_replayBuf, length);
+    for (i = 0; i < s_replayPlan.actionCount; ++i) {
+        const FiReplayPlanAction *a = &s_replayPlan.actions[i];
+        uint32_t bytes;
+        /* Commit is also a public state boundary for the plan cache: the
+         * action list was recorded by the full builder, but a later source
+         * or test mutation must not make templateData read past either
+         * stream or output layout. Replay preflight repeats this check before
+         * every in-place hit; keep the commit-side guard independent so a
+         * malformed plan can never become resident. */
+        if (!fi_replay_plan_action_span(a, cur, length, &bytes)) {
+            fi_replay_plan_invalidate();
+            return;
+        }
+        memcpy(s_replayPlan.templateData + a->outOffset + 5,
+               cur->data + a->cmd.offset + 5, bytes);
+    }
+    s_replayPlan.cur = cur;
+    s_replayPlan.prev = prev;
+    s_replayPlan.curData = cur->data;
+    s_replayPlan.prevData = prev != NULL ? prev->data : NULL;
+    s_replayPlan.curPosOff = cur->posOff;
+    s_replayPlan.prevPosOff = prev != NULL ? prev->posOff : NULL;
+    s_replayPlan.curPosKey = cur->posKey;
+    s_replayPlan.prevPosKey = prev != NULL ? prev->posKey : NULL;
+    s_replayPlan.curPrevPos = cur->prevPos;
+    s_replayPlan.curCommands = cur->commands;
+    s_replayPlan.curTick = cur->tick;
+    s_replayPlan.prevTick = prev != NULL ? prev->tick : 0;
+    s_replayPlan.curSize = cur->size;
+    s_replayPlan.curCommandCount = cur->commandCount;
+    s_replayPlan.curPosCount = cur->posCount;
+    s_replayPlan.curKeyCount = cur->keyCount;
+    s_replayPlan.prevPosCount = prev != NULL ? prev->posCount : 0;
+    s_replayPlan.prevKeyCount = prev != NULL ? prev->keyCount : 0;
+    s_replayPlan.length = length;
+    s_replayPlan.aoCount = s_replayAoCount;
+    memcpy(s_replayPlan.ao, s_replayAo,
+           (size_t)s_replayAoCount * sizeof(s_replayPlan.ao[0]));
+    s_replayPlan.pairEpoch = s_pairEpoch;
+    s_replayPlan.curSealed = cur->sealed;
+    s_replayPlan.prevSealed = prev != NULL ? prev->sealed : 0;
+    s_replayPlan.interp = interp;
+    s_replayPlan.noResidual = fi_no_residual();
+    s_replayPlan.noScaleHold = fi_no_scale_hold();
+    s_replayPlan.scaleSnapRatio = fi_scale_snap_ratio();
+    s_replayPlan.valid = 1;
+    s_replayBufOwner = FI_REPLAY_BUF_PLAN;
+#ifdef MP6_FI_REPLAY_TEST
+    ++s_replayPlanBuilds;
+#endif
+}
+
+static uint32_t fi_replay_build_fail(void)
+{
+    /* A partial full-build buffer is never a valid memo or plan layout.  Keep
+     * the bounded allocations for reuse, but make the next call rebuild from
+     * its stream inputs rather than observing stale bytes. */
+    fi_replay_memo_invalidate();
+    fi_replay_plan_invalidate();
+    s_replayBufOwner = FI_REPLAY_BUF_NONE;
+    return 0;
+}
+
+#ifdef MP6_AURORA_RETAINED_REPLAY
+/* Mobile AO on a retained replay (mp6_ao_replay_reuses_tick): interpolated
+ * frames draw only the tick's AO composite at each AO point, and skip the
+ * foliage replay bytes between its markers. Built as one stream plus hook
+ * offsets so aurora can still record and reuse the frame; on a reused frame
+ * the recorded composite draws are re-emitted and the hooks do not run. */
+static uint8_t *s_aoStreamBuf;
+static uint32_t s_aoStreamCap;
+static uint32_t s_aoHookOffset[FI_AO_MAX];
+static const Mp6AoView *s_aoHookView[FI_AO_MAX];
+
+static void fi_ao_hook(uint32_t index, void *user)
+{
+    (void)user;
+    mp6_ao_apply_retained(s_aoHookView[index]);
+}
+
+static int fi_replay_stream_ao(uint32_t len, int record)
+{
+    uint32_t offset = 0, out = 0, hooks = 0, i;
+    int skip = 0;
+    if (!fi_grow((void **)&s_aoStreamBuf, &s_aoStreamCap, len, 1)) {
+        /* No room for the filtered copy: decode piecewise, unrecorded. */
+        aurora_gx_replay_invalidate();
+        for (i = 0; i < s_replayAoCount; ++i) {
+            const FiAoMarker *marker = &s_replayAo[i];
+            if (marker->offset > offset && !skip)
+                aurora_gx_submit_raw(s_replayBuf + offset, marker->offset - offset);
+            if (marker->kind == 3) skip = 1;
+            else if (marker->kind == 4) skip = 0;
+            else if (marker->kind == 0) mp6_ao_apply_retained(&marker->view);
+            offset = marker->offset;
+        }
+        if (len > offset && !skip) aurora_gx_submit_raw(s_replayBuf + offset, len - offset);
+        return 0;
+    }
+    for (i = 0; i < s_replayAoCount; ++i) {
+        const FiAoMarker *marker = &s_replayAo[i];
+        if (marker->offset > offset && !skip) {
+            memcpy(s_aoStreamBuf + out, s_replayBuf + offset, marker->offset - offset);
+            out += marker->offset - offset;
+        }
+        if (marker->kind == 3) skip = 1;
+        else if (marker->kind == 4) skip = 0;
+        else if (marker->kind == 0) {
+            s_aoHookOffset[hooks] = out;
+            s_aoHookView[hooks++] = &marker->view;
+        }
+        offset = marker->offset;
+    }
+    if (len > offset && !skip) {
+        memcpy(s_aoStreamBuf + out, s_replayBuf + offset, len - offset);
+        out += len - offset;
+    }
+    return aurora_gx_replay_stream_hooked(s_aoStreamBuf, out, record, s_aoHookOffset, hooks,
+                                          fi_ao_hook, NULL);
+}
+#endif
+
+/* Build the skip-filtered, matrix-rewritten replay image of stream `cur`
+ * (paired against `prev` when interp != 0). Returns length, 0 on failure. */
+static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int interp, double alpha)
+{
+    FiMtx lastPos[10];       /* interpolated pos 3x4 per PN slot (id/3) */
+    uint8_t lastPosState[10]; /* 0 = untouched/verbatim, 1 = rewritten */
+    uint32_t pos = 0, out = 0, posIdx = 0, commandIdx = 0;
+    uint32_t copyFrom = 0, copyTo = 0, copyBytes = 0;
+    uint32_t aoIdx = 0;
+    uint32_t memoCameraMask = 0;
+    int skipDepthOffscreen = 0;
+    int memoEligible = 1;
+    int pairCache;
+    int planCapture;
+
+    if (fi_replay_memo_hit(cur, prev, interp)) return s_replayMemo.length;
+    {
+        uint32_t planLength = fi_replay_plan_replay(cur, prev, interp, alpha);
+        if (planLength != 0) return planLength;
+    }
+    /* A full build writes the shared output buffer. Retire the one-entry
+     * memo before any grow/copy so a failed or partial rebuild can never leave
+     * a hit pointing at overwritten bytes. */
+    fi_replay_memo_invalidate();
+#ifdef MP6_FI_REPLAY_TEST
+    s_replayMemoBuilds++;
+#endif
+    memset(lastPosState, 0, sizeof(lastPosState));
+    s_replayAoCount = 0;
+    s_texOutCount = 0;
+    s_dbgPosSeen = s_dbgRewritten = s_dbgSnapUnpaired = s_dbgSnapGate = s_dbgVerbatimEq = 0;
+    s_dbgSnapCamera = s_dbgSnapDecompose = 0;
+    s_dbgDropOffscreen = s_dbgDropCopyBind = s_dbgDropCopyExec = s_dbgDropDestroy = 0;
+    s_dbgDropOther = s_dbgDropPosLoads = s_dbgCopyClear = 0;
+    s_dbgMaxTrans = 0.0;
+    s_dbgMinQdot = 1.0;
+    s_dbgMaxScaleRatio = 0.0;
+    s_dbgScaleModel = s_dbgScaleOrd = -1;
+    s_dbgScaleHold = 0;
+    s_dbgMaxHeldScale = 0.0;
+    s_dbgHeldModel = s_dbgHeldOrd = -1;
+    s_dbgMaxRoundTrip = 0.0;
+    s_dbgRoundTripModel = s_dbgRoundTripOrd = -1;
+    s_dbgMaxAlpha0Err = 0.0;
+    s_dbgAlpha0Model = s_dbgAlpha0Ord = -1;
+    if (!cur->walkOk ||
+        !fi_grow((void **)&s_replayBuf, &s_replayCap, cur->size, 1))
+        return fi_replay_build_fail();
+    s_replayBufOwner = FI_REPLAY_BUF_FULL;
+    pairCache = interp && fi_pair_cache_begin(cur, prev);
+    planCapture = (fi_diag() == 0 && (!interp || pairCache) &&
+                   cur->size <= FI_REPLAY_PLAN_CACHE_MAX_BYTES);
+    fi_replay_plan_begin_build();
 
     while (pos < cur->size) {
         FiCmd c;
-        if (commandIdx >= cur->commandCount) return 0;
+        if (commandIdx >= cur->commandCount) return fi_replay_build_fail();
         c = cur->commands[commandIdx++];
-        if (c.offset != pos || c.size > cur->size - pos) return 0;
+        if (c.offset != pos || c.size > cur->size - pos)
+            return fi_replay_build_fail();
         while (aoIdx < cur->aoCount && cur->ao[aoIdx].offset == pos) {
             s_replayAo[s_replayAoCount] = cur->ao[aoIdx++];
             s_replayAo[s_replayAoCount++].offset = out;
         }
-        if (aoIdx < cur->aoCount && cur->ao[aoIdx].offset < pos) return 0;
+        if (aoIdx < cur->aoCount && cur->ao[aoIdx].offset < pos)
+            return fi_replay_build_fail();
         uint32_t n = c.size;
         uint32_t streamPosIdx = UINT32_MAX;
         int drop = 0;
         int emitCopyClear = 0;
-        if (n == 0) return 0; /* cannot happen after a clean seal walk; belt+braces */
+        if (n == 0) {
+            /* Cannot happen after a clean seal walk; belt+braces. */
+            return fi_replay_build_fail();
+        }
         if (fi_is_pos_load(&c)) streamPosIdx = posIdx++;
 
         if (c.op == GX_AURORA) {
@@ -2035,228 +3529,26 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
                 copyFrom = pos;
                 copyTo = out;
             }
+            if (fi_is_tex_load(&c) &&
+                fi_grow((void **)&s_texOut, &s_texOutCap, s_texOutCount + 1, sizeof(FiTexOut))) {
+                s_texOut[s_texOutCount].cmd = commandIdx - 1;
+                s_texOut[s_texOutCount].out = out;
+                s_texOutCount++;
+            }
             copyBytes += n;
             if (fi_is_pos_load(&c)) {
-                uint32_t slot = c.xfAddr / 4 / 3; /* addr = id*4, id = slot*3 (GX_PNMTX0..9) */
-                uint8_t *payload = s_replayBuf + out + 5;
-                int rewritten = 0;
-                /* Hoisted so the decline census can NAME which of the two
-                 * pre-conditions failed instead of one of them vanishing into a
-                 * silent fall-through, and so camera_stable is still evaluated
-                 * exactly once, only for a paired matrix. */
-                int paired = interp && streamPosIdx < cur->posCount &&
-                             cur->prevPos[streamPosIdx] >= 0;
-                int camStable = paired &&
-                    mp6_fi_model_camera_stable(cur->posKey[streamPosIdx].camera);
-                s_dbgPosSeen++;
-                if (camStable) {
-                    uint32_t prevIdx = (uint32_t)cur->prevPos[streamPosIdx];
-                    const uint8_t *pa = prev->data + prev->posOff[prevIdx];
-                    const uint8_t *pb = cur->data + c.offset + 5;
-                    FiPreparedPair fallback;
-                    FiPreparedPair *pair = pairCache && streamPosIdx < s_pairCacheCount ?
-                                           &s_pairCache[streamPosIdx] : &fallback;
-                    uint8_t state = pair == &fallback ? FI_PAIR_EMPTY : s_pairState[streamPosIdx];
-                    if (state == FI_PAIR_EMPTY) {
-                        state = fi_prepare_pair(pa, pb, pair);
-                        if (pair != &fallback) s_pairState[streamPosIdx] = state;
-                    }
-                    if (state == FI_PAIR_EQUAL) s_dbgVerbatimEq++;
-                    if (state != FI_PAIR_EQUAL) {
-                        FiMtx O;
-                        FiTrs to;
-                        const FiTrs *ta = &pair->a, *tb = &pair->b;
-                        const FiMtx *B = &pair->current, *RB = &pair->rebuilt;
-                        if (state == FI_PAIR_INVALID) {
-                            s_dbgSnapDecompose++;
-                        } else {
-                            double distanceSq = pair->distanceSq;
-                            double qdot = pair->qdot;
-                            /* Scale is the third TRS channel and the only one
-                             * that had no gate. Measured for every pair
-                             * (attributed, so a log names the model), and gated
-                             * by a CHANNEL HOLD rather than a snap. */
-                            double sratio = pair->scaleRatio;
-                            int holdScale = !fi_no_scale_hold() &&
-                                            sratio >= fi_scale_snap_ratio();
-                            /* Per-pair gate (FI_TRANS_SNAP_U / FI_ROT_SNAP_QDOT):
-                             * a replay advances this matrix one tick FORWARD, so
-                             * interpolate only when the tick's motion is small
-                             * enough that the overshoot is imperceptible. A fast
-                             * translation (spawn/despawn/scene cut) or fast
-                             * rotation (menu portrait flip) extrapolates into a
-                             * visible smear -- the reported flicker -- so those
-                             * pairs pass through stream N's matrix verbatim
-                             * (snapped, i.e. that object stays at the tick rate)
-                             * while the genuinely-smooth remainder interpolates. */
-                            double dmag = pair->distance;
-                            if (dmag > s_dbgMaxTrans) s_dbgMaxTrans = dmag;
-                            if (qdot < s_dbgMinQdot) s_dbgMinQdot = qdot;
-                            if (sratio > s_dbgMaxScaleRatio) {
-                                s_dbgMaxScaleRatio = sratio;
-                                s_dbgScaleModel = (int)cur->posKey[streamPosIdx].model;
-                                s_dbgScaleOrd = (int)cur->posKey[streamPosIdx].ordinal;
-                            }
-                            if (distanceSq >= FI_TRANS_SNAP_U * FI_TRANS_SNAP_U ||
-                                qdot <= FI_ROT_SNAP_QDOT) {
-                                s_dbgSnapGate++;
-                            }
-                            if (distanceSq < FI_TRANS_SNAP_U * FI_TRANS_SNAP_U &&
-                                qdot > FI_ROT_SNAP_QDOT) {
-                                int rr, cc;
-                                if (fi_diag() && (uint32_t)cur->prevPos[streamPosIdx] != streamPosIdx) {
-                                    /* fallback-matched pair that will interpolate: if the
-                                     * key search bound two DIFFERENT nodes (membership
-                                     * shift), this is the mispair-flash mechanism. */
-                                    fprintf(stderr, "[MP6-FI] interp-fallback tick=%ld model=%d sub=%u ord=%u "
-                                            "pairIdx %u->%d dTrans=%.2f qdot=%.5f\n",
-                                            cur->tick, (int)cur->posKey[streamPosIdx].model,
-                                            (unsigned)cur->posKey[streamPosIdx].sub,
-                                            (unsigned)cur->posKey[streamPosIdx].ordinal,
-                                            streamPosIdx, cur->prevPos[streamPosIdx],
-                                            pair->distance, qdot);
-                                }
-                                if (fi_diag() >= 3 &&
-                                    distanceSq > 1.0) {
-                                    /* Level 3: every pair that actually gets
-                                     * displaced, with both sides' identity.
-                                     * A static object appearing here at all is
-                                     * a mispair by construction. */
-                                    fprintf(stderr,
-                                            "[MP6-FI] rewrite vitick=%ld tick=%ld prevTick=%ld alpha=%.3f "
-                                            "idx %u->%u cam=%d model=%d gen=%u sub=%u ord=%u "
-                                            "prevCam=%d prevModel=%d prevGen=%u prevSub=%u prevOrd=%u "
-                                            "dTrans=%.2f qdot=%.5f\n",
-                                            mp6_tick_count, cur->tick, prev->tick, alpha,
-                                            streamPosIdx, prevIdx,
-                                            (int)cur->posKey[streamPosIdx].camera,
-                                            (int)cur->posKey[streamPosIdx].model,
-                                            (unsigned)cur->posKey[streamPosIdx].generation,
-                                            (unsigned)cur->posKey[streamPosIdx].sub,
-                                            (unsigned)cur->posKey[streamPosIdx].ordinal,
-                                            (int)prev->posKey[prevIdx].camera,
-                                            (int)prev->posKey[prevIdx].model,
-                                            (unsigned)prev->posKey[prevIdx].generation,
-                                            (unsigned)prev->posKey[prevIdx].sub,
-                                            (unsigned)prev->posKey[prevIdx].ordinal,
-                                            pair->distance, qdot);
-                                }
-                                /* ---- RESIDUAL CARRY --------------------------
-                                 * fi_decompose/fi_compose is lossy on any
-                                 * sheared modelview (see fi_decompose): the
-                                 * round trip alone re-poses the object even
-                                 * with alpha taken out, which is what made
-                                 * mode select's right bridge (model 30 ord 3,
-                                 * bridge4) shear on EVERY interpolated present
-                                 * and snap back on the next tick frame -- an
-                                 * A-B-A flicker whose amplitude is set by the
-                                 * decomposition error, not by object motion,
-                                 * so no motion gate above can ever catch it.
-                                 *
-                                 * Split B into the part the TRS model can
-                                 * represent (RB) and the part it cannot
-                                 * (B - RB, the shear). Interpolate only the
-                                 * first and add the second back unchanged:
-                                 *
-                                 *   O = compose(advance(A,B,alpha)) + (B - RB)
-                                 *
-                                 * At alpha = 0 advance() returns B's own TRS,
-                                 * so O == B EXACTLY: a replay frame can never
-                                 * disagree with the tick frame it was built
-                                 * from. That removes the whole defect class
-                                 * rather than one object, and every object
-                                 * keeps interpolating (no new snap gate, so
-                                 * the smoothness the feature exists for is
-                                 * preserved). The residual is a small constant
-                                 * in eye space; over a single tick's gated
-                                 * rotation (<=10 deg) its failure to rotate
-                                 * with the object is second-order.
-                                 * Column 3 needs no correction: decompose
-                                 * copies the translation verbatim, so the
-                                 * residual there is identically zero. */
-                                fi_advance(ta, tb, alpha, holdScale, &to);
-                                fi_compose(&to, &O);
-                                if (holdScale) {
-                                    s_dbgScaleHold++;
-                                    if (sratio > s_dbgMaxHeldScale) {
-                                        s_dbgMaxHeldScale = sratio;
-                                        s_dbgHeldModel = (int)cur->posKey[streamPosIdx].model;
-                                        s_dbgHeldOrd = (int)cur->posKey[streamPosIdx].ordinal;
-                                    }
-                                }
-                                if (!fi_no_residual()) {
-                                    for (rr = 0; rr < 3; ++rr) {
-                                        for (cc = 0; cc < 3; ++cc) {
-                                            O.m[rr][cc] += B->m[rr][cc] - RB->m[rr][cc];
-                                        }
-                                    }
-                                }
-                                if (fi_diag() >= 3) {
-                                    /* maxResid: how much shear the TRS model
-                                     * cannot represent (this is what USED to be
-                                     * injected as displacement -- it is now
-                                     * carried).  maxA0: the real self-check --
-                                     * run the whole rewrite at alpha = 0 and
-                                     * measure |O0 - B|, which must be 0. */
-                                    FiTrs t0chk;
-                                    FiMtx O0;
-                                    /* Same holdScale the real rewrite used: the
-                                     * self-check must exercise the code path
-                                     * that shipped, not a second variant of it.
-                                     * (alphaS = 0 is a no-op at alpha = 0, so
-                                     * maxA0Err must stay 0 either way -- that
-                                     * is the property being checked.) */
-                                    fi_advance(ta, tb, 0.0, holdScale, &t0chk);
-                                    fi_compose(&t0chk, &O0);
-                                    for (rr = 0; rr < 3; ++rr) {
-                                        for (cc = 0; cc < 4; ++cc) {
-                                            double e = RB->m[rr][cc] - B->m[rr][cc];
-                                            double e0;
-                                            if (cc < 3 && !fi_no_residual())
-                                                O0.m[rr][cc] += B->m[rr][cc] - RB->m[rr][cc];
-                                            e0 = O0.m[rr][cc] - B->m[rr][cc];
-                                            if (e < 0.0) e = -e;
-                                            if (e0 < 0.0) e0 = -e0;
-                                            if (e > s_dbgMaxRoundTrip) {
-                                                s_dbgMaxRoundTrip = e;
-                                                s_dbgRoundTripModel = (int)cur->posKey[streamPosIdx].model;
-                                                s_dbgRoundTripOrd = (int)cur->posKey[streamPosIdx].ordinal;
-                                            }
-                                            if (e0 > s_dbgMaxAlpha0Err) {
-                                                s_dbgMaxAlpha0Err = e0;
-                                                s_dbgAlpha0Model = (int)cur->posKey[streamPosIdx].model;
-                                                s_dbgAlpha0Ord = (int)cur->posKey[streamPosIdx].ordinal;
-                                            }
-                                        }
-                                    }
-                                }
-                                fi_flush_replay_copy(cur->data, copyFrom, copyTo, &copyBytes);
-                                fi_write_mtx(payload, &O);
-                                if (slot < 10) {
-                                    lastPos[slot] = O;
-                                    lastPosState[slot] = 1;
-                                }
-                                rewritten = 1;
-                            }
-                        }
-                    }
-                }
-                /* Exhaustive by construction: rewritten / unpaired / camera-cut
-                 * / byte-equal / decompose-refused / motion-gated are disjoint
-                 * and cover every pos load counted in s_dbgPosSeen. The sum is
-                 * checked below so a later edit cannot reintroduce a silent
-                 * class. */
-                if (rewritten) {
-                    s_dbgRewritten++;
-                } else if (!paired) {
-                    s_dbgSnapUnpaired++;
-                } else if (!camStable) {
-                    s_dbgSnapCamera++;
-                }
-                if (!rewritten && slot < 10) {
-                    lastPosState[slot] = 0; /* verbatim pos -> leave its nrm verbatim too */
-                }
+                if (planCapture && !fi_replay_plan_record_action(
+                        &c, out, streamPosIdx, FI_PLAN_POS, cur->commandCount))
+                    planCapture = 0;
+                (void)fi_replay_process_pos(cur, prev, interp, alpha, pairCache,
+                                             &c, out, streamPosIdx, lastPos,
+                                             lastPosState, &memoCameraMask,
+                                             &memoEligible, &copyFrom, &copyTo,
+                                             &copyBytes);
             } else if (fi_is_nrm_load(&c)) {
+                if (planCapture && !fi_replay_plan_record_action(
+                        &c, out, UINT32_MAX, FI_PLAN_NRM, cur->commandCount))
+                    planCapture = 0;
                 uint32_t slot = (c.xfAddr - 0x400u) / 3 / 3; /* addr = id*3+0x400, id = slot*3 */
                 if (slot < 10 && lastPosState[slot]) {
                     /* rewritten pos -> recompute inverse-transpose; on a
@@ -2290,18 +3582,152 @@ static uint32_t fi_build_replay(const FiStream *cur, const FiStream *prev, int i
         s_replayAo[s_replayAoCount] = cur->ao[aoIdx++];
         s_replayAo[s_replayAoCount++].offset = out;
     }
-    if (aoIdx != cur->aoCount) return 0;
+    if (aoIdx != cur->aoCount) return fi_replay_build_fail();
+    if (out != 0 && memoEligible && s_dbgRewritten == 0)
+        fi_replay_memo_commit(cur, prev, interp, out, memoCameraMask);
+    if (out != 0 && planCapture)
+        fi_replay_plan_commit(cur, prev, interp, out);
     return out;
+}
+
+/* Minimum present spacing with VSync off, paid out of surplus like the paced
+ * spacing (MP6_FI_MIN_SPACING_US overrides; 0 = none).
+ *
+ * Android: a mailbox surface shows only the newest finished buffer at each
+ * refresh, so presenting every ~2.7 ms (Galaxy S22+, ~190/s against a 120 Hz
+ * panel) throws away ~40% of the GPU work and makes WHICH pose lands on a
+ * refresh depend on where a burst happened to end. Measured on screen with
+ * SurfaceFlinger present times (Towering Treetop, interleaved runs, same
+ * displayed rate): 5 ms spacing cut the on-screen motion error from 6.5-7.0
+ * to 4.0 ms rms and the refreshes off by more than half a refresh from
+ * 54-58% to 23%, with less heat. Desktop keeps no floor.
+ *
+ * The floor is 3.5 ms rather than 5: every wait lets the phone's CPU
+ * governor lower its clocks (this S22+ reports no ADPF hint-session
+ * support, so src/android/adpf_hint.c cannot hold them), and at 5 ms game
+ * logic stretched from 3.3 to 4.9 ms per tick and most ticks got no
+ * in-between frame at all. Unloaded 1-minute Treetop runs: 5 ms 76-78 FPS,
+ * 3.5 ms 101-112 FPS, none 148-168 FPS but bursty (on-screen motion error
+ * 3.6-3.8 / 4.2-4.8 / 6.3-6.6 ms rms). */
+static int64_t fi_min_spacing_ns(void)
+{
+    static int64_t s_ns = -1;
+    if (s_ns < 0) {
+        const char *env = getenv("MP6_FI_MIN_SPACING_US");
+        if (env != NULL && *env != 0) s_ns = (int64_t)atol(env) * 1000;
+        else {
+#ifdef __ANDROID__
+            s_ns = 3500000;
+#else
+            s_ns = 0;
+#endif
+        }
+    }
+    return s_ns;
+}
+
+static int fi_smooth_spacing_enabled(void)
+{
+    static int s_env = -1;
+    if (s_env < 0) {
+        const char *env = getenv("MP6_FI_SMOOTH_SPACING");
+        s_env = (env != NULL && *env == '0') ? 0 : 1;
+    }
+    return s_env;
+}
+
+/* Whether to hide the tick frame now ending (Smooth mode). A hidden tick
+ * whose window then gets no replay is a tick never shown: a 33 ms hole. On a
+ * GPU-bound scene (Galaxy S22+, w01 with AO on: the AO tick frame alone is
+ * ~16 ms of GPU) two windows in three got no replay, and the old rule kept
+ * hiding through up to three misses in a row, so Smooth showed 59 frames/s
+ * with 33 ms gaps. Now any miss shows tick frames (as Responsive) for a
+ * back-off of 30 ticks, doubling on each further miss up to 10 s, and back
+ * to 30 after 10 s without one. Switching costs one uneven step, so the
+ * back-off keeps it from flipping every tick. */
+int mp6_fi_smooth_hide_tick(void)
+{
+    if (!s_active || !fi_smooth_enabled() || fi_no_interp() || s_latest < 0) {
+        s_smoothBackoff = s_smoothOkRun = 0;
+        return s_smoothPending = 0;
+    }
+    if (s_smoothBackoffLen < 30) s_smoothBackoffLen = 30;
+    if (s_smoothWindow) {
+        if (s_replaysThisWindow == 0) {
+            s_smoothBackoff = s_smoothBackoffLen;
+            if (s_smoothBackoffLen < 600) s_smoothBackoffLen *= 2;
+            s_smoothOkRun = 0;
+        } else if (++s_smoothOkRun >= 600) {
+            s_smoothBackoffLen = 30;
+        }
+    }
+    if (s_smoothBackoff > 0) {
+        s_smoothBackoff--;
+        return s_smoothPending = 0;
+    }
+    s_smoothPending = s_replaysThisWindow > 0;
+    return s_smoothPending;
+}
+
+/* Replay budget per tick from the display refresh rate (Android, or any
+ * paced display). The screen shows at most refresh/tickRate frames per tick,
+ * the tick frame being one of them, so more replays than that are drawn and
+ * never shown. Measured on a Galaxy S22+ (w01, 60 Hz panel, phone preset):
+ * the game thread spent 90% of a core, most of it on idle-window replays that
+ * a 60 Hz panel can never display. At 120 Hz this allows one replay per
+ * 60 Hz tick, at 60 Hz none. The rate is re-read every 64 ticks (Adaptive
+ * panels change it). MP6_FI_REFRESH_BUDGET=0 disables the cap. */
+static int fi_refresh_replay_budget(int paced, int64_t periodNs)
+{
+    static int s_env = -1;
+    static double s_refreshHz = 0.0;
+    static long s_readTick = -1000;
+    double ticksPerSec, perTick;
+    int budget;
+#ifndef __ANDROID__
+    if (!paced) return -1; /* desktop with VSync off stays uncapped */
+#endif
+    (void)paced;
+    if (s_env < 0) {
+        const char *env = getenv("MP6_FI_REFRESH_BUDGET");
+        s_env = (env != NULL && *env == '0') ? 0 : 1;
+    }
+    if (!s_env || periodNs <= 0) return -1;
+    if (mp6_tick_count - s_readTick >= 64 || mp6_tick_count < s_readTick) {
+        Mp6DisplayInfo info;
+#ifdef __ANDROID__
+        /* The compositor's live rate, not the panel's mode (see adpf_hint.c). */
+        s_refreshHz = mp6_android_display_refresh_hz();
+        if (s_refreshHz <= 0.0)
+#endif
+        s_refreshHz = (mp6_display_info_get(&info) && info.refreshMilliHz > 0) ? info.refreshMilliHz / 1000.0 : 0.0;
+        s_readTick = mp6_tick_count;
+    }
+    if (s_refreshHz <= 0.0) return -1; /* unknown: no cap */
+    ticksPerSec = 1e9 / (double)periodNs;
+    perTick = s_refreshHz / ticksPerSec;  /* refreshes per tick, e.g. 2.0 at 120 Hz */
+    budget = (int)(perTick + 0.05) - 1;   /* minus the tick frame itself */
+    {
+        static int s_lastBudget = -2;
+        if (budget != s_lastBudget) {
+            printf("[MP6-FI] replay budget %d per tick (display %.1f Hz, %.1f ticks/s)\n", budget < 0 ? 0 : budget,
+                   s_refreshHz, ticksPerSec);
+            fflush(stdout);
+            s_lastBudget = budget;
+        }
+    }
+    return budget < 0 ? 0 : budget;
 }
 
 int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
 {
     const FiStream *cur, *prev;
-    int interp, paced;
-    double alpha;
+    int interp, paced, budget;
+    double alpha, telAlpha;
     uint32_t len;
-    int64_t t0, now, margin;
+    int64_t t0, now, margin, smoothSpacing = 0;
 
+    if (periodNs > 0) s_lastPeriodNs = periodNs;
     if (!s_active || s_latest < 0 || periodNs <= 0) return fi_decline(FI_DECL_INACTIVE);
     cur = &s_streams[s_latest];
     if (!cur->sealed || !cur->walkOk || cur->size == 0) {
@@ -2315,6 +3741,22 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     paced = mp6_display_vsync_enabled();
     if (mp6_fi_replay_limit_reached(paced, s_replaysThisWindow))
         return fi_decline(FI_DECL_CAP);
+    /* A hidden tick frame (Smooth mode) is not shown, so its refresh slot
+     * goes to one more replay. */
+    budget = fi_refresh_replay_budget(paced, periodNs);
+    if (budget >= 0 && (int)s_replaysThisWindow >= budget + (s_smoothWindow ? 1 : 0))
+        return fi_decline(FI_DECL_CAP);
+    /* Smooth shows only replays, so they alone set the on-screen rhythm. With
+     * the 3.5 ms floor the two replays of a 60 Hz tick on a 120 Hz panel ran
+     * back to back after the tick's ~7 ms of work: shown gaps of 5-6 ms then
+     * 10-11 ms, so MAILBOX dropped one and repeated another (Galaxy S22+,
+     * Treetop, 43% of refreshes without a new frame). Spacing them a full
+     * share of the tick apart (period / shown frames, less 1/16 for jitter)
+     * puts the second replay as late as the deadline allows, right before the
+     * next tick's hidden work, and evens the gaps out. MP6_FI_SMOOTH_SPACING=0
+     * keeps the floor. */
+    if (s_smoothWindow && budget >= 0 && !paced && fi_smooth_spacing_enabled())
+        smoothSpacing = periodNs / (budget + 1) * 15 / 16;
     /* Admission is always evaluated against the throttle's one absolute
      * deadline. A small fixed margin plus the measured replay CPU cost keeps
      * work out of the next simulation tick; the estimate decays on a decline
@@ -2338,7 +3780,7 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
      * scheduler jitter without reserving a second frame's worth of time.
      * MP6_FI_MARGIN_DIV overrides the divisor for pacing A/Bs (the lever this
      * value was chosen with); larger = more conservative. */
-    margin = periodNs / fi_margin_div();
+    margin = periodNs / fi_margin_div() + s_queueReserveNs;
     now = (int64_t)mp6_host_monotonic_ns();
     {   /* census: the idle room this window actually had to offer */
         int64_t slack = (deadlineNs > now) ? deadlineNs - now : 0;
@@ -2359,8 +3801,9 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
      * sleep and skip the rest of the window's replays entirely. Under a real
      * blocking vsync the previous present already consumed the slot, so the
      * wait is naturally zero and pacing stays purely vsync-driven. */
-    if (paced) {
-        int64_t spacing = mp6_fi_replay_spacing_ns(paced, periodNs);
+    if (paced || fi_min_spacing_ns() > 0 || smoothSpacing > 0) {
+        int64_t spacing = paced ? mp6_fi_replay_spacing_ns(paced, periodNs) : fi_min_spacing_ns();
+        if (spacing < smoothSpacing) spacing = smoothSpacing;
         int64_t target = (s_lastPresentNs > INT64_MAX - spacing)
                              ? INT64_MAX : s_lastPresentNs + spacing;
         if (target > now) {
@@ -2386,6 +3829,11 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
                 return fi_decline(FI_DECL_DEADLINE_SPACE);
             }
             if (wait > surplus) wait = surplus;
+            /* A Smooth-spaced wait is long and usually lands on the surplus
+             * clamp, where any sleep overshoot fails the re-check below and
+             * loses the replay (S22+: every second replay, 60 fps). Leave the
+             * sleep 1.5 ms of room to overshoot into. */
+            if (smoothSpacing > 0 && wait > surplus - 1500000) wait = surplus - 1500000;
             /* Below the host's sleep granularity a wait buys no spacing and
              * only risks overshooting into the replay's own room -- which is
              * exactly what a surplus-clamped wait tends to be on a heavy
@@ -2426,9 +3874,20 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     interp = (prev != NULL && prev->sealed && prev->walkOk && cur->posCount > 0);
     if (fi_no_interp()) interp = 0; /* MP6_FI_NO_INTERP bisect: replay verbatim */
 
-    alpha = (double)(t0 - s_lastSealNs) / (double)periodNs;
+#ifdef MP6_AURORA_RETAINED_REPLAY
+    if (fi_retained())
+        alpha = (double)(t0 + (s_recordedThisWindow && !s_defBlendedThisWindow ? s_lagReuseNs : s_lagDecodeNs) -
+                         s_lastSealNs) /
+                (double)periodNs;
+    else
+#endif
+    alpha = (double)(t0 + s_lagFifoNs - s_lastSealNs) / (double)periodNs;
     if (alpha < 0.0) alpha = 0.0;
     if (alpha > 1.0) alpha = 1.0;
+    telAlpha = alpha;
+    /* Smooth window: N + e*(N - (N-1)) with e = alpha - 1 is the
+     * interpolation from N-1 to N. A replay without interp shows N. */
+    if (s_smoothWindow && interp) alpha -= 1.0;
     if (fi_diag() >= 3) {
         fprintf(stderr, "[MP6-FI] replay vitick=%ld tick=%ld prevTick=%ld alpha=%.3f interp=%d pos=%u\n",
                 mp6_tick_count, cur->tick, prev ? prev->tick : -1L, alpha, interp, cur->posCount);
@@ -2489,7 +3948,7 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
     }
     mp6_ao_begin_frame();
     mp6_launcher_frame_overlay(); /* keep FPS overlay/menu present on every frame */
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__) /* touch controls: Android + browser */
     /* Redraw the Android on-screen touch overlay on interpolated frames too.
      * On real frames aurora_bridge.c draws it right after aurora_begin_frame();
      * without this the controls would render only on the 60 real frames/s and
@@ -2502,20 +3961,57 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
      * its first laid-out frame. */
     { extern void mp6_touch_pad_draw(void); mp6_touch_pad_draw(); }
 #endif
+    /* Deformed-vertex blend for this replay (restored after end_frame). */
+    s_defBlended = interp ? fi_def_blend(alpha) : 0;
+    if (interp) fi_tex_rewrite(cur, prev, alpha);
+    if (s_defBlended) s_defBlendedThisWindow = 1;
+#ifdef MP6_AURORA_RETAINED_REPLAY
+    if ((s_replayAoCount == 0 || mp6_ao_replay_reuses_tick()) && fi_retained()) {
+        /* No AO hooks to interleave: hand aurora the whole stream at once so
+         * it can reuse the previous replay's draws (aurora_gx_replay_stream). */
+        int64_t tSubmit = (int64_t)mp6_host_monotonic_ns();
+        /* Record only when another replay of this stream can still fit in
+         * the window after this decode; otherwise the copies are pure cost. */
+        /* Blended vertex buffers are not in the stream bytes, so a recording
+         * cannot see them change: decode such replays and keep no recording. */
+        int record;
+        if (s_defBlended) {
+            aurora_gx_replay_invalidate();
+            s_recordedThisWindow = 1; /* nothing further to record this tick */
+        }
+        record = !s_recordedThisWindow &&
+                     mp6_fi_deadline_fits(deadlineNs, t0 + s_lagDecodeNs, margin,
+                                          s_lagReuseNs + s_costBuildLastNs);
+        /* Mobile AO keeps the retained path: the stream minus its foliage
+         * bytes, with the tick's AO composite as a hook at each AO point. */
+        int reused = s_replayAoCount == 0 ? aurora_gx_replay_stream(s_replayBuf, len, record)
+                                          : fi_replay_stream_ao(len, record);
+        if (record) s_recordedThisWindow = 1;
+        s_replayPath = reused ? 2 : 1;
+        tSubmit = (int64_t)mp6_host_monotonic_ns() - tSubmit;
+        if (reused) { s_retReuseNs += tSubmit; s_retReuseN++; }
+        else { s_retDecodeNs += tSubmit; s_retDecodeN++; }
+    } else
+#endif
     {
         uint32_t offset = 0, i;
         int skipFoliage=0;
+        s_replayPath = 0;
+        /* Mobile: composite the tick frame's AO; no foliage/decal/AO passes. */
+        const int tickAo = mp6_ao_replay_reuses_tick();
         for (i = 0; i < s_replayAoCount; ++i) {
             const FiAoMarker *marker = &s_replayAo[i];
             if (marker->offset > offset && !skipFoliage)
                 aurora_gx_submit_raw(s_replayBuf + offset, marker->offset - offset);
             if (marker->kind==3)
-                skipFoliage=!mp6_ao_foliage_begin(marker->camera);
+                skipFoliage=tickAo || !mp6_ao_foliage_begin(marker->camera);
             else if (marker->kind==4) {
                 if (!skipFoliage) mp6_ao_foliage_end(marker->camera);
                 skipFoliage=0;
-            } else if (marker->kind)
-                mp6_ao_capture_decals(marker->camera, marker->kind == 2);
+            } else if (marker->kind) {
+                if (!tickAo) mp6_ao_capture_decals(marker->camera, marker->kind == 2);
+            } else if (tickAo)
+                mp6_ao_apply_retained(&marker->view);
             else
                 mp6_ao_apply(&marker->view);
             offset = marker->offset;
@@ -2532,6 +4028,7 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
      * uses; the console reads s_costPresent* through mp6_fi_stats_get()
      * instead. */
     aurora_end_frame();
+    fi_def_restore();
     /* MP6_FRAME_DUMP (include/mp6_frame_dump.h): an interpolated frame
      * is a PRESENTED frame -- the user sees it, and this layer is the prime
      * suspect for the reported flicker, so a capture that skipped it would
@@ -2549,11 +4046,27 @@ int mp6_fi_idle_present(int64_t deadlineNs, int64_t periodNs)
 
     {
         int64_t totalNs = (int64_t)mp6_host_monotonic_ns() - t0;
+        s_windowReplayWorkNs += totalNs;
         fi_budget_observe(totalNs);
         fi_cost_observe(s_costBuildLastNs, totalNs);
     }
 
     s_lastPresentNs = (int64_t)mp6_host_monotonic_ns(); /* spacing base for the next replay */
+    {
+        int64_t lag = s_lastPresentNs - t0;
+#ifdef MP6_AURORA_RETAINED_REPLAY
+        int64_t *ema = s_replayPath == 2 ? &s_lagReuseNs
+                     : s_replayPath == 1 ? &s_lagDecodeNs : &s_lagFifoNs;
+#else
+        int64_t *ema = &s_lagFifoNs;
+#endif
+        *ema = (*ema == 0) ? lag : *ema + (lag - *ema) / 8;
+    }
+#ifdef MP6_FI_TELEMETRY
+    (void)telAlpha;
+    mp6_fi_tel_record(1 + s_replayPath, mp6_tick_count, s_lastSealNs, t0, s_lastPresentNs, telAlpha,
+                      interp | (s_smoothWindow ? 2 : 0));
+#endif
     s_declCount[FI_DECL_OK]++;
     return 1;
 }
@@ -2579,6 +4092,7 @@ void mp6_fi_savestate_reset(void)
      * dropped. Single-threaded with capture/replay (all on the game thread's
      * frame boundary), so no allocation can be in flight here. */
     int i;
+    fi_census_owner_invalidate();
     for (i = 0; i < 2; ++i) {
         free(s_streams[i].data);
         free(s_streams[i].chunkEnd);
@@ -2594,6 +4108,12 @@ void mp6_fi_savestate_reset(void)
     s_pairState = NULL;
     s_pairCacheCap = s_pairStateCap = 0;
     fi_pair_cache_invalidate();
+    fi_replay_plan_release();
+    s_defLatest = s_defPrev = -1;
+    s_defBlended = 0;
+#ifdef MP6_AURORA_RETAINED_REPLAY
+    aurora_gx_replay_invalidate();
+#endif
     free(s_replayBuf);
     s_replayBuf = NULL;
     s_replayCap = 0;

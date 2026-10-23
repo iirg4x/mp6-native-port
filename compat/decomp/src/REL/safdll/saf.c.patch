@@ -1,0 +1,16 @@
+--- a/src/REL/safdll/saf.c
++++ b/src/REL/safdll/saf.c
+@@ -0,0 +1 @@
++#include "mp6_window.h"
+@@ -133,2 +134,2 @@
+-        HuWinInsertMesSet(window, (u32)hundredText.text, 0);
+-        HuWinInsertMesSet(window, (u32)oneText.text, 1);
++        mp6_window_insert_text(window, hundredText.text, 0);
++        mp6_window_insert_text(window, oneText.text, 1);
+@@ -994,0 +996,6 @@
++
++void mp6_saf_saf_data_reset(void);
++void mp6_saf_reset(void)
++{
++    mp6_saf_saf_data_reset();
++}

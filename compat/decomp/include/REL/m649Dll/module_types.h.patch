@@ -1,0 +1,342 @@
+--- a/include/REL/m649Dll/module_types.h
++++ b/include/REL/m649Dll/module_types.h
+@@ -35,17 +35,3 @@
+-/* Shared camera-light state used for the shadow direction, placement, and color. */
+-typedef struct M620LightData_s {
+-    HU3D_LIGHTID lightId; /* Renderer light handle; -1 before the light is created. */
+-    OMOBJ_FUNC callback; /* Optional object update callback for the light owner. */
+-    HuVecF position; /* World position used to place the directional light. */
+-    HuVecF target; /* World point used to derive the light direction at setup. */
+-    HuVecF direction; /* Stored light direction shared with the camera shadow state. */
+-    GXColor color; /* RGBA color sent to the renderer. */
+-} M620LightData;
+-
+-/* Stores per-object context and the optional frame callback used by the sound manager. */
+-typedef void (*M620ObjectCallback)(OMOBJ *obj);
+-
+-typedef struct M620ObjectState_s {
+-    void *userData; /* Client-owned data retained by the sound manager object. */
+-    M620ObjectCallback callback; /* Optional per-frame callback after sound updates. */
+-} M620ObjectState;
++
++
++
+@@ -83,0 +70,2 @@
++typedef void (*M649CameraCallback)(OMOBJ *, u32, s32);
++
+@@ -89 +77 @@
+-    void (*callback)(OMOBJ *, unsigned int, int);
++    M649CameraCallback callback;
+@@ -111,0 +100,312 @@
++/* Native work records. Their owning OM objects allocate sizeof(record);
++ * shared consumers must never reinterpret PPC offsets or callback addresses. */
++typedef struct M649LightWork_s {
++    s16 light; /* Renderer light handle, or -1 before creation. */
++    OMOBJ_FUNC callback; /* Optional frame callback owned by this light object. */
++    Vec position, target, direction; /* World-space light origin, target, and stored light
++                                      * direction. */
++    GXColor color; /* RGBA color sent to the renderer. */
++} M649LightWork;
++
++typedef struct M649FogParam_s {
++    s32 layer; /* Renderer layer using this fog entry; -1 terminates the table. */
++    u32 cameras; /* Camera mask selecting the perspective used for this fog layer. */
++    GXFogType type; /* Renderer fog mode. */
++    float start, end; /* Fog start and end distances. */
++    GXColor color; /* RGBA fog color. */
++} M649FogParam;
++
++typedef struct M649FogWork_s {
++    M649FogParam *parameters; /* Fog settings terminated by a layer value of -1. */
++    OMOBJ_FUNC callback; /* Optional frame callback owned by this fog object. */
++    float factor; /* Scales the configured range from start toward end. */
++} M649FogWork;
++
++typedef struct M649AudioConfigView_s {
++    u32 cameras; /* Camera bits to which these sound settings apply. */
++    s32 panMin, panMax; /* Output pan range for screen X from 0 to 576. */
++    s32 volumeMin, volumeMiddle, volumeMax; /* Output volume at far, middle, and near distances. */
++    float distanceFar, distanceMiddle, distanceNear; /* Camera-space depth breakpoints. */
++} M649AudioConfigView;
++
++typedef struct M649AudioEntry_s {
++    s32 handle, effect; /* Playing sound handle and the effect used to start it. */
++    u32 cameras; /* Camera mask used for position-based updates. */
++    s32 updatePan, updateVolume; /* Nonzero when the corresponding value is refreshed. */
++    Vec *position; /* Live world position used by each audio-object update. */
++} M649AudioEntry;
++
++typedef struct M649AudioWork_s {
++    M649AudioConfigView *config; /* Terminated audio settings selected at creation. */
++    OMOBJ_FUNC callback; /* Invoked after this owner updates its sound records. */
++    M649AudioEntry entries[64]; /* Active sound records; handle -1 marks a free slot. */
++} M649AudioWork;
++
++typedef struct M649PlayerState_s {
++    u32 camera;
++    s32 previousPlayer, player, controlEnabled;
++    Vec position, velocity, rotation;
++    u32 buttonsDown, buttons;
++    float stickAngle, stickMagnitude;
++    s32 currentMotion, motionTime, requestedMotion;
++    float motionSpeed;
++    s32 phase, timer;
++    /* Cleared at character setup; no player update reads these bytes. */
++    u8 unknown_5C_to_6B[16];
++    s32 updateCount; /* Count of player-manager updates since registration. */
++    s32 computer, difficulty, computerPhase; /* Computer control, difficulty, and input phase. */
++    s32 computerTimer; /* Frames until the next computer-controlled button press. */
++    float computerDirection; /* Facing angle used to select the computer-controlled button. */
++    /* Turn-motion active flag and a counter kept at zero by player updates. */
++    s32 motionActive, motionTimer;
++    /* Cleared at character setup; no player update reads these bytes. */
++    u8 unknown_8C_to_97[12];
++    s32 turnTimer, itemModel, turnDirection;
++    M649PlayerConfig config;
++} M649PlayerState;
++
++typedef struct M649PlayerWork_s {
++    M649PlayerState state;
++    s32 player, character, phase;
++    /* Cleared at character setup; no player update reads these bytes. */
++    u8 unknown_F0_to_F3[4];
++    s32 timer; /* Number of object updates since the character was created. */
++    s32 volumeEnabled;
++} M649PlayerWork;
++
++typedef struct M649PlayerMotionParam_s {
++    u16 motion;
++    s16 overlay;
++    float blend;
++    u32 attr;
++} M649PlayerMotionParam;
++
++typedef struct M649ComputerParam_s {
++    float firstDelay, delay, randomDelay, error;
++    s32 targetScore;
++} M649ComputerParam;
++
++typedef struct M649PropMotionParam_s {
++    s32 resource;
++    float blend;
++    u32 attr;
++} M649PropMotionParam;
++
++typedef struct M649PropParam_s {
++    s32 count, linkModel, type;
++    s16 firstId, layer;
++    u32 attr;
++    s32 shadow, modelResource;
++    M649PropMotionParam *motions;
++    Vec *position;
++    float rotationY;
++    OMOBJ_FUNC update;
++} M649PropParam;
++
++typedef struct M649Point_s {
++    Vec position;
++    s16 active, hit;
++} M649Point;
++
++typedef struct M649Motion_s {
++    s32 id, timer;
++    float position, speed, targetSpeed;
++    s32 mode, group, character, nextPoint;
++    M649Point points[64];
++} M649Motion;
++
++typedef struct M649PathView_s {
++    s32 time;
++    s32 points[7];
++} M649PathView;
++
++typedef struct M649Scene_s {
++    s32 phase, delay, direction;
++} M649Scene;
++
++typedef struct M649PropState_s {
++    s32 camera;
++    /* Cleared when the prop is created; no prop callback reads these bytes. */
++    u8 unknown_04_to_0F[12];
++    Vec position, velocity, rotation;
++    /* Cleared when the prop is created; no prop callback reads these bytes. */
++    u8 unknown_34_to_43[16];
++    s32 motion, motionTime;
++    /* Cleared when the prop is created; no prop callback reads these bytes. */
++    u8 unknown_4C_to_83[56];
++    s32 motionActive, motionTimer;
++    /* Cleared when the prop is created; no prop callback reads these bytes. */
++    u8 unknown_8C_to_E3[88];
++} M649PropState;
++
++typedef union M649PropMovement_u {
++    M649Motion *motion;
++    float *speed;
++    s32 *path;
++} M649PropMovement;
++
++typedef struct M649ShadowRecord_s {
++    s32 active, camera; /* Draw flag and camera index selecting the shadow model. */
++    float radius; /* Shadow fan radius in world units. */
++    Vec *position, *offset; /* Live shadow center and the offset added when drawing it. */
++} M649ShadowRecord;
++
++typedef struct M649EffectOwner_s { ANIMDATA *animations[2]; } M649EffectOwner;
++
++typedef struct M649EffectRecord_s {
++    s32 visible, generation, phase, spawnDelay, frame; /* Draw flag, trail depth, and update
++                                                        * state. */
++    float size; /* Radius of the rendered score effect in world units. */
++    float *speed; /* Live travel speed of the prop that created this effect. */
++    Vec position, trailPosition; /* Moving effect position and rising trail center. */
++    GXColor color; /* Trail color and fading alpha. */
++} M649EffectRecord;
++
++typedef struct M649EffectSlotsView_s_0A018 {
++    M649ShadowRecord *entries[1];
++} M649EffectSlots;
++
++typedef struct M649ScoreEntryView_s {
++    s32 points; /* Current player score, capped at 99. */
++    float x, y; /* Score box position in screen coordinates. */
++    s16 box; /* Player's score-box sprite group. */
++    MGSCORE *score; /* Number sprite displaying the current score. */
++} M649ScoreEntryView;
++
++typedef struct M649ScoreWorkView_s {
++    s32 displayState; /* 0 leaves visibility unchanged, 1 shows the displays, and 2 keeps them
++                       * visible. */
++    M649ScoreEntryView entries[4]; /* Scores and display handles in player order. */
++} M649ScoreWorkView;
++
++typedef struct M649PropWork_s {
++    M649PropState state;
++    M649PropParam *param;
++    s32 id, timer;
++    Vec startPosition;
++    s32 phase, pathTime;
++    /* Cleared when the prop is created; no prop callback reads these bytes. */
++    u8 unknown_104_to_1B3[176];
++    M649PropMovement movement;
++    s32 leftSound, rightSound;
++    s32 childModel;
++    M649ShadowRecord effect;
++} M649PropWork;
++
++/* Cross-unit functions: signatures follow the defining owner. */
++void fn_1_13D8(OMOBJMAN *manager);
++void fn_1_14A0(OMOBJMAN *manager, Vec *position, Vec *target, GXColor *color);
++void fn_1_1664(s32 modelId, char *lightName);
++void fn_1_1B88(OMOBJMAN *manager, u32 cameras, float fov, float nearPlane, float farPlane,
++    float shadowRadius, OM_CAMERA_VIEW *view);
++void fn_1_2590(s32 camera, Vec *direction, Vec *target, float fov, float radius);
++void fn_1_2780(M649CameraCallback callback);
++void fn_1_281C(u32 cameras, float x, float y, float width, float height);
++void fn_1_2BCC(u32 cameras, void *data);
++BOOL fn_1_2C84(u32 cameras);
++void fn_1_3250(HUPROCESS *objectManager, M649AudioConfigView *audioConfig);
++s32 fn_1_3630(u32 cameras, Vec *position);
++s32 fn_1_3850(u32 cameras, Vec *position);
++void fn_1_4788(unsigned int cameraMask, int effect, int handle, HuVecF *position, int panEnabled,
++               int volumeEnabled);
++int fn_1_48DC(int dataNum);
++s32 fn_1_49E4(s32 model, s32 dataNum);
++float fn_1_4AF4(float start, float end, float factor);
++float fn_1_4C10(float start, float end);
++float fn_1_4CC4(HuVecF *currentPosition, HuVecF *nextPosition);
++float fn_1_4D60(Vec *first, Vec *second);
++void fn_1_8F58(HUPROCESS *process);
++void fn_1_A018(M649ShadowRecord *effect);
++void fn_1_A0BC(M649Motion *motion);
++void fn_1_A168(s32 cameraIndex, Vec *position, float *speed, s32 effectType);
++void fn_1_A0(void);
++void fn_1_680(short mode, short state);
++void fn_1_BB0(s16 mode, s16 frameNo);
++void fn_1_BE0(OM_CAMERA_VIEW *start, OM_CAMERA_VIEW *end, OM_CAMERA_VIEW *result, float factor);
++void fn_1_C78(OMOBJ *object, u32 camera, s32 index);
++s32 fn_1_1210(s32 resource);
++s32 fn_1_1218(s32 cameraIndex);
++s32 fn_1_1234(void);
++s32 fn_1_1244(void);
++s32 fn_1_127C(u32 resultId);
++void fn_1_1338(s32 player, u32 resultId, u32 character);
++void fn_1_1368(s32 player);
++s32 fn_1_1388(void);
++void fn_1_4ECC(Point3d *start, Point3d *end, Point3d *out, f32 t);
++void fn_1_4F24(HUPROCESS *manager);
++void fn_1_5020(void);
++s32 fn_1_5B04(void *state);
++s32 fn_1_6958(s32 player);
++void fn_1_6990(HUPROCESS *manager);
++void fn_1_6A84(void);
++void fn_1_7288(OMOBJ *object);
++void fn_1_728C(OMOBJ *object);
++void fn_1_7300(OMOBJ *object);
++void fn_1_7C94(OMOBJ *obj);
++void fn_1_7DD8(OMOBJ *obj);
++void fn_1_7FD4(OMOBJ *object);
++void fn_1_80B4(OMOBJ *object);
++void fn_1_8278(OMOBJ *object);
++void fn_1_83BC(OMOBJ *object);
++void fn_1_88FC(s32 group, s32 id);
++s32 fn_1_8D20(s32 group, s32 id, s32 frames);
++void fn_1_A220(OMOBJMAN *manager);
++void fn_1_A2A8(void);
++void fn_1_A5A4(s32 playerIndex, s32 awardedPoints);
++void fn_1_A600(void);
++s32 fn_1_A644(s32 playerIndex);
++
++/* Shared storage is owned and reset by main.c. */
++extern OM_CAMERA_VIEW lbl_1_data_0;
++extern Vec lbl_1_data_1C;
++extern Vec lbl_1_data_28;
++extern GXColor lbl_1_data_34;
++extern M649AudioConfigView lbl_1_data_38[2];
++extern MGSEQ_PARAM lbl_1_data_80;
++extern s32 lbl_1_data_A8[4];
++extern Vec lbl_1_data_B8;
++extern GXColor lbl_1_data_C4;
++extern s32 lbl_1_data_C8[6];
++extern M649PlayerMotionParam lbl_1_data_E0[6];
++extern Vec lbl_1_data_128[4];
++extern float lbl_1_data_158[4];
++extern M649PlayerConfig lbl_1_data_174;
++extern s32 lbl_1_data_1B4[4];
++extern M649ComputerParam lbl_1_data_1C4[4];
++extern M649PropMotionParam lbl_1_data_224[3];
++extern M649PropParam lbl_1_data_248[12];
++extern OMOBJ *lbl_1_bss_5A8;
++extern HUPROCESS *lbl_1_bss_5A4;
++extern OMOBJ *lbl_1_bss_5A0;
++extern OMOBJ *lbl_1_bss_59C;
++extern OMOBJ *lbl_1_bss_39C[128];
++extern s32 lbl_1_bss_398;
++extern OMOBJ *lbl_1_bss_368[12];
++extern OMOBJ *lbl_1_bss_338[12];
++extern OMOBJ *lbl_1_bss_334;
++extern OMOBJ *lbl_1_bss_324[4];
++extern M649PlayerState *lbl_1_bss_314[4];
++extern s32 lbl_1_bss_310;
++extern OMOBJ *lbl_1_bss_308;
++extern OMOBJ *lbl_1_bss_304;
++extern OMOBJ *lbl_1_bss_300;
++extern OMOBJ *lbl_1_bss_2FC;
++extern OMOBJ *lbl_1_bss_2F8;
++extern s32 lbl_1_bss_1B8[80];
++extern s32 lbl_1_bss_78[80];
++extern OMOBJMAN *lbl_1_bss_74;
++extern s32 lbl_1_bss_70;
++extern s32 lbl_1_bss_6C;
++extern s32 lbl_1_bss_68;
++extern s32 lbl_1_bss_64;
++extern s32 lbl_1_bss_60;
++extern s32 lbl_1_bss_5C;
++extern s32 lbl_1_bss_4C[4];
++extern s32 lbl_1_bss_3C[4];
++extern s32 lbl_1_bss_2C[4];
++extern u32 lbl_1_bss_1C[4];
++extern s32 lbl_1_bss_C[4];
++extern s32 lbl_1_bss_8;
++extern f32 lbl_1_bss_4;
++extern f32 lbl_1_bss_0;
++

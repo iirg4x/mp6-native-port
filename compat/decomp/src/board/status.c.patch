@@ -1,11 +1,11 @@
 --- a/src/board/status.c
 +++ b/src/board/status.c
-@@ -13,0 +14,4 @@
+@@ -14,0 +15,4 @@
 +
 +#include "mp6_widescreen.h" /* widescreen support -- true-edge status anchoring */
 +#include <stdio.h>  /* MP6_STATUS_DIAG panel-identity trace (StatusDiagOn) */
 +#include <stdlib.h>
-@@ -190,0 +195,113 @@
+@@ -193,0 +198,113 @@
 +
 +/* ---------------------------------------------------------------------
 + * Widescreen: anchor the board status layer to the TRUE screen edges.
@@ -119,10 +119,10 @@
 +    n += (int)sizeof(len);
 +    return StatusDiagHash(scratch, n);
 +}
-@@ -255 +372 @@
+@@ -260 +377 @@
 -        HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
 +        HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);
-@@ -281,0 +399,10 @@
+@@ -288,0 +406,10 @@
 +    if(StatusDiagOn()) {
 +        int i;
 +        printf("[STATUS-DIAG] mbStatusReset enter: proc=%p", (void *)statusProc);
@@ -133,7 +133,7 @@
 +        printf("\n");
 +        fflush(stdout);
 +    }
-@@ -284,0 +412,9 @@
+@@ -291,0 +419,9 @@
 +    if(StatusDiagOn()) {
 +        int i;
 +        printf("[STATUS-DIAG] mbStatusReset leave:");
@@ -143,13 +143,13 @@
 +        printf("\n");
 +        fflush(stdout);
 +    }
-@@ -361 +497 @@
+@@ -377 +513 @@
 -            HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
 +            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);
-@@ -404 +540 @@
+@@ -421 +557 @@
 -            HuSprGrpPosSet(statusMasuWork.gid, 700.0f, 72.0f);
 +            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(700.0f), 72.0f);
-@@ -451,0 +588,30 @@
+@@ -476,0 +613,30 @@
 +        if(mp6_widescreen_enabled()) {
 +            /* A resting panel is never re-positioned by the retail code
 +             * (this early return is the whole at-rest path), so a LIVE
@@ -180,7 +180,7 @@
 +                HuSprGrpPosSet(status->gid, wantX, status->posEnd.y);
 +            }
 +        }
-@@ -470 +636,8 @@
+@@ -495 +661,8 @@
 -    HuSprGrpPosSet(status->gid, pos.x, pos.y);
 +    /* The ONE place a moving panel's position reaches its sprite group.
 +     * posBegin/posEnd are both native and both on the SAME side of centre
@@ -190,20 +190,20 @@
 +     * translation of the whole slide -- it never crosses the side test
 +     * mid-move. */
 +    HuSprGrpPosSet(status->gid, StatusAnchorX(pos.x), pos.y);
-@@ -634 +807 @@
+@@ -679 +852 @@
 -        HuSprGrpPosSet(status->gid, status->posEnd.x, status->posEnd.y);
 +        HuSprGrpPosSet(status->gid, StatusAnchorX(status->posEnd.x), status->posEnd.y);
-@@ -680 +853 @@
+@@ -731 +904 @@
 -    HuSprGrpPosSet(status->gid, status->posEnd.x, status->posEnd.y);
 +    HuSprGrpPosSet(status->gid, StatusAnchorX(status->posEnd.x), status->posEnd.y);
-@@ -710 +883 @@
+@@ -766 +939 @@
 -            HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
 +            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);
-@@ -712 +885 @@
+@@ -768 +941 @@
 -            HuSprGrpPosSet(statusMasuWork.gid, 700.0f, 72.0f);
 +            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(700.0f), 72.0f);
-@@ -752 +925,9 @@
--    pos->x = gp->pos.x;
+@@ -814 +987,9 @@
+-    pos->x = spriteGroup->pos.x;
 +    /* The group's own stored X is ANCHORED (that is the only form this
 +     * file ever writes); the status API is native end to end, so undo the
 +     * anchor on the way out. Without this, mbStatusMoveSet/
@@ -212,15 +212,15 @@
 +     * value back into a path that anchors again, the exact double-shift
 +     * the 2D ortho change above removes. Exact inverse, exact no-op
 +     * when disabled. */
-+    pos->x = StatusUnanchorX(gp->pos.x);
-@@ -761 +942 @@
--    pos->x = gp->pos.x;
-+    pos->x = StatusUnanchorX(gp->pos.x);
-@@ -834 +1015,28 @@
--    mbSprCreate(mbBoardDataNumGet(statusKaoFileTbl[charNo]), 1500, NULL, &sprId);
++    pos->x = StatusUnanchorX(spriteGroup->pos.x);
+@@ -824 +1005 @@
+-    pos->x = spriteGroup->pos.x;
++    pos->x = StatusUnanchorX(spriteGroup->pos.x);
+@@ -891 +1072,28 @@
+-    mbSprCreate(mbBoardDataNumGet(statusKaoFileTbl[characterNo]), 1500, NULL, &sprId);
 +    {
 +        ANIMDATA *kaoAnim = NULL;
-+        mbSprCreate(mbBoardDataNumGet(statusKaoFileTbl[charNo]), 1500, &kaoAnim, &sprId);
++        mbSprCreate(mbBoardDataNumGet(statusKaoFileTbl[characterNo]), 1500, &kaoAnim, &sprId);
 +        if(StatusDiagOn()) {
 +            ANIMBMP *b0 = (kaoAnim != NULL && kaoAnim->bmp != NULL) ? &kaoAnim->bmp[0] : NULL;
 +            int palBytes = (b0 != NULL) ? (int)b0->palNum * 2 : 0;
@@ -228,9 +228,9 @@
 +                   "kaoData=%d gid=%d kaoSpr=%d anim=%p"
 +                   " fmt=%d %dx%d dataSize=%d palNum=%d data=%p pal=%p"
 +                   " dataFull=%08lx dataHT=%08lx palFull=%08lx palHT=%08lx\n",
-+                statusNo, charNo, (int)GwPlayer[statusNo].charNo,
++                statusNo, characterNo, (int)GwPlayer[statusNo].charNo,
 +                (int)GwPlayer[statusNo].comF,
-+                (int)statusKaoFileTbl[charNo], (int)status->gid, (int)sprId,
++                (int)statusKaoFileTbl[characterNo], (int)status->gid, (int)sprId,
 +                (void *)kaoAnim,
 +                (b0 != NULL) ? (int)b0->dataFmt : -1,
 +                (b0 != NULL) ? (int)b0->sizeX : -1,
@@ -246,15 +246,15 @@
 +            fflush(stdout);
 +        }
 +    }
-@@ -1021 +1229 @@
+@@ -1089 +1297 @@
 -                HuSprGrpPosSet(status->gid, status->posBegin.x, status->posBegin.y);
 +                HuSprGrpPosSet(status->gid, StatusAnchorX(status->posBegin.x), status->posBegin.y);
-@@ -1026 +1234 @@
+@@ -1094 +1302 @@
 -            HuSprGrpPosSet(statusMasuWork.gid, 700.0f, 72.0f);
 +            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(700.0f), 72.0f);
-@@ -1032 +1240 @@
+@@ -1100 +1308 @@
 -                HuSprGrpPosSet(status->gid, status->posEnd.x, status->posEnd.y);
 +                HuSprGrpPosSet(status->gid, StatusAnchorX(status->posEnd.x), status->posEnd.y);
-@@ -1039 +1247 @@
+@@ -1107 +1315 @@
 -            HuSprGrpPosSet(statusMasuWork.gid, 472.0f, 72.0f);
 +            HuSprGrpPosSet(statusMasuWork.gid, StatusAnchorX(472.0f), 72.0f);

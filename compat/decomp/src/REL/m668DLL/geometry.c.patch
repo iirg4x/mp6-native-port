@@ -1,0 +1,5 @@
+--- a/src/REL/m668DLL/geometry.c
++++ b/src/REL/m668DLL/geometry.c
+@@ -19 +19 @@
+-extern inline f32 m668_fabs32(f32 value)
++static inline f32 m668_fabs32(f32 value)

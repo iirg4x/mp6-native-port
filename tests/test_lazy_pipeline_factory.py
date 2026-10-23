@@ -11,21 +11,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class LazyPipelineFactory(unittest.TestCase):
     def test_cache_hits_and_deferred_ownership(self):
-        base = ROOT/'build/aurora-release-source/lib/gfx'
+        base = ROOT/'third_party/aurora/lib/gfx'
         for name in ('pipeline_cache.hpp', 'pipeline_cache.cpp', 'common.cpp'):
             self.assertEqual((base/name).read_text(),
-                (ROOT/'build/android-aurora-source/lib/gfx'/name).read_text())
+                (ROOT/'third_party/aurora/lib/gfx'/name).read_text())
         source = (base/'pipeline_cache.cpp').read_text()
-        start = source.index('template <typename PipelineConfig>\nstatic void publish_shader_info(')
+        # From the ready-pipeline memo (0078) through the lookup itself.
+        start = source.index('constexpr size_t GxReadyPipelineMemoSize')
         subject = source[start:source.index('static void pipeline_cache_abort()', start)]
         cached = source[source.index('struct CachedPipeline {'):source.index('struct PendingPipeline {')]
         entry = re.search(r'PipelineRef find_gx_pipeline\(.*?^}', source, re.S | re.M).group()
         self.assertIn('PipelinePriority::Blocking', entry)
         subject += entry
         command = (base.parent/'gx/command_processor.cpp').read_text()
-        self.assertIn('gfx::find_gx_pipeline(config, info)', command)
+        self.assertIn('gfx::find_gx_pipeline(config, info, uber)', command)
         self.assertNotIn('build_shader_info(config.shaderConfig)', command)
-        self.assertEqual(command, (ROOT/'build/android-aurora-source/lib/gx/command_processor.cpp').read_text())
+        self.assertEqual(command, (ROOT/'third_party/aurora/lib/gx/command_processor.cpp').read_text())
         self.assertIn('g_pipelines.clear();', source[source.index('void shutdown_pipeline_cache()'):])
         for kind in ('clear', 'gx', 'rmlui'):
             definition = re.search(r'PipelineRef find_pipeline\(ShaderType type, const '+kind+

@@ -1,0 +1,77 @@
+--- a/src/REL/mdsingdll/mdsing.c
++++ b/src/REL/mdsingdll/mdsing.c
+@@ -1,0 +2,3 @@
++#include "game/hsfex.h"
++#include "mp6_widescreen.h"
++#include <stdio.h>
+@@ -11,0 +15 @@
++void mbSaveStoryInit(s32 teamChar, s32 mgPack, s32 storyComDif);
+@@ -44,0 +49 @@
++#include "mp6_window.h"
+@@ -149 +154 @@
+-void fn_1_4144(s16 winNo, s32 messNum, s16 insertPos);
++void fn_1_4144(s16 winNo, const char *messText, s16 insertPos);
+@@ -910 +915 @@
+-        if ((void *)CharMotionAMemPGet(characterNo[characterIndex]) == NULL) {
++        if (CharMotionAMemPGet(characterNo[characterIndex]) == 0) {
+@@ -951 +956 @@
+-        if ((void *)CharMotionAMemPGet(characterNo[characterIndex]) == NULL) {
++        if (CharMotionAMemPGet(characterNo[characterIndex]) == 0) {
+@@ -1728 +1733 @@
+-void fn_1_4144(s16 winNo, s32 messNum, s16 insertPos)
++void fn_1_4144(s16 winNo, const char *messText, s16 insertPos)
+@@ -1731,5 +1736,4 @@
+-    if (lbl_1_data_A9C[1] != messNum) {
+-        lbl_1_data_A9C[0] = -1;
+-        lbl_1_data_A9C[1] = messNum;
+-        fn_1_3898(lbl_1_data_A98[0], lbl_1_data_A9C[1], insertPos);
+-    }
++    lbl_1_data_A9C[0] = -1;
++    lbl_1_data_A9C[1] = -1;
++    HuWinHomeClear(lbl_1_bss_1398[winNo]);
++    mp6_window_insert_text(lbl_1_bss_1398[winNo], messText, insertPos);
+@@ -1868,0 +1873,3 @@
++        /* Group 8 is the flat save-screen backing, not the menu artwork. */
++        if (spriteDesc->groupNo == 8)
++            HuSprAttrSet(lbl_1_bss_1292[8], 0, MP6_HUSPR_ATTR_WIDE_BACKDROP);
+@@ -2578,0 +2586,7 @@
++        if (modelNo == 0) {
++            /* Independent clean-plank fill; keep the native emblem/shadows intact. */
++            mp6_widescreen_floor_border_fill_dup(DATANUM(DATA_mdsing, 0), "yuka");
++        } else if (modelNo == 2) {
++            /* Continue only the cloud-frame outer edges, not the ships or rocks. */
++            mp6_widescreen_extend_pillar_edge(obj->mdlId[modelNo], "pillar");
++        }
+@@ -2604,0 +2619 @@
++    mp6_widescreen_floor_border_fill_dup_kill_all();
+@@ -2766,0 +2782,3 @@
++            /* Continue the rotating pattern at native radial density, before
++             * linking its twin. The live preview panels stay native-sized. */
++            mp6_widescreen_extend_ring_reflect_uv(obj->mdlId[modelNo], "CP");
+@@ -4487,2 +4505,2 @@
+-        lbl_1_bss_1340.difficulty = (((u8 *) & GwCommon)[1069] >> 5) & 3;
+-        lbl_1_bss_1340.minigamePack = (((u8 *) & GwCommon)[1066] >> 1) & 7;
++        lbl_1_bss_1340.difficulty = GwCommon.confSingleDiff;
++        lbl_1_bss_1340.minigamePack = GwCommon.storyMgPack;
+@@ -4727,0 +4746 @@
++    mp6_widescreen_floor_border_fill_dup_kill_all();
+@@ -4954,0 +4974,3 @@
++        /* Group 8 is the flat save-screen backing, not the menu artwork. */
++        if (spriteDesc->groupNo == 8)
++            HuSprAttrSet(lbl_1_bss_1292[8], 0, MP6_HUSPR_ATTR_WIDE_BACKDROP);
+@@ -5005 +5027 @@
+-    memset(cameraWork, 0, 80U);
++    memset(cameraWork, 0, sizeof(*cameraWork));
+@@ -6418,0 +6441 @@
++    HuSprAttrSet(lbl_1_bss_474, 0, MP6_HUSPR_ATTR_WIDE_BACKDROP);
+@@ -7051,0 +7075 @@
++    HuSprAttrSet(lbl_1_bss_474, 0, MP6_HUSPR_ATTR_WIDE_BACKDROP);
+@@ -7588 +7612 @@
+-        fn_1_4144(3, (s32)scoreText, 0);
++        fn_1_4144(3, scoreText, 0);
+@@ -5438,0 +5438,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -5979,0 +5979,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

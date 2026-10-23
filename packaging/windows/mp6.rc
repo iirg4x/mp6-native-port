@@ -1,0 +1,23 @@
+// Windows resources for mp6native.exe, linked by tools/build.py.
+// 101 = the app icon (Explorer, taskbar, and the window via
+// SDL_HINT_WINDOWS_INTRESOURCE_ICON in src/main_native.c).
+// mp6.ico is built by tools/make_app_icons.py.
+101 ICON "mp6.ico"
+
+// The name Task Manager and Explorer's details show for the exe.
+1 VERSIONINFO
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "Starlit Party"
+      VALUE "ProductName", "Starlit Party"
+      VALUE "OriginalFilename", "mp6native.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

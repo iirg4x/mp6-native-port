@@ -35,6 +35,7 @@ public:
     void refresh_active_tab();
     bool focus_tab(int index);
     int focused_tab_index() const;
+    void set_tab_icon(int index, const Rml::String &assetName);
     bool handle_nav_command(Rml::Event &event, NavCommand cmd);
 
 private:

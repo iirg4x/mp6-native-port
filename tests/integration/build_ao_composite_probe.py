@@ -10,11 +10,40 @@ import json
 from pathlib import Path
 import re
 import subprocess
-import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'build'))
-from android_local import build, configure, step_android
+
+
+ENV_VAR = 'MP6_PROFILE_SKIP_AO_COMPOSITE'
+PROBE_MARKER = '[MP6-COMPOSITE-PROBE]'
+# The draw setup lives in draw_composite, shared by the composite callback
+# and the retained (interpolated-frame) composite; the probe body spans both
+# up to the foliage callback, so the composite's job release still follows.
+COMPOSITE_ENTRY_ANCHOR = '''void draw_composite(const gfx::DrawContext &ctx, const wgpu::RenderPassEncoder &pass,
+                    const wgpu::BindGroup &bindings, bool preparedDepth, bool upstreamSignal,
+                    bool canonicalDepth) {'''
+COMPOSITE_SETUP_ANCHOR = '''    pass.SetViewport(0, 0, float(ctx.targetWidth), float(ctx.targetHeight), 0, 1);
+    pass.SetScissorRect(0, 0, ctx.targetWidth, ctx.targetHeight);
+    pass.SetPipeline(found->pipeline);'''
+COMPOSITE_DRAW_ANCHOR = '''    pass.SetBindGroup(0, bindings);
+    pass.Draw(3);'''
+COMPOSITE_RELEASE_ANCHOR = '''    job.composite = nullptr;
+    job.upstream.scratch.reset();
+    job.available.store(true, std::memory_order_release);'''
+FOLIAGE_ENTRY_ANCHOR = '''void foliage_seed(const gfx::DrawContext &ctx, const wgpu::RenderPassEncoder &pass,
+                  const void *payload, size_t, void *) {'''
+COMPOSITE_POLICY = '''
+    static const bool skipComposite = [] {
+        const char *value = std::getenv("MP6_PROFILE_SKIP_AO_COMPOSITE");
+        const bool skip = value && std::strcmp(value, "1") == 0;
+        if (skip)
+            std::fprintf(stderr, "[MP6-COMPOSITE-PROBE] skip=1 local-diagnostic-only\\n");
+        return skip;
+    }();'''
+COMPOSITE_DRAW_REPLACEMENT = '''    pass.SetBindGroup(0, bindings);
+    if (!skipComposite) {
+        pass.Draw(3);
+    }'''
 
 
 def digest(path):
@@ -25,7 +54,71 @@ class LinkCaptured(Exception):
     pass
 
 
+def _replace_once(source, anchor, replacement):
+    count = source.count(anchor)
+    if count != 1:
+        raise ValueError(f'expected exactly one AO composite source anchor, found {count}: {anchor!r}')
+    return source.replace(anchor, replacement, 1)
+
+
+def _composite_body(source):
+    if source.count(COMPOSITE_ENTRY_ANCHOR) != 1:
+        raise ValueError('AO composite entry anchor drifted')
+    if source.count(FOLIAGE_ENTRY_ANCHOR) != 1:
+        raise ValueError('AO foliage callback boundary drifted')
+    start = source.index(COMPOSITE_ENTRY_ANCHOR)
+    end = source.index(FOLIAGE_ENTRY_ANCHOR, start)
+    if end <= start:
+        raise ValueError('AO composite callback boundary is invalid')
+    return source[start:end]
+
+
+def instrument_ao_composite(source):
+    """Guard only the final AO composite draw in a source-bound probe.
+
+    The transform is pure and fail-closed: callback setup, bind-group state,
+    counters, and the shared scratch/job release tail must all match the
+    current production source before a diagnostic variant is generated.
+    """
+    if not isinstance(source, str):
+        raise TypeError('source must be text')
+    if ENV_VAR in source or PROBE_MARKER in source:
+        raise ValueError('source is already AO composite probe instrumented')
+
+    body = _composite_body(source)
+    for anchor, label in (
+        (COMPOSITE_SETUP_ANCHOR, 'draw setup'),
+        (COMPOSITE_DRAW_ANCHOR, 'final draw'),
+        (COMPOSITE_RELEASE_ANCHOR, 'shared cleanup'),
+    ):
+        if body.count(anchor) != 1:
+            raise ValueError(f'AO composite {label} anchor drifted')
+    draw_offset = body.index(COMPOSITE_DRAW_ANCHOR)
+    release_offset = body.index(COMPOSITE_RELEASE_ANCHOR)
+    if draw_offset >= release_offset:
+        raise ValueError('AO composite draw must precede shared cleanup')
+
+    transformed = _replace_once(
+        source,
+        COMPOSITE_ENTRY_ANCHOR,
+        COMPOSITE_ENTRY_ANCHOR + COMPOSITE_POLICY,
+    )
+    return _replace_once(transformed, COMPOSITE_DRAW_ANCHOR, COMPOSITE_DRAW_REPLACEMENT)
+
+
+# Keep the shorter name available to source-test callers following the other
+# AO probe modules' convention.
+instrument_ao = instrument_ao_composite
+
+
 def main():
+    # Android build helpers are optional for CPU/source tests and belong only
+    # to the executable path.
+    import sys
+
+    sys.path.insert(0, str(ROOT / 'build'))
+    from android_local import build, configure, step_android
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--session', required=True)
     args = parser.parse_args()
@@ -41,26 +134,9 @@ def main():
     staged = ROOT / 'packaging/android/app/src/main/jniLibs/arm64-v8a/libmp6game.so'
     watched = {str(path): digest(path) for path in (source, obj, native, staged)}
     manifest = json.loads((native.parent / 'native-build-manifest.json').read_text())
-    text = source.read_text()
-    anchor = '''void composite(const gfx::DrawContext &ctx, const wgpu::RenderPassEncoder &pass,
-               const void *payload, size_t, void *) {
-    auto &job = payload_job(payload);
-'''
-    assert text.count(anchor) == 1
-    text = text.replace(anchor, anchor + '''    static const bool skipComposite = [] {
-        const char *value = std::getenv("MP6_PROFILE_SKIP_AO_COMPOSITE");
-        const bool skip = value && std::strcmp(value, "1") == 0;
-        std::fprintf(stderr, "[MP6-COMPOSITE-PROBE] skip=%d local-diagnostic-only\\n", int(skip));
-        return skip;
-    }();
-    if (skipComposite) {
-        ++g_composited;
-        job.available.store(true, std::memory_order_release);
-        return;
-    }
-''')
+    text = instrument_ao_composite(source.read_text(encoding='utf-8'))
     generated = out / source.name
-    generated.write_text(text)
+    generated.write_text(text, encoding='utf-8')
     record = json.loads(Path(str(obj) + '.cmd.json').read_text())
     compile_cmd = list(record['command'])
     assert compile_cmd.count('-O2') == 1 and '-O0' not in compile_cmd

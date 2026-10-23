@@ -1,11 +1,64 @@
 --- a/src/game/printfunc.c
 +++ b/src/game/printfunc.c
-@@ -4,0 +5 @@
-+#include "mp6_widescreen.h" /* widescreen support */
-@@ -297 +298,5 @@
--                            if(x > HU_FB_WIDTH) {
-+                            /* The reference widescreen hack widens this
-+                             * same check to a fixed value; generalized to
-+                             * the live render width here. 640 (byte-
-+                             * identical) when disabled. */
-+                            if(x > mp6_widescreen_render_width()) {
+@@ -3,6 +3,8 @@
+ #include "game/printfunc.h"
+ #include "game/init.h"
+ #include "game/disp.h"
++#include "mp6_widescreen.h"
++#include "mp6_gxarray_registry.h"
+ 
+ #include "stdio.h"
+ #include "stdarg.h"
+@@ -163,7 +165,9 @@
+     if(saftyFrameF) {
+         WireDraw();
+     }
+-    MTXOrtho(projection, 0, HU_FB_HEIGHT, 0, HU_FB_WIDTH, 0, 10);
++    /* Debug text uses the 640-pixel framebuffer canvas, not the 576-pixel HUD. */
++    float frameMargin = (mp6_widescreen_render_width() - HU_FB_WIDTH) * 0.5f;
++    MTXOrtho(projection, 0, HU_FB_HEIGHT, -frameMargin, HU_FB_WIDTH + frameMargin, 0, 10);
+     GXSetProjection(projection, GX_ORTHOGRAPHIC);
+     MTXIdentity(modelView);
+     GXLoadPosMtxImm(modelView, GX_PNMTX0);
+@@ -177,7 +181,7 @@
+     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
+     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+-    GXSetArray(GX_VA_CLR0, fcoltbl, sizeof(GXColor));
++    mp6_gxarray_bind_span(GX_VA_CLR0, fcoltbl, sizeof(fcoltbl), sizeof(GXColor));
+     GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
+     GXInvalidateTexAll();
+     GXInitTexObj(&fontTexture, ank8x8_4b, 128, 128, GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
+@@ -227,7 +231,7 @@
+             GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
+             GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+             GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+-            GXSetArray(GX_VA_CLR0, fcoltbl, sizeof(GXColor));
++            mp6_gxarray_bind_span(GX_VA_CLR0, fcoltbl, sizeof(fcoltbl), sizeof(GXColor));
+             GXSetNumTevStages(1);
+             GXSetNumTexGens(1);
+             GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+@@ -317,10 +321,10 @@
+                                 GXTexCoord2f32(glyphTexU, glyphTexV+(1/16.0f));
+                                 GXEnd();
+                             }
+-                            /* Text wraps to the left edge after crossing the framebuffer width. */
+                             screenX += glyphWidth;
+-                            if(screenX > HU_FB_WIDTH) {
+-                                screenX = 0;
++                            /* Keep the native check when widescreen is disabled. */
++                            if(screenX > HU_FB_WIDTH + frameMargin) {
++                                screenX = -frameMargin;
+                                 screenY += glyphHeight;
+                             }
+                             break;
+@@ -339,7 +343,8 @@
+ {
+     Mtx44 projection;
+     Mtx modelView;
+-    MTXOrtho(projection, 0, HU_DISP_HEIGHT, 0, HU_DISP_WIDTH, 0, 10);
++    MTXOrtho(projection, 0, HU_DISP_HEIGHT, -mp6_widescreen_half_width_delta(),
++             HU_DISP_WIDTH + mp6_widescreen_half_width_delta(), 0, 10);
+     GXSetProjection(projection, GX_ORTHOGRAPHIC);
+     if(RenderMode->field_rendering) {
+         GXSetViewportJitter(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, 0, 1, VIGetNextField());

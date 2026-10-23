@@ -11,19 +11,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CompactUniforms(unittest.TestCase):
     def test_matrix_addressing_and_uploads(self):
-        base = ROOT / 'build/aurora-release-source/lib/gx'
+        base = ROOT / 'third_party/aurora/lib/gx'
         source = (base/'shader_info.cpp').read_text()
         shader = (base/'shader.cpp').read_text()
         header = (base/'gx.hpp').read_text()
         for filename in ('shader_info.cpp', 'shader.cpp', 'gx.hpp', 'pipeline.hpp'):
             self.assertEqual((base/filename).read_text(),
-                (ROOT/'build/android-aurora-source/lib/gx'/filename).read_text())
+                (ROOT/'third_party/aurora/lib/gx'/filename).read_text())
         select = source[source.index('  info.compactMatrices ='):source.index('  for (int i = 0; i < config.tevStageCount;', source.index('  info.compactMatrices ='))]
         textures = source[source.index('    if ((tcg.type =='):source.index('  if (config.fogType !=', source.index('    if ((tcg.type =='))]
         # Include the original sampled-coordinate loop, with the full selection,
         # static texture and post-matrix accounting bodies.
         textures = '  for (int i=0; i<8; ++i) {\n    if (!info.sampledTexCoords.test(i)) continue;\n    const auto& tcg=config.tcgs[i];\n' + textures
         upload = source[source.index('  if (info.compactMatrices) {',source.index('gfx::Range build_uniform')):source.index('  for (int i = 0; i < info.loadsTevReg.size();',source.index('gfx::Range build_uniform'))]
+        # The production matrix appender, minus its retained-replay note.
+        append_start = source.index('  const auto appendMtx = ', source.index('gfx::Range build_uniform'))
+        append = source[append_start:source.index('\n  };\n', append_start) + 5]
+        append = '\n'.join(line for line in append.split('\n') if 'fifo::' not in line)
+        upload = append + upload
         post = source[source.index('  if (info.usesPTTexMtx.any()) {',source.index('gfx::Range build_uniform')):source.index('  if (info.usesFog) {',source.index('gfx::Range build_uniform'))]
         rank = re.search(r'  template <size_t N>\n  static u32 matrix_slot.*?\n  }',header,re.S).group()
         tex_index = re.search(r'        u32 texMtxIdx = .*?\n        }',shader,re.S).group()

@@ -90,6 +90,10 @@ void mp6_input_script_init(const char *spec);
 uint16_t mp6_input_script_advance(void);
 void mp6_input_script_stick_get(int8_t *stickX, int8_t *stickY);
 int mp6_input_script_armed(void);
+/* Copy the running script out (malloc'd) and back over a savestate restore
+ * (src/os/savestate.c, MP6_LOAD_STATE loads only). */
+void *mp6_input_script_latch(void);
+void mp6_input_script_unlatch(void *latch);
 
 /* The exe has no explicit /SUBSYSTEM flag, so launching it with no parent
  * console (the ordinary "just run the .exe" path) makes Windows allocate
@@ -163,8 +167,8 @@ void mp6_bridge_window_policy_init(void *sdlWindow);
 void mp6_bridge_apply_content_aspect_policy(int aspectLockedCfg);
 
 /* Temporary black-frame cover while an unavailable overlay returns through
- * the real overlay manager. Never a permanent placeholder. Normal board
- * minigames are skipped before any transition by minigame_stub.c. */
+ * the real overlay manager. Never a permanent placeholder. A missing board
+ * minigame uses the same cover between instructions and results. */
 extern volatile int mp6_dll_stub_black_screen_active;
 
 /* Test-only forced-load hook: if the MP6_TEST_LOAD_DLL env var is set (to
@@ -178,6 +182,11 @@ extern volatile int mp6_dll_stub_black_screen_active;
  * the prolog needs (all HuMem heaps initialized and a valid current parent)
  * instead of assuming the first VI tick is late enough. */
 void mp6_dll_bridge_selftest_check_env(void);
+
+/* Test-only: MP6_TEST_MASU_TYPE=<n> makes every board space a player stops
+ * on run space type n's event (5 = Duel), so a short forced-board run
+ * reaches that event on the first turn. Returns type unchanged otherwise. */
+int mp6_test_masu_type(int type);
 
 /* Resolves a code address to "func+0xNN (file:line)" (or the best partial
  * match dbghelp can give) using the SAME dbghelp recipe

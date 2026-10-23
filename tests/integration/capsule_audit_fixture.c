@@ -1,5 +1,7 @@
 /* Compiled only into build/board-qa: explicit effect-entry fixtures, not a
  * certification of natural board routing, menu selection or random outcomes. */
+#include "game/wipe.h"
+
 static void qa_capsule_audit(int playerNo, const char *route)
 {
     extern int mbev_CapCall(int,int,BOOL,BOOL);
@@ -71,6 +73,59 @@ static void qa_capsule_audit(int playerNo, const char *route)
         mbCapMasuCapsuleSet(target,id,(playerNo+1)%4);
         mbev_CapCall(playerNo,mbMasuCapsuleGet(target),FALSE,mbCapUseModeGet(id)==2);
         if (owned>=0) printf("[CAPSULE-AUDIT] ownership.after space=%d owner=%d\n",owned,mbCapMasuPlayerGet(owned));
+    } else if (!strcmp(route,"audit-wide-wipes")) {
+        /* Explicit rendering fixture, not natural transition-routing proof. */
+        const int types[]={WIPE_TYPE_NORMAL,WIPE_TYPE_CROSS,WIPE_TYPE_DISSOLVE_IN,
+            WIPE_TYPE_DISSOLVE_OUT,WIPE_TYPE_VIEW_SHIFT,WIPE_TYPE_STAR,
+            WIPE_TYPE_WAVE,WIPE_TYPE_KOOPA,WIPE_TYPE_MOON,WIPE_TYPE_SUN,
+            WIPE_TYPE_SUNMOON,WIPE_TYPE_DISSOLVE_IN_BLUR,WIPE_TYPE_DISSOLVE_OUT_BLUR};
+        for (unsigned i=0;i<sizeof(types)/sizeof(types[0]);i++) {
+            WipeWait();
+            qa_state("wide.wipe.out",playerNo,types[i]);
+            WipeCreate(WIPE_MODE_OUT,types[i],45);
+            WipeWait();
+            if (i==0) { WipeLoadCreate(); HuPrcSleep(30); }
+            else HuPrcSleep(6);
+            qa_state("wide.wipe.in",playerNo,types[i]);
+            WipeCreate(WIPE_MODE_IN,types[i]|WIPE_TYPE_FBKEEP,45);
+            WipeWait();
+            HuPrcSleep(12);
+        }
+        qa_state("wide.wipe.done",playerNo,0);
+        for (int type=1;type<=5;type++) {
+            qa_state("wide.boardwipe.capture",playerNo,type);
+            mbWipeSpecialFadeInCreate(type,1);
+            HuPrcSleep(8);
+            qa_state("wide.boardwipe.animate",playerNo,type);
+            mbWipeSpecialFadeOutCreate(type,45);
+            HuPrcSleep(12);
+        }
+        qa_state("wide.boardwipe.done",playerNo,0);
+    } else if (!strcmp(route,"audit-wide-board-masks")) {
+        /* The three ANM masks have a different lifetime and draw path from
+         * the five captured-frame board wipes. Exercise both directions. */
+        for (int type=6;type<=8;type++) {
+            WipeWait();
+            qa_state("wide.boardwipe.capture",playerNo,type);
+            mbWipeSpecialFadeInCreate(type,45);
+            HuPrcSleep(12);
+            qa_state("wide.boardwipe.animate",playerNo,type);
+            mbWipeSpecialFadeOutCreate(type,45);
+            HuPrcSleep(12);
+        }
+        qa_state("wide.boardwipe.done",playerNo,0);
+    } else if (!strcmp(route,"audit-wide-edges")) {
+        /* Camera/coverage fixture only: visit authored outer log spaces using
+         * the normal player camera. Not evidence of natural board routing. */
+        static const s16 spaces[] = {22,27,46,30,40,41,85,77};
+        for (unsigned i=0;i<sizeof(spaces)/sizeof(spaces[0]);i++) {
+            GwPlayer[playerNo].masuId=GwPlayer[playerNo].masuIdNext=spaces[i];
+            mbPlayerPosReset(playerNo);
+            mbCameraPlayerViewSet(playerNo,0);
+            mbCameraMoveWait();
+            qa_state("wide.edge",playerNo,spaces[i]);
+            HuPrcSleep(180);
+        }
     } else if (!strcmp(route,"audit-boo-house")) {
         if (GwSystem.curTime!=1) { printf("[BOARD-QA] FATAL Boo requires night assets\n"); exit(3); }
         GwPlayer[playerNo].masuId=mbMasuFind_MAttrIdGet(-1,0x01000000);

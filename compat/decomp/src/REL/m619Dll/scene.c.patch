@@ -1,0 +1,42 @@
+--- a/src/REL/m619Dll/scene.c
++++ b/src/REL/m619Dll/scene.c
+@@ -7,0 +8,7 @@
++#include "mp6_widescreen.h"
++#include <string.h>
++
++static int mp6_m619_sky(const char *name)
++{
++    return strcmp(name, "sky00") == 0 || strcmp(name, "nyuudou") == 0;
++}
+@@ -158,3 +165,3 @@
+-extern s32 fn_1_C3B4(void *player);
+-
+-extern s32 fn_1_C420(void *player);
++extern s32 fn_1_C3B4(M619Player *player);
++
++extern s32 fn_1_C420(M619Player *playerState);
+@@ -170 +177 @@
+-extern s32 fn_1_C1E8(M619Player *player, f32 yOffset);
++extern void fn_1_C1E8(M619Player *player, f32 y);
+@@ -178 +185 @@
+-extern void fn_1_B3FC(void *motion, s32 expand);
++extern void fn_1_B3FC(M619Sway *motion, s32 expand);
+@@ -185 +192 @@
+-extern void fn_1_C690(void *work);
++extern void fn_1_C690(s32 *responseState);
+@@ -630 +637 @@
+-                fn_1_E5B8(fn_1_C420, player) != 0U) {
++                fn_1_E5B8((s32 (*)(void *))fn_1_C420, player) != 0U) {
+@@ -689 +696 @@
+-                fn_1_E5B8(fn_1_C3B4, player);
++                fn_1_E5B8((s32 (*)(void *))fn_1_C3B4, player);
+@@ -963,0 +971,3 @@
++    model = module->models[module->nightLighting != 0 ? 30 : 18];
++    mp6_widescreen_scale_backdrop(model, "sky00", 1);
++    mp6_widescreen_scale_backdrop(model, "nyuudou", 1);
+@@ -2631 +2641 @@
+-    pathParameter = (s32)lbl_1_bss_0->data;
++    pathParameter = (s32)(intptr_t)lbl_1_bss_0->data;
+@@ -1846,0 +1846,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

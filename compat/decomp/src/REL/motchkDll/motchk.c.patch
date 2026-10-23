@@ -1,0 +1,6 @@
+--- a/src/REL/motchkDll/motchk.c
++++ b/src/REL/motchkDll/motchk.c
+@@ -436,0 +437,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

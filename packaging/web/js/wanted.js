@@ -11,13 +11,15 @@
 //       if (strcmp(rel, "opening.bnr") == 0) return true;
 //       if (strcmp(rel, "sound/MP6_SND.msm") == 0) return true;
 //       if (strcmp(rel, "sound/MP6_Str.pdt") == 0) return true;
-//       return path_has_prefix(rel, "data") || path_has_prefix(rel, "mess") || path_has_prefix(rel, "mic");
+//       return path_has_prefix(rel, "data") || path_has_prefix(rel, "mess") ||
+//              path_has_prefix(rel, "mic") || path_has_prefix(rel, "movie");
 //   }
 //
 // and the design-contract comment at content_import.h:5-10, which names the
 // same set in prose: sys/fst.bin, files/opening.bnr,
 // files/sound/MP6_SND.msm, files/sound/MP6_Str.pdt, and everything under
-// files/data, files/mess, files/mic ("a ~401MB subset"). `rel` here is
+// files/data, files/mess, files/mic and files/movie (the minigame
+// instruction previews; ~740MB in all). `rel` here is
 // always a files/-relative POSIX path (forward slashes), matching what
 // parseFst() and the folder-source reader both produce.
 //
@@ -29,7 +31,7 @@
 // (js/packager.js), not by this filter.
 
 const EXACT_MATCHES = new Set(["opening.bnr", "sound/MP6_SND.msm", "sound/MP6_Str.pdt"]);
-const PREFIX_MATCHES = ["data", "mess", "mic"];
+const PREFIX_MATCHES = ["data", "mess", "mic", "movie"];
 
 /** Mirrors content_import.cpp's path_has_prefix(). */
 export function pathHasPrefix(path, prefix) {
@@ -40,7 +42,7 @@ export function pathHasPrefix(path, prefix) {
 
 /**
  * Mirrors content_import.cpp's wanted_file(). `rel` is a files/-relative
- * POSIX path, e.g. "data/title.bin", "sound/MP6_SND.msm", "movie/foo.thp".
+ * POSIX path, e.g. "data/title.bin", "sound/MP6_SND.msm", "dll/bootDll.rel".
  */
 export function wantedFile(rel) {
     if (EXACT_MATCHES.has(rel)) return true;

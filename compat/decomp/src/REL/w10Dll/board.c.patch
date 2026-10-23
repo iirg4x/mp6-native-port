@@ -1,0 +1,22 @@
+--- a/src/REL/w10Dll/board.c
++++ b/src/REL/w10Dll/board.c
+@@ -0,0 +1,2 @@
++#include "game/board/audio.h"
++#include "mp6_board_window.h"
+@@ -301 +303 @@
+-    mbWinInsertMesSet((s16) winNo, (u32)"1", 1);
++    mp6_board_window_insert_text((s16) winNo, "1", 1);
+@@ -487,6 +489,3 @@
+-static inline float fabsf2(register float x)
+-{
+-    asm {
+-        fabs x, x
+-    }
+-    return x;
++static inline float fabsf2(float x)
++{
++    return fabsf(x);
+@@ -922,0 +922,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

@@ -15,13 +15,12 @@ static W01CurveEval volatile hermite = fn_1_14BF0;
 int main(void)
 {
     HuVecF a = {0,0,0}, b = {50,0,0}, c = {100,0,0};
-    double slope;
     CHECK(fabsf(w01CurveLen(bezier,&a,&b,&c)-100.0f)<0.001f);
     for (int i=0;i<=16;i++) {
         float t = i/16.0f;
         CHECK(fabsf(bezier(&a,&b,&c,NULL,t)-fn_1_14A90(&a,&b,&c,t))<0.001f);
         CHECK(fabsf(w01CurveLen2(bezier,&a,&b,&c,t)-100*t)<0.001f);
-        CHECK(fabsf(w01CurveT(bezier,&a,&b,&c,0.4f,100*t,&slope)-t)<0.001f);
+        CHECK(fabsf(w01CurveT(bezier,&a,&b,&c,0.4f,100*t)-t)<0.001f);
     }
     b = (HuVecF){100,0,0}; c = (HuVecF){100,0,0};
     HuVecF d = {100,0,0};
@@ -41,7 +40,7 @@ int main(void)
     CHECK(isfinite(length) && fabsf(length-reference)/reference<0.002f);
     for (int i=0;i<=10;i++) {
         float t=i/10.0f, distance=w01CurveLen2(bezier,&a,&b,&c,t);
-        CHECK(fabsf(w01CurveT(bezier,&a,&b,&c,0.5f,distance,&slope)-t)<0.002f);
+        CHECK(fabsf(w01CurveT(bezier,&a,&b,&c,0.5f,distance)-t)<0.002f);
     }
     puts("board native curve callbacks: PASS");
     return 0;

@@ -1,0 +1,36 @@
+--- a/src/REL/mdmicdll/mic_mode.c
++++ b/src/REL/mdmicdll/mic_mode.c
+@@ -1,0 +2,2 @@
++#include "game/hsfex.h"
++#include "game/audio.h"
+@@ -604 +606 @@
+-s16 fn_1_276E0(void);
++s16 fn_1_276E0(s16 unused);
+@@ -942 +944 @@
+-        if ((void *) CharMotionAMemPGet((s16) GwPlayer[playerNo].charNo) == NULL) {
++        if (CharMotionAMemPGet((s16) GwPlayer[playerNo].charNo) == 0) {
+@@ -976 +978 @@
+-        if ((void *) CharMotionAMemPGet((s16) GwPlayer[playerNo].charNo) == NULL) {
++        if (CharMotionAMemPGet((s16) GwPlayer[playerNo].charNo) == 0) {
+@@ -6858 +6860 @@
+-    memset(state, 0, 80U);
++    memset(state, 0, sizeof(*state));
+@@ -7379 +7381 @@
+-s16 fn_1_276E0(void) {
++s16 fn_1_276E0(s16 unused) {
+@@ -7285,0 +7285,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -11,0 +14 @@
++#include "mp6_widescreen.h"
+@@ -2528,0 +2532,8 @@
++        if (modeNo == 0) {
++            /* Separate floor backing for the wide margins; the shadow
++             * receiver above stays native, as in Party and Solo. */
++            mp6_widescreen_floor_border_fill_dup(DATANUM(DATA_mdmic, 0), "yuka");
++        } else if (modeNo == 2) {
++            /* Continue the cloud-frame outer edges, as in Party and Solo. */
++            mp6_widescreen_extend_pillar_edge(obj->mdlId[modeNo], "pillar");
++        }
+@@ -2553,0 +2566 @@
++        mp6_widescreen_floor_border_fill_dup_kill_all();

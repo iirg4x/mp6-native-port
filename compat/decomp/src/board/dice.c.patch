@@ -1,8 +1,14 @@
 --- a/src/board/dice.c
 +++ b/src/board/dice.c
-@@ -0,0 +1 @@
+@@ -1 +1 @@
+-// Runs the board's dice rolls, dice effects, and floating result numbers.
 +#include <stdio.h>
-@@ -1468,0 +1470,13 @@
+@@ -23,0 +24 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -980,0 +982,2 @@
++        /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++        mp6_quick_play_hold("dice block");
+@@ -1512,0 +1513,13 @@
 +
 +    /* Native OM slots are reusable: a deleted opening/roll number must not
 +     * remain in the lookup table and make a later special die wait on the
@@ -16,7 +22,7 @@
 +        }
 +    }
 +
-@@ -2433 +2447,8 @@
+@@ -2507 +2520,8 @@
 -    DICE_NUM_VTX *vtxBuf;
 +    /* MP6_NATIVE_PORT: vtxBuf is assigned only inside the HSF_OBJ_MESH branch
 +     * of the object loop, so a model with no mesh returned an indeterminate

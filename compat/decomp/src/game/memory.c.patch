@@ -1,10 +1,8 @@
 --- a/src/game/memory.c
 +++ b/src/game/memory.c
-@@ -4,4 +4,18 @@
--#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-32))
+@@ -5,2 +5,16 @@
+-#define DATA_GET_BLOCK(payload) ((MEMORY_BLOCK *)(((char *)(payload))-32))
 -#define BLOCK_GET_DATA(block) (((char *)(block))+32)
--
--#define MEM_ALLOC_SIZE(size) (((size)+63) & 0xFFFFFFE0)
 +/* MEMORY_BLOCK's own prev/next fields are real pointers: 8 bytes each on
 + * this native 64-bit build vs 4 bytes on the original 32-bit target, so
 + * the true native header is 40 bytes, not the 32 these three macros
@@ -19,22 +17,207 @@
 + * start (block+40) -- i.e. straight at the `file` field (real offset 32)
 + * this struct's own layout puts there. */
 +#define MP6_MEMBLOCK_HDR ((s32)sizeof(MEMORY_BLOCK))
-+#define DATA_GET_BLOCK(ptr) ((MEMORY_BLOCK *)(((char *)(ptr))-MP6_MEMBLOCK_HDR))
++#define DATA_GET_BLOCK(payload) ((MEMORY_BLOCK *)(((char *)(payload))-MP6_MEMBLOCK_HDR))
 +#define BLOCK_GET_DATA(block) (((char *)(block))+MP6_MEMBLOCK_HDR)
+@@ -15,2 +29,7 @@
+-#define MEM_ALLOC_SIZE(payloadBytes) (((payloadBytes)+63) & MEMORY_ALIGNMENT_MASK)
+-
++#define MEM_ALLOC_SIZE(payloadBytes) (((payloadBytes)+MP6_MEMBLOCK_HDR+31) & MEMORY_ALIGNMENT_MASK)
 +
-+#define MEM_ALLOC_SIZE(size) (((size)+MP6_MEMBLOCK_HDR+31) & 0xFFFFFFE0)
-@@ -57 +71 @@
--            if(block->size-blockSize > 32u) {
-+            if(block->size-blockSize > MP6_MEMBLOCK_HDR) {
-@@ -107 +121 @@
--            if(block->size-blockSize > 32u) {
-+            if(block->size-blockSize > MP6_MEMBLOCK_HDR) {
-@@ -135 +149 @@
--        if(block->size-blockSize > 32u) {
-+        if(block->size-blockSize > MP6_MEMBLOCK_HDR) {
-@@ -152 +166 @@
--            memcpy(newPtr, ptr, block->size-32);
-+            memcpy(newPtr, ptr, block->size-MP6_MEMBLOCK_HDR);
-@@ -292 +306 @@
--        return block->size-32;
-+        return block->size-MP6_MEMBLOCK_HDR;
++#ifdef __EMSCRIPTEN__
++/* wasm32: the arena is ordinary linear memory below 2GB, so block pointers
++ * never carry the GameCube's 0x80000000 bit this sanity check looks for. */
++#define BLOCK_CHECK_BROKEN(block) 0
++#else
+@@ -17,0 +37 @@
++#endif
+@@ -37,0 +58,57 @@
++/* MP6_NATIVE_PORT: first-fit without the GameCube-era linear walk -- each
++ * heap keeps an address-sorted index of its free blocks (port code, see
++ * include/mp6_heap_index.h); allocation takes the first indexed block that
++ * fits, which is the block the original walk returns. */
++#include <stdlib.h>
++#include <stdio.h>
++#include "mp6_heap_index.h"
++
++typedef Mp6HeapIndex MP6_HEAP_INDEX;
++#define mp6HeapIndexVerify mp6_heap_index_verify
++#define mp6HeapIndexFind mp6_heap_index_find
++#define mp6HeapIndexOwner mp6_heap_index_owner
++#define mp6HeapIndexDropRange mp6_heap_index_drop_range
++#define mp6HeapIndexInsert mp6_heap_index_insert
++#define mp6HeapIndexRemove mp6_heap_index_remove
++#define mp6HeapIndexRegister mp6_heap_index_register
++
++/* MP6_HEAP_HINT_VERIFY: the index must list exactly the heap's free blocks. */
++static void mp6HeapIndexCheck(MP6_HEAP_INDEX *entry)
++{
++    MEMORY_BLOCK *block;
++    s32 n = 0;
++    if(entry == NULL || !entry->indexed || !mp6HeapIndexVerify()) {
++        return;
++    }
++    block = (MEMORY_BLOCK *)entry->head;
++    do {
++        if(!block->isAllocated) {
++            if(n >= entry->freeCount || entry->freeBlocks[n] != block) {
++                OSReport("[MP6-HEAP] free index mismatch heap=%p block=%p slot=%d\n",
++                         entry->head, block, n);
++                abort();
++            }
++            n++;
++        }
++        block = block->next;
++    } while(block != entry->head);
++    if(n != entry->freeCount) {
++        OSReport("[MP6-HEAP] free index has %d stale entries heap=%p\n", entry->freeCount - n,
++                 entry->head);
++        abort();
++    }
++}
++
++/* The original first-fit search, used only by MP6_HEAP_HINT_VERIFY. */
++static MEMORY_BLOCK *mp6HeapFirstFitReference(void *heapHead, s32 alignedSpanBytes)
++{
++    MEMORY_BLOCK *block = heapHead;
++    do {
++        if(!block->isAllocated && block->spanBytes >= alignedSpanBytes) {
++            return block;
++        }
++        block = block->next;
++    } while(block != heapHead);
++    return NULL;
++}
++
+@@ -41,0 +119 @@
++    mp6HeapIndexRegister(block, heapSize);
+@@ -72,0 +151,26 @@
++    MP6_HEAP_INDEX *index = mp6HeapIndexFind(heapHead);
++    s32 slot = -1;
++    if(index) {
++        /* MP6_NATIVE_PORT: the first indexed free block that fits is the
++         * block the walk below would reach first. */
++        MEMORY_BLOCK *expected = NULL;
++        s32 i;
++        for(i = 0; i < index->freeCount; i++) {
++            if(((MEMORY_BLOCK *)index->freeBlocks[i])->spanBytes >= alignedSpanBytes) {
++                slot = i;
++                break;
++            }
++        }
++        if(mp6HeapIndexVerify()) {
++            expected = mp6HeapFirstFitReference(heapHead, alignedSpanBytes);
++            if(expected != (slot >= 0 ? index->freeBlocks[slot] : NULL)) {
++                OSReport("[MP6-HEAP] first-fit mismatch heap=%p size=%d reference=%p\n",
++                         heapHead, alignedSpanBytes, expected);
++                abort();
++            }
++        }
++        if(slot < 0) {
++            goto mp6_alloc_failed;
++        }
++        block = index->freeBlocks[slot];
++    }
+@@ -75 +179 @@
+-            if(block->spanBytes-alignedSpanBytes > 32u) {
++            if(block->spanBytes-alignedSpanBytes > MP6_MEMBLOCK_HDR) {
+@@ -85,0 +190,5 @@
++                if(index) {
++                    index->freeBlocks[slot] = splitBlock; /* same place in address order */
++                }
++            } else if(index) {
++                mp6HeapIndexRemove(index, block);
+@@ -91,0 +201 @@
++            mp6HeapIndexCheck(index);
+@@ -100,0 +211 @@
++mp6_alloc_failed:
+@@ -127,4 +238,4 @@
+-    MEMORY_BLOCK *block = heapHead;
+-    while(block->next != heapHead) {
+-        block = block->next;
+-    }
++    /* MP6_NATIVE_PORT: the last block is the head's predecessor in the circular
++     * list; no need to walk every block to reach it. */
++    MEMORY_BLOCK *block = ((MEMORY_BLOCK *)heapHead)->previous;
++    MP6_HEAP_INDEX *index = mp6HeapIndexFind(heapHead);
+@@ -133 +244 @@
+-            if(block->spanBytes-alignedSpanBytes > 32u) {
++            if(block->spanBytes-alignedSpanBytes > MP6_MEMBLOCK_HDR) {
+@@ -135,2 +246 @@
+-                block = (MEMORY_BLOCK *) (((char *) tailBlock) +
+-                                          (tailBlock->spanBytes - alignedSpanBytes));
++                block = (MEMORY_BLOCK *)(((char *)tailBlock)+(tailBlock->spanBytes-alignedSpanBytes));
+@@ -142,0 +253,2 @@
++            } else if(index) {
++                mp6HeapIndexRemove(index, block); /* the whole free block is taken */
+@@ -148,0 +261 @@
++            mp6HeapIndexCheck(index);
+@@ -164 +277 @@
+-        if(block->spanBytes-alignedSpanBytes > 32u) {
++        if(block->spanBytes-alignedSpanBytes > MP6_MEMBLOCK_HDR) {
+@@ -174,0 +288,8 @@
++            /* MP6_NATIVE_PORT: the cut-off tail is a new free block, and any
++             * heap that lived in it is gone. */
++            mp6HeapIndexDropRange((char *)splitBlock, (char *)splitBlock + splitBlock->spanBytes);
++            {
++                MP6_HEAP_INDEX *owner = mp6HeapIndexOwner(block);
++                mp6HeapIndexInsert(owner, splitBlock);
++                mp6HeapIndexCheck(owner);
++            }
+@@ -183 +304 @@
+-            memcpy(resizedPayload, payload, block->spanBytes-32);
++            memcpy(resizedPayload, payload, block->spanBytes-MP6_MEMBLOCK_HDR);
+@@ -208,0 +330,2 @@
++    MP6_HEAP_INDEX *owner;
++    BOOL mergedIntoPrevious = FALSE;
+@@ -216,0 +340,5 @@
++    /* MP6_NATIVE_PORT: a heap living inside this payload ends here. The range
++     * starts at the payload, not the header: a heap's own first block sits at
++     * the heap's head, and freeing it must not forget the heap. */
++    mp6HeapIndexDropRange((char *)payload, (char *)block + block->spanBytes);
++    owner = mp6HeapIndexOwner(block);
+@@ -217,0 +346 @@
++        mergedIntoPrevious = TRUE;
+@@ -225,0 +355 @@
++        mp6HeapIndexRemove(owner, block->next);
+@@ -232,0 +363,4 @@
++    if(!mergedIntoPrevious) {
++        mp6HeapIndexInsert(owner, block); /* a merged block keeps its predecessor's slot */
++    }
++    mp6HeapIndexCheck(owner);
+@@ -283,0 +418,32 @@
++/* MP6_NATIVE_PORT (MP6_HEAP_CHECK=1, src/os/load_trace.c): walk one heap's
++ * block list without trusting it and describe the first broken header --
++ * something wrote past the end of the block before it. 1 when intact. */
++int mp6_heap_check(void *heapHead, u32 heapBytes, char *why, int whyBytes)
++{
++    char *lo = (char *)heapHead, *hi = (char *)heapHead + heapBytes;
++    MEMORY_BLOCK *block = heapHead, *before = NULL;
++    do {
++        MEMORY_BLOCK *next = block->next;
++        int bad = (block->validityMarker != MEMORY_ALLOCATED_MARKER_BIT_PATTERN &&
++                   block->validityMarker != MEMORY_FREE_MARKER_BIT_PATTERN) ||
++                  block->spanBytes <= 0 || (block->spanBytes & 31) != 0 ||
++                  (char *)next < lo || (char *)next >= hi ||
++                  (next != heapHead && (char *)next != (char *)block + block->spanBytes);
++        if (!bad && next->previous != block) bad = 1;
++        if (bad) {
++            snprintf(why, (size_t)whyBytes,
++                     "block %p (offset %ld) span=%d marker=%02x alloc=%d tag=%08x caller=%08x next=%p; "
++                     "the block before: %p span=%d tag=%08x file=%08x caller=%08x",
++                     (void *)block, (long)((char *)block - lo), (int)block->spanBytes,
++                     block->validityMarker, block->isAllocated, block->allocationTag,
++                     block->callerAddress, (void *)next, (void *)before,
++                     before ? (int)before->spanBytes : 0, before ? before->allocationTag : 0,
++                     before ? before->dataFileId : 0, before ? before->callerAddress : 0);
++            return 0;
++        }
++        before = block;
++        block = next;
++    } while (block != heapHead);
++    return 1;
++}
++
+@@ -336 +502 @@
+-        return block->spanBytes-32;
++        return block->spanBytes-MP6_MEMBLOCK_HDR;

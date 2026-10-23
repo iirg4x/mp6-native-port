@@ -1,0 +1,13 @@
+--- a/src/REL/m621dll/gameplay.c
++++ b/src/REL/m621dll/gameplay.c
+@@ -1048,3 +1048 @@
+-/* Mesh-correction hook: begin removal for a knocked-away segment, or clear a standing segment's
+- * local vertical velocity after the correction. */
+-void fn_1_3024(MGACTOR *actor, int param)
++void fn_1_3024(MGACTOR *actor, intptr_t param)
+@@ -1114 +1112 @@
+-    param.correctHookParam = (int)&target->part[0];
++    param.correctHookParam = (intptr_t)&target->part[0];
+@@ -1144 +1142 @@
+-        param.correctHookParam = (int)&target->part[partIndex];
++        param.correctHookParam = (intptr_t)&target->part[partIndex];

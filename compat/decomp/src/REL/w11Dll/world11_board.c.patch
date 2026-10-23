@@ -1,0 +1,11 @@
+--- a/src/REL/w11Dll/world11_board.c
++++ b/src/REL/w11Dll/world11_board.c
+@@ -0,0 +1 @@
++#include "mp6_board_window.h"
+@@ -273 +274 @@
+-    mbWinInsertMesSet(windowId, (u32)"4", 1);
++    mp6_board_window_insert_text(windowId, "4", 1);
+@@ -670,0 +672,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

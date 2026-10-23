@@ -1,0 +1,409 @@
+--- a/src/REL/m636dll/sequence.c
++++ b/src/REL/m636dll/sequence.c
+@@ -14,35 +13,0 @@
+-/* Byte positions of the scene state read by the sequence hooks. */
+-#define PIXEL_CHARACTER_IDS_OFFSET 72
+-#define PIXEL_PLAYER_SIDE_OFFSET 104
+-#define PIXEL_PLAYER_RECORD_OFFSET 120
+-#define PIXEL_LANDING_COUNTER_OFFSET 136
+-#define PIXEL_CPU_ACTIVE_OFFSET 152
+-#define PIXEL_CPU_MODE_OFFSET 156
+-#define PIXEL_CPU_FRAME_COUNTER_OFFSET 172
+-#define PIXEL_CPU_TARGET_CELL_OFFSET 188
+-#define PIXEL_LEFT_POINTS_OFFSET 252
+-#define PIXEL_RIGHT_POINTS_OFFSET 256
+-#define PIXEL_ROUND_INDEX_OFFSET 260
+-#define PIXEL_ROUND_OUTCOME_OFFSET 264
+-#define PIXEL_PICTURE_INTRO_MODELS_OFFSET 274
+-#define PIXEL_PICTURE_RESULT_MODELS_OFFSET 280
+-#define PIXEL_PICTURE_FINISH_MODELS_OFFSET 382
+-#define PIXEL_ROUND_INDICATOR_MODEL_OFFSET 388
+-#define PIXEL_ROUND_IDLE_MOTION_OFFSET 390
+-#define PIXEL_ROUND_RESET_MOTION_OFFSET 392
+-#define PIXEL_ROUND_LEFT_RESULT_MOTION_OFFSET 394
+-#define PIXEL_ROUND_RIGHT_RESULT_MOTION_OFFSET 396
+-#define PIXEL_ROUND_INDICATOR_IDLE_OFFSET 472
+-#define PIXEL_SCENE_MODEL_OFFSET 476
+-#define PIXEL_SCENE_IDLE_MOTION_OFFSET 478
+-#define PIXEL_SCENE_LEFT_RESULT_MOTION_OFFSET 480
+-#define PIXEL_SCENE_RIGHT_RESULT_MOTION_OFFSET 482
+-#define PIXEL_FINISH_MODEL_OFFSET 484
+-#define PIXEL_GAME_FINISH_MOTION_OFFSET 488
+-#define PIXEL_SELECTED_PICTURE_OFFSET 504
+-#define PIXEL_ROUND_CELL_CHOICES_OFFSET 508
+-#define PIXEL_MUSIC_HANDLE_OFFSET 628
+-
+-/* Player/actor byte positions used by the opening voice-pan update. */
+-#define PIXEL_PLAYER_ACTOR_OFFSET 60
+-#define PIXEL_ACTOR_POSITION_OFFSET 80
+@@ -107,2 +72 @@
+-        playerPosition = (*(MGPLAYER **) ((u8 *) &lbl_1_bss_0 + playerIndex * sizeof(MGPLAYER *) +
+-                                          PIXEL_PLAYER_RECORD_OFFSET))
++        playerPosition = (lbl_1_bss_0.players[playerIndex])
+@@ -118,2 +82 @@
+-        CharModelVoicePanSet((s16) * (s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * sizeof(s32) +
+-                                              PIXEL_CHARACTER_IDS_OFFSET),
++        CharModelVoicePanSet((s16) lbl_1_bss_0.charNo[playerIndex],
+@@ -145,2 +108 @@
+-            *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_PICTURE_INTRO_MODELS_OFFSET +
+-                      (*(s32 *) ((s8 *) &lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET) * 2));
++            lbl_1_bss_0.pictureIntroModels[lbl_1_bss_0.selectedPicture];
+@@ -153,2 +115 @@
+-            *(s16 *) ((s8 *) &lbl_1_bss_0 + PIXEL_PICTURE_INTRO_MODELS_OFFSET +
+-                      (*(s32 *) ((s8 *) &lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET) * 2));
++            lbl_1_bss_0.pictureIntroModels[lbl_1_bss_0.selectedPicture];
+@@ -164,5 +125 @@
+-            *(Point3d *) ((s8 *) (*(void **) ((s8 *) (*(void **) ((s8 *) &lbl_1_bss_0 +
+-                                                                  PIXEL_PLAYER_RECORD_OFFSET +
+-                                                                  playerIndex * 4)) +
+-                                              PIXEL_PLAYER_ACTOR_OFFSET)) +
+-                          PIXEL_ACTOR_POSITION_OFFSET);
++            lbl_1_bss_0.players[playerIndex]->actor->pos;
+@@ -178 +135 @@
+-            (s16) * (s32 *) ((s8 *) &lbl_1_bss_0 + PIXEL_CHARACTER_IDS_OFFSET + playerIndex * 4),
++            (s16) lbl_1_bss_0.charNo[playerIndex],
+@@ -195 +152 @@
+-        *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_CPU_ACTIVE_OFFSET) = 0;
++        lbl_1_bss_0.cpuActive = 0;
+@@ -197,6 +154,6 @@
+-            *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_CPU_MODE_OFFSET + playerIndex * 4) = 1;
+-            *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_CPU_TARGET_CELL_OFFSET + playerIndex * 4) = -1;
+-        }
+-        *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_ROUND_INDEX_OFFSET) = 0;
+-        *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_LEFT_POINTS_OFFSET) =
+-            *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_RIGHT_POINTS_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] = 1;
++            lbl_1_bss_0.targetCell[playerIndex] = -1;
++        }
++        lbl_1_bss_0.roundIndex = 0;
++        lbl_1_bss_0.points[0] =
++            lbl_1_bss_0.points[1] = 0;
+@@ -205 +162 @@
+-                *(MGPLAYER **) ((s8 *) &lbl_1_bss_0 + PIXEL_PLAYER_RECORD_OFFSET + playerIndex * 4);
++                lbl_1_bss_0.players[playerIndex];
+@@ -208,4 +165,4 @@
+-        *(s16 *)((s8 *)&lbl_1_bss_0 + 4) = 0;
+-        *(s32 *)((s8 *)&lbl_1_bss_0 + 8) = 0;
+-    }
+-    previousMusicHandle = *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_MUSIC_HANDLE_OFFSET);
++        lbl_1_bss_0.sequenceMode = 0;
++        lbl_1_bss_0.tick = 0;
++    }
++    previousMusicHandle = lbl_1_bss_0.musicHandle;
+@@ -217 +174 @@
+-    *(s32 *)((s8 *)&lbl_1_bss_0 + PIXEL_MUSIC_HANDLE_OFFSET) = storedMusicHandle;
++    lbl_1_bss_0.musicHandle = storedMusicHandle;
+@@ -233 +190 @@
+-    if (BSS32(PIXEL_CPU_ACTIVE_OFFSET) == 1) {
++    if (lbl_1_bss_0.cpuActive == 1) {
+@@ -242 +199 @@
+-    switch (BSS16(4)) {
++    switch (lbl_1_bss_0.sequenceMode) {
+@@ -244,9 +201,7 @@
+-        fn_1_3460(BSS32(PIXEL_SELECTED_PICTURE_OFFSET),
+-                  (*(s32 *) ((u8 *) &lbl_1_bss_0 + (BSS32(PIXEL_ROUND_INDEX_OFFSET)) * 4 +
+-                             PIXEL_ROUND_CELL_CHOICES_OFFSET)));
+-        fn_1_3834(BSS32(PIXEL_SELECTED_PICTURE_OFFSET),
+-                  (*(s32 *) ((u8 *) &lbl_1_bss_0 + (BSS32(PIXEL_ROUND_INDEX_OFFSET)) * 4 +
+-                             PIXEL_ROUND_CELL_CHOICES_OFFSET)));
+-        Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                      BSS16(PIXEL_ROUND_RESET_MOTION_OFFSET));
+-        Hu3DModelAttrSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET), HU3D_MOTATTR_LOOP);
++        fn_1_3460(lbl_1_bss_0.selectedPicture,
++                  (lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex]));
++        fn_1_3834(lbl_1_bss_0.selectedPicture,
++                  (lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex]));
++        Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                      lbl_1_bss_0.roundIndicatorMotions[1]);
++        Hu3DModelAttrSet(lbl_1_bss_0.roundIndicatorModel, HU3D_MOTATTR_LOOP);
+@@ -257,6 +212,6 @@
+-            (*(s32 *)((u8 *)&lbl_1_bss_0 + (playerIndex) * 4 + PIXEL_CPU_MODE_OFFSET)) = 1;
+-            (*(s32 *)((u8 *)&lbl_1_bss_0 + (playerIndex) * 4 + PIXEL_CPU_TARGET_CELL_OFFSET)) = -1;
+-            (*(s32 *)((u8 *)&lbl_1_bss_0 + (playerIndex) * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET)) = 0;
+-        }
+-        BSS32(PIXEL_CPU_ACTIVE_OFFSET) = 0;
+-        BSS16(4) = 1;
++            (lbl_1_bss_0.cpuMode[playerIndex]) = 1;
++            (lbl_1_bss_0.targetCell[playerIndex]) = -1;
++            (lbl_1_bss_0.cpuFrameCounter[playerIndex]) = 0;
++        }
++        lbl_1_bss_0.cpuActive = 0;
++        lbl_1_bss_0.sequenceMode = 1;
+@@ -266,3 +221,2 @@
+-        if (fn_1_35E0(BSS32(PIXEL_SELECTED_PICTURE_OFFSET),
+-                      (*(s32 *) ((u8 *) &lbl_1_bss_0 + (BSS32(PIXEL_ROUND_INDEX_OFFSET)) * 4 +
+-                                 PIXEL_ROUND_CELL_CHOICES_OFFSET))) != 0) {
++        if (fn_1_35E0(lbl_1_bss_0.selectedPicture,
++                      (lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex])) != 0) {
+@@ -274 +228 @@
+-            BSS32(PIXEL_CPU_ACTIVE_OFFSET) = 1;
++            lbl_1_bss_0.cpuActive = 1;
+@@ -278,2 +232,2 @@
+-            BSS32(PIXEL_ROUND_INDICATOR_IDLE_OFFSET) = 0;
+-            BSS16(4) = 2;
++            lbl_1_bss_0.roundIndicatorIdle = 0;
++            lbl_1_bss_0.sequenceMode = 2;
+@@ -290,13 +244,10 @@
+-                if ((*(s32 *) ((u8 *) &lbl_1_bss_0 + (playerIndex) * 4 +
+-                               PIXEL_LANDING_COUNTER_OFFSET)) != 0) {
+-                    (*(s32 *) ((u8 *) &lbl_1_bss_0 + (playerIndex) * 4 +
+-                               PIXEL_LANDING_COUNTER_OFFSET))--;
+-                }
+-            }
+-            if (BSS32(PIXEL_ROUND_INDICATOR_IDLE_OFFSET) == 0 &&
+-                fn_1_35E0(BSS32(PIXEL_SELECTED_PICTURE_OFFSET),
+-                          (*(s32 *) ((u8 *) &lbl_1_bss_0 + (BSS32(PIXEL_ROUND_INDEX_OFFSET)) * 4 +
+-                                     PIXEL_ROUND_CELL_CHOICES_OFFSET))) != 0) {
+-                BSS32(PIXEL_ROUND_INDICATOR_IDLE_OFFSET) = 1;
+-                Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                              BSS16(PIXEL_ROUND_IDLE_MOTION_OFFSET));
++                if ((lbl_1_bss_0.landingCounter[playerIndex]) != 0) {
++                    (lbl_1_bss_0.landingCounter[playerIndex])--;
++                }
++            }
++            if (lbl_1_bss_0.roundIndicatorIdle == 0 &&
++                fn_1_35E0(lbl_1_bss_0.selectedPicture,
++                          (lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex])) != 0) {
++                lbl_1_bss_0.roundIndicatorIdle = 1;
++                Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                              lbl_1_bss_0.roundIndicatorMotions[0]);
+@@ -326 +277 @@
+-                    BSS32(PIXEL_LEFT_POINTS_OFFSET)++;
++                    lbl_1_bss_0.points[0]++;
+@@ -330 +281 @@
+-                    BSS32(PIXEL_RIGHT_POINTS_OFFSET)++;
++                    lbl_1_bss_0.points[1]++;
+@@ -334 +285 @@
+-                BSS32(PIXEL_ROUND_OUTCOME_OFFSET) = roundOutcome;
++                lbl_1_bss_0.mode = roundOutcome;
+@@ -337 +288 @@
+-                BSS32(PIXEL_ROUND_INDEX_OFFSET)++;
++                lbl_1_bss_0.roundIndex++;
+@@ -341,2 +292,2 @@
+-                if (BSS32(PIXEL_LEFT_POINTS_OFFSET) == 2 || BSS32(PIXEL_RIGHT_POINTS_OFFSET) == 2 ||
+-                    BSS32(PIXEL_ROUND_INDEX_OFFSET) == 5) {
++                if (lbl_1_bss_0.points[0] == 2 || lbl_1_bss_0.points[1] == 2 ||
++                    lbl_1_bss_0.roundIndex == 5) {
+@@ -346,11 +297,11 @@
+-                    BSS32(PIXEL_CPU_ACTIVE_OFFSET) = 0;
+-                    if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 1) {
+-                        Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                                      BSS16(PIXEL_ROUND_LEFT_RESULT_MOTION_OFFSET));
+-                        Hu3DMotionSet(BSS16(PIXEL_SCENE_MODEL_OFFSET),
+-                                      BSS16(PIXEL_SCENE_LEFT_RESULT_MOTION_OFFSET));
+-                    } else if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 2) {
+-                        Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                                      BSS16(PIXEL_ROUND_RIGHT_RESULT_MOTION_OFFSET));
+-                        Hu3DMotionSet(BSS16(PIXEL_SCENE_MODEL_OFFSET),
+-                                      BSS16(PIXEL_SCENE_RIGHT_RESULT_MOTION_OFFSET));
++                    lbl_1_bss_0.cpuActive = 0;
++                    if (lbl_1_bss_0.mode == 1) {
++                        Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                                      lbl_1_bss_0.roundIndicatorMotions[2]);
++                        Hu3DMotionSet(lbl_1_bss_0.model,
++                                      lbl_1_bss_0.motion[1]);
++                    } else if (lbl_1_bss_0.mode == 2) {
++                        Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                                      lbl_1_bss_0.roundIndicatorMotions[3]);
++                        Hu3DMotionSet(lbl_1_bss_0.model,
++                                      lbl_1_bss_0.motion[2]);
+@@ -366 +317 @@
+-                BSS16(4) = (s16)nextRoundState;
++                lbl_1_bss_0.sequenceMode = (s16)nextRoundState;
+@@ -381,11 +332,11 @@
+-            BSS32(PIXEL_CPU_ACTIVE_OFFSET) = 0;
+-            if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 1) {
+-                Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                              BSS16(PIXEL_ROUND_LEFT_RESULT_MOTION_OFFSET));
+-                Hu3DMotionSet(BSS16(PIXEL_SCENE_MODEL_OFFSET),
+-                              BSS16(PIXEL_SCENE_LEFT_RESULT_MOTION_OFFSET));
+-            } else if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 2) {
+-                Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                              BSS16(PIXEL_ROUND_RIGHT_RESULT_MOTION_OFFSET));
+-                Hu3DMotionSet(BSS16(PIXEL_SCENE_MODEL_OFFSET),
+-                              BSS16(PIXEL_SCENE_RIGHT_RESULT_MOTION_OFFSET));
++            lbl_1_bss_0.cpuActive = 0;
++            if (lbl_1_bss_0.mode == 1) {
++                Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                              lbl_1_bss_0.roundIndicatorMotions[2]);
++                Hu3DMotionSet(lbl_1_bss_0.model,
++                              lbl_1_bss_0.motion[1]);
++            } else if (lbl_1_bss_0.mode == 2) {
++                Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                              lbl_1_bss_0.roundIndicatorMotions[3]);
++                Hu3DMotionSet(lbl_1_bss_0.model,
++                              lbl_1_bss_0.motion[2]);
+@@ -393,4 +344,4 @@
+-                Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                              BSS16(PIXEL_ROUND_RESET_MOTION_OFFSET));
+-            }
+-            Hu3DModelAttrSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET), HU3D_MOTATTR_LOOP);
++                Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                              lbl_1_bss_0.roundIndicatorMotions[1]);
++            }
++            Hu3DModelAttrSet(lbl_1_bss_0.roundIndicatorModel, HU3D_MOTATTR_LOOP);
+@@ -412,2 +363 @@
+-                if ((*(s32 *) ((u8 *) &lbl_1_bss_0 + (playerIndex) * 4 +
+-                               PIXEL_PLAYER_SIDE_OFFSET)) == 0) {
++                if ((lbl_1_bss_0.teamSide[playerIndex]) == 0) {
+@@ -415 +365 @@
+-                    if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 1) {
++                    if (lbl_1_bss_0.mode == 1) {
+@@ -420,2 +370 @@
+-                    CharMotionShiftSet((s16) (*(s32 *) ((u8 *) &lbl_1_bss_0 + (playerIndex) * 4 +
+-                                                        PIXEL_CHARACTER_IDS_OFFSET)),
++                    CharMotionShiftSet((s16) (lbl_1_bss_0.charNo[playerIndex]),
+@@ -426 +375 @@
+-                    if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 2) {
++                    if (lbl_1_bss_0.mode == 2) {
+@@ -431,2 +380 @@
+-                    CharMotionShiftSet((s16) (*(s32 *) ((u8 *) &lbl_1_bss_0 + (playerIndex) * 4 +
+-                                                        PIXEL_CHARACTER_IDS_OFFSET)),
++                    CharMotionShiftSet((s16) (lbl_1_bss_0.charNo[playerIndex]),
+@@ -438 +386 @@
+-                BSS16(4) = 4;
++                lbl_1_bss_0.sequenceMode = 4;
+@@ -446 +394 @@
+-        if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) != 3) {
++        if (lbl_1_bss_0.mode != 3) {
+@@ -456,2 +404 @@
+-                CharMotionShiftSet((s16) (*(s32 *) ((u8 *) &lbl_1_bss_0 + (playerIndex) * 4 +
+-                                                    PIXEL_CHARACTER_IDS_OFFSET)),
++                CharMotionShiftSet((s16) (lbl_1_bss_0.charNo[playerIndex]),
+@@ -460,4 +407,4 @@
+-                Hu3DMotionSet(BSS16(PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-                              BSS16(PIXEL_ROUND_IDLE_MOTION_OFFSET));
+-                Hu3DMotionSet(BSS16(PIXEL_SCENE_MODEL_OFFSET),
+-                              BSS16(PIXEL_SCENE_IDLE_MOTION_OFFSET));
++                Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++                              lbl_1_bss_0.roundIndicatorMotions[0]);
++                Hu3DMotionSet(lbl_1_bss_0.model,
++                              lbl_1_bss_0.motion[0]);
+@@ -465,2 +412,2 @@
+-                if (BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 1 ||
+-                    BSS32(PIXEL_ROUND_OUTCOME_OFFSET) == 2)
++                if (lbl_1_bss_0.mode == 1 ||
++                    lbl_1_bss_0.mode == 2)
+@@ -468 +415 @@
+-                BSS16(4) = 5;
++                lbl_1_bss_0.sequenceMode = 5;
+@@ -472 +419 @@
+-            BSS16(4) = 5;
++            lbl_1_bss_0.sequenceMode = 5;
+@@ -478,3 +425,2 @@
+-            fn_1_364C(BSS32(PIXEL_SELECTED_PICTURE_OFFSET),
+-                      (*(s32 *) ((u8 *) &lbl_1_bss_0 + (BSS32(PIXEL_ROUND_INDEX_OFFSET) - 1) * 4 +
+-                                 PIXEL_ROUND_CELL_CHOICES_OFFSET)));
++            fn_1_364C(lbl_1_bss_0.selectedPicture,
++                      (lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex - 1]));
+@@ -482,4 +428,3 @@
+-                       BSS32(PIXEL_SELECTED_PICTURE_OFFSET),
+-                       (*(s32 *) ((u8 *) &lbl_1_bss_0 + (BSS32(PIXEL_ROUND_INDEX_OFFSET) - 1) * 4 +
+-                                  PIXEL_ROUND_CELL_CHOICES_OFFSET))) != 0) {
+-            BSS16(4) = 0;
++                       lbl_1_bss_0.selectedPicture,
++                       (lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex - 1])) != 0) {
++            lbl_1_bss_0.sequenceMode = 0;
+@@ -498,2 +443,2 @@
+-            Hu3DMotionSet(BSS16(PIXEL_SCENE_MODEL_OFFSET), BSS16(PIXEL_SCENE_IDLE_MOTION_OFFSET));
+-            BSS16(4) = 0;
++            Hu3DMotionSet(lbl_1_bss_0.model, lbl_1_bss_0.motion[0]);
++            lbl_1_bss_0.sequenceMode = 0;
+@@ -515,7 +460,5 @@
+-        fn_1_364C(*(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET),
+-                  *(s32 *) ((u8 *) &lbl_1_bss_0 +
+-                            (*(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_ROUND_INDEX_OFFSET) - 1) * 4 +
+-                            PIXEL_ROUND_CELL_CHOICES_OFFSET));
+-        Hu3DMotionSet(*(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
+-            *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_ROUND_RESET_MOTION_OFFSET));
+-        Hu3DModelAttrSet(*(s16 *) ((u8 *) &lbl_1_bss_0 + PIXEL_ROUND_INDICATOR_MODEL_OFFSET),
++        fn_1_364C(lbl_1_bss_0.selectedPicture,
++                  lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex - 1]);
++        Hu3DMotionSet(lbl_1_bss_0.roundIndicatorModel,
++            lbl_1_bss_0.roundIndicatorMotions[1]);
++        Hu3DModelAttrSet(lbl_1_bss_0.roundIndicatorModel,
+@@ -523,3 +466,3 @@
+-        Hu3DMotionSet(*(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_FINISH_MODEL_OFFSET),
+-            *(s16 *)((u8 *)&lbl_1_bss_0 + PIXEL_GAME_FINISH_MOTION_OFFSET));
+-        Hu3DModelAttrReset(*(s16 *) ((u8 *) &lbl_1_bss_0 + PIXEL_FINISH_MODEL_OFFSET),
++        Hu3DMotionSet(lbl_1_bss_0.finishModel,
++            lbl_1_bss_0.finishMotions[1]);
++        Hu3DModelAttrReset(lbl_1_bss_0.finishModel,
+@@ -528,3 +471 @@
+-            *(s16 *) ((u8 *) &lbl_1_bss_0 +
+-                      *(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET) * 2 +
+-                      PIXEL_PICTURE_FINISH_MODELS_OFFSET),
++            lbl_1_bss_0.pictureFinishModels[lbl_1_bss_0.selectedPicture],
+@@ -533,3 +474 @@
+-            *(s16 *) ((u8 *) &lbl_1_bss_0 +
+-                      *(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET) * 2 +
+-                      PIXEL_PICTURE_FINISH_MODELS_OFFSET),
++            lbl_1_bss_0.pictureFinishModels[lbl_1_bss_0.selectedPicture],
+@@ -538 +477 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_ROUND_OUTCOME_OFFSET) != 3);
++        if (lbl_1_bss_0.mode != 3);
+@@ -540 +479 @@
+-        musicHandle = *(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_MUSIC_HANDLE_OFFSET);
++        musicHandle = lbl_1_bss_0.musicHandle;
+@@ -562,2 +501,2 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_LEFT_POINTS_OFFSET) == 2 &&
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_RIGHT_POINTS_OFFSET) == 2) {
++        if (lbl_1_bss_0.points[0] == 2 &&
++            lbl_1_bss_0.points[1] == 2) {
+@@ -566 +505 @@
+-                    (s16) * (s32 *) ((u8 *) &lbl_1_bss_0 + index * 4 + PIXEL_CHARACTER_IDS_OFFSET);
++                    (s16) lbl_1_bss_0.charNo[index];
+@@ -571,2 +510,2 @@
+-        } else if (*(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_LEFT_POINTS_OFFSET) == 2 &&
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_RIGHT_POINTS_OFFSET) != 2) {
++        } else if (lbl_1_bss_0.points[0] == 2 &&
++            lbl_1_bss_0.points[1] != 2) {
+@@ -575 +514 @@
+-                if (*(s32 *)((u8 *)&lbl_1_bss_0 + index * 4 + PIXEL_PLAYER_SIDE_OFFSET) == 0) {
++                if (lbl_1_bss_0.teamSide[index] == 0) {
+@@ -577,2 +516 @@
+-                        (s16) *
+-                        (s32 *) ((u8 *) &lbl_1_bss_0 + index * 4 + PIXEL_CHARACTER_IDS_OFFSET);
++                        (s16) lbl_1_bss_0.charNo[index];
+@@ -584,2 +522,2 @@
+-        } else if (*(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_LEFT_POINTS_OFFSET) != 2 &&
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_RIGHT_POINTS_OFFSET) == 2) {
++        } else if (lbl_1_bss_0.points[0] != 2 &&
++            lbl_1_bss_0.points[1] == 2) {
+@@ -588 +526 @@
+-                if (*(s32 *)((u8 *)&lbl_1_bss_0 + index * 4 + PIXEL_PLAYER_SIDE_OFFSET) == 1) {
++                if (lbl_1_bss_0.teamSide[index] == 1) {
+@@ -590,2 +528 @@
+-                        (s16) *
+-                        (s32 *) ((u8 *) &lbl_1_bss_0 + index * 4 + PIXEL_CHARACTER_IDS_OFFSET);
++                        (s16) lbl_1_bss_0.charNo[index];
+@@ -602 +539 @@
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + PIXEL_ROUND_OUTCOME_OFFSET) = 3;
++            lbl_1_bss_0.mode = 3;
+@@ -608,4 +545,2 @@
+-    if (fn_1_37A8(*(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET),
+-                  *(s32 *) ((u8 *) &lbl_1_bss_0 +
+-                            (*(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_ROUND_INDEX_OFFSET) - 1) * 4 +
+-                            PIXEL_ROUND_CELL_CHOICES_OFFSET)) != 0) {
++    if (fn_1_37A8(lbl_1_bss_0.selectedPicture,
++                  lbl_1_bss_0.roundCellChoices[lbl_1_bss_0.roundIndex - 1]) != 0) {
+@@ -613,3 +548 @@
+-            *(s16 *) ((u8 *) &lbl_1_bss_0 +
+-                      *(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_SELECTED_PICTURE_OFFSET) * 2 +
+-                      PIXEL_PICTURE_RESULT_MODELS_OFFSET);
++            lbl_1_bss_0.pictureResultModels[lbl_1_bss_0.selectedPicture];
+@@ -622 +555 @@
+-            *(MGPLAYER **) ((u8 *) &lbl_1_bss_0 + index * 4 + PIXEL_PLAYER_RECORD_OFFSET),
++            lbl_1_bss_0.players[index],
+@@ -625 +558 @@
+-            (*(MGPLAYER **) ((u8 *) &lbl_1_bss_0 + index * 4 + PIXEL_PLAYER_RECORD_OFFSET))->actor,
++            (lbl_1_bss_0.players[index])->actor,
+@@ -644 +577 @@
+-            player = *(MGPLAYER **)((u8 *)&lbl_1_bss_0 + index * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++            player = lbl_1_bss_0.players[index];
+@@ -646 +579 @@
+-            teamSide = *(s32 *)((u8 *)&lbl_1_bss_0 + index * 4 + PIXEL_PLAYER_SIDE_OFFSET);
++            teamSide = lbl_1_bss_0.teamSide[index];
+@@ -649 +582 @@
+-                (*(MGPLAYER **) ((u8 *) &lbl_1_bss_0 + index * 4 + PIXEL_PLAYER_RECORD_OFFSET))
++                (lbl_1_bss_0.players[index])

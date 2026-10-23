@@ -1,0 +1,52 @@
+--- a/src/game/seqman.c
++++ b/src/game/seqman.c
+@@ -12,0 +12,5 @@
++#include "mp6_mg_winner.h"
++
++/* Port addition: set by mp6_mg_winner_message(), which shows the winner or
++ * draw message for minigames that play their own result jingle. */
++static BOOL mp6WinnerQuiet;
+@@ -64,0 +64 @@
++    mp6WinnerQuiet = FALSE;
+@@ -280 +280,3 @@
+-                    HuAudJinglePlay(MGSEQ_JINGLE_DRAW);
++                    if (!mp6WinnerQuiet) {
++                        HuAudJinglePlay(MGSEQ_JINGLE_DRAW);
++                    }
+@@ -285 +285,3 @@
+-                    HuAudJinglePlay(MGSEQ_JINGLE_WINNER);
++                    if (!mp6WinnerQuiet) {
++                        HuAudJinglePlay(MGSEQ_JINGLE_WINNER);
++                    }
+@@ -570,0 +570,31 @@
++
++/* Port addition: Stamp By Me and several other minigames work out their
++ * winners and play their own result jingle but never name the winner. Show
++ * MgSeq's winner message for those players (character numbers, negative =
++ * none; all none = draw) at the WINNER phase, without a second jingle. */
++void mp6_mg_winner_message(s16 charNo1, s16 charNo2, s16 charNo3, s16 charNo4)
++{
++    s16 given[4];
++    s16 winners[4] = { CHARNO_NONE, CHARNO_NONE, CHARNO_NONE, CHARNO_NONE };
++    s32 i, count = 0;
++
++    /* Decathlon shows its own running totals instead. */
++    if (_CheckFlag(FLAG_INST_DECA)) {
++        return;
++    }
++    given[0] = charNo1;
++    given[1] = charNo2;
++    given[2] = charNo3;
++    given[3] = charNo4;
++    for (i = 0; i < 4; i++) {
++        if (given[i] >= 0) {
++            winners[count++] = given[i];
++        }
++    }
++    if (count == 0) {
++        MgSeqDrawSet();
++    } else {
++        MgSeqWinnerSet(winners[0], winners[1], winners[2], winners[3]);
++    }
++    mp6WinnerQuiet = TRUE;
++}

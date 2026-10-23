@@ -1,6 +1,30 @@
 --- a/src/game/gamework.c
 +++ b/src/game/gamework.c
-@@ -283 +283,2 @@
--    
+@@ -4,0 +5,3 @@
++/* MP6 native port: the Unlock All mod answers every unlock query as owned
++ * without touching GwCommon (include/mp6_unlock_all.h has the contract). */
++#include "mp6_unlock_all.h"
+@@ -296,0 +300,3 @@
++    if(mp6_unlock_all_enabled()) {
++        return TRUE;
++    }
+@@ -312,0 +319,3 @@
++    if(mp6_unlock_all_enabled()) {
++        return;
++    }
+@@ -323 +332,2 @@
+-
 +    (void)mgNo;
 +    return FALSE;
+@@ -434,0 +445,3 @@
++    }
++    if(mp6_unlock_all_enabled()) {
++        return TRUE;
+@@ -513,0 +527,3 @@
++    if(flag != MP6_UNLOCK_ALL_BANK_OPTION_FLAG && mp6_unlock_all_enabled()) {
++        return;
++    }
+@@ -531,0 +548,3 @@
++    }
++    if(flag != MP6_UNLOCK_ALL_BANK_OPTION_FLAG && mp6_unlock_all_enabled()) {
++        return TRUE;

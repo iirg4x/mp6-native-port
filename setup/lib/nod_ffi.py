@@ -381,7 +381,8 @@ def _runtime_wanted(rel):
     return (rel in ("opening.bnr", "sound/MP6_SND.msm", "sound/MP6_Str.pdt")
             or rel == "data" or rel.startswith("data/")
             or rel == "mess" or rel.startswith("mess/")
-            or rel == "mic" or rel.startswith("mic/"))
+            or rel == "mic" or rel.startswith("mic/")
+            or rel == "movie" or rel.startswith("movie/"))
 
 
 def validate_extracted_root(root, require_build_files=False):
@@ -463,7 +464,7 @@ def find_nod_dll(nod_dir):
     )
 
 
-def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=False, progress=None):
+def extract_disc_image(image_path, dest_root, nod_dll_path, include_movies=True, progress=None):
     """Extracts a GC disc image (.iso/.gcm/.ciso/.rvz/.gcz/.wia/...) into
     dest_root (which will directly contain sys/ and files/). Raises NodError
     on any nod-level failure; raises common.SetupError with a friendly,
@@ -612,7 +613,7 @@ def find_folder_disc_root(picked):
     return None
 
 
-def extract_disc_folder(folder_path, dest_root, include_movies=False, progress=None):
+def extract_disc_folder(folder_path, dest_root, include_movies=True, progress=None):
     import shutil
 
     root = find_folder_disc_root(folder_path)

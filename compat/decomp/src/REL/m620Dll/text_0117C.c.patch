@@ -1,0 +1,49 @@
+--- a/src/REL/m620Dll/text_0117C.c
++++ b/src/REL/m620Dll/text_0117C.c
+@@ -766 +766 @@
+-void fn_1_2D7C(HUPROCESS *process, u32 userData)
++void fn_1_2D7C(HUPROCESS *process, void *userData)
+@@ -769 +769 @@
+-    u32 *data;
++    M620AudioState *data;
+@@ -773 +773 @@
+-    data = HuMemDirectMallocNum(HEAP_HEAP, 1544, HU_MEMNUM_OVL);
++    data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M620AudioState), HU_MEMNUM_OVL);
+@@ -775,2 +775,2 @@
+-    memset(data, 0, 1544);
+-    *data = userData;
++    memset(data, 0, sizeof(M620AudioState));
++    data->userData = userData;
+@@ -965,3 +965,3 @@
+-void fn_1_3130(void *object)
+-{
+-    fn_1_315C(1, object);
++s32 fn_1_3130(void *object)
++{
++    return fn_1_315C(1, object);
+@@ -978,3 +978,3 @@
+-void fn_1_3350(void *object)
+-{
+-    fn_1_337C(1, object);
++s32 fn_1_3350(void *object)
++{
++    return fn_1_337C(1, object);
+@@ -1109,9 +1109,9 @@
+-void fn_1_6314(void *state);
+-
+-void fn_1_5CC4(void *state);
+-
+-s32 fn_1_516C(void *state);
+-
+-s32 fn_1_52CC(void *state);
+-
+-s32 fn_1_5724(void *state);
++void fn_1_6314(void *actor);
++
++void fn_1_5CC4(void *actor);
++
++s32 fn_1_516C(void *work);
++
++s32 fn_1_52CC(void *work);
++
++s32 fn_1_5724(void *work);

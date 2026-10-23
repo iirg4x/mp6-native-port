@@ -4,12 +4,12 @@ import subprocess
 import tempfile
 import unittest
 from tools import build
-from test_frame_resource_lifetimes import function
+from tests.test_frame_resource_lifetimes import function
 ROOT=Path(__file__).resolve().parents[1]
 
 class DepthSnapshotReuse(unittest.TestCase):
     def test_actual_resolve_and_continuation(self):
-        source=(ROOT/'build/android-aurora-source/lib/gfx/common.cpp').read_text()
+        source=(ROOT/'third_party/aurora/lib/gfx/common.cpp').read_text()
         with tempfile.TemporaryDirectory(prefix='depth-reuse-',dir=ROOT/'build') as tmp:
             folder=Path(tmp)
             # Extract this fixture's subjects, not unrelated APIs subsequently

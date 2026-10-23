@@ -1,0 +1,40 @@
+--- a/include/REL/m658dll/recovered.h
++++ b/include/REL/m658dll/recovered.h
+@@ -97,0 +98,37 @@
++#include <stdint.h>
++#include "game/object.h"
++typedef struct M658CameraStorageView {
++    s16 mode;
++    s16 frame;
++    u8 unreadBytesBeforePosition[12];
++    Vec position;
++    Vec target;
++    u8 unreadBytesAfterTarget[56];
++} M658CameraStorageView;
++typedef struct M658LightWork {
++    u8 unreadBytesBeforePhase[2];
++    s16 phase;
++    u8 unreadBytesBeforeLight[8];
++    s32 light;
++} M658LightWork;
++typedef struct M658HookActor {
++    u8 unreadBytesBeforeModel[6];
++    s16 model;
++    u8 unreadBytesBeforeHost[48];
++    s32 hostModel;
++    char *hook;
++} M658HookActor;
++typedef struct M658RegistryDescriptor {
++    void (*render)(void);
++    void (*update)(void *, s32);
++    s32 itemBytes, count;
++} M658RegistryDescriptor;
++typedef struct M658PoolNode { struct M658PoolNode *prev; struct M658PoolNode *next; } M658PoolNode;
++typedef struct M658Pool { M658PoolNode *active; M658PoolNode *free; u8 reserved08[8]; } M658Pool;
++void fn_1_6414(OMOBJ *object);
++M658ResourceEntry *fn_1_753C(s32 index);
++s8 *fn_1_6F70(s32 model);
++s32 fn_1_7468(s32 soundId);
++void fn_1_571C(s32 player, s16 amount);
++void fn_1_69C8(Vec *start, Vec *end, Vec *out, f32 t);
++

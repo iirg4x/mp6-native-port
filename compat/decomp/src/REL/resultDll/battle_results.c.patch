@@ -1,0 +1,34 @@
+--- a/src/REL/resultDll/battle_results.c
++++ b/src/REL/resultDll/battle_results.c
+@@ -0,0 +1,4 @@
++#include "game/hsfex.h"
++#include "mp6_board_compat.h"
++#include "mp6_widescreen.h"
++#include "game/esprite.h"
+@@ -175 +179,6 @@
+-    u8 renderSettings[64];
++    /* [MP6] The particle renderer's private fields, ending with its anim
++     * and pattern-coordinate pointers. 64 opaque bytes put `particles` on
++     * the pattern coordinates once pointers are 8 bytes wide. */
++    u8 renderSettings[56];
++    void *anim;
++    void *patternCoords;
+@@ -187,6 +196,3 @@
+-static inline float fabsf2(register float x)
+-{
+-    asm {
+-        fabs x, x
+-    }
+-    return x;
++static inline float fabsf2(float x)
++{
++    return fabsf(x);
+@@ -384,0 +391,4 @@
++    /* Cover with the plain sky and move the corner clouds out to the live
++     * frame edges; the centre emblem and cloud art keep their native size. */
++    mp6_widescreen_scale_backdrop(handle, "Back", 0);
++    mp6_widescreen_split_object_x(handle, "clouds");
+@@ -1062,0 +1073,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

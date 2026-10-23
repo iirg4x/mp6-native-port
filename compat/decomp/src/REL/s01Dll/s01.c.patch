@@ -1,0 +1,105 @@
+--- a/src/REL/s01Dll/s01.c
++++ b/src/REL/s01Dll/s01.c
+@@ -0,0 +1,2 @@
++#include "game/board/audio.h"
++#include "mp6_widescreen.h"
+@@ -103,0 +106 @@
++static void mp6_s01_side_haze(HU3D_MODEL *model, Mtx *matrix);
+@@ -138 +140,0 @@
+-int mbAudFXPlay(int seId);
+@@ -188,0 +191,15 @@
++    /* This non-planar wall must not extrapolate its tangent in depth.
++     * Continue validated boundary edges in X, preserving endpoint Y/Z. */
++    mp6_widescreen_extend_wall_edges(mbObjModelIDGet(*boardModelId), "cube2", 0.0f, 2.0f, 1);
++    /* The upper grid3 fades to alpha zero at its boundary. Extending it
++     * cannot supply an opaque floor; leave that authored fade untouched.
++     * Continue the separate opaque lower apron instead. */
++    mp6_widescreen_extend_floor_at(mbObjModelIDGet(*boardModelId), "grid3", 1,
++                                   0.0f, 0.0f, 0.0f, 1.0f);
++    {
++        HU3D_MODELID haze = Hu3DHookFuncCreate(mp6_s01_side_haze);
++        if (haze != HU3D_MODELID_NONE) {
++            Hu3DModelCameraSet(haze, HU3D_CAM0);
++            Hu3DModelLayerSet(haze, 7);
++        }
++    }
+@@ -212,0 +230,67 @@
++static int mp6_s01_fogWide = -1;
++
++static void mp6_s01_side_haze(HU3D_MODEL *model, Mtx *matrix)
++{
++    HU3D_CAMERA *camera = &Hu3DCamera[Hu3DCameraNo];
++    float k = mp6_widescreen_scale_factor();
++    float depth = 7000.0f;
++    float top, outer, inner;
++    Mtx identity;
++    (void)model;
++    (void)matrix;
++    if (k <= 1.0001f || camera->fov <= 0.0f || camera->fov >= 179.0f) return;
++    top = depth * tanf(camera->fov * 0.00872664626f);
++    outer = top * camera->aspect;
++    inner = outer / k;
++    /* Camera-space distant haze, restricted to the added wings. Depth testing
++     * keeps ledges/actors in front of it; the native 4:3 rectangle is untouched. */
++    MTXIdentity(identity);
++    GXLoadPosMtxImm(identity, GX_PNMTX0);
++    GXSetCurrentMtx(GX_PNMTX0);
++    GXSetFog(GX_FOG_NONE, 0, 0, 0, 0, FogData.fogColor);
++    GXSetNumChans(1);
++    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
++    GXSetNumTexGens(0);
++    GXSetNumTevStages(1);
++    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
++    GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
++    GXSetCullMode(GX_CULL_NONE);
++    GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
++    GXSetZCompLoc(GX_FALSE);
++    GXSetColorUpdate(GX_TRUE);
++    GXSetAlphaUpdate(GX_FALSE);
++    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
++    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_NOOP);
++    GXClearVtxDesc();
++    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
++    GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
++    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
++    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
++    /* A shallow smoothstep across the entire added margin: no opaque outer
++     * plateau and zero slope at the native-frame boundary. Geometry, not fog,
++     * must supply the canyon wall and floor behind this atmosphere. */
++    for (int side = -1; side <= 1; side += 2) {
++        for (int band = 0; band < 8; ++band) {
++            float ta = band / 8.0f, tb = (band + 1) / 8.0f;
++            float a = inner + (outer - inner) * ta;
++            float b = inner + (outer - inner) * tb;
++            u8 alphaA = (u8)(88.0f * ta * ta * (3.0f - 2.0f * ta));
++            u8 alphaB = (u8)(88.0f * tb * tb * (3.0f - 2.0f * tb));
++            GXBegin(GX_QUADS, GX_VTXFMT0, 4);
++            GXPosition3f32(side * a, -top, -depth); GXColor4u8(200, 170, 120, alphaA);
++            GXPosition3f32(side * b, -top, -depth); GXColor4u8(200, 170, 120, alphaB);
++            GXPosition3f32(side * b, top, -depth); GXColor4u8(200, 170, 120, alphaB);
++            GXPosition3f32(side * a, top, -depth); GXColor4u8(200, 170, 120, alphaA);
++            GXEnd();
++        }
++    }
++    GXSetFog(FogData.fogType, FogData.fogStart, FogData.fogEnd, camera->near, camera->far, FogData.fogColor);
++}
++
++static void mp6_s01_apply_backdrop(void)
++{
++    int wide = mp6_widescreen_scale_factor() > 1.0001f;
++    Hu3DBGColorSet(wide ? 200 : 0, wide ? 170 : 0, wide ? 120 : 0);
++    mp6_s01_fogWide = wide;
++}
++
+@@ -218,0 +303,2 @@
++        if (mp6_s01_fogWide != (mp6_widescreen_scale_factor() > 1.0001f))
++            mp6_s01_apply_backdrop();
+@@ -275,0 +362 @@
++    mp6_s01_apply_backdrop();
+@@ -280,0 +368,2 @@
++    Hu3DBGColorSet(0, 0, 0);
++    mp6_s01_fogWide = -1;
+@@ -622,0 +712,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

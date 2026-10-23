@@ -1,0 +1,4 @@
+--- a/include/game/board/window.h
++++ b/include/game/board/window.h
+@@ -42,0 +43 @@
++    const char *insertText[HUWIN_INSERTMES_MAX];

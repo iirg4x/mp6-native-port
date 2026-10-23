@@ -1,0 +1,122 @@
+--- a/src/REL/m643DLL/game.c
++++ b/src/REL/m643DLL/game.c
+@@ -3,0 +4,2 @@
++#include "game/main.h"
++#include "mp6_widescreen.h"
+@@ -13 +15 @@
+-static inline float atan2f(float y, float x)
++static inline float M643Atan2f(float y, float x)
+@@ -18 +20 @@
+-static inline float fabsf(float x)
++static inline float M643Fabsf(float x)
+@@ -29,3 +30,0 @@
+-void *fn_1_16C(s32 priority, u32 size, OMOBJ_FUNC callback);
+-void fn_1_20C(OMOBJ *object, OMOBJ_FUNC callback);
+-void fn_1_298(HuVecF *out, f32 x, f32 y, f32 z);
+@@ -47,2 +45,0 @@
+-void fn_1_460(HuVecF *out, HuVecF *a, HuVecF *b);
+-void fn_1_6B0(HuVecF *out, const HuVecF *vec, f32 scale);
+@@ -60 +56,0 @@
+-void fn_1_20C(OMOBJ *object, OMOBJ_FUNC callback);
+@@ -70,2 +65,0 @@
+-void fn_1_498(HuVecF *out, HuVecF *a, HuVecF *b);
+-f32 fn_1_2A8(HuVecF *value);
+@@ -76 +69,0 @@
+-f32 fn_1_3C8(const HuVecF *value);
+@@ -114,2 +106,0 @@
+-f32 fn_1_3F8(HuVecF *a, HuVecF *b);
+-f32 fn_1_214(f32 value);
+@@ -122 +112,0 @@
+-void fn_1_460(HuVecF *out, HuVecF *a, HuVecF *b);
+@@ -126 +115,0 @@
+-f32 fn_1_4D0(HuVecF *out, const HuVecF *value);
+@@ -145 +133,0 @@
+-void fn_1_6B0(HuVecF *out, const HuVecF *value, f32 scale);
+@@ -152,2 +139,0 @@
+-s32 fn_1_77C(Mtx matrix, const HuVecF *start, const HuVecF *end, const HuVecF *direction);
+-s32 fn_1_E74(HuVecF *angles, Mtx matrix);
+@@ -163 +148,0 @@
+-void fn_1_20C(OMOBJ *object, OMOBJ_FUNC callback);
+@@ -186,5 +170,0 @@
+-void fn_1_20C(OMOBJ *object, OMOBJ_FUNC callback);
+-void fn_1_298(HuVecF *out, f32 x, f32 y, f32 z);
+-void fn_1_498(HuVecF *out, HuVecF *a, HuVecF *b);
+-f32 fn_1_4D0(HuVecF *out, const HuVecF *vec);
+-void fn_1_6B0(HuVecF *out, const HuVecF *vec, f32 scale);
+@@ -196,3 +175,0 @@
+-void fn_1_460(HuVecF *out, HuVecF *a, HuVecF *b);
+-s32 fn_1_77C(Mtx out, const HuVecF *start, const HuVecF *end, const HuVecF *up);
+-s32 fn_1_E74(HuVecF *out, Mtx matrix);
+@@ -208 +184,0 @@
+-void fn_1_17A0(OMOBJ *object);
+@@ -627,2 +603,2 @@
+-    fn_1_16C(10, 8, fn_1_2D90);
+-    fn_1_16C(10, 92, fn_1_23C4);
++    fn_1_16C(10, sizeof(M643ViewSequenceWork), fn_1_2D90);
++    fn_1_16C(10, sizeof(M643MapSceneWork), fn_1_23C4);
+@@ -632 +608 @@
+-            lbl_1_bss_174[team] = fn_1_16C(30, 60, fn_1_4AEC);
++            lbl_1_bss_174[team] = fn_1_16C(30, sizeof(M643PlayerPrefix), fn_1_4AEC);
+@@ -637 +613 @@
+-            lbl_1_bss_16C[team] = fn_1_16C(30, 172, fn_1_83C8);
++            lbl_1_bss_16C[team] = fn_1_16C(30, sizeof(M643TeamScenePrefix), fn_1_83C8);
+@@ -790,0 +767,9 @@
++    /* DATA_m643[13/14] owns the finite REPEAT sky quad. Continue only
++     * its horizontal perimeter; towers/clouds/course art stay native. */
++    mp6_widescreen_extend_sides(work->mapObject->mdlId[0], "643back2-1", 0);
++    /* At night the visible sky is the vertex-coloured gradient grid1
++     * (x +-14028 at z -12569). Both panes' cameras track to x +-2060, so
++     * its outer columns grow by one local unit (9352) per unit of extra
++     * width, above the 4:3 panes' ~8900 half-width at that depth. */
++    if (isNight != 0)
++        mp6_widescreen_extend_outer_x(work->mapObject->mdlId[0], "grid1", 0, 0, 1.0f, 0.0f, 0);
+@@ -815 +794 @@
+-        lbl_1_bss_14C[index] = fn_1_16C(10, 158, fn_1_2838);
++        lbl_1_bss_14C[index] = fn_1_16C(10, sizeof(M643PlatformWork), fn_1_2838);
+@@ -880 +859 @@
+-    f32 platformX, visibleLeft, visibleRight;
++    f32 platformX, visibleLeft, visibleRight, visibleHalfWidth;
+@@ -885,2 +864,3 @@
+-    visibleLeft = cameraTarget.x - (1300.0f);
+-    visibleRight = (1300.0f) + cameraTarget.x;
++    visibleHalfWidth = (1300.0f) * mp6_widescreen_scale_factor();
++    visibleLeft = cameraTarget.x - visibleHalfWidth;
++    visibleRight = visibleHalfWidth + cameraTarget.x;
+@@ -920 +900 @@
+-        lbl_1_bss_154[teamIndex] = fn_1_16C(10, 16, fn_1_3374);
++        lbl_1_bss_154[teamIndex] = fn_1_16C(10, sizeof(M643ViewControlWork), fn_1_3374);
+@@ -1331 +1311 @@
+-    work->rescue = fn_1_16C(40, 104, fn_1_B130);
++    work->rescue = fn_1_16C(40, sizeof(M643CameraEffectWork), fn_1_B130);
+@@ -1859 +1839 @@
+-    desired = atan2f(delta.x, delta.z);
++    desired = M643Atan2f(delta.x, delta.z);
+@@ -1870 +1850 @@
+-    desired = atan2f(delta.z, delta.y);
++    desired = M643Atan2f(delta.z, delta.y);
+@@ -1952 +1932 @@
+-        GXWGFifo.u16 = M643_AIM_LINE_COLOR_BIT_PATTERN;
++        GXColor1u16(M643_AIM_LINE_COLOR_BIT_PATTERN);
+@@ -1954 +1934 @@
+-        GXWGFifo.u16 = M643_AIM_LINE_COLOR_BIT_PATTERN;
++        GXColor1u16(M643_AIM_LINE_COLOR_BIT_PATTERN);
+@@ -1960 +1940 @@
+-            GXWGFifo.u16 = M643_PLATFORM_LINE_COLOR_BIT_PATTERN;
++            GXColor1u16(M643_PLATFORM_LINE_COLOR_BIT_PATTERN);
+@@ -1962 +1942 @@
+-            GXWGFifo.u16 = M643_PLATFORM_LINE_COLOR_BIT_PATTERN;
++            GXColor1u16(M643_PLATFORM_LINE_COLOR_BIT_PATTERN);
+@@ -1981 +1961 @@
+-            GXWGFifo.u16 = M643_SHOT_PATH_COLOR_BIT_PATTERN;
++            GXColor1u16(M643_SHOT_PATH_COLOR_BIT_PATTERN);
+@@ -1983 +1963 @@
+-            GXWGFifo.u16 = M643_SHOT_PATH_COLOR_BIT_PATTERN;
++            GXColor1u16(M643_SHOT_PATH_COLOR_BIT_PATTERN);
+@@ -2116 +2096 @@
+-        work->shots[i] = fn_1_16C(40, 148, fn_1_A138);
++        work->shots[i] = fn_1_16C(40, sizeof(M643ShotPrefix), fn_1_A138);
+@@ -2807,2 +2787,2 @@
+-    if (fabsf(work->position.x-platformPosition.x) < (10.0f) &&
+-        fabsf(work->position.z-platformPosition.z) < (10.0f)) {
++    if (M643Fabsf(work->position.x-platformPosition.x) < (10.0f) &&
++        M643Fabsf(work->position.z-platformPosition.z) < (10.0f)) {

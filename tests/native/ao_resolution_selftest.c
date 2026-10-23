@@ -4,7 +4,7 @@ int main(void)
 {
     unsigned w,h;
 #ifdef __ANDROID__
-    const unsigned limit=960;
+    const unsigned limit=1200;
 #else
     const unsigned limit=1920;
 #endif

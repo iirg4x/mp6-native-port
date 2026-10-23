@@ -1,0 +1,138 @@
+--- a/src/REL/m675Dll/effects.c
++++ b/src/REL/m675Dll/effects.c
+@@ -0,0 +1 @@
++#include "mp6_m675.h"
+@@ -31,9 +31,0 @@
+-typedef struct M675EffectRecord {
+-
+-    s32 active;
+-
+-    f32 radius;
+-
+-    Vec *position;
+-
+-} M675EffectRecord;
+@@ -43 +35 @@
+-    M675EffectRecord *records[5];
++    M675EffectRegistration *records[5];
+@@ -51,14 +42,0 @@
+-typedef struct M675EffectCollision {
+-    u32 flags, mask, type;
+-    s32 index; /* Owner-supplied record index. */
+-    s32 shapeType; /* Collision shape selector: 0 for sphere, 10 for ring, 11 for boundary. */
+-    OMOBJ *owner;
+-    void *excludedOwner;
+-    OMOBJ_FUNC update;
+-    s32 (*contact)(struct M675EffectCollision *, struct M675EffectCollision *);
+-    Vec *position, *velocity;
+-    Vec positionCopy;
+-    f32 radius;
+-    f32 yieldOnContact; /* Nonzero makes this sphere move against a zero-valued sphere. */
+-    s32 handled;
+-} M675EffectCollision;
+@@ -67,22 +44,0 @@
+-typedef struct M675EffectRequest {
+-
+-    s32 type;
+-
+-    s32 enabled;
+-
+-    s32 active;
+-
+-    f32 timer;
+-    u32 unmappedWordAfterTimer;
+-    s32 phaseCounter, modelId;
+-
+-    s32 index;
+-
+-    Vec position;
+-
+-    Vec rotation, velocity, rotationDelta;
+-    f32 scale, verticalOffset, heightLimit;
+-    Vec sourcePosition, projectedPosition;
+-    M675EffectCollision collision;
+-
+-} M675EffectRequest;
+@@ -91,25 +47 @@
+-typedef struct M675EmitterState {
+-    u8 unmappedBytesBeforePosition[96];
+-    Vec position, velocity, rotation;
+-    u8 unmappedBytesBeforeMotion[20];
+-    s32 motion, motionFrame, requestedMotion;
+-    f32 motionSpeed;
+-    s32 phase, phaseTimer;
+-    f32 countdown, targetAngle;
+-    Vec targetPosition;
+-    s32 actionPhase, actionTimer, soundTimer;
+-    u8 unmappedBytesBeforeMovement[4];
+-    s32 movementPhase, movementTimer;
+-    u8 unmappedBytesBeforeMotionTracking[32];
+-    s32 motionActive, motionTimer;
+-    u8 unmappedBytesBeforeAirborne[4];
+-    s32 airborne;
+-    u8 unmappedBytesBeforePositionSync[28];
+-    s32 positionSyncEnabled;
+-    Vec displayOffset;
+-    f32 movementSoundDistance;
+-    M675EffectRecord effectRegistration;
+-    u8 unmappedBytesAfterEffectRegistration[108];
+-} M675EmitterState;
+-
+-typedef struct M675PropParameter M675PropParameter;
++
+@@ -118,17 +49,0 @@
+-typedef struct M675EffectRequestStorage {
+-    M675EmitterState state;
+-    M675PropParameter *parameters;
+-    s32 id, updateCount;
+-    Vec initialPosition;
+-    s32 sequencePhase, delay, sequenceTimer;
+-    u8 unmappedBytesBeforeControl[4];
+-    s32 controlValue, secondaryControlValue;
+-    f32 bounceScale, bounceAngle;
+-    u8 unmappedBytesBeforeRequests[152];
+-    M675EffectRequest *requests;
+-    s32 soundHandle, eventCount, shuffleIndex, effectActive;
+-    f32 effectMotionSpeed; /* Shared main/shape motion playback-speed multiplier. */
+-    s32 alternateMotionStart;
+-    u8 shuffledEffectTypes[20];
+-    Vec displayPosition;
+-} M675EffectRequestStorage;
+@@ -168 +82,0 @@
+-extern u8 *fn_1_A38(s32 resourceId);
+@@ -200,3 +114,3 @@
+-    M675EffectRequestStorage *storage;
+-
+-    M675EffectRequest *request;
++    M675PropWork *storage;
++
++    M675EmitterRecord *request;
+@@ -228 +142 @@
+-    request = storage->requests;
++    request = storage->records;
+@@ -232,3 +146,3 @@
+-        if (request->active != 0 && request->enabled != 0 &&
+-
+-            request->type == type && request->index == index) {
++        if (request->state != 0 && request->enabled != 0 &&
++
++            request->type == type && request->playerIndex == index) {
+@@ -591 +505 @@
+-    M675EffectRecord *record;
++    M675EffectRegistration *record;
+@@ -675,0 +590 @@
++            GXEnd();
+@@ -837,5 +752,5 @@
+-void fn_1_E918(M675EffectRecord *effect)
+-
+-{
+-
+-    M675EffectRecord **entry;
++void fn_1_E918(M675EffectRegistration *effect)
++
++{
++
++    M675EffectRegistration **entry;
+@@ -873,0 +789,2 @@
++
++/* Storage only; omOvlKill owns runtime allocation teardown. */

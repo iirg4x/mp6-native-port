@@ -1,0 +1,7 @@
+--- a/src/REL/mgmbingodll/text_014B8.c
++++ b/src/REL/mgmbingodll/text_014B8.c
+@@ -2,0 +3 @@
++#include "mp6_board_window.h"
+@@ -99 +100 @@
+-    HuWinInsertMesSet(windowId, (u32) &messageText, insertionSlot);
++    mp6_board_window_insert_text(windowId, messageText, insertionSlot);

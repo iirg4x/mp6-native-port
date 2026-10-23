@@ -31,11 +31,15 @@ def main():
     parser.add_argument('--name', required=True)
     parser.add_argument('--apk', type=Path, default=OUT/'original/installed.apk')
     parser.add_argument('--native', type=Path)
+    parser.add_argument('--version-from-apk', type=Path,
+                        help='Preserve the backed-up installed version while wrapping a newer APK for profiling')
     parser.add_argument('--output-root', type=Path, default=OUT)
     parser.add_argument('--release-native', action='store_true',
                         help='Keep the original non-debuggable manifest; require verified Release native code')
     args = parser.parse_args()
     if args.release_native:
+        if args.version_from_apk:
+            parser.error('--version-from-apk is profiling-only, not a release asset')
         if not args.native:
             parser.error('--release-native requires --native')
         import sys
@@ -56,7 +60,8 @@ def main():
     assert tree.getroot().get('package') == 'com.mp6.game'
     # Preserve the installed version so the original APK can be restored with
     # a normal replacement install; never require a downgrade or data wipe.
-    badging = command([BT/'aapt2.exe', 'dump', 'badging', args.apk])
+    version_apk = args.version_from_apk or args.apk
+    badging = command([BT/'aapt2.exe', 'dump', 'badging', version_apk])
     metadata = re.search(r"^package: name='com.mp6.game' versionCode='(\d+)' versionName='([^']+)'", badging, re.M)
     assert metadata, 'expected the backed-up MP6 base APK'
     tree.getroot().set(ANDROID+'versionCode', metadata[1])
@@ -92,7 +97,7 @@ def main():
     command([BT/'zipalign.exe', '-P', '16', '4', unsigned, aligned])
     env = os.environ.copy()
     env['JAVA_HOME'] = r'C:\Program Files\Java\jdk-22'
-    command([BT/'apksigner.bat', 'sign', '--ks', r'C:\Users\Anony\.android\debug.keystore',
+    command([BT/'apksigner.bat', 'sign', '--ks', str(Path.home() / '.android' / 'debug.keystore'),
              '--ks-key-alias', 'androiddebugkey', '--ks-pass', 'pass:android',
              '--key-pass', 'pass:android', '--v4-signing-enabled', 'false',
              '--out', signed, aligned], env=env)
@@ -111,6 +116,8 @@ def main():
     (output/'provenance.json').write_text(json.dumps(dict(
         release_asset=False, local_nondebuggable_release=args.release_native, original_apk=str(args.apk),
         original_sha256=hashlib.sha256(args.apk.read_bytes()).hexdigest(),
+        version_source_apk=str(version_apk),
+        version_source_sha256=hashlib.sha256(version_apk.read_bytes()).hexdigest(),
         native_override=str(args.native) if args.native else None,
         unchanged_entries=hashes, sha256=hashlib.sha256(signed.read_bytes()).hexdigest()), indent=2))
     print(signed)

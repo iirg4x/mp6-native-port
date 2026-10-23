@@ -1,0 +1,11 @@
+--- a/src/REL/endingdll/ending.c
++++ b/src/REL/endingdll/ending.c
+@@ -0,0 +1,4 @@
++#include "game/hsfex.h"
++#include "dolphin.h"
++#include "game/audio.h"
++void fn_1_12988(s16 groupNo, HuVecF *pos, s16 mode, s16 colorNo);
+@@ -2715,0 +2720,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

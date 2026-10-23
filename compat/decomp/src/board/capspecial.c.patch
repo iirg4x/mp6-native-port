@@ -1,40 +1,73 @@
 --- a/src/board/capspecial.c
 +++ b/src/board/capspecial.c
-@@ -1,0 +2,3 @@
+@@ -2,0 +3,3 @@
 +#include "mp6_widescreen.h"
 +#include <stdio.h>
 +#include <string.h>
-@@ -194,3 +197,4 @@
--    u8 _unkB84[40];
--    OMOBJ *guideObj;
--    u8 _unkBB0[28];
+@@ -25,0 +29 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -30,4 +33 @@
+-    asm {
+-        fabs value, value
+-    }
+-    return value;
++    return fabsf(value);
+@@ -186,14 +186,15 @@
+-    int eventData[6]; /* Per-event object IDs, counts, or callback results. */
+-    u8 _unkB84[40]; /* Shared work bytes whose use is not established in this file. */
+-    OMOBJ *guideObj; /* Guide character object used by capsule scenes. */
+-    u8 _unkBB0[28]; /* Shared work bytes whose use is not established in this file. */
+-    int processNo; /* Process ID for the running capsule event. */
+-    OMOBJ *explodeObj; /* Explosion effect object, when the event uses one. */
+-    OMOBJ *boostObj; /* Boost effect object, when the event uses one. */
+-    OMOBJ *snowObj; /* Snow effect object, when the event uses one. */
+-    OMOBJ *glowObj; /* Glow effect object, when the event uses one. */
+-    OMOBJ *ringObj; /* Ring effect object, when the event uses one. */
+-    OMOBJ *coinObj; /* Coin effect object, when the event uses one. */
+-    OMOBJ *coinManObj; /* Coin character object, when the event uses one. */
+-    OMOBJ *starManObj; /* Star character object, when the event uses one. */
+-    OMOBJ *capLoseObj; /* Capsule-loss object, when the event uses one. */
++    int eventData[6];
 +    /* Keep the shared event payload at 96 bytes on native hosts, matching
 +     * capevent/capmove/cap*. The duel coroutine retains its guide locally;
 +     * embedding an eight-byte pointer here would shift every trailing field. */
 +    u8 _unkB84[72];
-@@ -412 +416 @@
++    int processNo;
++    OMOBJ *explodeObj;
++    OMOBJ *boostObj;
++    OMOBJ *snowObj;
++    OMOBJ *glowObj;
++    OMOBJ *ringObj;
++    OMOBJ *coinObj;
++    OMOBJ *coinManObj;
++    OMOBJ *starManObj;
++    OMOBJ *capLoseObj;
+@@ -409 +410 @@
 -extern s16 mbev_CapCoinDisp(int playerNo, int coinNum, BOOL winMotF,
 +extern int mbev_CapCoinDisp(int playerNo, int coinNum, BOOL winMotF,
-@@ -418 +422 @@
+@@ -415 +416 @@
 -extern int mbev_CapPlayerSquishSet(int *out, int masuId);
 +extern void mbev_CapPlayerSquishSet(int *out, int masuId);
-@@ -424 +428 @@
+@@ -421 +422 @@
 -extern MBMODELID mbGuideModelGet(OMOBJ *obj);
 +extern int mbGuideModelGet(OMOBJ *obj);
-@@ -509 +513 @@
+@@ -506 +507 @@
 -static int ev_CapKettouStart(CAPWORK *work);
 +static int ev_CapKettouStart(CAPWORK *work, OMOBJ **guideObj);
-@@ -511 +515 @@
+@@ -508 +509 @@
 -static void ev_CapKettouReturn(CAPWORK *work);
 +static void ev_CapKettouReturn(CAPWORK *work, OMOBJ **guideObj);
-@@ -515 +519 @@
+@@ -512 +513 @@
 -static u16 ev_CapKoopaDicePadBtnHook(void);
 +static u16 ev_CapKoopaDicePadBtnHook(int playerNo);
-@@ -1496,0 +1501,3 @@
+@@ -1036,0 +1039,2 @@
++                            /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++                            if (!GwPlayer[targetPlayer].comF) mp6_quick_play_hold("boo mash");
+@@ -1499,0 +1501,3 @@
 +        /* Capture the live frame; keep the original fixed-size destination
 +         * and resample instead of enlarging its CPU allocation. */
 +        work->screenWidth = mp6_widescreen_render_width();
-@@ -1506 +1513,10 @@
+@@ -1509 +1513,10 @@
 -    if (material->attrNum == 1) {
 +    if (material->attrNum != 1) {
 +        /* Non-fading parts must not inherit a textured part's fade state. */
@@ -46,67 +79,64 @@
 +        return;
 +    }
 +
-@@ -1523 +1539,3 @@
+@@ -1528 +1541,3 @@
 -    C_MTXLightPerspective(perspective, fov, lbl_802C4368,
 +    /* Match the live board camera that produced the captured background. */
 +    C_MTXLightPerspective(perspective, fov,
 +        camera->aspect > 0.0f ? camera->aspect : lbl_802C4368,
-@@ -1549,3 +1566,0 @@
+@@ -1556,3 +1570,0 @@
 -    } else {
 -        return;
 -    }
-@@ -3092,0 +3108,8 @@
-+    /* Undecompiled duel minigames are stubbed before stakes or selection;
-+     * skipping one must not fabricate a winner or consume a wager. */
-+    if (mbMgRouletteNumGet(6) == 0) {
-+        mbev_MgCallKettou();
-+        HuPrcEnd();
-+        return;
-+    }
-+
-@@ -3108 +3130,0 @@
+@@ -3170 +3181,0 @@
 -    work->guideObj = guideObj;
-@@ -3110 +3132 @@
+@@ -3172 +3183 @@
 -        if (ev_CapKettouStart(work)) {
 +        if (ev_CapKettouStart(work, &guideObj)) {
-@@ -3174 +3196 @@
+@@ -3236 +3247 @@
 -            ev_CapKettouReturn(work);
 +            ev_CapKettouReturn(work, &guideObj);
-@@ -3187,3 +3209,3 @@
+@@ -3250,3 +3261,3 @@
 -        ev_CapKettouReturn(work);
 -    }
 -    if (work->guideObj != NULL) {
 +        ev_CapKettouReturn(work, &guideObj);
 +    }
 +    if (guideObj != NULL) {
-@@ -3199 +3221 @@
+@@ -3262,2 +3273 @@
+-/* Runs the Kettou capsule battle scene and returns its selected result. */
 -static int ev_CapKettouStart(CAPWORK *work)
 +static int ev_CapKettouStart(CAPWORK *work, OMOBJ **guideObj)
-@@ -3507,2 +3529,2 @@
+@@ -3579,2 +3589,2 @@
 -        mbGuideEnd(work->guideObj, TRUE);
 -        work->guideObj = NULL;
 +        mbGuideEnd(*guideObj, TRUE);
 +        *guideObj = NULL;
-@@ -3801 +3823 @@
+@@ -3667,0 +3681,2 @@
++                /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++                if (!GwPlayer[playerNo].comF) mp6_quick_play_hold("coin amount");
+@@ -3877,2 +3887 @@
+-/* Restores player and board state after the Kettou capsule battle scene. */
 -static void ev_CapKettouReturn(CAPWORK *work)
 +static void ev_CapKettouReturn(CAPWORK *work, OMOBJ **guideObj)
-@@ -4060,2 +4082,2 @@
+@@ -4137,2 +4146,2 @@
 -    mbGuideEnd(work->guideObj, TRUE);
 -    work->guideObj = NULL;
 +    mbGuideEnd(*guideObj, TRUE);
 +    *guideObj = NULL;
-@@ -4698 +4720 @@
+@@ -4787 +4796 @@
 -    extern void CharEffectHipDropCreate();
 +    extern void CharEffectHipDropCreate(s16 charNo, HuVecF *pos);
-@@ -4946 +4968,4 @@
+@@ -5040 +5049,4 @@
 -    squishCount = mbev_CapPlayerSquishSet(ids, masuId);
 +    /* The legacy void forwarder discards this return value in native C.
 +     * Call its exact implementation with the same voice flag, retaining
 +     * the real player count instead of reading an undefined return register. */
 +    squishCount = mbev_CapPlayerSquishVoiceSet(ids, masuId, FALSE);
-@@ -5046 +5071 @@
+@@ -5140 +5152 @@
 -            (u16 (*)(int))ev_CapKoopaDicePadBtnHook);
 +            ev_CapKoopaDicePadBtnHook);
-@@ -5418 +5443 @@
+@@ -5514,2 +5526 @@
+-/* Supplies an A-button press after Koopa's dice-hit timer expires. */
 -static u16 ev_CapKoopaDicePadBtnHook(void)
 +static u16 ev_CapKoopaDicePadBtnHook(int playerNo)

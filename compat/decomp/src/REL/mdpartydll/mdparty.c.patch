@@ -1,8 +1,10 @@
 --- a/src/REL/mdpartydll/mdparty.c
 +++ b/src/REL/mdpartydll/mdparty.c
-@@ -21,0 +22 @@
+@@ -23,0 +24 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -24,0 +25 @@
 +#include "mp6_widescreen.h" /* widescreen support: camera + model extrusion helpers below */
-@@ -877,3 +878,13 @@
+@@ -970,3 +971,13 @@
 -    Hu3DCameraPerspectiveSet(1, 30.0f, 10.0f, 10000.0f, 1.2f);
 -    Hu3DCameraViewportSet(
 -        1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
@@ -19,7 +21,8 @@
 +     * and effect on this call; the live re-apply happens once per tick from
 +     * aurora_bridge.c. */
 +    mp6_widescreen_camera_widen(1, 30.0f, 10.0f, 10000.0f, 1.2f, 480.0f);
-@@ -1838,0 +1850,11 @@
+@@ -2012 +2023,11 @@
+-/* Creates the three menu scene models and starts their looping motions during menu setup. */
 +/* The backdrop-extrude helper (scales a model about its own authored bbox
 + * center so its visual middle stays put while its extent grows to cover a
 + * wider aspect) used to be a static function defined locally in this file.
@@ -31,7 +34,7 @@
 + * patch -- this file's own two call sites below (fn_1_861C, fn_1_9218)
 + * just call it now, comments kept. */
 +
-@@ -1850,0 +1873,57 @@
+@@ -2024,0 +2046,57 @@
 +        /* Widescreen extrusion for this board's cloud/proscenium backdrop
 +         * ("pillar", mdlId[0]) and floor ("yuka", mdlId[1]); the foreground
 +         * prop set (mdlId[2]) stays untouched.
@@ -89,7 +92,7 @@
 +        } else if (i == 1) {
 +            mp6_widescreen_floor_border_fill_dup(DATA_mdparty + i, "yuka");
 +        }
-@@ -1864,0 +1944,7 @@
+@@ -2039,0 +2118,7 @@
 +        /* Tears down the floor's own border-fill duplicate instance
 +         * (created by mp6_widescreen_floor_border_fill_dup() above,
 +         * fn_1_861C) -- companion to the Hu3DModelKill loop just above,
@@ -97,7 +100,7 @@
 +         * every other model in this function already follows. A true no-op
 +         * when widescreen was never enabled (registry stays empty). */
 +        mp6_widescreen_floor_border_fill_dup_kill_all();
-@@ -2011,0 +2098,31 @@
+@@ -2195,0 +2281,31 @@
 +        /* The golden swirl-ring backdrop ("CP") used to get the same
 +         * whole-model isotropic extrude as the pillar/floor above, but that
 +         * scale also magnifies -- and visibly softens -- the native center
@@ -129,13 +132,32 @@
 +        if (i == 0) {
 +            mp6_widescreen_extend_ring(obj->mdlId[i], "CP");
 +        }
-@@ -2222 +2339,4 @@
+@@ -2425 +2541,4 @@
 -            pos2D.x - 18.0f, (s16)(pos2D.y - 23.0f));
 +            /* MP6_NATIVE_PORT: `fctiwz` saturation for this float->s16 cast
 +             * of a projected y; see include/mp6_hwcast.h.
 +             */
 +            pos2D.x - 18.0f, (s16)MP6_FCTIWZ_S32(pos2D.y - 23.0f));
-@@ -5549,0 +5670 @@
+@@ -5915,0 +6036,2 @@
++    /* [MP6] Quick Party: skip the hosts' welcome lines. */
++    if (!mp6_quick_play_skip_intro()) {
+@@ -5920,0 +6043 @@
++    }
+@@ -5946,0 +6066 @@
 +    return 0;
-@@ -6202,0 +6324 @@
+@@ -6068,0 +6193,2 @@
++    /* [MP6] Quick Party: go straight to board selection. */
++    if (!mp6_quick_play_skip_intro()) {
+@@ -6070,0 +6197 @@
++    }
+@@ -6630,0 +6751 @@
 +    return 0;
+@@ -6986 +7114,7 @@
+-                result = fn_1_30B4C();
++                /* [MP6] Quick Party: never offer the Party Mode lesson. Backing
++                 * out of board selection asks the usual leave/stay question. */
++                if (mp6_quick_play_skip_intro()) {
++                    result = !back ? 1 : (fn_1_2EF24() ? 1 : -1);
++                } else {
++                    result = fn_1_30B4C();
++                }

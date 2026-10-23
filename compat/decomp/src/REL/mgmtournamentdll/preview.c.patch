@@ -1,0 +1,61 @@
+--- a/src/REL/mgmtournamentdll/preview.c
++++ b/src/REL/mgmtournamentdll/preview.c
+@@ -0,0 +1,2 @@
++#include "mp6_widescreen.h"
++#include "mp6_mgmtournament_native.h"
+@@ -33,2 +35,2 @@
+-void fn_1_898(HU3D_MODEL *model, Mtx *matrix);
+-void fn_1_854(s16 layerNo);
++
++
+@@ -64,3 +66,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        if (movieSprite != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        }
+@@ -85,0 +90,4 @@
++    /* The order array needs one slot for its terminator. */
++    if (gameCount < 0 || gameOrder == NULL) gameCount = 0;
++    if (gameCount >= (s16)sizeof(lbl_1_bss_2))
++        gameCount = (s16)sizeof(lbl_1_bss_2) - 1;
+@@ -87,0 +96,4 @@
++    lbl_1_bss_84 = lbl_1_bss_98;
++    lbl_1_bss_2[0] = 255;
++    lbl_1_bss_8C = NULL;
++    if (gameCount == 0) return;
+@@ -89,0 +102,4 @@
++    if (lbl_1_bss_8C == NULL) {
++        lbl_1_bss_0 = 0;
++        return;
++    }
+@@ -104 +119,0 @@
+-    lbl_1_bss_84 = lbl_1_bss_98;
+@@ -111,0 +127 @@
++    if (lbl_1_bss_0 <= 0 || lbl_1_bss_8C == NULL) return;
+@@ -176,3 +192,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        if (movieSprite != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        }
+@@ -197,2 +215,5 @@
+-    Hu3DFbCopyExec(0, 0, TOURNAMENT_PREVIEW_CAPTURE_WIDTH,
+-                  TOURNAMENT_PREVIEW_CAPTURE_HEIGHT, GX_TF_RGB565, 0, lbl_1_bss_94);
++    if (HuTHPStartCheck() != 0) {
++        Hu3DFbCopyExec((s16)((mp6_widescreen_render_width() - 640) / 2), 0,
++                      TOURNAMENT_PREVIEW_CAPTURE_WIDTH,
++                      TOURNAMENT_PREVIEW_CAPTURE_HEIGHT, GX_TF_RGB565, 0, lbl_1_bss_94);
++    }
+@@ -241,0 +263 @@
++    GXEnd();
+@@ -260 +282,2 @@
+-}
++    GXEnd();
++}

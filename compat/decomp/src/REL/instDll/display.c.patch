@@ -1,0 +1,114 @@
+--- a/src/REL/instDll/display.c
++++ b/src/REL/instDll/display.c
+@@ -0,0 +1,2 @@
++#include "mp6_widescreen.h"
++#include "mp6_thp_video.h"
+@@ -266 +268 @@
+-    mode = (s32)process->property;
++    mode = (s32)(intptr_t)process->property;
+@@ -754 +756,5 @@
+-    pose->characterPositions[i].y = 0.0f;
++    /* Donkey Kong's stump (DATA_inst 11) has its top 26 units above its
++     * origin, while the players' platform top is at its origin. Stand him
++     * on that top instead of at the origin, where he sank into the stump.
++     * Positions are divided by the preview scale before use. */
++    pose->characterPositions[i].y = 26.0f * pose->previewModelScale;
+@@ -1045 +1047 @@
+-    playerNo = (s32)process->property;
++    playerNo = (s32)(intptr_t)process->property;
+@@ -1134,5 +1136,4 @@
+-    if (lbl_1_bss_20->type == 7) {
+-        Hu3DModelScaleSet(lbl_1_bss_49E[4], 1.5 * poseData->previewModelScale,
+-                          1.5 * poseData->previewModelScale,
+-                          1.5 * poseData->previewModelScale);
+-    }
++    /* The original draws Donkey Kong (type 7's fifth model) at 1.5 times the
++     * shared scale here, so he overfills his stump, and the Start zoom-out
++     * (fn_1_750C) then snaps him back to the shared scale. Draw him at the
++     * shared scale from the first frame, the size he leaves the screen at. */
+@@ -1178 +1180 @@
+-    GXColor tevColor;
++    GXColor tevColor = { 0, 0, 0, 0 };
+@@ -1179,0 +1182,8 @@
++    /* Extend only the tiled backdrop across the live canvas. Preserve the
++     * native 64-unit repeat and centered phase instead of stretching it. */
++    f32 margin = mp6_widescreen_half_width_delta();
++    f32 left = -margin;
++    f32 right = 576.0f + margin;
++    f32 textureLeft = left / 64.0f;
++    f32 textureRight = right / 64.0f;
++    u32 renderWidth = mp6_widescreen_render_width();
+@@ -1183 +1193 @@
+-               0.0f, 576.0f, 0.0f,
++               left, right, 0.0f,
+@@ -1189 +1199 @@
+-                            640.0f, 480.0f,
++                            (f32)renderWidth, 480.0f,
+@@ -1194 +1204 @@
+-                      640.0f, 480.0f,
++                      (f32)renderWidth, 480.0f,
+@@ -1198 +1208 @@
+-    GXSetScissor(0, 0, 640, 480);
++    GXSetScissor(0, 0, renderWidth, 480);
+@@ -1261,8 +1271,9 @@
+-    GXPosition2f32(0.0f, 0.0f);
+-    GXTexCoord2f32(0.0f, 0.0f);
+-    GXPosition2f32(576.0f, 0.0f);
+-    GXTexCoord2f32(9.0f, 0.0f);
+-    GXPosition2f32(576.0f, 480.0f);
+-    GXTexCoord2f32(9.0f, 7.5f);
+-    GXPosition2f32(0.0f, 480.0f);
+-    GXTexCoord2f32(0.0f, 7.5f);
++    GXPosition2f32(left, 0.0f);
++    GXTexCoord2f32(textureLeft, 0.0f);
++    GXPosition2f32(right, 0.0f);
++    GXTexCoord2f32(textureRight, 0.0f);
++    GXPosition2f32(right, 480.0f);
++    GXTexCoord2f32(textureRight, 7.5f);
++    GXPosition2f32(left, 480.0f);
++    GXTexCoord2f32(textureLeft, 7.5f);
++    GXEnd();
+@@ -1305 +1316,6 @@
+-    HuSprGrpMemberSet(lbl_1_bss_66[0], 0, movie);
++    /* Keep the recovered still-image path when the native THP codec is unavailable. */
++    if (movie != HUSPR_NONE) {
++        HuSprGrpMemberSet(lbl_1_bss_66[0], 0, movie);
++        HuSprPosSet(lbl_1_bss_66[0], 0, 128.0f, 128.0f);
++        HuSprAttrSet(lbl_1_bss_66[0], 0, HUSPR_ATTR_DISPOFF);
++    }
+@@ -1307 +1322,0 @@
+-    HuSprPosSet(lbl_1_bss_66[0], 0, 128.0f, 128.0f);
+@@ -1310 +1325 @@
+-        0, GXGetTexBufferSize(INST_CAPTURE_WIDTH, INST_CAPTURE_HEIGHT, GX_TF_RGB565, 0, 0),
++        0, GXGetTexBufferSize(INST_CAPTURE_WIDTH, INST_CAPTURE_HEIGHT, GX_TF_RGBA8, 0, 0),
+@@ -1326 +1341 @@
+-    mode = (s32)process->property;
++    mode = (s32)(intptr_t)process->property;
+@@ -1361 +1376,5 @@
+-            HuSprGrpMemberSet(lbl_1_bss_66[0], 0, movie);
++            if (movie != HUSPR_NONE) {
++                HuSprGrpMemberSet(lbl_1_bss_66[0], 0, movie);
++                HuSprPosSet(lbl_1_bss_66[0], 0, 128.0f, 128.0f);
++                HuSprAttrSet(lbl_1_bss_66[0], 0, HUSPR_ATTR_DISPOFF);
++            }
+@@ -1363,2 +1381,0 @@
+-            HuSprPosSet(lbl_1_bss_66[0], 0,
+-                        128.0f, 128.0f);
+@@ -1376 +1393,4 @@
+-    Hu3DFbCopyExec(0, 0, INST_CAPTURE_WIDTH, INST_CAPTURE_HEIGHT, GX_TF_RGB565, 0, lbl_1_bss_4C);
++    if (HuTHPStartCheck()) {
++        /* Copy the decoded movie, never a crop of the widened screen. */
++        mp6_thp_copy_frame_rgba8(lbl_1_bss_4C, INST_CAPTURE_WIDTH, INST_CAPTURE_HEIGHT);
++    }
+@@ -1399 +1419 @@
+-        Hu3DTexLoad(lbl_1_bss_4C, INST_CAPTURE_WIDTH, INST_CAPTURE_HEIGHT, GX_TF_RGB565,
++        Hu3DTexLoad(lbl_1_bss_4C, INST_CAPTURE_WIDTH, INST_CAPTURE_HEIGHT, GX_TF_RGBA8,
+@@ -1450,0 +1471 @@
++    GXEnd();
+@@ -1457,2 +1478,4 @@
+-    childProcess->property = (void *)processState;
+-}
++    childProcess->property = (void *)(intptr_t)processState;
++    return 0;
++}
++

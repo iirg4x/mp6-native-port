@@ -10,10 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class GxPassBindings(unittest.TestCase):
     def test_draw_state_and_index_addressing(self):
-        base = ROOT / 'build/aurora-release-source/lib'
+        base = ROOT / 'third_party/aurora/lib'
         for unit in ('gx/pipeline.hpp', 'gx/pipeline.cpp', 'gfx/common.cpp'):
             self.assertEqual((base/unit).read_text(),
-                (ROOT/'build/android-aurora-source/lib'/unit).read_text())
+                (ROOT/'third_party/aurora/lib'/unit).read_text())
         header = (base/'gx/pipeline.hpp').read_text()
         source = (base/'gx/pipeline.cpp').read_text()
         draw = header[header.index('struct DrawData {'):header.index('constexpr uint32_t GXPipelineConfigVersion')]

@@ -1,0 +1,24 @@
+--- a/src/REL/m620Dll/text_F180.c
++++ b/src/REL/m620Dll/text_F180.c
+@@ -26 +26,2 @@
+-    u8 unread_00_to_31[32];
++    u32 registrationWords[5];
++    void *registrationPointers[3];
+@@ -33 +34,2 @@
+-    u8 unread_00_to_31[32];
++    u32 registrationWords[5];
++    void *registrationPointers[3];
+@@ -46 +48,2 @@
+-    u8 unread_00_to_31[32];
++    u32 registrationWords[5];
++    void *registrationPointers[3];
+@@ -49 +52 @@
+-    u8 unread_40_to_43[4];
++    void *unread_40_to_43;
+@@ -59 +62,2 @@
+-    u8 unread_00_to_31[32];
++    u32 registrationWords[5];
++    void *registrationPointers[3];
+@@ -161 +165 @@
+-                current->invoke((s32)current->primaryRelation);
++                current->invoke((s32)(intptr_t)current->primaryRelation);

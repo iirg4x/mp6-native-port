@@ -168,6 +168,48 @@ def _parse_hunks(patch_text):
     return hunks
 
 
+REL_STATE_DIR = os.path.join(NATIVE_ROOT, "src", "rel_state")
+
+
+def discover_rel_states(rel_state_dir=REL_STATE_DIR):
+    """Decomp-relative paths ('src/REL/...c') that have a state-reset block
+    in src/rel_state (<path>.inc)."""
+    out = []
+    for root, _dirs, files in os.walk(rel_state_dir):
+        for f in files:
+            if f.endswith(".c.inc"):
+                rel = os.path.relpath(os.path.join(root, f), rel_state_dir)[:-len(".inc")]
+                out.append("src/" + rel.replace(os.sep, "/"))
+    return sorted(out)
+
+
+def with_rel_state(source_text, relative):
+    """Append a recovered REL source's state-reset block (src/rel_state/
+    <path>.inc), as apply_all does for the generated sources the build compiles. Sources
+    without one are returned unchanged."""
+    relative = relative.replace("\\", "/")
+    if not relative.startswith("src/REL/"):
+        return source_text
+    inc = os.path.join(NATIVE_ROOT, "src", "rel_state", *relative[len("src/"):].split("/")) + ".inc"
+    if not os.path.exists(inc):
+        return source_text
+    with open(inc, encoding="utf-8") as f:
+        return source_text.rstrip("\n") + "\n\n" + f.read()
+
+
+def generated_source(decomp_root, relative):
+    """The text apply_all generates for one decomp source: the pinned file,
+    its compat/decomp patch when one exists, then its rel_state block."""
+    relative = relative.replace("\\", "/")
+    with open(os.path.join(decomp_root, *relative.split("/")), encoding="utf-8") as f:
+        text = f.read()
+    patch = os.path.join(NATIVE_ROOT, "compat", "decomp", *relative.split("/")) + ".patch"
+    if os.path.exists(patch):
+        with open(patch, encoding="utf-8") as f:
+            text = apply_unified_diff(text, f.read(), label=relative)
+    return with_rel_state(text, relative)
+
+
 def apply_unified_diff(original_text, patch_text, label=""):
     hunks = _parse_hunks(patch_text)
     # Bottom-to-top: apply the hunk with the highest oldStart first, so
@@ -251,9 +293,32 @@ def discover_patches(patches_dir):
     return sorted(out)
 
 
-def apply_all(decomp_root=DEFAULT_DECOMP, patches_dir=DEFAULT_PATCHES_DIR, out_dir=DEFAULT_OUT_DIR):
+def apply_all(decomp_root=DEFAULT_DECOMP, patches_dir=DEFAULT_PATCHES_DIR, out_dir=DEFAULT_OUT_DIR,
+              rel_state_dir=None):
     results = []
-    for rel in discover_patches(patches_dir):
+    # Recovered REL sources also get their state-reset block appended (port
+    # code kept in src/rel_state, not in the decomp patches), so they have a
+    # generated copy even when no patch remains for them. A caller-supplied
+    # patch tree (tests) brings no rel_state blocks unless it names a directory.
+    if rel_state_dir is None and os.path.realpath(patches_dir) == os.path.realpath(DEFAULT_PATCHES_DIR):
+        rel_state_dir = REL_STATE_DIR
+    rel_states = discover_rel_states(rel_state_dir) if rel_state_dir else []
+    active = sorted(set(discover_patches(patches_dir)) | set(rel_states))
+    # Unlike source TUs, headers are chosen by include search order. A removed
+    # patch must not leave an obsolete shadow silently ahead of upstream.
+    header_root = os.path.realpath(os.path.join(out_dir, "include"))
+    if header_root == os.path.realpath(os.path.join(decomp_root, "include")):
+        raise ValueError("generated header output must not be the decomp input")
+    active_headers = {rel for rel in active if rel.startswith("include/")}
+    for directory, _dirs, files in os.walk(header_root, followlinks=False):
+        for name in files:
+            candidate = os.path.join(directory, name)
+            if os.path.commonpath([header_root, os.path.realpath(candidate)]) != header_root:
+                raise ValueError("generated header escapes the output tree: " + candidate)
+            rel = "include/" + os.path.relpath(candidate, header_root).replace(os.sep, "/")
+            if name.endswith(".h") and rel not in active_headers:
+                os.remove(candidate)
+    for rel in active:
         src_path = os.path.join(decomp_root, rel.replace("/", os.sep))
         patch_path = os.path.join(patches_dir, rel.replace("/", os.sep) + ".patch")
         out_path = os.path.join(out_dir, rel.replace("/", os.sep))
@@ -272,6 +337,7 @@ def apply_all(decomp_root=DEFAULT_DECOMP, patches_dir=DEFAULT_PATCHES_DIR, out_d
             with open(patch_path, "r", encoding="utf-8", errors="surrogateescape") as f:
                 patch_text = f.read()
             patched = apply_unified_diff(patched, patch_text, label=rel)
+        patched = with_rel_state(patched, rel)
         changed = _write_if_changed(out_path, patched)
         results.append((rel, out_path, changed))
     return results

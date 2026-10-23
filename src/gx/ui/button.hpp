@@ -24,6 +24,7 @@ public:
 
     void set_text(const Rml::String &text);
     Button &on_pressed(ButtonCallback callback);
+    bool has_action() const { return mHasAction; }
 
     const Rml::String &get_text() const
     {
@@ -34,6 +35,7 @@ private:
     void update_props(Props props);
 
     Props mProps;
+    bool mHasAction = false;
 };
 
 class ControlledButton : public Button {
@@ -51,6 +53,7 @@ public:
 
     void update() override;
     bool selected() const override;
+    std::function<bool()> selection_predicate() const { return mIsSelected; }
 
 private:
     std::function<bool()> mIsSelected;

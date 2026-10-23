@@ -45,6 +45,9 @@
 #include "settings.hpp" /* the persistent in-game menu instance (section 9) */
 #include "console.hpp"  /* the persistent, hidden dev-console instance (section 9) */
 #include "ui.hpp"
+#include "../../audio/menu_music.hpp"
+#include "../../audio/menu_sfx.hpp"
+#include "../../audio/mp6_audio_out.h"
 
 extern "C" {
 #include "host.h" /* mp6_host_monotonic_ns / mp6_host_sleep_ns / mp6_host_save_dir */
@@ -53,6 +56,9 @@ extern "C" {
 #include "mp6_utf8_file.h" /* Windows UTF-8 config/content files */
 #include "mp6_savestate.h" /* in-game menu: savestate result toasts (section 9) */
 #include "mp6_minigame.h"
+#include "mp6_unlock_all.h" /* game.unlock_all -> the Unlock All mod store */
+#include "mp6_mic.h"        /* game.microphone -> the GameCube Mic store */
+#include "mp6_quick_play.h" /* game.quick_play -> the Quick Party mod store */
 #include "mp6_console.h"   /* dev console: the one availability grant (section 9) */
 #include "mp6_enhancements.h" /* the Enhancements seam: preset table + published store */
 #include "mp6_ambient_occlusion.h"
@@ -81,6 +87,7 @@ void mp6_display_note_sdl_event(const SDL_Event *ev);
  * decomp's competing dolphin.h universe. */
 int mp6_dvd_set_root_override(const char *filesRoot, const char *fstPath);
 int mp6_dvd_probe_root(char *filesRootOut, size_t n);
+void mp6_dvd_rescan_root(void);
 int mp6_dvd_validate_disc_root(const char *discRoot, char *err, size_t errn);
 int mp6_import_recover_disc_root(const char *destDiscRoot);
 void mp6_audio_set_master_gain(float gain);                                 /* src/audio/audio_out_sdl.c */
@@ -155,6 +162,10 @@ static void mp6_launcher_publish_enh(void)
     if (!g_launcherMode) return;
     const Mp6EnhValues v = mp6_launcher_enh_values();
     mp6_enh_set_values(&v);
+    /* Not an enhancement, but published on the same load/change path. */
+    mp6_unlock_all_set_enabled(g_cfg.unlockAll);
+    mp6_quick_play_set_speed(g_cfg.quickPlay);
+    mp6_mic_set_enabled(g_cfg.microphone);
 }
 
 static void mp6_launcher_defaults(void)
@@ -164,6 +175,7 @@ static void mp6_launcher_defaults(void)
     g_cfg.windowScale = 0.0f;
     g_cfg.aspectLocked = 1;
     g_cfg.vsync = 1;
+    g_cfg.smoothFrames = 1; /* Smooth is the default Unlocked FPS mode (Rashed, 2026-10-22) */
     snprintf(g_cfg.backend, sizeof(g_cfg.backend), "auto");
     /* "auto" = the highest-refresh attached output. See launcher_state.hpp's
      * field comment: this is the one default in this function that changes
@@ -176,6 +188,10 @@ static void mp6_launcher_defaults(void)
     g_cfg.tickHz = 60.0;
     g_cfg.contentRoot[0] = '\0';
     g_cfg.masterVolume = 100;
+    g_cfg.menuMotion = 1;
+    g_cfg.unlockAll = 0;
+    g_cfg.quickPlay = MP6_QUICK_PLAY_OFF;
+    g_cfg.microphone = 1;
     g_cfg.touch = mp6_touch_defaults();
     /* THE ENHANCEMENTS DEFAULT. A fresh interactive install comes up on the
      * Modern preset: the port ships enhanced, and every one of the six has a
@@ -202,7 +218,12 @@ static void mp6_launcher_defaults(void)
  * settings and leaves the caller's defaults intact.
  * ======================================================================= */
 
-enum Mp6ConfigKeyBit : uint32_t {
+enum Mp6ConfigKeyBit : uint64_t {
+    MP6_CFG_UNLOCK_ALL = 1ull << 32, /* 64-bit mask: bits 0..31 are all taken */
+    /* 33 is reserved for fps-retained-replay's smooth-frames key. */
+    MP6_CFG_QUICK_PLAY = 1ull << 34,
+    MP6_CFG_MICROPHONE = 1ull << 35,
+    MP6_CFG_MENU_MOTION = 1u << 31,
     MP6_CFG_SKIP = 1u << 0,
     MP6_CFG_WINDOW_MODE = 1u << 1,
     MP6_CFG_WINDOW_SCALE = 1u << 2,
@@ -247,10 +268,15 @@ enum Mp6ConfigKeyBit : uint32_t {
     MP6_CFG_TOUCH_FLOATING = 1u << 28,
     MP6_CFG_TOUCH_LAYOUT = 1u << 29,
     MP6_CFG_ENH_AMBIENT_OCCLUSION = 1u << 30,
+    MP6_CFG_SMOOTH_FRAMES = 1ull << 33,
 };
 
-static uint32_t js_known_key_bit(const char *key)
+static uint64_t js_known_key_bit(const char *key)
 {
+    if (strcmp(key, "game.unlock_all") == 0) return MP6_CFG_UNLOCK_ALL;
+    if (strcmp(key, "game.quick_play") == 0) return MP6_CFG_QUICK_PLAY;
+    if (strcmp(key, "game.microphone") == 0) return MP6_CFG_MICROPHONE;
+    if (strcmp(key, "interface.menu_motion") == 0) return MP6_CFG_MENU_MOTION;
     if (strcmp(key, "enhancements.ambient_occlusion") == 0) return MP6_CFG_ENH_AMBIENT_OCCLUSION;
     if (strcmp(key, "touch.enabled") == 0) return MP6_CFG_TOUCH_ENABLED;
     if (strcmp(key, "touch.size") == 0) return MP6_CFG_TOUCH_SIZE;
@@ -261,6 +287,11 @@ static uint32_t js_known_key_bit(const char *key)
     if (strcmp(key, "video.window_mode") == 0) return MP6_CFG_WINDOW_MODE;
     if (strcmp(key, "video.window_scale") == 0) return MP6_CFG_WINDOW_SCALE;
     if (strcmp(key, "video.vsync") == 0) return MP6_CFG_VSYNC;
+    /* video.frame_blending replaced video.smooth_frames when Smooth became the
+     * default: an old config's smooth_frames=false was written by every save
+     * while Responsive was the default, not chosen, so it is not carried over
+     * (the old key falls through to the tolerant unknown-key ignore). */
+    if (strcmp(key, "video.frame_blending") == 0) return MP6_CFG_SMOOTH_FRAMES;
     if (strcmp(key, "video.backend") == 0) return MP6_CFG_BACKEND;
     if (strcmp(key, "video.display") == 0) return MP6_CFG_DISPLAY;
     if (strcmp(key, "video.window_x") == 0) return MP6_CFG_WINDOW_X;
@@ -285,7 +316,7 @@ static uint32_t js_known_key_bit(const char *key)
     return 0;
 }
 
-static bool js_known_string_key(uint32_t bit)
+static bool js_known_string_key(uint64_t bit)
 {
     return bit == MP6_CFG_WINDOW_MODE || bit == MP6_CFG_BACKEND ||
            bit == MP6_CFG_CONTENT_ROOT || bit == MP6_CFG_ENH_PRESET ||
@@ -318,7 +349,7 @@ static int mp6_launcher_parse_config(const char *text)
     char key[64];
     char sval[1024];
     const char *p = mp6_json_skip_ws(text);
-    uint32_t seen = 0;
+    uint64_t seen = 0;
     bool first = true;
     /* `enhancements` block staging. Written during the loop, resolved over the
      * legacy `video.*` values AFTER it, so precedence is a property of the
@@ -337,8 +368,8 @@ static int mp6_launcher_parse_config(const char *text)
     p = mp6_json_skip_ws(p + 1);
 
     while (*p != '}') {
-        uint32_t bit;
-        uint32_t seenBefore;
+        uint64_t bit;
+        uint64_t seenBefore;
         ValueKind kind = VALUE_OTHER;
         bool boolValue = false;
         double numberValue = 0.0;
@@ -427,7 +458,11 @@ static int mp6_launcher_parse_config(const char *text)
              * unknown-key ignore below, and the built-in default (locked
              * whenever Widescreen is off) applies. */
             if      (bit == MP6_CFG_SKIP)          parsed.skipLauncher = boolValue;
+            else if (bit == MP6_CFG_MENU_MOTION)   parsed.menuMotion = boolValue;
+            else if (bit == MP6_CFG_UNLOCK_ALL)    parsed.unlockAll = boolValue;
+            else if (bit == MP6_CFG_MICROPHONE)    parsed.microphone = boolValue;
             else if (bit == MP6_CFG_VSYNC)         parsed.vsync = boolValue;
+            else if (bit == MP6_CFG_SMOOTH_FRAMES) parsed.smoothFrames = boolValue;
             else if (bit == MP6_CFG_SHOW_FPS)      parsed.showFps = boolValue;
             else if (bit == MP6_CFG_WIDESCREEN)    parsed.widescreen = boolValue;
             else if (bit == MP6_CFG_UNLOCKED_FPS)  parsed.unlockedFps = boolValue;
@@ -446,6 +481,10 @@ static int mp6_launcher_parse_config(const char *text)
             }
             else if (bit == MP6_CFG_FPS_CORNER) {
                 parsed.fpsCorner = (v >= 0.0 && v <= 3.0 && v == std::floor(v)) ? (int)v : 0;
+            }
+            else if (bit == MP6_CFG_QUICK_PLAY) {
+                parsed.quickPlay = (v >= MP6_QUICK_PLAY_OFF && v <= MP6_QUICK_PLAY_MAX && v == std::floor(v))
+                                       ? (int)v : MP6_QUICK_PLAY_OFF;
             }
             else if (bit == MP6_CFG_TICK_HZ) {
                 parsed.tickHz = (v == 0.0 || (v >= 1.0 && v <= 1000.0)) ? v : 60.0;
@@ -630,6 +669,7 @@ static void mp6_launcher_config_save(void)
             "    \"video.window_mode\": \"%s\",\n"
             "    \"video.window_scale\": %g,\n"
             "    \"video.vsync\": %s,\n"
+            "    \"video.frame_blending\": %s,\n"
             "    \"video.backend\": \"%s\",\n"
             "    \"video.display\": \"%s\",\n"
             "    \"video.window_x\": %d,\n"
@@ -638,7 +678,11 @@ static void mp6_launcher_config_save(void)
             "    \"video.fps_corner\": %d,\n"
             "    \"game.tick_hz\": %g,\n"
             "    \"game.content_root\": \"%s\",\n"
+            "    \"game.unlock_all\": %s,\n"
+            "    \"game.quick_play\": %d,\n"
+            "    \"game.microphone\": %s,\n"
             "    \"audio.master_volume\": %d,\n"
+            "    \"interface.menu_motion\": %s,\n"
             "    \"video.widescreen\": %s,\n"
             "    \"video.shadow_quality\": %d,\n"
             "    \"video.unlocked_fps\": %s,\n"
@@ -661,6 +705,7 @@ static void mp6_launcher_config_save(void)
             g_cfg.windowMode == MP6_WINMODE_FULLSCREEN ? "fullscreen" : "windowed",
             (double)g_cfg.windowScale,
             g_cfg.vsync ? "true" : "false",
+            g_cfg.smoothFrames ? "true" : "false",
             g_cfg.backend,
             displayEsc,
             g_cfg.windowX,
@@ -669,7 +714,11 @@ static void mp6_launcher_config_save(void)
             g_cfg.fpsCorner,
             g_cfg.tickHz,
             rootEsc,
+            g_cfg.unlockAll ? "true" : "false",
+            g_cfg.quickPlay,
+            g_cfg.microphone ? "true" : "false",
             g_cfg.masterVolume,
+            g_cfg.menuMotion ? "true" : "false",
             g_cfg.widescreen ? "true" : "false", /* legacy mirror */
             g_cfg.shadowQuality, /* legacy mirror */
             g_cfg.unlockedFps ? "true" : "false", /* legacy mirror */
@@ -699,7 +748,7 @@ static void mp6_launcher_config_save(void)
 
 static void mp6_launcher_resolve_paths(void)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__) /* config/saves under MP6_HOST_BASE */
     /* SDL_GetBasePath() is "./" on Android
      * (the app has no exe directory and cwd is "/", unwritable) -- the
      * config lives under the same base dir mp6_android_main publishes for
@@ -727,7 +776,7 @@ static void mp6_launcher_resolve_paths(void)
 #endif
 
     {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__) /* config/saves under MP6_HOST_BASE */
         /* Android's host seam already returns the complete absolute
          * <MP6_HOST_BASE>/saves target. Never prefix the base a second time. */
         if (mp6_host_save_dir(g_saveDirAbs, sizeof(g_saveDirAbs)) != 0) {
@@ -973,6 +1022,13 @@ extern "C" int mp6_launcher_cfg_vsync(void)
     return g_launcherMode ? g_cfg.vsync : 1;
 }
 
+/* Unlocked FPS smooth mode; -1 outside launcher mode (automation runs use
+ * MP6_FI_SMOOTH or the build default). Read live every tick. */
+extern "C" int mp6_launcher_cfg_smooth_frames(void)
+{
+    return g_launcherMode ? (g_cfg.smoothFrames ? 1 : 0) : -1;
+}
+
 /* Launch-output selection, same launcher-mode-vs-automation-default shape as
  * the two accessors above. Automation answers "primary", which is the explicit
  * name for "leave the placement exactly as it was" -- so an automation run
@@ -1059,6 +1115,10 @@ static void mp6_launcher_apply_display(void)
      * Content aspect/letterboxing is controlled independently by the renderer. */
     SDL_SetWindowFullscreen(g_window, true);
     return;
+#elif defined(__EMSCRIPTEN__)
+    /* The canvas fills the page (SDL_WINDOW_FILL_DOCUMENT); window size and
+     * fullscreen preferences are the browser's, not ours. */
+    return;
 #else
     if (g_cfg.windowMode == MP6_WINMODE_FULLSCREEN) {
         SDL_SetWindowFullscreen(g_window, true); /* SDL3: borderless desktop fullscreen */
@@ -1137,6 +1197,7 @@ static void mp6_launcher_apply_display(void)
 static void mp6_launcher_apply_volume(void)
 {
     mp6_audio_set_master_gain((float)g_cfg.masterVolume / 100.0f);
+    mp6::audio::set_menu_sound_gain((float)g_cfg.masterVolume / 100.0f);
 }
 
 /* Content-root override validation uses the same parser and mandatory-file
@@ -1184,6 +1245,11 @@ static int g_autoRootOk = 0;
 static char g_autoRoot[1200];
 static char g_rootErr[1200];
 static char g_activeRootDisplay[1200];
+static unsigned g_contentStateGeneration = 0;
+/* Audio callers use this stable storage for both SFX and music updates; a
+ * content-state refresh is the root invalidation boundary. */
+static std::string g_menuMusicRoot;
+static unsigned g_menuMusicRootGeneration = ~0u;
 
 static void mp6_recover_known_content_roots(void)
 {
@@ -1218,6 +1284,7 @@ static void mp6_recover_known_content_roots(void)
 static void mp6_refresh_content_state(void)
 {
     mp6_recover_known_content_roots();
+    mp6_dvd_rescan_root(); /* an import may have just created the auto root */
     g_rootState = mp6_launcher_validate_root(g_cfg.contentRoot, g_rootErr, sizeof(g_rootErr));
     g_autoRootOk = mp6_dvd_probe_root(g_autoRoot, sizeof(g_autoRoot)) != 0;
     if (g_rootState > 0) {
@@ -1227,13 +1294,14 @@ static void mp6_refresh_content_state(void)
         if (mp6_path_copy_checked(g_activeRootDisplay, sizeof(g_activeRootDisplay), g_autoRoot) != 0) {
             g_autoRootOk = 0;
             g_activeRootDisplay[0] = '\0';
-            return;
+        } else {
+            size_t len = strlen(g_activeRootDisplay);
+            if (len > 6 && strcmp(g_activeRootDisplay + len - 6, "/files") == 0) g_activeRootDisplay[len - 6] = '\0';
         }
-        size_t len = strlen(g_activeRootDisplay);
-        if (len > 6 && strcmp(g_activeRootDisplay + len - 6, "/files") == 0) g_activeRootDisplay[len - 6] = '\0';
     } else {
         g_activeRootDisplay[0] = '\0';
     }
+    ++g_contentStateGeneration;
 }
 
 /* C-side probe for main_native.c's onboarding
@@ -1258,6 +1326,19 @@ static int mp6_active_files_root(char *buf, size_t n)
         return mp6_path_join_checked(buf, n, g_cfg.contentRoot, "files") == 0;
     }
     return mp6_dvd_probe_root(buf, n) != 0;
+}
+
+static const std::string &mp6_menu_music_root()
+{
+    if(g_rootState==-2)mp6_refresh_content_state();
+    if(g_menuMusicRootGeneration!=g_contentStateGeneration){
+        char root[1200]{};
+        if(g_rootState>0)mp6_path_join_checked(root,sizeof(root),g_cfg.contentRoot,"files");
+        else if(g_rootState==0&&g_autoRootOk)mp6_path_copy_checked(root,sizeof(root),g_autoRoot);
+        if(g_menuMusicRoot!=root)g_menuMusicRoot=root;
+        g_menuMusicRootGeneration=g_contentStateGeneration;
+    }
+    return g_menuMusicRoot;
 }
 
 /* =======================================================================
@@ -1374,20 +1455,22 @@ static unsigned char *mp6_hsf_find_rgb5a3(const unsigned char *blob, unsigned le
     return rgba;
 }
 
-/* Sets the interactive window title + icon. Launcher mode only; automation
- * keeps aurora's own appName title untouched. Title format = app name +
- * space + version (their portmain window-title shape; the name is ours). */
+/* Sets the interactive window title. Launcher mode only; automation keeps
+ * aurora's own appName title untouched (test tooling finds windows by it). */
 static void mp6_window_brand(void)
 {
     if (g_window != NULL) {
-        static char title[96];
-        snprintf(title, sizeof(title), "Mario Party 6 \xE2\x80\x94 Native Port %s", MP6_PORT_VERSION);
-        SDL_SetWindowTitle(g_window, title);
+        SDL_SetWindowTitle(g_window, "Starlit Party");
     }
 }
 
 static void mp6_window_icon_from_wordmark(const unsigned char *rgba, int w, int h)
 {
+#ifdef _WIN32
+    /* Windows uses the app icon embedded in the exe (packaging/windows/mp6.rc,
+     * selected via SDL_HINT_WINDOWS_INTRESOURCE_ICON in main_native.c). */
+    (void)rgba; (void)w; (void)h;
+#else
     /* The '6'+star art occupies the wordmark's right end; crop a square
      * region there for the window icon. */
     if (g_window == NULL || w < 128 || h < 128) return;
@@ -1403,6 +1486,7 @@ static void mp6_window_icon_from_wordmark(const unsigned char *rgba, int w, int 
         SDL_SetWindowIcon(g_window, surf);
         SDL_DestroySurface(surf);
     }
+#endif
 }
 
 static void mp6_logo_ensure(void)
@@ -1615,8 +1699,34 @@ int validate_root(const char *root, char *err, size_t errn) { return mp6_launche
 int auto_root(char *buf, size_t n) { return mp6_dvd_probe_root(buf, n) != 0; }
 bool content_ready() { if (g_rootState == -2) mp6_refresh_content_state(); return g_rootState > 0 || (g_rootState == 0 && g_autoRootOk); }
 void refresh_content_state() { mp6_refresh_content_state(); }
+/* Imports made before 2026-10-18 left movie/ out, so minigame instructions
+ * show a still picture where the preview should play. Asked through the host
+ * file layer, which also covers the web build's disc image (no folder). */
+bool content_missing_movies()
+{
+    char filesRoot[1024];
+    char movie[1024];
+    if (!content_ready() || !mp6_active_files_root(filesRoot, sizeof(filesRoot)) ||
+        mp6_path_join_checked(movie, sizeof(movie), filesRoot, "movie/m601.thp") != 0) {
+        return false;
+    }
+    Mp6HostFile *file = mp6_host_file_open(movie);
+    const bool present = file != nullptr && mp6_host_file_size(file) > 0;
+    if (file != nullptr) mp6_host_file_close(file);
+    return !present;
+}
 const char *active_root_display() { if (g_rootState == -2) mp6_refresh_content_state(); return g_activeRootDisplay; }
-const char *port_version() { return MP6_PORT_VERSION; }
+/* "0.5.0-rc7 (40160, 3916859)"; just the commit when the build passed no
+ * VERSION/VERSION_CODE (tools/build.py mp6_port_release_defines). */
+const char *port_version() {
+#if defined(MP6_PORT_RELEASE) && defined(MP6_PORT_VERSION_CODE)
+#define MP6_PORT_STR2(x) #x
+#define MP6_PORT_STR(x) MP6_PORT_STR2(x)
+    return MP6_PORT_RELEASE " (" MP6_PORT_STR(MP6_PORT_VERSION_CODE) ", " MP6_PORT_VERSION ")";
+#else
+    return MP6_PORT_VERSION;
+#endif
+}
 const char *save_dir_abs() { return g_saveDirAbs; }
 
 static bool s_playRequested = false;
@@ -1676,11 +1786,13 @@ extern "C" void mp6_launcher_apply_display_settings(void *sdlWindowPtr)
  * input.cpp's sync_input_block PADBlockInput()s the game -- the world
  * keeps ticking, its input is paused so menu navigation never leaks. */
 static mp6::ui::SettingsWindow *g_gameMenu; /* owned by the ui document stack; never closed */
+static std::unique_ptr<mp6::audio::MenuMusic> g_gameMenuMusic;
 static mp6::ui::Console *g_console;         /* likewise -- pushed HIDDEN, toggled by ` / F9 */
 
 extern "C" void mp6_launcher_frame_overlay(void)
 {
     if (!g_launcherMode || !g_uiReady) return;
+    mp6::audio::update_menu_sounds(mp6_menu_music_root().c_str(),float(g_cfg.masterVolume)/100.f);
     if (g_gameMenu == nullptr) {
         g_gameMenu = static_cast<mp6::ui::SettingsWindow *>(&mp6::ui::push_document(
             std::make_unique<mp6::ui::SettingsWindow>(false, 0, /*inGame=*/true), /*show=*/false));
@@ -1725,23 +1837,44 @@ extern "C" void mp6_launcher_frame_overlay(void)
             });
         }
     }
-    if (mp6_minigame_take_skipped()) {
-        mp6::ui::push_toast({
+    /* A missing module holds its black screen while this notice is up
+     * (dll_bridge.c's stub child), so it shows where the game would have
+     * started instead of over whatever comes after. */
+    switch (mp6_unavailable_overlay_take_returned()) {
+    case MP6_UNAVAILABLE_BOARD_MINIGAME:
+        mp6::ui::show_notice({
             .type = "minigame",
-            .title = "Minigame Skipped",
-            .content = "Minigames are not available yet. The board continues without minigame coin awards.",
-            .duration = std::chrono::seconds(4),
+            .title = "Minigame Not Available Yet",
+            .content = "This minigame is not available yet. It counts as a draw and the board continues.",
+            .duration = std::chrono::milliseconds(3500),
         });
-    }
-    if (mp6_unavailable_overlay_take_returned()) {
-        mp6::ui::push_toast({
+        break;
+    case MP6_UNAVAILABLE_RETURNED:
+        mp6::ui::show_notice({
             .type = "unavailable",
             .title = "Not Available Yet",
             .content = "This minigame or mode is not available yet. Returning to a supported screen.",
-            .duration = std::chrono::seconds(4),
+            .duration = std::chrono::milliseconds(3500),
         });
+        break;
+    default:
+        break;
+    }
+    /* Release the hold once the notice has run out, or if it is not on
+     * screen at all (a savestate loaded mid-hold). */
+    if (mp6_unavailable_notice_open() && mp6::ui::current_notice() == nullptr) {
+        mp6_unavailable_notice_closed();
     }
     mp6::ui::update();
+    if(g_gameMenu->visible()) {
+        if(!g_gameMenuMusic)g_gameMenuMusic=std::make_unique<mp6::audio::MenuMusic>();
+        g_gameMenuMusic->update(mp6_menu_music_root().c_str(),float(g_cfg.masterVolume)/100.f);
+        // Never silence gameplay when no usable bank/device is available.
+        mp6_audio_set_menu_override(g_gameMenuMusic->playing());
+    } else {
+        g_gameMenuMusic.reset();
+        mp6_audio_set_menu_override(0);
+    }
 }
 
 /* Pre-shutdown UI teardown. MUST run BEFORE aurora_shutdown(): the UI
@@ -1760,6 +1893,9 @@ extern "C" void mp6_launcher_ui_teardown(void)
 {
     mp6_ao_shutdown(); /* also needed in automation, where there is no UI */
     if (!g_uiReady) return;
+    g_gameMenuMusic.reset();
+    mp6::audio::shutdown_menu_sounds();
+    mp6_audio_set_menu_override(0);
     g_gameMenu = nullptr; /* owned by the stack being cleared */
     /* Withdraw availability BEFORE the document dies: the C core force-closes
      * on losing it, so the keyboard capture can never outlive the view. */
@@ -1804,7 +1940,6 @@ extern "C" void mp6_launcher_forward_sdl_event(const SDL_Event *ev)
 extern "C" int mp6_launcher_run_menu(void *sdlWindowPtr)
 {
     bool quit = false;
-    uint64_t nextFrameNs = mp6_host_monotonic_ns();
 
     g_window = (SDL_Window *)sdlWindowPtr; /* display settings already applied by main_native.c */
 
@@ -1818,12 +1953,14 @@ extern "C" int mp6_launcher_run_menu(void *sdlWindowPtr)
 
     mp6_refresh_content_state();
     mp6::ui::push_document(std::make_unique<mp6::ui::Prelaunch>(), true);
+    mp6::audio::MenuMusic music;
 
     printf("[LAUNCHER] menu open (interactive launch) -- Play boots the game; MP6_LAUNCHER=0 or a "
            "tick-budget/--input-script/MP6_AUTO_START_TICKS invocation skips this menu entirely\n");
     fflush(stdout);
 
     while (!mp6::ui::play_requested() && !quit) {
+        mp6::audio::update_menu_sounds(mp6_menu_music_root().c_str(),float(g_cfg.masterVolume)/100.f);
         const AuroraEvent *event = aurora_update();
         /* The cross-output flip's second half, at this loop's own drain
          * boundary. Same reason this loop needs its own observer hook below:
@@ -1848,20 +1985,18 @@ extern "C" int mp6_launcher_run_menu(void *sdlWindowPtr)
         }
         if (mp6::ui::quit_requested()) quit = true;
 
+        // Cached validation is refreshed by content selection/import, not by
+        // every audio refill. Empty/invalid roots never start disc music.
+        if(!quit&&!mp6::ui::play_requested())music.update(mp6_menu_music_root().c_str(),float(g_cfg.masterVolume)/100.f);
+
         if (aurora_begin_frame()) {
             mp6::ui::update();
             aurora_end_frame();
-        }
-
-        /* ~60 Hz cap (absolute deadline, same discipline as the game's
-         * tick throttle) -- present usually blocks on vsync already; this
-         * only matters when vsync is off or begin_frame returns false. */
-        nextFrameNs += 16666667ull;
-        uint64_t now = mp6_host_monotonic_ns();
-        if (nextFrameNs > now) {
-            mp6_host_sleep_ns(nextFrameNs - now);
+            mp6_display_pace_frame(); /* MAILBOX: no frames past the refresh rate */
         } else {
-            nextFrameNs = now;
+            // Respect the selected presentation mode; do not impose a second
+            // 60 Hz UI timer. Still yield while minimized/surface unavailable.
+            mp6_host_sleep_ns(1000000ull);
         }
     }
 

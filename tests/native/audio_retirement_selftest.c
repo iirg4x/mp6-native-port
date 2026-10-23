@@ -22,7 +22,7 @@ typedef struct { int segCount; } Env;
 typedef struct {
     int active,paused,loop,baseVol,vol,fadeAction;
     int16_t* pcm;
-    uint32_t totalFrames,loopStartFrame,loopEndFrame,tlWraps;
+    uint32_t totalFrames,decodedFrames,loopStartFrame,loopEndFrame,tlWraps;
     uint64_t posFrac,stepFrac;
     float fadeMul,fadeStep,gainL,gainR;
     Env envPlan;
@@ -36,6 +36,7 @@ int g_chanMax=MP6_MSM_MAX_CHAN,g_mixerLockInit=0,g_savestateMixerMuted=0;
 int g_masterVol=127,g_seMasterVol=127,g_wavArmed=0;
 int g_sfxVoiceCap=MP6_MSM_MAX_SFX_VOICES,requestedCap=MP6_MSM_MAX_SFX_VOICES;
 unsigned long g_kgReleaseEvents=0,g_kgVoicesReleased=0;
+unsigned long g_streamUnderruns=0;
 uint64_t mp6_tick_count=1;
 struct { int inUse,baseGrpF;uint16_t gid; } g_seGroups[MP6_MSM_MAX_SE_GROUPS];
 typedef struct { int flag,vol,pan; } MSM_SEPARAM;
@@ -83,7 +84,7 @@ void mp6_wav_capture(int16_t* out,uint32_t frames,int armed) {
 MsmChan voice(int stereo) {
     MsmChan c={0};
     c.active=1;c.baseVol=c.vol=127;c.fadeMul=1;c.gainL=c.gainR=1;
-    c.totalFrames=c.loopEndFrame=4;c.stepFrac=65536;
+    c.totalFrames=c.decodedFrames=c.loopEndFrame=4;c.stepFrac=65536;
     c.pcm=malloc((stereo?8:4)*sizeof(int16_t));assert(c.pcm);
     for(int i=0;i<(stereo?8:4);++i)c.pcm[i]=(int16_t)(100*(i+1));
     return c;

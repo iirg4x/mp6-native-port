@@ -383,6 +383,12 @@ void mp6_CARDInit(void);
  * symbol catches both. */
 #define GXLoadTexMtxImm        mp6_fs_GXLoadTexMtxImm
 #define GXSetTexCoordGen2      mp6_fs_GXSetTexCoordGen2
+/* Material/alpha probes (channel colors, alpha test). */
+#define GXSetChanMatColor      mp6_fs_GXSetChanMatColor
+#define GXSetChanCtrl          mp6_fs_GXSetChanCtrl
+#define GXSetAlphaCompare      mp6_fs_GXSetAlphaCompare
+#define GXSetTevColor          mp6_fs_GXSetTevColor
+#define GXSetTevColorS10       mp6_fs_GXSetTevColorS10
 #endif /* !MP6_GENSHIMS_PROBE (framescope renames) */
 
 

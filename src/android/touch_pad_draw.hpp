@@ -120,6 +120,22 @@ inline void draw_control(ImDrawList *dl, const Model &model, int i, const Mp6Tou
                     color(selected ? 255 : 160, selected ? 208 : 177, selected ? 86 : 202, .85f), 4, 0,
                     selected ? 3 : 1);
 }
+// The Mic's talk button: a microphone glyph, lit while held, ringed while
+// the game is listening.
+inline void draw_mic_button(ImDrawList *dl, const Layout &layout, bool held, bool listening)
+{
+    auto r = layout.mic;
+    const float u = r.rx;
+    const ImU32 ink = color(235, 240, 255, .9f);
+    dl->AddCircleFilled(ImVec2(r.x, r.y), u, held ? color(232, 79, 84, .75f) : color(25, 31, 44, .4f), 32);
+    dl->AddCircle(ImVec2(r.x, r.y), u, listening ? color(255, 208, 86, .9f) : color(235, 240, 255, .65f), 32,
+                  listening ? 3.f : 1.5f);
+    dl->AddRectFilled(ImVec2(r.x - u * .17f, r.y - u * .5f), ImVec2(r.x + u * .17f, r.y + u * .1f), ink, u * .17f);
+    dl->PathArcTo(ImVec2(r.x, r.y - u * .05f), u * .32f, 0.f, 3.14159265f, 12);
+    dl->PathStroke(ink, 0, 3.f);
+    dl->AddLine(ImVec2(r.x, r.y + u * .27f), ImVec2(r.x, r.y + u * .48f), ink, 3.f);
+    dl->AddLine(ImVec2(r.x - u * .2f, r.y + u * .48f), ImVec2(r.x + u * .2f, r.y + u * .48f), ink, 3.f);
+}
 inline void draw_system(ImDrawList *dl, const Layout &layout, bool console, bool open = false)
 {
     auto r = console ? layout.console : layout.menu;

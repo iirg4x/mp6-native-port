@@ -1,8 +1,8 @@
 --- a/src/game/hsfmotion.c
 +++ b/src/game/hsfmotion.c
-@@ -9,0 +10 @@
+@@ -7,0 +8 @@
 +#include "mp6_boot.h" /* mp6_heap_pointer_tag -- standalone motion teardown fix below */
-@@ -75 +76,11 @@
+@@ -78 +79,11 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
 +    /* mdsel's teardown calls this with the "no motion" sentinel (-1) when
 +     * a mode is confirmed (reproduced as a panic at &Hu3DMotion[-1]). On
@@ -15,7 +15,7 @@
 +        return FALSE;
 +    }
 +    motP = &Hu3DMotion[motId];
-@@ -100 +111,25 @@
+@@ -103 +114,25 @@
 -        HuMemDirectFree(motP->hsf);
 +        /* Port ownership fix (docs/research/hsf_stub_audit.md D4). On
 +         * hardware this single free was complete: LoadHSF parsed the file
@@ -42,7 +42,7 @@
 +            HuMemDirectFree(motP->hsf);
 +            HuMemDirectFreeNum(HEAP_MODEL, mp6GraphTag);
 +        }
-@@ -191 +226,19 @@
+@@ -207 +242,19 @@
 -    HU3D_MOTION *motP = &Hu3DMotion[motId];
 +    /* 64-bit/checked-build portability fix, negative-sentinel-index class:
 +     * motId == HU3D_MOTIONID_NONE (-1) reaches this function ORGANICALLY.
@@ -63,16 +63,16 @@
 +     * observable: the pointer stays dead either way, and every modelP
 +     * field write below is identical. */
 +    HU3D_MOTION *motP = (motId != HU3D_MOTIONID_NONE) ? &Hu3DMotion[motId] : NULL;
-@@ -826 +879 @@
+@@ -896 +949 @@
 -                if(trackP->target < hsf->objectNum && trackP->target != -1) {
 +                if(trackP->target != (u16)-1 && trackP->target < hsf->objectNum) {
-@@ -871 +924 @@
+@@ -950 +1003 @@
 -                if(track->target < hsf->objectNum) {
 +                if(track->target < hsf->objectNum && track->morphWeight >= 0 && track->morphWeight < 33) {
-@@ -880 +933 @@
+@@ -959 +1012 @@
 -                if(!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF) && trackP->attrIdx < hsf->materialNum) {
 +                if(!(modelP->attr & HU3D_ATTR_CURVE_MOTOFF) && trackP->attrIdx >= 0 && trackP->attrIdx < hsf->materialNum) {
-@@ -887,2 +940,19 @@
+@@ -966,2 +1019,19 @@
 -                    clusterP = &hsf->cluster[trackP->cluster];
 -                    clusterP->index = GetClusterCurve(trackP, time);
 +                    /* hsf->cluster is still stub-tolerated (forced NULL/0
@@ -94,7 +94,7 @@
 +                        clusterP = &hsf->cluster[trackP->cluster];
 +                        clusterP->index = GetClusterCurve(trackP, time);
 +                    }
-@@ -895,2 +965,7 @@
+@@ -974,2 +1044,7 @@
 -                    clusterP = &hsf->cluster[track->cluster];
 -                    clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
 +                    /* Same reasoning as HSF_TRACK_CLUSTER immediately
@@ -104,13 +104,13 @@
 +                        clusterP = &hsf->cluster[track->cluster];
 +                        clusterP->weight[track->clusterWeight] = GetClusterWeightCurve(track, time);
 +                    }
-@@ -904 +979 @@
+@@ -985 +1060 @@
 -                    if(track->attrIdx != -1 && track->attrIdx < hsf->attributeNum) {
 +                    if(track->attrIdx >= 0 && track->attrIdx < hsf->attributeNum) {
-@@ -992 +1067 @@
+@@ -1080 +1155 @@
 -                if (trackP->target < hsf->objectNum && trackP->target != -1) {
 +                if (trackP->target != (u16)-1 && trackP->target < hsf->objectNum) {
-@@ -1190,0 +1266,12 @@
+@@ -1296,0 +1372,12 @@
 +                /* native port: the original left animId/texScrId/bitMapPtr
 +                 * (and the 2D scale/trans pair) of this freshly allocated
 +                 * work uninitialized -- never read without their flags on
@@ -123,20 +123,20 @@
 +                attrAnimP->animId = HU3D_ANIMID_NONE;
 +                attrAnimP->texScrId = HU3D_TEXSCRID_NONE;
 +                attrAnimP->bitMapPtr = NULL;
-@@ -1467 +1554 @@
+@@ -1586 +1673 @@
 -    HSF_CONSTANT_KEY *data = key;
 +    HSF_CONSTANT_KEY *data;
-@@ -1469 +1556,4 @@
+@@ -1588 +1675,4 @@
 -    if(0.0f == time || keyNum == 1) {
 +    if(keyNum <= 0 || key == NULL) {
 +        return 0.0f;
 +    }
 +    if(time <= key[0][0] || keyNum == 1) {
-@@ -1472 +1562,2 @@
+@@ -1591 +1681,2 @@
 -    for(i=0; i<keyNum; i++, data++) {
 +    data = &key[1];
 +    for(i=1; i<keyNum; i++, data++) {
-@@ -1474,4 +1565,4 @@
+@@ -1593,4 +1684,4 @@
 -            return data[0][-1];
 -        }
 -    }
@@ -145,32 +145,62 @@
 +        }
 +    }
 +    return key[keyNum-1][1];
-@@ -1485 +1576,4 @@
+@@ -1606 +1697,4 @@
 -    if(0.0f == time || keyNum == 1) {
 +    if(keyNum <= 0 || key == NULL) {
 +        return 0.0f;
 +    }
 +    if(time <= key[0][0] || keyNum == 1) {
-@@ -1488 +1582 @@
+@@ -1609 +1703 @@
 -    for(i=0; i<keyNum; i++) {
 +    for(i=1; i<keyNum; i++) {
-@@ -1517 +1611,4 @@
+@@ -1638 +1732,5 @@
 -    if (time == 0.0f || keyNum == 1) {
++
 +    if (keyNum <= 0 || key == NULL) {
 +        return 0.0f;
 +    }
 +    if (time <= key[0][0] || keyNum == 1) {
-@@ -1518,0 +1616,3 @@
+@@ -1639,0 +1738,3 @@
 +    }
 +    if (trackP->start == 0 || trackP->start >= keyNum) {
 +        trackP->start = 1;
-@@ -1564 +1664,4 @@
+@@ -1688 +1789,4 @@
 -    if(0.0f == time || keyNum == 1) {
 +    if(keyNum <= 0 || key == NULL) {
 +        return NULL;
 +    }
 +    if(time <= key->time*60.0f || keyNum == 1) {
-@@ -1567 +1670,2 @@
+@@ -1691 +1795,2 @@
 -    for(i=0; i<keyNum; i++, key++) {
 +    key++;
 +    for(i=1; i<keyNum; i++, key++) {
+@@ -1708,0 +1814,15 @@
++
++/* MP6: SearchObjectIndex compares a track's name with every object name in
++ * turn, and a board start attaches thousands of motions (tracks x objects
++ * strcmp calls, several ms). JointModel_Motion indexes the object names
++ * once per call instead (include/mp6_name_index.h); same first match. */
++#include <stddef.h>
++#include "mp6_name_index.h"
++static Mp6NameIndex mp6ObjIndex;
++static HSF_DATA *mp6ObjIndexHsf;
++
++static s32 mp6SearchObjectIndexed(HSF_DATA *hsf, u32 nameOffset)
++{
++    if (hsf != mp6ObjIndexHsf || !mp6ObjIndex.slot) return SearchObjectIndex(hsf, nameOffset);
++    return mp6_name_index_find(&mp6ObjIndex, SetName(&nameOffset));
++}
+@@ -1719,0 +1840,3 @@
++    mp6_name_index_build(&mp6ObjIndex, hsf->object, sizeof(HSF_OBJECT), offsetof(HSF_OBJECT, name),
++                         hsf->objectNum);
++    mp6ObjIndexHsf = hsf;
+@@ -1725 +1848 @@
+-                track->target = SearchObjectIndex(hsf, track->target);
++                track->target = mp6SearchObjectIndexed(hsf, track->target);
+@@ -1732 +1855 @@
+-                track->target = SearchObjectIndex(hsf, track->target);
++                track->target = mp6SearchObjectIndexed(hsf, track->target);
+@@ -1750,0 +1874,2 @@
++    mp6_name_index_free(&mp6ObjIndex);
++    mp6ObjIndexHsf = NULL;

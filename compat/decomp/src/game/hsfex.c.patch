@@ -1,20 +1,15 @@
 --- a/src/game/hsfex.c
 +++ b/src/game/hsfex.c
-@@ -505 +505 @@
--    HU3D_CAMERA *cameraP;
-+    HU3D_CAMERA *cameraP = NULL;
-@@ -513,0 +514,6 @@
-+    /* The interval search reads work[1], so a usable path has at least two
-+     * keys. An empty/out-of-range camera mask otherwise leaves cameraP
-+     * indeterminate before the pointer table below is built. */
-+    if(workBuf == NULL || num < 2) {
-+        return;
-+    }
-@@ -519,0 +526 @@
-+    if(cameraP == NULL) return;
-@@ -533 +540 @@
--        for(i=0; i<num; i++, work++) {
-+        for(i=0; i<num-1; i++, work++) {
-@@ -538 +545 @@
--        if(i == num) {
-+        if(i >= num-1) {
+@@ -543 +543 @@
+-    HU3D_CAMERA *camera;
++    HU3D_CAMERA *camera = NULL;
+@@ -553,0 +554 @@
++    if(samples == NULL || sampleCount < 2) return;
+@@ -559,0 +561 @@
++    if(camera == NULL) return;
+@@ -573 +575 @@
+-        for(selectedIndex=0; selectedIndex<sampleCount; selectedIndex++, sample++) {
++        for(selectedIndex=0; selectedIndex<sampleCount-1; selectedIndex++, sample++) {
+@@ -578 +580 @@
+-        if(selectedIndex == sampleCount) {
++        if(selectedIndex >= sampleCount-1) {

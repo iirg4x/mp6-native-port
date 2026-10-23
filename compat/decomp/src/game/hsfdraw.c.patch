@@ -1,78 +1,39 @@
 --- a/src/game/hsfdraw.c
 +++ b/src/game/hsfdraw.c
-@@ -14,0 +15,4 @@
+@@ -5,2 +4,0 @@
+-static inline float acosf(float x) { return (float)acos((double)x); }
+-
+@@ -12,0 +11,6 @@ static inline float acosf(float x) { return (float)acos((double)x); }
 +#include "mp6_shadow_quality.h" /* shadow quality: effective map size */
 +#include "mp6_grounding.h"
 +#include "mp6_fi_model.h" /* deferred-draw matrix identity (Unlocked FPS) */
++#include "mp6_hsf_dl_dump.h"
++#include "mp6_draw_census.h" /* MP6_DRAW_CENSUS_OBJ */
 +#include <stdint.h>
-@@ -25,0 +30,53 @@
-+
-+/* Object-level draw census, the per-OBJECT companion to hsfman.c's
-+ * per-MODEL one (that census explains what the Hu3DExec loop decided;
-+ * this one, behind its own MP6_DRAW_CENSUS_OBJ=<tick>, explains what
-+ * happened INSIDE each Hu3DDraw tree walk: which objects were visited,
-+ * which were skipped by LOCK/DISPOFF-flags/zero-scale, which deferred to
-+ * the z-sorted XLU list, and which reached ObjDraw). Same two-tick window
-+ * semantics as the hsfman census; zero output and one cached getenv when
-+ * unset. Diagnostic only: prints state, never changes behavior. */
+@@ -28,2 +32,6 @@ static inline float acosf(float x) { return (float)acos((double)x); }
+-void HuSprTexLoad(ANIMDATA *anim, s16 bmpNo, s16 texMapId, GXTexWrapMode wrapS, GXTexWrapMode wrapT,
+-                  GXTexFilter filter);
 +#include <stdio.h>
 +#include <stdlib.h>
 +extern long mp6_tick_count;
-+static long mp6ObjCensusTick = -2; /* -2 = env not parsed yet, -1 = disabled */
-+static int mp6ObjCensusActive(void)
-+{
-+    if (mp6ObjCensusTick == -2) {
-+        const char *e = getenv("MP6_DRAW_CENSUS_OBJ");
-+        mp6ObjCensusTick = (e && atol(e) > 0) ? atol(e) : -1;
-+    }
-+    return mp6ObjCensusTick > 0 && mp6_tick_count >= mp6ObjCensusTick &&
-+           mp6_tick_count < mp6ObjCensusTick + 2;
-+}
 +
-+/* Display-list / vertex ground-truth dump, used to track down a
-+ * mode-select/file-select "vertices all over the place" report with
-+ * actual bytes instead of more theories: for the one object named by
-+ * MP6_DL_DUMP=<name> this dumps, at DL-BUILD time (MDObjMesh, i.e.
-+ * model-create), to build/dldump_<name>.txt:
-+ *   - the parsed face records (type/mat/index tuples) the DL was built from,
-+ *   - the vertex/st array contents summary (count, first entries, min/max
-+ *     magnitude, out-of-range-index scan over every face tuple),
-+ *   - the referenced materials' vtxMode/attrNum/flags (the vertex-descriptor
-+ *     selectors), and
-+ *   - the raw built DL bytes (first 1 KB hex) + per-batch dlOfs table.
-+ * Decoding those bytes against the descriptor the draw path will set is a
-+ * mechanical, offline check of stream-vs-descriptor alignment. One getenv,
-+ * zero output when unset. Diagnostic only: never changes behavior. */
-+#include <string.h>
-+static int mp6DlDumpParsed = 0;       /* 0 = env not parsed yet */
-+static const char *mp6DlDumpName = NULL;
-+static const char *mp6DlDumpEnv(void)
-+{
-+    if (!mp6DlDumpParsed) {
-+        mp6DlDumpName = getenv("MP6_DL_DUMP");
-+        mp6DlDumpParsed = 1;
-+    }
-+    return mp6DlDumpName;
-+}
-+static int mp6DlDumpWant(const char *objName)
-+{
-+    const char *want = mp6DlDumpEnv();
-+    return want && objName && strcmp(want, objName) == 0;
-+}
-@@ -52,2 +109,2 @@
++
++void HuSprTexLoad(ANIMDATA *anim, s16 bmpNo, s16 texMapId, GXTexWrapMode wrapS, GXTexWrapMode wrapT, GXTexFilter filter);
+@@ -55,2 +63,2 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face);
 -static s32 MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
 -static s32 MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
 +static void MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
 +static void MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx);
-@@ -130,0 +188 @@
+@@ -135 +143 @@ static GXColor secondTev = { 0, 0, 255, 255 };
+-/* Called by Hu3DInit to allocate the per-frame draw-object queue. */
 +#include "mp6_ao_foliage_draw.h"
-@@ -138,0 +196,4 @@
+@@ -145,0 +154,4 @@ void Hu3DDrawPreInit(void)
 +    /* Unlocked FPS (include/mp6_fi_model.h): a new deferred batch starts
 +     * here, so drop the previous one's reserved identities. Diagnostic-free
 +     * bookkeeping; nothing about the draw itself changes. */
 +    mp6_fi_capture_defer_reset();
-@@ -149,0 +211,26 @@
-+    if (mp6ObjCensusActive()) { /* object census -- see mp6ObjCensusActive above */
+@@ -158,0 +171,26 @@ void Hu3DDraw(HU3D_MODEL *model, Mtx modelMatrix, HuVecF *scale)
++    if (mp6_draw_census_obj_active()) { /* object census -- see mp6ObjCensusActive above */
 +        /* modelP->hsf and modelP->hookFunc are the SAME union member
 +         * (include/game/hu3d.h): for a hook-func model -- every particle
 +         * system (mbParticleCreate) and every raw Hu3DHookFuncCreate --
@@ -85,78 +46,101 @@
 +         * census could consequently never complete a single board frame,
 +         * which is exactly the frame content a flicker investigation needs
 +         * enumerated. Print the HSF fields only when there IS an HSF. */
-+        if (modelP->attr & HU3D_ATTR_HOOKFUNC) {
++        if (model->attr & HU3D_ATTR_HOOKFUNC) {
 +            printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x HOOKFUNC hook=%p motId=%d (no HSF: union holds the hook)\n",
-+                   (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)modelP->hookFunc, modelP->motId);
-+        } else if (hsf == NULL) {
++                   (int)(model - Hu3DData), (unsigned)model->attr, (void *)model->hookFunc, model->motId);
++        } else if (modelData == NULL) {
 +            printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=NULL motId=%d\n",
-+                   (int)(modelP - Hu3DData), (unsigned)modelP->attr, modelP->motId);
++                   (int)(model - Hu3DData), (unsigned)model->attr, model->motId);
 +        } else {
 +            printf("[CENSUS-OBJ] Hu3DDraw model=%d attr=%08x hsf=%p root=%p rootType=%d objectNum=%d motId=%d\n",
-+                   (int)(modelP - Hu3DData), (unsigned)modelP->attr, (void *)hsf, (void *)hsf->root,
-+                   hsf->root ? hsf->root->type : -1, hsf->objectNum, modelP->motId);
++                   (int)(model - Hu3DData), (unsigned)model->attr, (void *)modelData, (void *)modelData->root,
++                   modelData->root ? modelData->root->type : -1, modelData->objectNum, model->motId);
 +        }
 +        fflush(stdout);
 +    }
-@@ -158,0 +246,4 @@
-+        /* Unlocked FPS: this hook-func (particle) model is being DEFERRED to
-+         * Hu3DDrawPost, which emits its matrices after the model bracket has
-+         * closed. Reserve its identity here, while the bracket is still open. */
+@@ -168,0 +207 @@ void Hu3DDraw(HU3D_MODEL *model, Mtx modelMatrix, HuVecF *scale)
 +        mp6_fi_capture_defer_push(DrawObjIdx);
-@@ -189,0 +281,7 @@
-+    if (mp6ObjCensusActive()) { /* object census (rot/pos: the sky-wheel angle) */
+@@ -200,0 +240,7 @@ static void objCall(HU3D_MODEL *model, HSF_OBJECT *object)
++    if (mp6_draw_census_obj_active()) { /* object census (rot/pos: the sky-wheel angle) */
 +        printf("[CENSUS-OBJ]  objCall type=%d name=%s childNum=%d baseRot=(%.1f,%.1f,%.1f) basePos=(%.1f,%.1f,%.1f) curRot=(%.1f,%.1f,%.1f)\n",
-+               objPtr->type, objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum,
-+               objPtr->mesh.base.rot.x, objPtr->mesh.base.rot.y, objPtr->mesh.base.rot.z,
-+               objPtr->mesh.base.pos.x, objPtr->mesh.base.pos.y, objPtr->mesh.base.pos.z,
-+               objPtr->mesh.curr.rot.x, objPtr->mesh.curr.rot.y, objPtr->mesh.curr.rot.z);
++               object->type, object->name ? object->name : "(null)", object->mesh.childNum,
++               object->mesh.base.rot.x, object->mesh.base.rot.y, object->mesh.base.rot.z,
++               object->mesh.base.pos.x, object->mesh.base.pos.y, object->mesh.base.pos.z,
++               object->mesh.curr.rot.x, object->mesh.curr.rot.y, object->mesh.curr.rot.z);
 +    }
-@@ -256,0 +355,3 @@
-+    if (mp6ObjCensusActive() && (constData->attr & HU3D_CONST_LOCK)) { /* object census */
-+        printf("[CENSUS-OBJ]  mesh %s -> skip:LOCK\n", objPtr->name ? objPtr->name : "(null)");
+@@ -270,0 +317,3 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
++    if (mp6_draw_census_obj_active() && (constData->attr & HU3D_CONST_LOCK)) { /* object census */
++        printf("[CENSUS-OBJ]  mesh %s -> skip:LOCK\n", object->name ? object->name : "(null)");
 +    }
-@@ -273,0 +375 @@
-+            mp6_ground_object(modelP, objPtr, MTXBuf[MTXIdx], 1);
-@@ -302,0 +405 @@
-+        mp6_ground_object(modelP, objPtr, drawObj->matrix, 0);
-@@ -339,0 +442,19 @@
-+            if (mp6ObjCensusActive()) { /* object census: predict the branch below, in its order */
+@@ -292,0 +342 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
++            mp6_ground_object(model, object, MTXBuf[MTXIdx], 1);
+@@ -323,0 +374 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
++        mp6_ground_object(model, object, drawObject->matrix, 0);
+@@ -365,0 +417,19 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
++            if (mp6_draw_census_obj_active()) { /* object census: predict the branch below, in its order */
 +                const char *mp6Br;
-+                if (!dispF) {
++                if (!shouldDraw) {
 +                    mp6Br = "skip:dispF(cull/DISPOFF-flag)";
-+                } else if (transformP->scale.x == 0.0f && transformP->scale.y == 0.0f && transformP->scale.z == 0.0f) {
++                } else if (transform->scale.x == 0.0f && transform->scale.y == 0.0f && transform->scale.z == 0.0f) {
 +                    mp6Br = "skip:zero-scale";
 +                } else if (!(constData->attr & HU3D_CONST_REFLECTMODEL) &&
 +                           ((constData->attr & (HU3D_CONST_NEAR|HU3D_CONST_ALTBLEND|HU3D_CONST_XLU)) && shadowModelDrawF == FALSE)) {
 +                    mp6Br = "deferred-xlu";
-+                } else if (modelP->attr & HU3D_ATTR_ZCMP_OFF) {
++                } else if (model->attr & HU3D_ATTR_ZCMP_OFF) {
 +                    mp6Br = "deferred-zoff";
 +                } else {
 +                    mp6Br = "ObjDraw";
 +                }
 +                printf("[CENSUS-OBJ]  mesh %s -> %s constAttr=%08x objFlags=%08x curScale=(%.2f,%.2f,%.2f)\n",
-+                       objPtr->name ? objPtr->name : "(null)", mp6Br, (unsigned)constData->attr,
-+                       (unsigned)objPtr->flags, transformP->scale.x, transformP->scale.y, transformP->scale.z);
++                       object->name ? object->name : "(null)", mp6Br, (unsigned)constData->attr,
++                       (unsigned)object->flags, transform->scale.x, transform->scale.y, transform->scale.z);
 +                fflush(stdout);
 +            }
-@@ -353,0 +475,3 @@
+@@ -371,2 +441,3 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
+-                    (constData->attr & (HU3D_CONST_NEAR | HU3D_CONST_ALTBLEND | HU3D_CONST_XLU) &&
+-                     shadowModelDrawF == FALSE)) {
++                    shadowModelDrawF == FALSE &&
++                    ((constData->attr & (HU3D_CONST_NEAR | HU3D_CONST_ALTBLEND | HU3D_CONST_XLU)) ||
++                     mp6_ground_is_decal(model, object))) {
+@@ -381,0 +453,8 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
++                    /* Flat ground art follows opaque terrain, before ordinary
++                     * translucent draws (descending sort). Its unchanged color
++                     * receives lawn AO without a false depth ledge. No new pass. */
++                    if (mp6_ground_is_decal(model, object))
++                        drawObject->z = 1.0e30f;
 +                    /* Unlocked FPS: deferred translucent/NEAR object -- reserve
 +                     * its identity before Hu3DDrawPost emits it out of order. */
 +                    mp6_fi_capture_defer_push(DrawObjIdx);
-@@ -360,0 +485,2 @@
+@@ -387 +466 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
+-                } else if (model->attr & HU3D_ATTR_ZCMP_OFF) {
++                } else if(model->attr & HU3D_ATTR_ZCMP_OFF) {
+@@ -388,0 +468,2 @@ static void objMesh(HU3D_MODEL *model, HSF_OBJECT *object)
 +                    /* Unlocked FPS: deferred z-compare-off object, same. */
 +                    mp6_fi_capture_defer_push(DrawObjIdx);
-@@ -489,0 +615 @@
+@@ -522,0 +604 @@ static void FaceDraw(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
 +    mp6AoFoliageRemember(drawObj, face, drawCnt);
-@@ -571 +697 @@
+@@ -553,5 +635,5 @@ static void FaceDraw(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
+-        if ((modelP->attr & HU3D_ATTR_REFLECT_MODEL) || (flags & HSF_MATERIAL_REFLECTMODEL) ||
+-            ((matP->invAlpha != 0.0f || (matP->pass & 0xF) ||
+-              (constDataP->attr & HU3D_CONST_ALTBLEND)) &&
+-             !((modelP->attr & HU3D_ATTR_ZWRITE_OFF) |
+-               (flags & (HSF_MATERIAL_DISABLE_ZWRITE | HSF_MATERIAL_NEAR))))) {
++        if(mp6_ground_is_decal(modelP, objPtr)
++            || (modelP->attr & HU3D_ATTR_REFLECT_MODEL)
++            || (flags & HSF_MATERIAL_REFLECTMODEL)
++            || ((matP->invAlpha != 0.0f || (matP->pass & 0xF) || (constDataP->attr & HU3D_CONST_ALTBLEND))
++            && !((modelP->attr & HU3D_ATTR_ZWRITE_OFF) | (flags & (HSF_MATERIAL_DISABLE_ZWRITE|HSF_MATERIAL_NEAR))))) {
+@@ -605 +687 @@ static void FaceDraw(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
 -                GXSetArray(GX_VA_POS, objPtr->mesh.vertex->data, sizeof(HuVecF));
 +                GXSetArray(GX_VA_POS, mp6_ground_vertices(modelP, objPtr), sizeof(HuVecF));
-@@ -653 +779 @@
+@@ -691 +773 @@ static void FaceDraw(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
 -                GXSetArray(GX_VA_POS, objPtr->mesh.vertex->data, sizeof(HuVecF));
 +                GXSetArray(GX_VA_POS, mp6_ground_vertices(modelP, objPtr), sizeof(HuVecF));
-@@ -684,2 +810,25 @@
+@@ -722,3 +804,25 @@ static void FaceDraw(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
 -                    texAnimP = &Hu3DTexAnimData[animWorkP->animId];
--                    if((animWorkP->attr & HU3D_ATTRANIM_ATTR_ANIM2D) && !(texAnimP->attr & HU3D_ANIM_ATTR_NOUSE)) {
+-                    if ((animWorkP->attr & HU3D_ATTRANIM_ATTR_ANIM2D) &&
+-                        !(texAnimP->attr & HU3D_ANIM_ATTR_NOUSE)) {
 +                    /* native port: the original computed
 +                     * `texAnimP = &Hu3DTexAnimData[animWorkP->animId];`
 +                     * BEFORE testing the ANIM2D flag. animId is only ever
@@ -182,56 +166,60 @@
 +                     * identical to retail. */
 +                    if((animWorkP->attr & HU3D_ATTRANIM_ATTR_ANIM2D)
 +                     && !((texAnimP = &Hu3DTexAnimData[animWorkP->animId])->attr & HU3D_ANIM_ATTR_NOUSE)) {
-@@ -805,0 +954 @@
+@@ -856,0 +961 @@ static void FaceDraw(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
 +        mp6AoFoliageMaskState();
-@@ -1161 +1310 @@
+@@ -1258 +1363 @@ void Hu3DTevStageTexSet(HU3D_DRAW_OBJ *drawObj, HSF_MATERIAL *matP)
 -            GXSetTevOrder(tevStage, GX_TEXMAP_NULL, GX_TEXCOORD_NULL, GX_COLOR0A0);
 +            GXSetTevOrder(tevStage, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
-@@ -1432 +1581 @@
+@@ -1581 +1686 @@ void Hu3DTevStageTexSet(HU3D_DRAW_OBJ *drawObj, HSF_MATERIAL *matP)
 -            GXSetTevOrder(tevStage, GX_TEXMAP_NULL, GX_TEXCOORD_NULL, GX_COLOR0A0);
 +            GXSetTevOrder(tevStage, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
-@@ -1836 +1985,6 @@
--    GXInitTexObj(&texObj, Hu3DShadow->buf, Hu3DShadow->size, Hu3DShadow->size, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+@@ -2033,4 +2138,7 @@ static void SetShadowTex(void)
+-    GXInitTexObj(&texObj, Hu3DShadow->buf, Hu3DShadow->size, Hu3DShadow->size, GX_TF_I8, GX_CLAMP,
+-                 GX_CLAMP, GX_FALSE);
+-    GXInitTexObjLOD(&texObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE,
+-                    GX_ANISO_1);
 +    /* The texObj's claimed dims track the scaled copy DESTINATION
 +     * (mp6_shadow_effective_size()), matching what Hu3DShadowExec's
 +     * GXSetTexCopyDst resolved into Hu3DShadow->buf. Identity at the
 +     * native setting. */
 +    s32 effSize = mp6_shadow_latched_size(Hu3DShadow->buf, Hu3DShadow->size); /* create-time size, not live config */
 +    GXInitTexObj(&texObj, Hu3DShadow->buf, (u16)effSize, (u16)effSize, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
-@@ -1904 +2059 @@
++    GXInitTexObjLOD(&texObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
+@@ -2106 +2214 @@ static void FaceDrawShadow(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
 -                GXSetArray(GX_VA_POS, objPtr->mesh.vertex->data, sizeof(HuVecF));
 +                GXSetArray(GX_VA_POS, mp6_ground_vertices(modelP, objPtr), sizeof(HuVecF));
-@@ -1936 +2091 @@
+@@ -2140 +2248 @@ static void FaceDrawShadow(HU3D_DRAW_OBJ *drawObj, HSF_FACE *face)
 -                GXSetArray(GX_VA_POS, objPtr->mesh.vertex->data, sizeof(HuVecF));
 +                GXSetArray(GX_VA_POS, mp6_ground_vertices(modelP, objPtr), sizeof(HuVecF));
-@@ -1995,0 +2150,7 @@
-+    }
-+    if (mp6ObjCensusActive()) { /* object census: name the texture each draw binds */
+@@ -2206,0 +2315,7 @@ static void LoadTexture(HU3D_MODEL *modelP, HSF_BITMAP *bmpPtr, HSF_ATTRIBUTE *a
++    if (mp6_draw_census_obj_active()) { /* object census: name the texture each draw binds */
 +        printf("[CENSUS-OBJ]    LoadTexture bmp=%s data=%p fmt=%d %dx%d texId=%d attr=%s tint=(%d,%d,%d,%d)\n",
 +               bmpPtr->name ? bmpPtr->name : "(null)", (void *)bmpPtr->data, bmpPtr->dataFmt,
 +               bmpPtr->sizeX, bmpPtr->sizeY, texId, attrP->name ? attrP->name : "(null)",
 +               bmpPtr->tint.r, bmpPtr->tint.g, bmpPtr->tint.b, bmpPtr->tint.a);
 +        fflush(stdout);
-@@ -2124,0 +2286,5 @@
-+            if (mp6ObjCensusActive()) { /* object census: whole subtree pruned here */
++    }
+@@ -2347,0 +2463,5 @@ static void objNull(HU3D_MODEL *modelP, HSF_OBJECT *objPtr)
++            if (mp6_draw_census_obj_active()) { /* object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
-@@ -2174,0 +2341,5 @@
-+            if (mp6ObjCensusActive()) { /* object census: whole subtree pruned here */
+@@ -2399,0 +2520,5 @@ static void objRoot(HU3D_MODEL *modelP, HSF_OBJECT *objPtr)
++            if (mp6_draw_census_obj_active()) { /* object census: whole subtree pruned here */
 +                printf("[CENSUS-OBJ]  node %s -> skip:zero-scale (subtree pruned, childNum=%d)\n",
 +                       objPtr->name ? objPtr->name : "(null)", objPtr->mesh.childNum);
 +                fflush(stdout);
 +            }
-@@ -2386,0 +2558,5 @@
+@@ -2619,0 +2745,5 @@ void Hu3DDrawPost(void)
 +            /* Unlocked FPS: re-install the identity reserved for this draw
 +             * object at PUSH time. DrawObjNum[] is the depth-sorted emission
 +             * order; DrawObjNum[drawObjNo] is the stable push slot, which is
 +             * what the reservation was keyed by. */
 +            mp6_fi_capture_defer_begin(DrawObjNum[drawObjNo]);
-@@ -2387,0 +2564,8 @@
-+                if (mp6ObjCensusActive()) { /* object census: the hook-func (particle) draws -- the one class the object walk above can never enter, because a hook-func model has no scene graph to walk */
+@@ -2620,0 +2751,8 @@ void Hu3DDrawPost(void)
++                if (mp6_draw_census_obj_active()) { /* object census: the hook-func (particle) draws -- the one class the object walk above can never enter, because a hook-func model has no scene graph to walk */
 +                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d HOOKFUNC hook=%p z=%.1f mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
 +                           drawObjNo, (int)(drawObj->model - Hu3DData), (void *)drawObj->model->hookFunc, drawObj->z,
 +                           drawObj->matrix[0][0], drawObj->matrix[0][1], drawObj->matrix[0][2], drawObj->matrix[0][3],
@@ -239,18 +227,21 @@
 +                           drawObj->matrix[2][0], drawObj->matrix[2][1], drawObj->matrix[2][2], drawObj->matrix[2][3]);
 +                    fflush(stdout);
 +                }
-@@ -2399,0 +2584,6 @@
-+                if (mp6ObjCensusActive()) { /* object census: deferred z-sorted draws */
+@@ -2632,0 +2771,6 @@ void Hu3DDrawPost(void)
++                if (mp6_draw_census_obj_active()) { /* object census: deferred z-sorted draws */
 +                    printf("[CENSUS-OBJ]   PostDraw #%d model=%d obj=%s z=%.1f\n",
 +                           drawObjNo, (int)(drawObj->model - Hu3DData),
 +                           drawObj->object->name ? drawObj->object->name : "(null)", drawObj->z);
 +                    fflush(stdout);
 +                }
-@@ -2488,0 +2679,2 @@
+@@ -2634,0 +2779,2 @@ void Hu3DDrawPost(void)
++                mp6_fi_capture_object_matrix((int)(drawObj->model-Hu3DData),
++                    mp6_fi_object_index((int)(drawObj->model-Hu3DData),drawObj->object));
+@@ -2723,0 +2870,2 @@ void Hu3DDrawPost(void)
 +            /* Unlocked FPS: close this deferred draw object's bracket. */
 +            mp6_fi_capture_model_end();
-@@ -2507,0 +2700,10 @@
-+    if (mp6ObjCensusActive()) { /* object census (matrix row: the applied wheel rotation) */
+@@ -2743,0 +2892,10 @@ static void ObjDraw(HU3D_DRAW_OBJ *drawObj)
++    if (mp6_draw_census_obj_active()) { /* object census (matrix row: the applied wheel rotation) */
 +        printf("[CENSUS-OBJ]   ObjDraw model=%d obj=%s faceCount=%d mtxR0=(%.3f,%.3f,%.3f,%.1f) mtxR1=(%.3f,%.3f,%.3f,%.1f) mtxR2=(%.3f,%.3f,%.3f,%.1f)\n",
 +               (int)(drawObj->model - Hu3DData),
 +               drawObj->object->name ? drawObj->object->name : "(null)",
@@ -260,127 +251,12 @@
 +               drawObj->matrix[2][0], drawObj->matrix[2][1], drawObj->matrix[2][2], drawObj->matrix[2][3]);
 +        fflush(stdout);
 +    }
-@@ -2693,0 +2896,119 @@
-+    if (mp6DlDumpEnv() && mp6DlDumpEnv()[0] == '*') { /* sweep mode: one line per built object */
-+        HSF_FACE *fp = faceBuf->data;
-+        HuVecF *vtx = objPtr->mesh.vertex ? (HuVecF *)objPtr->mesh.vertex->data : NULL;
-+        s32 vtxN = objPtr->mesh.vertex ? objPtr->mesh.vertex->count : 0;
-+        s32 stN = objPtr->mesh.st ? objPtr->mesh.st->count : 0;
-+        s32 fi, k, badV = 0, badS = 0;
-+        float mn = 1e30f, mx = -1e30f;
-+        for (fi = 0; fi < vtxN; fi++) {
-+            float ax = vtx[fi].x < 0 ? -vtx[fi].x : vtx[fi].x;
-+            float ay = vtx[fi].y < 0 ? -vtx[fi].y : vtx[fi].y;
-+            float az = vtx[fi].z < 0 ? -vtx[fi].z : vtx[fi].z;
-+            float m = ax > ay ? ax : ay; if (az > m) m = az;
-+            if (m < mn) mn = m; if (m > mx) mx = m;
-+        }
-+        for (fi = 0; fi < faceBuf->count; fi++) {
-+            HSF_FACE *f = &fp[fi];
-+            s32 nIdx = ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_QUAD) ? 4 :
-+                       ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRI) ? 3 : 0;
-+            for (k = 0; k < nIdx; k++) {
-+                if (f->index[k].vertex < 0 || f->index[k].vertex >= vtxN) badV++;
-+                if (stN > 0 && (f->index[k].st < -1 || f->index[k].st >= stN)) badS++;
-+            }
-+            if ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRISTRIP) {
-+                HSF_FACE_INDEX *sd = f->strip.data;
-+                u32 sc = f->strip.count, m2;
-+                for (m2 = 0; m2 < 3; m2++) {
-+                    if (f->strip.index[m2].vertex < 0 || f->strip.index[m2].vertex >= vtxN) badV++;
-+                }
-+                for (m2 = 0; sd && m2 < sc; m2++) {
-+                    if (sd[m2].vertex < 0 || sd[m2].vertex >= vtxN) badV++;
-+                    if (stN > 0 && (sd[m2].st < -1 || sd[m2].st >= stN)) badS++;
-+                }
-+            }
-+        }
-+        printf("[DL-SWEEP] obj=%s faces=%d vtxN=%d dl=%d/%d badV=%d badS=%d vmag=[%g..%g]%s\n",
-+               objPtr->name ? objPtr->name : "(null)", faceBuf->count, vtxN,
-+               (int)totalSize, (int)DLTotalNum, (int)badV, (int)badS, mn, mx,
-+               ((int)totalSize > (int)DLTotalNum || badV || badS) ? "  <-- ANOMALY" : "");
-+        fflush(stdout);
-+    }
-+    if (mp6DlDumpWant(objPtr->name)) { /* DL/vertex ground-truth dump -- see mp6DlDumpWant above */
-+        char path[128];
-+        FILE *df;
-+        snprintf(path, sizeof(path), "build/dldump_%s.txt", objPtr->name);
-+        df = fopen(path, "w");
-+        if (df) {
-+            HSF_FACE *fp = faceBuf->data;
-+            HuVecF *vtx = objPtr->mesh.vertex ? (HuVecF *)objPtr->mesh.vertex->data : NULL;
-+            s32 vtxN = objPtr->mesh.vertex ? objPtr->mesh.vertex->count : 0;
-+            HuVec2f *stp = objPtr->mesh.st ? (HuVec2f *)objPtr->mesh.st->data : NULL;
-+            s32 stN = objPtr->mesh.st ? objPtr->mesh.st->count : 0;
-+            s32 nrmN = objPtr->mesh.normal ? objPtr->mesh.normal->count : 0;
-+            s32 colN = objPtr->mesh.color ? objPtr->mesh.color->count : 0;
-+            s32 fi, k, badV = 0, badS = 0;
-+            float mn = 1e30f, mx = -1e30f;
-+            const u8 *dl = (const u8 *)DLBufStartP;
-+            fprintf(df, "obj=%s faces=%d vtxN=%d stN=%d nrmN=%d colN=%d dlSize=%d dlCap=%d batches=%d\n",
-+                    objPtr->name, faceBuf->count, vtxN, stN, nrmN, colN, (int)totalSize, (int)DLTotalNum, (int)matChgCnt);
-+            for (fi = 0; fi < vtxN; fi++) {
-+                float ax = vtx[fi].x < 0 ? -vtx[fi].x : vtx[fi].x;
-+                float ay = vtx[fi].y < 0 ? -vtx[fi].y : vtx[fi].y;
-+                float az = vtx[fi].z < 0 ? -vtx[fi].z : vtx[fi].z;
-+                float m = ax > ay ? ax : ay; if (az > m) m = az;
-+                if (m < mn) mn = m; if (m > mx) mx = m;
-+            }
-+            fprintf(df, "vtx magnitude min=%g max=%g\n", mn, mx);
-+            for (fi = 0; fi < vtxN && fi < 8; fi++) {
-+                fprintf(df, "  vtx[%d]=(%g, %g, %g)\n", fi, vtx[fi].x, vtx[fi].y, vtx[fi].z);
-+            }
-+            for (fi = 0; fi < stN && fi < 8; fi++) {
-+                fprintf(df, "  st[%d]=(%g, %g)\n", fi, stp[fi].x, stp[fi].y);
-+            }
-+            for (fi = 0; fi < faceBuf->count; fi++) {
-+                HSF_FACE *f = &fp[fi];
-+                s32 nIdx = ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_QUAD) ? 4 :
-+                           ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRI) ? 3 : 0;
-+                for (k = 0; k < nIdx; k++) {
-+                    if (f->index[k].vertex < 0 || f->index[k].vertex >= vtxN) badV++;
-+                    if (stN > 0 && (f->index[k].st < -1 || f->index[k].st >= stN)) badS++;
-+                }
-+                if (fi < 24) {
-+                    fprintf(df, "face[%d] type=%04x mat=%d", fi, (unsigned)f->typeSrc, f->mat & 0xFFF);
-+                    if ((f->typeSrc & HSF_FACE_MASK) == HSF_FACE_TRISTRIP) {
-+                        u32 m2;
-+                        for (m2 = 0; m2 < 3; m2++) {
-+                            fprintf(df, " (v=%d n=%d c=%d st=%d)", f->strip.index[m2].vertex,
-+                                    f->strip.index[m2].normal, f->strip.index[m2].color, f->strip.index[m2].st);
-+                        }
-+                        fprintf(df, " STRIP count=%u:", (unsigned)f->strip.count);
-+                        for (m2 = 0; f->strip.data && m2 < f->strip.count && m2 < 8; m2++) {
-+                            fprintf(df, " (v=%d n=%d c=%d st=%d)", f->strip.data[m2].vertex,
-+                                    f->strip.data[m2].normal, f->strip.data[m2].color, f->strip.data[m2].st);
-+                        }
-+                    } else {
-+                        for (k = 0; k < (nIdx ? nIdx : 3); k++) {
-+                            fprintf(df, " (v=%d n=%d c=%d st=%d)", f->index[k].vertex,
-+                                    f->index[k].normal, f->index[k].color, f->index[k].st);
-+                        }
-+                    }
-+                    {
-+                        HSF_MATERIAL *fm = &objPtr->mesh.material[f->mat & 0xFFF];
-+                        fprintf(df, " | mat vtxMode=%d attrNum=%d flags=%08x pass=%d\n",
-+                                fm->vtxMode, (int)fm->attrNum, (unsigned)fm->flags, fm->pass);
-+                    }
-+                }
-+            }
-+            fprintf(df, "out-of-range indices: vertex=%d st=%d (over %d faces)\n", (int)badV, (int)badS, faceBuf->count);
-+            for (fi = 0; fi < matChgCnt && fi < 8; fi++) {
-+                fprintf(df, "batch[%d] dlOfs=%u flags=%x\n", fi, (unsigned)DrawData[fi].dlOfs, (unsigned)DrawData[fi].flags);
-+            }
-+            for (fi = 0; fi < (s32)totalSize && fi < 1024; fi++) {
-+                fprintf(df, "%02x%s", dl[fi], ((fi & 15) == 15) ? "\n" : " ");
-+            }
-+            fprintf(df, "\n");
-+            fclose(df);
-+            printf("[DL-DUMP] wrote %s (faces=%d dlSize=%d)\n", path, faceBuf->count, (int)totalSize);
-+            fflush(stdout);
-+        }
-+    }
-@@ -2730 +3051,9 @@
+@@ -2745,0 +2904,2 @@ static void ObjDraw(HU3D_DRAW_OBJ *drawObj)
++    mp6_fi_capture_object_matrix((int)(drawObj->model-Hu3DData),
++        mp6_fi_object_index((int)(drawObj->model-Hu3DData),drawObj->object));
+@@ -2933,0 +3094 @@ static void MDObjMesh(HSF_DATA *hsf, HSF_OBJECT *objPtr)
++    mp6_hsf_dl_dump(objPtr, faceBuf, DLBufStartP, totalSize, DLTotalNum, DrawData, matChgCnt); /* MP6_DL_DUMP */
+@@ -2974 +3135,9 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
 -        DrawData[drawCnt].dlOfs = (u32) DLBufP - (u32) DLBufStartP;
 +        {
 +            uintptr_t current = (uintptr_t)DLBufP;
@@ -391,7 +267,7 @@
 +            }
 +            DrawData[drawCnt].dlOfs = (s32)(current - start);
 +        }
-@@ -2834,0 +3164,36 @@
+@@ -3078,0 +3248,36 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
 +                /* Real, unpatched original decomp gap, same class as
 +                 * game/hsfman.c's Hu3DZClear and game/sprput.c's
 +                 * HuSpr3DDisp: this GXBegin(GX_TRIANGLES, ...,
@@ -428,29 +304,36 @@
 +                 * necessarily-coarser, wrong-buffer fallback to eventually
 +                 * mis-close. */
 +                GXEnd();
-@@ -2904,0 +3270,5 @@
+@@ -3150,0 +3356,5 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
 +                /* Same class and same fix as the HSF_FACE_TRI case above
 +                 * (this function's own comment there has the full
 +                 * root-cause story) -- GXQUADS' own vertex loop always
 +                 * emits exactly faceNumBuf[drawCnt] vertices too. */
 +                GXEnd();
-@@ -2975,0 +3346,6 @@
+@@ -3223,0 +3434,6 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
 +                /* Same class and same fix as the HSF_FACE_TRI case above
 +                 * (this function's own comment there has the full
 +                 * root-cause story) -- the initial 3 vertices plus this
 +                 * strip loop always emit exactly faceNumBuf[drawCnt]
 +                 * vertices in total too. */
 +                GXEnd();
-@@ -2993 +3369 @@
+@@ -3241,3 +3457 @@ static void MDFaceDraw(HSF_OBJECT *objPtr, HSF_FACE *face)
+-/* Emits an indexed vertex normal with an edge-based tangent and bitangent for GX NBT data;
+-* saves the tangent and bitangent for subsequent MakeNBT calls. */
 -static s32 MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
 +static void MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
-@@ -3028 +3404 @@
+@@ -3278,3 +3492 @@ static s32 MakeCalcNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 start
+-/* Emits the selected vertex normal with MakeCalcNBT's saved tangent and bitangent while
+-* MDFaceDraw writes GX commands; startVtx is unused. */
 -static s32 MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
 +static void MakeNBT(HSF_OBJECT *objPtr, HSF_FACE *face, s16 endVtx, s16 startVtx) {
-@@ -3059 +3435 @@
+@@ -3313,3 +3525 @@ static void MDFaceCnt(HSF_OBJECT *objPtr, HSF_FACE *face) {
+-    /* The mask applies to the comparison result, so high face-type bits can start a new group
+-    * in this counting pass even when the low three bits match. */
 -    if(matP != materialBak || (polyTypeBak != face->type & 7) || (face->type & 7) == 4) {
 +    if(matP != materialBak || polyTypeBak != (face->type & 7) || (face->type & 7) == 4) {
-@@ -3438,0 +3815,26 @@
+@@ -3714 +3924,26 @@ void PGObjReplica(HU3D_MODEL *model, HSF_OBJECT *object)
+-/* Called while copying a model; duplicates object records and remaps tree pointers. */
 +static HSF_OBJECT *mp6_hsf_duplicate_remap(const HSF_DATA *hsf,
 +                                            HSF_OBJECT *objectCopy,
 +                                            const HSF_OBJECT *source)
@@ -477,7 +360,7 @@
 +    return (HSF_OBJECT *)((u8 *)objectCopy + delta);
 +}
 +
-@@ -3447 +3849,11 @@
+@@ -3723 +3958,11 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
 -    objPtr = HuMemDirectMallocNum(HEAP_MODEL, hsf->objectNum * sizeof(HSF_OBJECT), mallocNo);
 +    if(hsf == NULL || hsf->object == NULL || hsf->objectNum <= 0
 +            || (size_t)hsf->objectNum > (size_t)INT32_MAX / sizeof(HSF_OBJECT)) {
@@ -490,13 +373,14 @@
 +        OSReport("[FATAL] HSF object duplicate allocation failed\n");
 +        _Exit(EXIT_FAILURE);
 +    }
-@@ -3455 +3867 @@
--                objReplicaP->mesh.replica = (HSF_OBJECT*) ((u8 *) objBuf + ((u32)objReplicaP->mesh.replica - (u32)hsf->object));
+@@ -3731,3 +3976 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-                objReplicaP->mesh.replica =
+-                    (HSF_OBJECT *) ((u8 *) objBuf +
+-                                    ((u32) objReplicaP->mesh.replica - (u32) hsf->object));
 +                objReplicaP->mesh.replica = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.replica);
-@@ -3458,3 +3870,12 @@
--                objPtr->mesh.parent = (HSF_OBJECT*) ((u8 *)objBuf + ((u32)srcObj->mesh.parent - (u32)hsf->object));
--            }
--            objPtr->mesh.child = HuMemDirectMallocNum(HEAP_MODEL, srcObj->mesh.childNum*sizeof(HSF_OBJECT *), mallocNo);
+@@ -3736,2 +3979,11 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-                objPtr->mesh.parent = (HSF_OBJECT *) ((u8 *) objBuf + ((u32) srcObj->mesh.parent -
+-                                                                       (u32) hsf->object));
 +                objPtr->mesh.parent = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.parent);
 +            }
 +            if(srcObj->mesh.childNum != 0) {
@@ -508,17 +392,25 @@
 +                }
 +            } else {
 +                objPtr->mesh.child = NULL;
-+            }
-@@ -3462,0 +3884,4 @@
+@@ -3739,2 +3990,0 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-            objPtr->mesh.child = HuMemDirectMallocNum(
+-                HEAP_MODEL, srcObj->mesh.childNum * sizeof(HSF_OBJECT *), mallocNo);
+@@ -3742,2 +3992,5 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-                objPtr->constData =
+-                    HuMemDirectMallocNum(HEAP_MODEL, sizeof(HSF_CONSTDATA), mallocNo);
++                objPtr->constData = HuMemDirectMallocNum(HEAP_MODEL, sizeof(HSF_CONSTDATA), mallocNo);
 +                if(objPtr->constData == NULL) {
 +                    OSReport("[FATAL] HSF duplicate const-data allocation failed\n");
 +                    _Exit(EXIT_FAILURE);
 +                }
-@@ -3466 +3891 @@
--                objPtr->mesh.child[j] = (HSF_OBJECT*) ((u8 *)objBuf + ((u32)srcObj->mesh.child[j] - (u32)hsf->object));
+@@ -3747,3 +4000 @@ HSF_OBJECT *Hu3DObjDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-                objPtr->mesh.child[j] =
+-                    (HSF_OBJECT *) ((u8 *) objBuf +
+-                                    ((u32) srcObj->mesh.child[j] - (u32) hsf->object));
 +                objPtr->mesh.child[j] = mp6_hsf_duplicate_remap(hsf, objBuf, srcObj->mesh.child[j]);
-@@ -3495 +3920,20 @@
--            objPtr->mesh.attribute = (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
+@@ -3779,2 +4030,20 @@ HSF_ATTRIBUTE *Hu3DAttrDuplicate(HSF_DATA *hsf, u32 mallocNo)
+-            objPtr->mesh.attribute =
+-                (HSF_ATTRIBUTE *) (attrBuf + (objPtr->mesh.attribute - hsf->attribute));
 +            /* 64-bit/checked-build portability fix, NULL-in-pointer-rebase
 +             * class: a mesh with no attributes has mesh.attribute == NULL
 +             * -- BY DESIGN, on real hardware too (ObjectLoad's own -1 "no

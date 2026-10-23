@@ -1,0 +1,234 @@
+--- a/src/REL/m649Dll/camera.c
++++ b/src/REL/m649Dll/camera.c
+@@ -72,19 +72,7 @@
+-#undef lbl_1_bss_1B8
+-
+-#undef fn_1_4858
+-
+-#undef lbl_1_bss_78
+-
+-#undef lbl_1_bss_1B8
+-
+-#undef fn_1_48DC
+-
+-typedef void (*CameraCallback)(OMOBJ *, unsigned int, int);
+-
+-typedef struct M649LightWork_s {
+-    s16 light; /* Renderer light handle, or -1 before creation. */
+-    s32 callbackValue; /* Optional object-update callback address, read by fn_1_15A8. */
+-    Vec position, target, direction; /* World-space light origin, target, and stored light
+-                                      * direction. */
+-    GXColor color; /* RGBA color sent to the renderer. */
+-} M649LightWork;
++
++
++
++
++
++
++
+@@ -107,47 +95,10 @@
+-typedef struct M649AudioConfigView_s {
+-    u32 cameras; /* Camera bits to which these sound settings apply. */
+-    s32 panMin, panMax; /* Output pan range for screen X from 0 to 576. */
+-    s32 volumeMin, volumeMiddle, volumeMax; /* Output volume at far, middle, and near distances. */
+-    float distanceFar, distanceMiddle, distanceNear; /* Camera-space depth breakpoints. */
+-} M649AudioConfigView;
+-
+-typedef struct M649AudioWorkView_s {
+-    M649AudioConfigView *config; /* Zero-camera-terminated sound settings. */
+-} M649AudioWorkView;
+-
+-typedef struct M649FogParam_s {
+-    s32 layer; /* Renderer layer using this fog entry; -1 terminates the table. */
+-    u32 cameras; /* Camera mask selecting the perspective used for this fog layer. */
+-    GXFogType type; /* Renderer fog mode. */
+-    float start, end; /* Fog start and end distances. */
+-    GXColor color; /* RGBA fog color. */
+-} M649FogParam;
+-
+-typedef struct M649FogWork_s {
+-    M649FogParam *parameters; /* Fog settings terminated by a layer value of -1. */
+-    s32 callbackValue; /* Optional object-update callback address; unused by the layer hook. */
+-    float factor; /* Scales the configured range from start toward end. */
+-} M649FogWork;
+-
+-typedef struct M649AudioEntry_s {
+-    s32 handle, effect; /* Playing sound handle and the effect used to start it. */
+-    u32 cameras; /* Camera mask used for position-based updates. */
+-    s32 updatePan, updateVolume; /* Nonzero when the corresponding value is refreshed. */
+-    Vec *position; /* Live world position used by each audio-object update. */
+-} M649AudioEntry;
+-
+-typedef struct M649AudioWork_s {
+-    void *config; /* Audio settings table selected at object creation. */
+-    s32 callbackValue; /* Optional callback address invoked after the sound updates. */
+-    M649AudioEntry entries[64]; /* Active sound records; handle -1 marks a free slot. */
+-} M649AudioWork;
+-
+-extern OMOBJ *lbl_1_bss_308;
+-
+-extern OMOBJ *lbl_1_bss_2F8;
+-
+-extern OMOBJ *lbl_1_bss_2FC;
+-
+-extern OMOBJ *lbl_1_bss_300;
+-
+-extern OMOBJ *lbl_1_bss_304;
++
++
++
++
++
++
++
++
++
++
+@@ -163,4 +114 @@
+-extern OMOBJ *lbl_1_bss_2FC, *lbl_1_bss_2F8;
+-
+-void fn_1_4788(unsigned int cameraMask, int effect, int handle, HuVecF *position, int panEnabled,
+-               int volumeEnabled);
++
+@@ -172 +119,0 @@
+-extern OMOBJ *lbl_1_bss_2FC, *lbl_1_bss_304;
+@@ -176,5 +123,2 @@
+-extern GXColor lbl_1_data_C4;
+-
+-extern Vec lbl_1_data_B8;
+-
+-void fn_1_2590(s32 camera, Vec *direction, Vec *target, float fov, float radius);
++
++
+@@ -194,3 +138 @@
+-s32 fn_1_3630(u32 cameras, Vec *position);
+-
+-s32 fn_1_3850(u32 cameras, Vec *position);
++
+@@ -206,3 +148 @@
+-extern s32 lbl_1_bss_1B8[80];
+-
+-extern s32 lbl_1_bss_78[80];
++
+@@ -224 +164 @@
+-    M649AudioWorkView *work;
++    M649AudioWork *work;
+@@ -259 +199 @@
+-    M649AudioWorkView *audio;
++    M649AudioWork *audio;
+@@ -304 +244 @@
+-extern inline float tanf(float x) { return (float)tan(x); }
++static inline float M649Tanf(float x) { return (float)tan(x); }
+@@ -368 +308 @@
+-    M620LightData *light = omObjGetDataAs(lbl_1_bss_304, M620LightData);
++    M649LightWork *light = omObjGetDataAs(lbl_1_bss_304, M649LightWork);
+@@ -377,5 +317,5 @@
+-    M620LightData *light = omObjGetDataAs(lbl_1_bss_304, M620LightData);
+-
+-    light->lightId = Hu3DGLightCreateV(&light->position, &light->direction, &light->color);
+-    Hu3DGLightInfinitytSet(light->lightId);
+-    Hu3DGLightStaticSet(light->lightId, 1);
++    M649LightWork *light = omObjGetDataAs(lbl_1_bss_304, M649LightWork);
++
++    light->light = Hu3DGLightCreateV(&light->position, &light->direction, &light->color);
++    Hu3DGLightInfinitytSet(light->light);
++    Hu3DGLightStaticSet(light->light, 1);
+@@ -410 +350 @@
+-    M620LightData *light=omObjGetDataAs(lbl_1_bss_304,M620LightData);
++    M649LightWork *light=omObjGetDataAs(lbl_1_bss_304,M649LightWork);
+@@ -416 +356 @@
+-    M620LightData *light=omObjGetDataAs(lbl_1_bss_304,M620LightData);
++    M649LightWork *light=omObjGetDataAs(lbl_1_bss_304,M649LightWork);
+@@ -418 +358 @@
+-    Hu3DGLightPosSetV(light->lightId,&light->position,&light->direction);
++    Hu3DGLightPosSetV(light->light,&light->position,&light->direction);
+@@ -423 +363 @@
+-    M620LightData *light=omObjGetDataAs(lbl_1_bss_304,M620LightData);
++    M649LightWork *light=omObjGetDataAs(lbl_1_bss_304,M649LightWork);
+@@ -425 +365 @@
+-    Hu3DGLightPosSetV(light->lightId,&light->position,&light->direction);
++    Hu3DGLightPosSetV(light->light,&light->position,&light->direction);
+@@ -430 +370 @@
+-    M620LightData *light=omObjGetDataAs(lbl_1_bss_304,M620LightData);
++    M649LightWork *light=omObjGetDataAs(lbl_1_bss_304,M649LightWork);
+@@ -436 +376 @@
+-    M620LightData *light=omObjGetDataAs(lbl_1_bss_304,M620LightData);
++    M649LightWork *light=omObjGetDataAs(lbl_1_bss_304,M649LightWork);
+@@ -441 +381 @@
+-    Hu3DGLightColorSet(light->lightId,red,green,blue,alpha);
++    Hu3DGLightColorSet(light->light,red,green,blue,alpha);
+@@ -446 +386 @@
+-void fn_1_18BC(OMOBJMAN *manager, void *parameters)
++void fn_1_18BC(OMOBJMAN *manager, M649FogParam *parameters)
+@@ -456 +396 @@
+-    work->parameters = ((M649FogParam *)parameters);
++    work->parameters = parameters;
+@@ -458,2 +398,2 @@
+-    for (layerIndex = 0; ((M649FogParam *)parameters)->layer != -1;
+-         layerIndex++, ((M649FogParam *)parameters)++) {
++    for (layerIndex = 0; parameters->layer != -1;
++         layerIndex++, parameters++) {
+@@ -461,5 +401,5 @@
+-            Hu3DFogSet(((M649FogParam *) parameters)->start, ((M649FogParam *) parameters)->end,
+-                       ((M649FogParam *) parameters)->color.r,
+-                       ((M649FogParam *) parameters)->color.g,
+-                       ((M649FogParam *) parameters)->color.b);
+-        Hu3DLayerHookSet(((M649FogParam *)parameters)->layer, fn_1_1A14);
++            Hu3DFogSet(parameters->start, parameters->end,
++                       parameters->color.r,
++                       parameters->color.g,
++                       parameters->color.b);
++        Hu3DLayerHookSet(parameters->layer, fn_1_1A14);
+@@ -472 +412 @@
+-    M620LightData *fogState = omObjGetDataAs(lbl_1_bss_300, M620LightData);
++    M649FogWork *fogState = omObjGetDataAs(lbl_1_bss_300, M649FogWork);
+@@ -499,2 +439,2 @@
+-void fn_1_1B08(s32 callbackValue) {
+-    s32 *fogState;
++void fn_1_1B08(OMOBJ_FUNC callback) {
++    M649FogWork *fogState;
+@@ -504 +444 @@
+-        fogState[1] = callbackValue;
++        fogState->callback = callback;
+@@ -608 +548,2 @@
+-                                 (u32) entry->scissorWidth, (u32) entry->scissorHeight);
++                                 entry->scissorWidth > 0.0f ? (u32) entry->scissorWidth : 0,
++                                 entry->scissorHeight > 0.0f ? (u32) entry->scissorHeight : 0);
+@@ -652 +593 @@
+-    distance = radius / tanf(radians);
++    distance = radius / M649Tanf(radians);
+@@ -681 +622 @@
+-extern void fn_1_2780(CameraCallback callback) {
++extern void fn_1_2780(M649CameraCallback callback) {
+@@ -904 +845 @@
+-void fn_1_3250(HUPROCESS *objectManager, u32 audioConfig) {
++void fn_1_3250(HUPROCESS *objectManager, M649AudioConfigView *audioConfig) {
+@@ -906 +847 @@
+-    u32 *objectState;
++    M649AudioWork *objectState;
+@@ -910 +851 @@
+-    objectState = (u32 *)HuMemDirectMallocNum(HEAP_HEAP, 1544, HU_MEMNUM_OVL);
++    objectState = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*objectState), HU_MEMNUM_OVL);
+@@ -912,2 +853,2 @@
+-    memset(objectState, 0, 1544);
+-    *objectState = audioConfig;
++    memset(objectState, 0, sizeof(*objectState));
++    objectState->config = audioConfig;
+@@ -919 +860 @@
+-    M620ObjectState *state = omObjGetDataAs(lbl_1_bss_2F8, M620ObjectState);
++    M649AudioWork *state = omObjGetDataAs(lbl_1_bss_2F8, M649AudioWork);
+@@ -963,2 +904,2 @@
+-void fn_1_347C(s32 callbackValue) {
+-    s32 *audioState;
++void fn_1_347C(OMOBJ_FUNC callback) {
++    M649AudioWork *audioState;
+@@ -968 +909 @@
+-        audioState[1] = callbackValue;
++        audioState->callback = callback;
+@@ -980 +921 @@
+-    M649AudioWorkView *work;
++    M649AudioWork *work;
+@@ -1027 +968 @@
+-    M649AudioWorkView *audio;
++    M649AudioWork *audio;

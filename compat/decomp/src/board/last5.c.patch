@@ -1,6 +1,6 @@
 --- a/src/board/last5.c
 +++ b/src/board/last5.c
-@@ -38,9 +38,3 @@
+@@ -40,9 +40,3 @@
 -    register __vec2x32float__ xy;
 -    register float z;
 -
@@ -13,6 +13,6 @@
 +    dst->x = src->x;
 +    dst->y = src->y;
 +    dst->z = src->z;
-@@ -66 +60 @@
+@@ -68 +62 @@
 -void mbObjHookReset(int modelId);
 +void mbObjHookReset(s16 modelId);

@@ -49,6 +49,27 @@ void mp6_dvd_close(DVDFileInfo *fileInfo);
  * 0 with a human-readable error otherwise. */
 int mp6_dvd_validate_disc_root(const char *discRoot, char *err, size_t errn);
 
+/* The game is moving to overlay `scene` (its call and its start both
+ * report it): on hosts that prefetch, fetch the files that scene opened
+ * last time ahead of its loads, and record the ones it opens now. A no-op
+ * where reads are local. */
+void mp6_dvd_scene_hint(const char *scene);
+
+/* Overlay `scene` comes after the current one (the instructions screen
+ * knows its minigame): fetch the files it opened last time now, without
+ * recording anything. */
+void mp6_dvd_scene_prefetch(const char *scene);
+
+/* Reads all of disc file `entry` (an FST entry) into dst now; -1 when it
+ * cannot without waiting (on the web: the page has not fetched it yet). */
+int64_t mp6_dvd_read_entry_now(int32_t entry, void *dst, uint32_t length);
+
+/* The caller will read [offset, offset+length) of disc file `path` soon:
+ * fetch it ahead -- through the page on the web, into the OS page cache by
+ * the prefetch worker elsewhere -- so the read does not wait for the disc.
+ * A no-op when disc prefetch is off. */
+void mp6_dvd_prefetch_range(const char *path, u32 offset, u32 length);
+
 /* Launcher helpers (implemented by dvd_files.c). */
 int mp6_dvd_probe_root(char *filesRootOut, size_t n);
 /* Returns 0 only when both complete paths fit and were published together;

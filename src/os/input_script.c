@@ -40,6 +40,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <dolphin/pad.h>
@@ -70,7 +71,7 @@
  * Spec syntax: semicolon-separated steps, e.g.
  * "wait:180;press:start;wait:60;press:a" --
  *   wait:N   -- advance N ticks before the next step.
- *   press:X  -- latch button X (start/a/b/up/down/left/right) for
+ *   press:X  -- latch button X (start/a/b/x/y/z/l/r/up/down/left/right) for
  *               exactly one tick (matching mp6_latch_key_down_event's own
  *               one-tick-then-consumed semantics above -- a script press
  *               is exactly as "instantaneous" as a real key-down event
@@ -185,6 +186,11 @@ static u16 mp6_script_button_from_name(const char *name, size_t len)
     if (len == 5 && strncmp(name, "start", 5) == 0) return PAD_BUTTON_START;
     if (len == 1 && name[0] == 'a') return PAD_BUTTON_A;
     if (len == 1 && name[0] == 'b') return PAD_BUTTON_B;
+    if (len == 1 && name[0] == 'x') return PAD_BUTTON_X;
+    if (len == 1 && name[0] == 'y') return PAD_BUTTON_Y;
+    if (len == 1 && name[0] == 'z') return PAD_TRIGGER_Z;
+    if (len == 1 && name[0] == 'l') return PAD_TRIGGER_L;
+    if (len == 1 && name[0] == 'r') return PAD_TRIGGER_R;
     if (len == 2 && strncmp(name, "up", 2) == 0) return PAD_BUTTON_UP;
     if (len == 4 && strncmp(name, "down", 4) == 0) return PAD_BUTTON_DOWN;
     if (len == 4 && strncmp(name, "left", 4) == 0) return PAD_BUTTON_LEFT;
@@ -435,4 +441,50 @@ void mp6_input_script_stick_get(s8 *stickX, s8 *stickY)
 int mp6_input_script_armed(void)
 {
     return g_scriptStepCount > 0;
+}
+
+/* The script is this run's automation, and these statics are restored with
+ * the rest of the image. A savestate opened with MP6_LOAD_STATE keeps the
+ * loading run's script instead, so the script can drive the game on from the
+ * loaded state: the savestate module copies this out before its commit and
+ * back after. */
+typedef struct {
+    MP6ScriptStep script[MP6_SCRIPT_MAX_STEPS];
+    int stepCount, cursor;
+    u32 waitRemaining, evElapsed, evPeriod, evTimeout;
+    bool active;
+} MP6ScriptLatch;
+
+void *mp6_input_script_latch(void)
+{
+    MP6ScriptLatch *l = (MP6ScriptLatch *)malloc(sizeof(*l));
+    if (l == NULL) return NULL;
+    memcpy(l->script, g_script, sizeof(g_script));
+    l->stepCount = g_scriptStepCount;
+    l->cursor = g_scriptCursor;
+    l->waitRemaining = g_scriptWaitRemaining;
+    l->evElapsed = g_scriptEvElapsed;
+    l->evPeriod = g_scriptEvPeriod;
+    l->evTimeout = g_scriptEvTimeout;
+    l->active = g_scriptActive;
+    return l;
+}
+
+void mp6_input_script_unlatch(void *latch)
+{
+    MP6ScriptLatch *l = (MP6ScriptLatch *)latch;
+    if (l == NULL) return;
+    memcpy(g_script, l->script, sizeof(g_script));
+    g_scriptStepCount = l->stepCount;
+    g_scriptCursor = l->cursor;
+    g_scriptWaitRemaining = l->waitRemaining;
+    g_scriptEvElapsed = l->evElapsed;
+    g_scriptEvPeriod = l->evPeriod;
+    g_scriptEvTimeout = l->evTimeout;
+    g_scriptActive = l->active;
+    /* The restore replaced the event sequence: a wait in progress re-reads
+     * its base from the restored one. */
+    g_scriptEvEntered = false;
+    g_scriptTickStickX = g_scriptTickStickY = 0;
+    free(l);
 }

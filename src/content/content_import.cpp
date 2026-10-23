@@ -147,7 +147,8 @@ bool wanted_file(const char *rel)
     if (strcmp(rel, "opening.bnr") == 0) return true;
     if (strcmp(rel, "sound/MP6_SND.msm") == 0) return true;
     if (strcmp(rel, "sound/MP6_Str.pdt") == 0) return true;
-    return path_has_prefix(rel, "data") || path_has_prefix(rel, "mess") || path_has_prefix(rel, "mic");
+    return path_has_prefix(rel, "data") || path_has_prefix(rel, "mess") ||
+           path_has_prefix(rel, "mic") || path_has_prefix(rel, "movie");
 }
 
 /* =======================================================================
@@ -657,12 +658,12 @@ uint32_t fst_callback(uint32_t index, enum NodNodeKind kind, const char *name,
             fflush(stdout);
             return size; /* child-end index: skip the subtree */
         }
-        /* Prune subtrees we can never want (movie/, dll/, ...) so a full
+        /* Prune subtrees we do not use (dll/, ...) so a full
          * FST walk stays cheap; wanted_file() remains the single filter
          * authority for files. */
         bool interesting = wanted_file(rel.c_str()) || path_has_prefix("data", rel.c_str()) ||
                            path_has_prefix("mess", rel.c_str()) || path_has_prefix("mic", rel.c_str()) ||
-                           path_has_prefix("sound", rel.c_str());
+                           path_has_prefix("sound", rel.c_str()) || path_has_prefix("movie", rel.c_str());
         if (!interesting) {
             return size; /* child-end index: skip the subtree */
         }

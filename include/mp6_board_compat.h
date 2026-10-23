@@ -18,6 +18,14 @@ float __fabsf(float value);
  * their original MSL include guards. */
 void Hu3DModelShadowMapReset(s16 modelId);
 s16 GWPlayerStarGet(s32 playerNo);
+void mbObjectSetup(s32 boardNo, void (*init)(void), void (*close)(void));
+void mbWipeFadeOut(void);
+BOOL mbWipeSpecialCheck(void);
+BOOL mbWipeSpecialStatGet(void);
+void mbWipeDissolveFadeIn(void);
+void mbWipeDissolveFadeOutTime(int durationFrames);
+int mbSNpcMasuGet(void);
+void mbev_Scroll(int playerNo, BOOL mapF);
 
 void mbCapMasuObjInit(void);
 BOOL mbDiceNumStopCheck(int playerNo);

@@ -7,11 +7,31 @@ import unittest
 from unittest import mock
 
 from setup.lib import step_aurora
+from tools import apply_patches
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class WindowsReleaseTests(unittest.TestCase):
+    def test_live_aa_patch_stays_outside_functions_after_full_patch_queue(self):
+        dependency = pathlib.Path(step_aurora.common.AURORA_DIR)
+        if not (dependency / '.git').exists():
+            self.skipTest('requires the pinned Aurora source checkout')
+        path = 'lib/webgpu/gpu.cpp'
+        source = subprocess.check_output(
+            ['git', '-C', str(dependency), 'show',
+             f'{step_aurora.read_aurora_pin()}:{path}'], text=True)
+        for group in ('base', 'windows'):
+            for patch in sorted((ROOT / 'compat/aurora' / group).glob('*.patch')):
+                for section in step_aurora.split_patch_sections(patch.read_text()):
+                    if (section['new'] or section['old']) == path:
+                        source = apply_patches.apply_unified_diff(
+                            source, section['body'], label=str(patch))
+        hook = 'extern "C" void mp6_aurora_set_aa('
+        self.assertEqual(source.count(hook), 1)
+        self.assertGreater(source.index(hook),
+                           source.index('} // namespace aurora::webgpu'))
+
     def profile(self, name):
         script = (
             'import json; from tools import build as b; '

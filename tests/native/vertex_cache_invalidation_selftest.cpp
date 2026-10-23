@@ -30,6 +30,10 @@ static u32 read_u32(const u8* p, bool be) {
 static u16 read_u16(const u8* p, bool be) {
     u16 v; std::memcpy(&v,p,2); return be ? __builtin_bswap16(v) : v;
 }
+static bool g_pipelineConfigDirty = false;
+static void mark_pipeline_state_dirty() { g_pipelineConfigDirty = true; g_gxState.stateDirty = true; }
+static bool g_retainRecording = false;
+static void retain_note_indexed(u32) {}
 static bool copy_xf_data(u16, const u8*, u16, bool) { std::abort(); }
 static void handle_cp(u8,u32,bool) { std::abort(); }
 static void handle_xf(const u8*,u32&,u32,bool) { std::abort(); }

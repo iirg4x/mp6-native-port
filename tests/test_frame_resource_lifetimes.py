@@ -18,7 +18,7 @@ def function(source, name):
 
 class FrameResourceLifetimes(unittest.TestCase):
     def test_actual_frame_and_attachment_lifetimes(self):
-        renderer = ROOT / 'build/android-aurora-source'
+        renderer = ROOT / 'third_party/aurora'
         common = (renderer / 'lib/gfx/common.cpp').read_text()
         with tempfile.TemporaryDirectory(prefix='frame-lifetimes-', dir=ROOT / 'build') as tmp:
             folder = Path(tmp)
@@ -42,13 +42,13 @@ class FrameResourceLifetimes(unittest.TestCase):
     def test_shared_platform_sources_and_call_sites(self):
         for unit in ('include/aurora/gfx.hpp', 'lib/gfx/common.cpp', 'lib/gfx/common.hpp', 'lib/gfx/texture.hpp',
                      'lib/gfx/tex_copy_conv.cpp', 'lib/rmlui/WebGPURenderInterface.cpp'):
-            self.assertEqual((ROOT/'build/android-aurora-source'/unit).read_text(),
-                             (ROOT/'build/aurora-release-source'/unit).read_text(), unit)
+            self.assertEqual((ROOT/'third_party/aurora'/unit).read_text(),
+                             (ROOT/'third_party/aurora'/unit).read_text(), unit)
         # gpu.cpp also contains intentionally different platform presentation policies.
         for name in ('resample_present_bind_group', 'create_copy_bind_group'):
-            self.assertEqual(function((ROOT/'build/android-aurora-source/lib/webgpu/gpu.cpp').read_text(), name),
-                             function((ROOT/'build/aurora-release-source/lib/webgpu/gpu.cpp').read_text(), name))
-        common = (ROOT/'build/android-aurora-source/lib/gfx/common.cpp').read_text()
+            self.assertEqual(function((ROOT/'third_party/aurora/lib/webgpu/gpu.cpp').read_text(), name),
+                             function((ROOT/'third_party/aurora/lib/webgpu/gpu.cpp').read_text(), name))
+        common = (ROOT/'third_party/aurora/lib/gfx/common.cpp').read_text()
         self.assertNotIn('frame.ops', common)
         self.assertIn('static std::atomic_uint32_t g_frameIndex', common)
         self.assertIn('recycle_frame_packet(packet)', function(common, 'end_frame'))
@@ -58,14 +58,14 @@ class FrameResourceLifetimes(unittest.TestCase):
         upload = function(common, 'copy_staging_to_high_water')
         self.assertIn('for (const auto* upload : op.textureUploads)', upload)
         self.assertIn('frame.copied.textureUploadCount = highWater.textureUploadCount', upload)
-        ui = (ROOT/'build/android-aurora-source/lib/rmlui/WebGPURenderInterface.cpp').read_text()
+        ui = (ROOT/'third_party/aurora/lib/rmlui/WebGPURenderInterface.cpp').read_text()
         self.assertIn('gfx::end_color_pass(true)', function(ui, 'EndFrame'))
         self.assertIn('gfx::end_color_pass()', function(ui, 'EndActivePass'))
         ao = (ROOT/'src/gx/ambient_occlusion.cpp').read_text()
         self.assertNotIn('job.depth = job.cleanDepth.CreateView()', ao)
         self.assertNotIn('.CreateBindGroup(', ao)
         self.assertIn('job.cleanDepthView = nullptr', ao)
-        mip = (ROOT/'build/android-aurora-source/lib/gfx/tex_copy_conv.cpp').read_text()
+        mip = (ROOT/'third_party/aurora/lib/gfx/tex_copy_conv.cpp').read_text()
         self.assertIn('if (ref.generatedMipViews.empty())', function(mip, 'generate_mips'))
         self.assertNotIn('.CreateBindGroup(', function(mip, 'snapshot_depth'))
 

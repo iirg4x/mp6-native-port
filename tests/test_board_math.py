@@ -6,8 +6,8 @@ import tempfile
 import unittest
 
 from tools import build
-import test_board_native_abi as native_abi
-from test_board_native_abi import patched
+import tests.test_board_native_abi as native_abi
+from tests.test_board_native_abi import patched
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,8 +71,8 @@ class BoardMath(unittest.TestCase):
         subject = '\n'.join(constants)+'\nstatic float *cosTab;\n'
         subject += '\n\n'.join(portable_function(source, name) for name in names)
         native_abi.BoardNativeABI.compile_run(self, subject, 'board_math_selftest.c')
-        broken = subject.replace('-HU_DISP_CENTERY * (src->y - 1.0f)',
-                                 'HU_DISP_HEIGHT * (src->y - 1.0f)')
+        broken = subject.replace('-HU_DISP_CENTERY * (normPos->y - 1.0f)',
+                                 'HU_DISP_HEIGHT * (normPos->y - 1.0f)')
         self.assertNotEqual(subject, broken)
         native_abi.BoardNativeABI.compile_run(self, broken, 'board_math_selftest.c', expect_success=False)
         broken = subject.replace('mtx[2][3] = (float)tz;', 'mtx[2][3] = (float)ty;')

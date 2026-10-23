@@ -1,25 +1,232 @@
 --- a/src/game/mic.c
 +++ b/src/game/mic.c
-@@ -13,0 +14,2 @@
+@@ -14,0 +15,2 @@
 +#include "game/dvd.h"
 +#include "game/frand.h"
-@@ -45 +47 @@
+@@ -31 +32,0 @@
+-#define MIC_RESPONSE_RECORD_SIZE 96
+@@ -66 +67 @@
 -static void MCExtHandler(void);
 +static void MCExtHandler(s32 chan, s32 result);
-@@ -64,0 +67 @@
+@@ -72,0 +74,2 @@
++static void MCThreadCommand(s32 command);
++static void MCThreadStep(void);
+@@ -77 +80 @@
+-                              u32 callbackData, u32 resultNode);
++                              u32 callbackData, uintptr_t resultNode);
+@@ -88,0 +92 @@
 +int HuMCResponseGet2(void);
-@@ -306 +309 @@
+@@ -141,3 +144,0 @@
+-typedef struct MCResponseData_s {
+-    u32 data[24]; /* One 96-byte microphone response record. */
+-} MCResponseData_s;
+@@ -182 +183 @@
+-static u8 MCUnkResponseData[96];
++static MCResponse_s MCUnkResponseData;
+@@ -184 +185 @@
+-static u8 MCCurResponse[96];
++static MCResponse_s MCCurResponse;
+@@ -224 +225 @@
+-static u8 *MCResponseBuf;
++static MCResponse_s *MCResponseBuf;
+@@ -282 +283,3 @@
+-  MCResponseBuf = (u8 *)(MCContext = 0);
++  MCResponseBuf = NULL;
++
++  MCContext = NULL;
+@@ -302 +305 @@
+-    *(u8 *)((int)&MCSessionTimer + (int)playerIndex) = 0;
++    MCSessionTimer[playerIndex] = 0;
+@@ -319,2 +322 @@
+-    /* Existing response storage causes an immediate return without a defined status value. */
 -    return;
 +    return 0;
-@@ -955,3 +958,5 @@
+@@ -326 +328 @@
+-  MCResponseBuf = HuMemDirectMallocNum(0,24576,MIC_ALLOC_TAG);
++  MCResponseBuf = HuMemDirectMallocNum(0, MIC_RESPONSE_CAPACITY * sizeof(*MCResponseBuf), MIC_ALLOC_TAG);
+@@ -437 +439 @@
+-      OSSendMessage(&MCMessageQueue,(OSMessage)2,1);
++      MCThreadCommand(2);
+@@ -469 +471,2 @@
+-    MCResponseBuf = (u8 *)(MCContext = 0);
++    MCResponseBuf = NULL;
++    MCContext = NULL;
+@@ -623 +626 @@
+-  OSSendMessage(&MCMessageQueue,0,1);
++  MCThreadCommand(0);
+@@ -654 +657 @@
+-      OSSendMessage(&MCMessageQueue,(OSMessage)2,1);
++      MCThreadCommand(2);
+@@ -656 +659 @@
+-      OSSendMessage(&MCMessageQueue,0,1);
++      MCThreadCommand(0);
+@@ -673 +676 @@
+-    if (((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].count) {
++    if (MCResponseBuf[MCResponseLastNo].count) {
+@@ -678 +681 @@
+-    return ((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].word;
++    return MCResponseBuf[MCResponseLastNo].word;
+@@ -686 +689 @@
+-  OSSendMessage(&MCMessageQueue,(OSMessage)2,1);
++  MCThreadCommand(2);
+@@ -692 +695 @@
+-  response = ((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].status;
++  response = MCResponseBuf[MCResponseLastNo].status;
+@@ -699 +702 @@
+-  if (((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].count) {
++  if (MCResponseBuf[MCResponseLastNo].count) {
+@@ -704 +707 @@
+-  return ((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].word;
++  return MCResponseBuf[MCResponseLastNo].word;
+@@ -740 +743 @@
+-  OSSendMessage(&MCMessageQueue,0,1);
++  MCThreadCommand(0);
+@@ -760 +763 @@
+-    if (((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].count) {
++    if (MCResponseBuf[MCResponseLastNo].count) {
+@@ -765 +768 @@
+-    return ((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].word;
++    return MCResponseBuf[MCResponseLastNo].word;
+@@ -774 +777 @@
+-  OSSendMessage(&MCMessageQueue,(OSMessage)2,1);
++  MCThreadCommand(2);
+@@ -776 +779 @@
+-  response = ((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].status;
++  response = MCResponseBuf[MCResponseLastNo].status;
+@@ -786 +789 @@
+-  return ((MCResponse_s *)MCResponseBuf)[MCResponseLastNo].word;
++  return MCResponseBuf[MCResponseLastNo].word;
+@@ -795,2 +798 @@
+-        *(MCResponseData_s *)MCCurResponse =
+-            *(MCResponseData_s *)(MCResponseBuf + (MCResponseLastNo * MIC_RESPONSE_RECORD_SIZE));
++        MCCurResponse = MCResponseBuf[MCResponseLastNo];
+@@ -802,5 +804,5 @@
+-        *(s16 *)&MCCurResponse[0] = -1;
+-        *(u16 *)&MCCurResponse[2] = MIC_SCORE_UNAVAILABLE;
+-        *(s16 *)&MCCurResponse[4] = 0;
+-        *(s32 *)&MCCurResponse[8] = 0;
+-        *(s32 *)&MCCurResponse[12] = -1;
++        MCCurResponse.status = -1;
++        MCCurResponse.score = MIC_SCORE_UNAVAILABLE;
++        MCCurResponse.count = 0;
++        MCCurResponse.result = 0;
++        MCCurResponse.word = -1;
+@@ -809 +811 @@
+-    return (u16 *)MCCurResponse;
++    return (u16 *)&MCCurResponse;
+@@ -970,4 +972,9 @@
+-/* The microphone driver's detach callback marks capture unavailable and stops the speech stream. */
 -void MCExtHandler(void)
 -
 -{
++
++
++/* 80092c34 MCExtHandler */
++
 +static void MCExtHandler(s32 chan, s32 result)
 +
 +{
 +  (void)chan;
 +  (void)result;
-@@ -2363 +2368 @@
--  __src = (void *)HuDvdDataRead(param_1);
-+  __src = HuDvdDataRead((char *)param_1);
+@@ -1403 +1410 @@
+-    response = (MCResponse_s *)(MCResponseBuf + index * MIC_RESPONSE_RECORD_SIZE);
++    response = &MCResponseBuf[index];
+@@ -1445 +1452 @@
+-            latestResponse = (s16 *)(MCResponseBuf + (MCResponseNo - 1) * MIC_RESPONSE_RECORD_SIZE);
++            latestResponse = (s16 *)&MCResponseBuf[MCResponseNo - 1];
+@@ -1463 +1470 @@
+-            OSSendMessage(&MCMessageQueue,(OSMessage)2,1);
++            MCThreadCommand(2);
+@@ -1465 +1472 @@
+-            OSSendMessage(&MCMessageQueue,0,1);
++            MCThreadCommand(0);
+@@ -1742,3 +1749,3 @@
+-  ((MCResponse_s *)MCUnkResponseData)->entry[0].score =
+-      ((MCResponse_s *)MCUnkResponseData)->entry[1].score =
+-      ((MCResponse_s *)MCUnkResponseData)->entry[2].score = 0;
++  MCUnkResponseData.entry[0].score =
++      MCUnkResponseData.entry[1].score =
++      MCUnkResponseData.entry[2].score = 0;
+@@ -1746 +1753 @@
+-    latestResponse = (MCResponse_s *)(MCResponseBuf + scanIndex * MIC_RESPONSE_RECORD_SIZE);
++    latestResponse = &MCResponseBuf[scanIndex];
+@@ -1777 +1784 @@
+-    *(MCResponse_s *)MCUnkResponseData = *latestResponse;
++    MCUnkResponseData = *latestResponse;
+@@ -1806 +1813 @@
+-  savedResponse = (MCResponse_s *)MCUnkResponseData;
++  savedResponse = &MCUnkResponseData;
+@@ -1904 +1911 @@
+-      *(u8 *)((int)&MCSessionTimer + (int)MCSessionCur) = 0;
++      MCSessionTimer[MCSessionCur] = 0;
+@@ -2056,0 +2064,41 @@
++/* MP6 native port: OS threads are not scheduled here, so MCThreadFunc never
++ * runs. Its command loop runs synchronously instead: a command does what the
++ * thread would have done on receiving it (start or stop the engine, so a
++ * caller's following OSSleepThread has nothing left to wait for), and
++ * MCThreadStep is the loop's per-pass body without a new command. */
++static void MCThreadStep(void)
++{
++  s32 micMode;
++
++  if (HuMCSelWinCheck() || (micMode = GwCommon.mic, micMode != 1) || (MCSprStat == 4)) {
++    return;
++  }
++  if ((MicOpenF != 0) && (MCSprStat != 2)) {
++    if (MCSprStat == 1) {
++      MCSprStat = 2;
++    }
++    else {
++      MCSprStat = 3;
++    }
++  }
++  switch (MCSprStat) {
++    case 0:
++      MC_gsapiEngineError = gsapi_EngineStart(MC_gsapiEngine);
++      MCSprStat = (MC_gsapiEngineError < 0) ? 4 : 1;
++      break;
++    case 1:
++      gsapi_EngineRestart(0);
++      break;
++    case 2:
++      MC_gsapiEngineError = gsapi_EngineStop(MC_gsapiEngine);
++      MCSprStat = (MC_gsapiEngineError < 0) ? 4 : 3;
++      break;
++  }
++}
++
++static void MCThreadCommand(s32 command)
++{
++  MCSprStat = command;
++  MCThreadStep();
++}
++
+@@ -2077,3 +2125,4 @@
+-  OSCreateAlarm(&MCThreadAlarm);
+-  OSSetAlarm(&MCThreadAlarm,(OSTime)OSMillisecondsToTicks(5),MCThreadWakeup);
+-  OSSetThreadPriority(&MCThread,0);
++  /* MP6 native port: no OS thread runs MCThreadFunc, so the speech thread's
++   * per-frame work (the engine's audio/result pump) runs here, once per
++   * retrace, instead of being woken by a priority bump. */
++  MCThreadStep();
+@@ -2127 +2176 @@
+-      *(u8 *)((int)&MCSessionTimer + (int)MCSessionCur) = 0;
++      MCSessionTimer[MCSessionCur] = 0;
+@@ -2144 +2193 @@
+-        *(u8 *)((int)&MCSessionTimer + (int)MCSessionCur) = 0;
++        MCSessionTimer[MCSessionCur] = 0;
+@@ -2171 +2220 @@
+-void MicResultCallBack(u32 callbackContext, u32 callbackData, u32 resultNode)
++void MicResultCallBack(u32 callbackContext, u32 callbackData, uintptr_t resultNode)
+@@ -2267 +2316 @@
+-  response = (MCResponse_s *)(MCResponseBuf + MCResponseNo * 96);
++  response = &MCResponseBuf[MCResponseNo];
+@@ -2295 +2344 @@
+-  response = (MCResponse_s *)(MCResponseBuf + MCResponseNo * 96);
++  response = &MCResponseBuf[MCResponseNo];
+@@ -2320 +2369 @@
+-  discBuffer = (void *)HuDvdDataRead(path);
++  discBuffer = HuDvdDataRead((char *)path);
+@@ -2394 +2443 @@
+-        *(u8 *)((int)&MCSessionTimer + (int)MCSessionCur) = 0;
++        MCSessionTimer[MCSessionCur] = 0;

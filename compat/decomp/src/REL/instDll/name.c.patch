@@ -1,0 +1,11 @@
+--- a/src/REL/instDll/name.c
++++ b/src/REL/instDll/name.c
+@@ -306,3 +306,3 @@
+-    glyphAnimation = HuMemDirectMalloc(0, 400);
+-    glyphXOffset = HuMemDirectMalloc(0, 200);
+-    glyphYOffset = HuMemDirectMalloc(0, 200);
++    glyphAnimation = HuMemDirectMalloc(0, 100 * sizeof(*glyphAnimation));
++    glyphXOffset = HuMemDirectMalloc(0, 100 * sizeof(*glyphXOffset));
++    glyphYOffset = HuMemDirectMalloc(0, 100 * sizeof(*glyphYOffset));
+@@ -351,0 +352 @@
++

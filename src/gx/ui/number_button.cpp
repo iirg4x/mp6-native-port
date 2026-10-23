@@ -3,6 +3,7 @@
 // Credits: TwilitRealm
 
 #include "number_button.hpp"
+#include "../../audio/menu_sfx.hpp"
 
 #include <charconv>
 #include <fmt/format.h>
@@ -85,6 +86,71 @@ bool NumberButton::handle_nav_command(NavCommand cmd)
         return true;
     }
     return BaseStringButton::handle_nav_command(cmd);
+}
+
+SliderButton::SliderButton(Rml::Element *parent, Props props)
+    : BaseControlledSelectButton(parent, {.key = props.key, .submit = false})
+    , mSliderProps(std::move(props))
+{
+    mRoot->SetClass("slider-row", true);
+    listen(Rml::EventId::Blur, [this](Rml::Event &) { mRoot->SetClass("card-editing", false); });
+    mRange = append(mRoot, "input");
+    mRange->SetAttribute("type", "range");
+    mRange->SetAttribute("min", mSliderProps.min);
+    mRange->SetAttribute("max", mSliderProps.max);
+    mRange->SetAttribute("step", mSliderProps.step);
+    mRange->SetAttribute("aria-label", mSliderProps.key);
+    Component::listen(mRange, Rml::EventId::Change, [this](Rml::Event &event) {
+        if (!disabled()) set_value(event.GetParameter<int>("value", mSliderProps.getValue()));
+        event.StopPropagation();
+    });
+}
+
+void SliderButton::set_value(int value)
+{
+    const int step = std::max(1, mSliderProps.step);
+    value = mSliderProps.min + ((std::clamp(value, mSliderProps.min, mSliderProps.max) -
+        mSliderProps.min + step / 2) / step) * step;
+    value = std::clamp(value, mSliderProps.min, mSliderProps.max);
+    if (value != mSliderProps.getValue()) {mSliderProps.setValue(value);audio::play_menu_sound(audio::MenuSound::Move);}
+}
+
+void SliderButton::update()
+{
+    BaseControlledSelectButton::update();
+    const int value = mSliderProps.getValue();
+    if (mLastValue != value) {
+        mLastValue = value;
+        mRange->SetAttribute("value", value);
+    }
+    if (disabled()) mRange->SetAttribute("disabled", "");
+    else mRange->RemoveAttribute("disabled");
+}
+
+bool SliderButton::disabled() const { return mSliderProps.isDisabled && mSliderProps.isDisabled(); }
+bool SliderButton::modified() const { return mSliderProps.isModified && mSliderProps.isModified(); }
+Rml::String SliderButton::format_value()
+{
+    return fmt::format("{}{}{}", mSliderProps.prefix, mSliderProps.getValue(), mSliderProps.suffix);
+}
+bool SliderButton::handle_nav_command(NavCommand cmd)
+{
+    if (mRoot->Closest(".card-deck")) {
+        if (cmd == NavCommand::Confirm) {
+            mRoot->SetClass("card-editing", !mRoot->IsClassSet("card-editing"));
+            return true;
+        }
+        if (cmd == NavCommand::Cancel && mRoot->IsClassSet("card-editing")) {
+            mRoot->SetClass("card-editing", false);
+            return true;
+        }
+        if (!mRoot->IsClassSet("card-editing")) return false;
+    }
+    if (cmd == NavCommand::Left || cmd == NavCommand::Right) {
+        set_value(mSliderProps.getValue() + (cmd == NavCommand::Right ? mSliderProps.step : -mSliderProps.step));
+        return true;
+    }
+    return cmd == NavCommand::Confirm;
 }
 
 } // namespace mp6::ui

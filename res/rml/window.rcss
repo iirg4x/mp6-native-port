@@ -9,11 +9,11 @@ body {
     width: 100%;
     height: 100%;
     padding: 64dp;
-    font-family: "Inter";
+    font-family: "Titan One";
     font-weight: normal;
     font-style: normal;
     font-size: 12dp;
-    color: #E0DBC8;
+    color: #17100b;
 }
 
 window {
@@ -25,16 +25,12 @@ window {
     max-width: 1088dp;
     max-height: 768dp;
     margin: auto;
-    border-radius: 14dp;
+    border-radius: 12dp;
     overflow: hidden;
-    border: 2dp #009dda;
-    backdrop-filter: blur(5dp);
-    box-shadow: 0 0 25dp 5dp;
-    /* [MP6] was rgba(37, 59, 156, 90%) near-opaque blue, then 35% translucent
-     * ("can't see shit"), then rgba(16,24,64,82%) -- still let bright scenes
-     * (the WARNING screen) bleed through the panel. Now near-opaque and
-     * darker still: the game only ghosts faintly through the blur. */
-    background-color: rgba(8, 12, 32, 96%);
+    border: 2dp #dfbd60;
+    box-shadow: 0 4dp 0 1dp #a87a28;
+    /* Opaque paper: game highlights cannot bleed through dialog text. */
+    background-color: #fff9e7;
     filter: opacity(0);
     transform: scale(0.9);
     transform-origin: center;
@@ -67,15 +63,15 @@ window[open] {
 window tab-bar {
     flex: 0 0 64dp;
     height: 64dp;
-    background-color: rgba(217, 217, 217, 10%);
-    font-family: "Inter";
-    font-weight: bold;
-    font-size: 14dp;
-    border-bottom: 2dp #009dda;
+    background-color: #f3e7bd;
+    font-family: "Titan One";
+    font-weight: normal;
+    font-size: 18dp;
+    border-bottom: 2dp #dfbd60;
 }
 
 window tab-bar tab {
-    opacity: 0.25;
+    opacity: 1;
 }
 
 window content {
@@ -100,7 +96,7 @@ window content pane {
 }
 
 window content pane:not(:last-of-type) {
-    border-right: 1dp #009dda;
+    border-right: 1dp #dfbd60;
 }
 
 window content pane > * {
@@ -137,14 +133,14 @@ scrollbarvertical slidertrack {
 scrollbarvertical sliderbar {
     width: 8dp;
     min-height: 24dp;
-    background-color: rgba(224, 219, 200, 45%);
+    background-color: #dfbd60;
     border-radius: 2dp;
     transition: background-color 0.2s cubic-in-out;
 }
 
 scrollbarvertical sliderbar:hover,
 scrollbarvertical sliderbar:active {
-    background-color: rgba(194, 164, 45, 80%);
+    background-color: #a87a28;
 }
 
 scrollbarhorizontal {
@@ -164,11 +160,11 @@ scrollbarhorizontal sliderbar {
 }
 
 .section-heading {
-    font-family: "Inter";
-    font-weight: bold;
-    text-transform: uppercase;
+    font-family: "Titan One";
+    font-weight: normal;
+    text-transform: none;
     font-size: 18dp;
-    opacity: 0.25;
+    color: #df200c;
 }
 
 .section-heading:not(:first-of-type) {
@@ -177,92 +173,100 @@ scrollbarhorizontal sliderbar {
 
 button {
     text-align: center;
-    background-color: rgba(17, 16, 10, 20%);
-    opacity: 0.9;
+    background-color: #f3e7bd;
+    color: #17100b;
+    opacity: 1;
     padding: 8dp 16dp;
-    border-radius: 14dp;
-    box-shadow: rgba(146, 135, 91, 25%) 0 0 0 1dp;
+    border-radius: 8dp;
+    border: 1dp #dfbd60;
     font-size: 16dp;
-    transition: background-color 0.1s linear-in-out, opacity 0.1s linear-in-out;
+    transition: background-color color 0.12s linear-in-out;
     cursor: pointer;
     focus: auto;
 }
 
 button:not(:disabled):hover,
 button:not(:disabled):focus-visible {
-    background-color: rgba(0, 157, 218, 20%);
-    box-shadow: #00b4fa 0 0 0 2dp;
+    background-color: #e92313;
+    color: #ffffff;
+    box-shadow: #e6b624 0 0 0 2dp;
 }
 
 button:not(:disabled):selected {
     opacity: 1;
-    background-color: rgba(0, 157, 218, 40%);
+    background-color: #e92313;
+    color: #ffffff;
 }
 
 button:not(:disabled):active {
     opacity: 1;
-    background-color: rgba(0, 157, 218, 40%);
-    box-shadow: #00b4fa 0 0 0 2dp;
+    background-color: #bd190c;
+    color: #ffffff;
+    box-shadow: #e6b624 0 0 0 2dp;
 }
+
+button:disabled { color: #817b70; background-color: #e9e3d2; cursor: default; }
 
 button.modal-btn {
     flex: 1 1 0;
     text-align: center;
 }
 
-/* [MP6] option lists (the right-pane Off / Top Left / ... choices) read as
- * the same family as the settings rows: left-aligned bold uppercase key
- * type instead of the upstream centered pill label. Scoped to DIRECT pane
- * children so modal/preset/achievement buttons keep their own look. */
+/* Auxiliary lists share the book lettering; settings remain inline arrows. */
 window content pane > button {
     text-align: left;
-    font-family: "Inter";
-    font-weight: bold;
-    text-transform: uppercase;
-    font-size: 14dp;
+    font-family: "Titan One";
+    font-weight: normal;
+    text-transform: none;
+    font-size: 18dp;
 }
 
 select-button {
     display: flex;
     align-items: center;
     gap: 8dp;
-    background-color: rgba(17, 16, 10, 20%);
-    opacity: 0.9;
+    background-color: #f3e7bd;
+    color: #17100b;
+    opacity: 1;
     padding: 8dp 16dp;
-    border-radius: 14dp;
-    box-shadow: rgba(146, 135, 91, 25%) 0 0 0 1dp;
-    transition: background-color 0.1s linear-in-out, opacity 0.1s linear-in-out;
+    border-radius: 8dp;
+    border: 1dp #dfbd60;
+    transition: background-color color 0.12s linear-in-out;
     cursor: pointer;
     focus: auto;
 }
 
 select-button:not(:disabled):hover,
 select-button:not(:disabled):focus-visible {
-    background-color: rgba(0, 157, 218, 20%);
-    box-shadow: #00b4fa 0 0 0 2dp;
+    background-color: #e92313;
+    color: #ffffff;
+    box-shadow: #e6b624 0 0 0 2dp;
 }
 
 select-button:not(:disabled):selected {
     opacity: 1;
-    background-color: rgba(0, 157, 218, 40%);
+    background-color: #e92313;
+    color: #ffffff;
 }
 
 select-button:not(:disabled):active {
     opacity: 1;
-    background-color: rgba(0, 157, 218, 40%);
-    box-shadow: #00b4fa 0 0 0 2dp;
+    background-color: #bd190c;
+    color: #ffffff;
+    box-shadow: #e6b624 0 0 0 2dp;
 }
 
 select-button:disabled {
-    opacity: 0.35;
+    color: #817b70;
+    background-color: #e9e3d2;
     cursor: default;
 }
 
 select-button key {
-    font-family: "Inter";
-    font-weight: bold;
-    font-size: 14dp;
-    text-transform: uppercase;
+    font-family: "Titan One";
+    font-weight: normal;
+    font-size: 16dp;
+    text-transform: none;
     flex: 0 1 auto;
 }
 
@@ -273,7 +277,7 @@ select-button value {
 }
 
 select-button value.modified {
-    font-weight: bold;
+    color: #0900ed;
 }
 
 select-button input {
@@ -319,7 +323,7 @@ icon.question-mark {
     font-family: "Inter";
     font-weight: bold;
     font-size: 13dp;
-    color: rgba(224, 219, 200, 55%);
+    color: #756345;
     pointer-events: none;
 }
 
@@ -348,7 +352,7 @@ icon.question-mark {
 }
 
 .achievement-name.unlocked {
-    color: #ffa826;
+    color: #765616;
 }
 
 .achievement-badge {
@@ -357,7 +361,7 @@ icon.question-mark {
 }
 
 .achievement-badge.unlocked {
-    color: #44cc55;
+    color: #287138;
     opacity: 1;
 }
 
@@ -368,7 +372,7 @@ icon.question-mark {
 
 .achievement-desc {
     display: block;
-    color: rgba(224, 219, 200, 55%);
+    color: #0900ed;
     font-size: 16dp;
     margin: 4dp 0 0 0;
 }
@@ -376,7 +380,7 @@ icon.question-mark {
 .achievement-progress {
     display: block;
     font-size: 13dp;
-    color: rgba(224, 219, 200, 45%);
+    color: #756345;
 }
 
 progress {
@@ -384,17 +388,17 @@ progress {
     width: 100%;
     height: 6dp;
     border-radius: 3dp;
-    background-color: rgba(255, 255, 255, 10%);
+    background-color: #e9dfbe;
     margin: 6dp 0 2dp 0;
 }
 
 progress.progress-done fill {
-    background-color: #44aa22;
+    background-color: #287138;
     border-radius: 3dp;
 }
 
 progress.progress-ongoing fill {
-    background-color: #2255bb;
+    background-color: #e6b624;
     border-radius: 3dp;
 }
 
@@ -458,7 +462,7 @@ button.achievement-clear {
     display: block;
     flex: 1 1 0;
     min-width: 0;
-    color: rgba(224, 219, 200, 65%);
+    color: #756345;
 }
 
 .enh-matrix-val {
@@ -473,7 +477,7 @@ button.achievement-clear {
     font-weight: bold;
     text-transform: uppercase;
     font-size: 12dp;
-    color: #009dda;
+    color: #df200c;
     border-bottom: 1dp rgba(146, 135, 91, 30%);
     padding-bottom: 4dp;
 }
@@ -503,10 +507,11 @@ button.achievement-clear {
     flex: 0 1 auto;
     width: 100%;
     text-align: left;
+    overflow-y: auto;
 }
 
 window.modal.danger {
-    border: 2dp #852221;
+    border-color: #df200c;
 }
 
 .modal-header {
@@ -521,16 +526,16 @@ window.modal.danger {
 
 .modal-header icon {
     font-size: 24dp;
-    color: #009dda;
+    color: #df200c;
 }
 
 .modal-title {
     display: block;
-    font-family: "Inter";
-    font-weight: bold;
-    text-transform: uppercase;
-    font-size: 14dp;
-    color: #009dda;
+    font-family: "Titan One";
+    font-weight: normal;
+    text-transform: none;
+    font-size: 24dp;
+    color: #df200c;
     flex: 1 1 auto;
 }
 
@@ -545,13 +550,14 @@ window.modal.danger .modal-header icon {
     flex: 0 1 auto;
     min-width: 0;
     font-size: 16dp;
-    color: #FFFFFF;
+    color: #17100b;
     font-weight: normal;
+    line-height: 1.4;
 }
 
 .modal-body span.tip {
     font-size: 14dp;
-    color: #009dda;
+    color: #0900ed;
 }
 
 .verification-progress {
@@ -564,7 +570,7 @@ window.modal.danger .modal-header icon {
 .verification-file {
     display: block;
     font-size: 17dp;
-    color: #FFFFFF;
+    color: #17100b;
 }
 
 progress.verification-progress-bar {
@@ -575,7 +581,7 @@ progress.verification-progress-bar {
 .verification-detail {
     display: block;
     font-size: 14dp;
-    color: rgba(224, 219, 200, 65%);
+    color: #756345;
 }
 
 .modal-actions {
@@ -587,4 +593,36 @@ progress.verification-progress-bar {
     width: 100%;
     flex: 0 0 auto;
     padding-top: 4dp;
+}
+
+/* First-launch linking uses the same paper, with roomier onboarding copy. */
+body.content-link-document { padding: 0; background-color: rgba(11, 6, 45, 48%); }
+window.content-link { width: 90vw; max-width: 720dp; max-height: 90vh; border: 3dp #e0b544;
+    border-radius: 20dp; background-color: #fff9e7; backdrop-filter: none;
+    box-shadow: none; font-family: "Titan One"; transition: transform 0.2s cubic-out; }
+window.content-link[open] { filter: none; }
+.content-link .modal-dialog { padding: 32dp; gap: 24dp; overflow-y: auto; }
+.content-link .modal-title { font-family: "Titan One"; font-weight: normal;
+    font-size: 32dp; text-transform: none; color: #df200c; }
+.content-link .modal-body { font-family: "Titan One"; font-size: 18dp; line-height: 1.5; color: #0900ed; }
+.content-link .modal-actions { flex-direction: column; gap: 10dp; }
+.content-link button.modal-btn { width: 100%; min-height: 48dp; padding: 10dp 20dp;
+    border: 1dp #ddbb59; border-radius: 12dp; background-color: #f3e7bd;
+    decorator: none; box-shadow: none; color: #000000; font-family: "Titan One"; font-size: 20dp;
+    font-weight: normal; text-transform: none; text-align: center; }
+.content-link button.modal-btn:focus-visible, .content-link button.modal-btn:hover,
+    .content-link button.modal-btn:active { background-color: #ec250f; color: #ffffff; decorator: none; box-shadow: none; border-color: #ddbb59; }
+.content-link .verification-file { color: #000000; font-family: "Titan One"; font-size: 18dp; }
+.content-link .verification-detail { color: #0900ed; font-family: "Titan One"; font-size: 16dp; }
+@media (max-height: 640dp) {
+    .content-link .modal-dialog { padding: 20dp; gap: 14dp; }
+    .content-link .modal-title { font-size: 26dp; }
+    .content-link .modal-body { font-size: 16dp; line-height: 1.35; }
+    .content-link button.modal-btn { min-height: 44dp; font-size: 18dp; padding: 8dp 16dp; }
+}
+@media (max-width: 560dp) {
+    .content-link .modal-dialog { padding: 20dp; gap: 14dp; }
+    .content-link .modal-title { font-size: 26dp; }
+    .content-link .modal-body { font-size: 16dp; line-height: 1.35; }
+    .content-link button.modal-btn { min-height: 44dp; font-size: 18dp; padding: 8dp 16dp; }
 }

@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Starlit Party">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<title>Starlit Party</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ddd; overflow: hidden;
+               font: 15px system-ui, sans-serif; }
+  #canvas { display: block; touch-action: none; } /* SDL sizes it to fill the page */
+  /* No browser gestures over the game: long-press copy/save callout, text
+     selection, image drag, tap highlight, double-tap zoom. */
+  html, body, #canvas { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+    -webkit-user-drag: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
+  #status { position: fixed; left: 16px; bottom: 16px; right: 16px; white-space: pre-wrap;
+            pointer-events: none; text-shadow: 0 1px 2px #000; }
+  #setup { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
+           justify-content: center; gap: 16px; padding: 24px; text-align: center; background: #000; }
+  #setup h1 { margin: 0; font-size: 22px; color: #fff; }
+  #setup p { margin: 0; max-width: 32em; line-height: 1.45; color: #aaa; }
+  #setup button, #setup label { font: inherit; color: #000; background: #ffd23f; border: 0;
+           border-radius: 12px; padding: 14px 22px; font-weight: 600; cursor: pointer; }
+  #setup .link { background: none; color: #888; padding: 4px; font-weight: 400; text-decoration: underline; }
+  #progress { width: min(320px, 80vw); display: none; }
+  #loading { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center;
+             justify-content: center; gap: 14px; background: #000; pointer-events: none; }
+  #loading h1 { margin: 0; font-size: 22px; color: #fff; }
+  #load-stage { color: #bbb; min-height: 1.3em; }
+  #load-bar { width: min(320px, 70vw); height: 6px; border-radius: 3px; background: #222; overflow: hidden; }
+  #load-fill { height: 100%; width: 0; background: #ffd23f; transition: width .2s; }
+  #update { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 25; display: none;
+            background: rgba(0,0,0,.8); color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 13px; }
+  #rotate { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center;
+            flex-direction: column; gap: 12px; background: #000; color: #fff; font-size: 18px; text-align: center; }
+  @media (orientation: portrait) and (pointer: coarse) { #rotate { display: flex; } } /* phones/tablets only */
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1"></canvas>
+<div id="setup">
+  <h1>Starlit Party</h1>
+  <p id="setup-text">Choose your own Mario Party 6 (USA) disc image (.iso). It is copied into this
+     app's private storage on this device, so you only do this once. Nothing is uploaded.</p>
+  <label for="iso-input" id="pick">Choose ISO</label>
+  <input type="file" id="iso-input" hidden>
+  <progress id="progress" max="1" value="0"></progress>
+  <button class="link" id="forget" hidden>Remove the stored ISO</button>
+</div>
+<div id="loading"><h1>Starlit Party</h1><div id="load-stage">Starting</div>
+  <div id="load-bar"><div id="load-fill"></div></div></div>
+<div id="update"></div>
+<div id="status"></div>
+<div id="prep" style="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:15;display:none;
+  background:rgba(0,0,0,.75);color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;pointer-events:none"></div>
+<div id="rotate"><div style="font-size:48px">⟳</div>Turn your phone sideways to play.</div>
+<script>
+  const statusEl = document.getElementById('status');
+  const setupEl = document.getElementById('setup');
+  const setupText = document.getElementById('setup-text');
+  const progressEl = document.getElementById('progress');
+  const params = new URLSearchParams(location.search);
+  // Launch stages, shown on the loading screen and sent with the first report
+  // (ms since the page started loading).
+  const loadingEl = document.getElementById('loading');
+  const launchStages = [];
+  let stageName = '';
+  const stage = (name, fraction) => {
+    if (name !== stageName) { stageName = name; launchStages.push({ stage: name, ms: Math.round(performance.now()) }); }
+    document.getElementById('load-stage').textContent = name;
+    if (fraction != null) document.getElementById('load-fill').style.width = Math.round(fraction * 100) + '%';
+  };
+  // Sub-steps (content.js: saves, disc) go into the same launch timeline.
+  window.mp6MarkStage = (name) => launchStages.push({ stage: name, ms: Math.round(performance.now()) });
+  const loadingDone = () => {
+    if (loadingEl.style.display === 'none') return;
+    stage('Running');
+    loadingEl.style.display = 'none';
+  };
+  // Landscape only. iOS can't lock orientation for a web app, so in portrait
+  // the page shows a "turn sideways" cover and the game never sees the
+  // portrait resize: its canvas and touch layout stay at the landscape size
+  // (resizing to portrait and back is what broke the touch controls).
+  // Registered before SDL's own listener, so it runs first.
+  // Phones and tablets only: a desktop browser window may be any shape.
+  const isSafari = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg|CriOS|FxiOS/.test(navigator.userAgent);
+  const touchDevice = params.get('touch') === '1' || (navigator.maxTouchPoints > 0 && matchMedia('(pointer: coarse)').matches);
+  // Long-press menus, selection and pinch/double-tap zoom never reach Safari.
+  for (const ev of ['contextmenu', 'selectstart', 'dragstart', 'gesturestart', 'gesturechange', 'dblclick'])
+    document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+  const isPortrait = () => touchDevice && innerHeight > innerWidth;
+  window.addEventListener('resize', (e) => { if (isPortrait()) e.stopImmediatePropagation(); }, true);
+  // SDL also resizes from orientation events (a phone report showed the
+  // canvas going portrait that way), so those are held back in portrait too.
+  const holdInPortrait = (e) => { if (isPortrait()) e.stopImmediatePropagation(); };
+  window.addEventListener('orientationchange', holdInPortrait, true);
+  if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener('change', holdInPortrait);
+  if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+  // iOS reports odd sizes mid-rotation (a launch measured 430x430, then
+  // 932x430) and can deliver the final resize while the orientation query is
+  // still stale, so the canvas kept the square size. Re-check the shape and
+  // replay a resize to SDL whenever it no longer matches the landscape window.
+  const fixCanvasShape = () => {
+    const c = document.getElementById('canvas');
+    if (!c || !c.width || !c.height || innerWidth <= innerHeight) return;
+    if (Math.abs(c.width / c.height - innerWidth / innerHeight) > 0.02) window.dispatchEvent(new Event('resize'));
+  };
+  setInterval(fixCanvasShape, 300);
+  window.addEventListener('orientationchange', () => setTimeout(fixCanvasShape, 50));
+  if (window.visualViewport) visualViewport.addEventListener('resize', () => setTimeout(fixCanvasShape, 50));
+  if (params.has('asyncshaders')) globalThis.mp6AsyncShaders = true;
+  // Safe area for the game's menus and touch controls (src/web/
+  // safe_area_web.c): the CSS insets around the notch and home indicator,
+  // and on iOS at least a bottom margin even where the inset reads 0, since
+  // swipe-home (installed) and Safari's toolbar (browser) take touches at
+  // the bottom edge. [top, right, bottom, left] in CSS pixels.
+  {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+      'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+    document.documentElement.appendChild(probe);
+    const iOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const insets = () => {
+      const s = getComputedStyle(probe);
+      return [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map((p) => parseFloat(p) || 0);
+    };
+    // The picture fills the screen; only things you tap (touch controls,
+    // menu prompts) keep clear of the bottom gesture zone: swipe-home when
+    // installed, Safari's toolbar in the browser.
+    globalThis.mp6SafeInsets = () => {
+      const v = insets();
+      if (iOS) v[2] = Math.max(v[2], 24);
+      return v;
+    };
+  }
+  // ?dpr=N caps the render pixel density (default: the device's own).
+  if (params.get('dpr') || params.get('forcedpr')) {
+    // forcedpr (testing): pretend the device has this pixel density.
+    const cap = Number(params.get('forcedpr')) || Math.min(window.devicePixelRatio || 1, Number(params.get('dpr')));
+    Object.defineProperty(window, 'devicePixelRatio', { get: () => cap });
+  }
+  const ISO_NAME = 'mp6.iso';
+  const GAME_ID = 'GP6E01';
+
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    // ?uncapped: present as fast as the device can, for benchmarking (the
+    // screen still updates at most at its refresh rate).
+    mp6Uncapped: params.has('uncapped'),
+    // Turning V-Sync off in the game's settings does the same (uncapped
+    // frames stay off while V-Sync is on, unless ?uncapped forces them).
+    mp6UncappedForced: params.has('uncapped'),
+    // ?touch=1: show the on-screen controller on a desktop browser (testing).
+    mp6ForceTouch: params.get('touch') === '1',
+    // ?gputimestamps=1: allow GPU pass timers on Safari (off there: they crash it).
+    mp6GpuTimestamps: params.get('gputimestamps') === '1',
+    // Emscripten reports the game-files download as "Downloading data... (a/b)".
+    setStatus: (text) => {
+      const m = /\((\d+)\/(\d+)\)/.exec(text || '');
+      if (m && /download/i.test(text)) stage('Loading game files', 0.15 + 0.55 * Number(m[1]) / Math.max(1, Number(m[2])));
+      else if (text && !/^(Running|Preparing|Downloading)/i.test(text)) stage(text); // e.g. "Could not read the disc image"
+    },
+    onRuntimeInitialized: () => stage('Starting the game', 0.9),
+    mp6Mark: (name) => window.mp6MarkStage(name),
+    preRun: [() => {
+      stage('Preparing the engine', 0.75);
+      // The launcher menu opens first, as in the Android app; ?nolauncher
+      // boots straight into the game.
+      if (params.has('nolauncher')) ENV.MP6_LAUNCHER = '0';
+      // Shader pipeline cache under /mp6 (persisted with the saves): the next
+      // launch builds every pipeline the game has used while loading, instead
+      // of stalling the GPU on each one's first use.
+      ENV.MP6_GPU_CACHE_PATH = '/mp6';
+      instrumentRuntime();
+    }],
+  };
+
+  // Phone testing aids: show fatal errors on the page (there is no console
+  // on an iPhone). The game's own log goes nowhere unless ?log is given:
+  // forwarding thousands of lines to the console costs real frame time.
+  const showError = (msg) => {
+    statusEl.style.color = '#f88';
+    statusEl.style.zIndex = 30;
+    statusEl.textContent = 'Error: ' + msg + ' | ' + statusEl.textContent;
+  };
+  window.addEventListener('error', (e) => showError(e.message || String(e.error)));
+  window.addEventListener('unhandledrejection', (e) => showError(String(e.reason && (e.reason.stack || e.reason))));
+  // Controller rumble (the game's PADControlMotor, via Aurora's device
+  // rumble). Whatever the device offers: a connected gamepad's
+  // vibrationActuator, navigator.vibrate (Android), or on an iPhone, which has
+  // neither, the system haptic tick iOS 18+ plays when a switch-style checkbox
+  // is toggled through its label. iOS only allows that tick shortly after a
+  // touch, so iPhone rumble is short ticks, mostly right after a button press.
+  // Each path is reported once when it first fires.
+  const rumble = (() => {
+    const canVibrate = typeof navigator.vibrate === 'function';
+    let iosSwitch = null;
+    if (!canVibrate && /iPhone|iPad|iPod/.test(navigator.userAgent)) {
+      const label = document.createElement('label');
+      label.setAttribute('aria-hidden', 'true');
+      label.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('switch', '');
+      input.tabIndex = -1;
+      label.appendChild(input);
+      document.body.appendChild(label);
+      iosSwitch = label;
+    }
+    const pads = () => Array.from(navigator.getGamepads ? navigator.getGamepads() : []).filter((p) => p && p.vibrationActuator);
+    const fired = new Set();
+    const note = (path) => {
+      if (fired.has(path)) return;
+      fired.add(path);
+      Module.print && Module.print('[MP6-RUMBLE] rumble played through ' + path);
+    };
+    let strength = 0, timer = 0, until = 0;
+    const pulse = () => {
+      if (!strength || performance.now() > until) { stop(); return; }
+      for (const p of pads()) {
+        p.vibrationActuator.playEffect('dual-rumble', { duration: 150, strongMagnitude: strength, weakMagnitude: strength * 0.6 }).catch(() => {});
+        note('gamepad');
+      }
+      if (canVibrate) { if (navigator.vibrate(160)) note('navigator.vibrate'); }
+      else if (iosSwitch) { iosSwitch.click(); note('iOS switch haptic'); }
+    };
+    const stop = () => {
+      strength = 0;
+      clearInterval(timer); timer = 0;
+      if (canVibrate) navigator.vibrate(0);
+      for (const p of pads()) if (p.vibrationActuator.reset) p.vibrationActuator.reset().catch(() => {});
+    };
+    return {
+      available: () => canVibrate || !!iosSwitch || pads().length > 0,
+      set(s, ms) {
+        if (!(s > 0)) { stop(); return; }
+        strength = s;
+        // The game stops the motor itself; 0 means "until stopped", capped
+        // so a lost stop never rumbles forever.
+        until = performance.now() + (ms > 0 ? ms : 30000);
+        if (!timer) { pulse(); timer = setInterval(pulse, iosSwitch && !canVibrate ? 100 : 140); }
+      },
+    };
+  })();
+  // Menus where restarting loses nothing: title, file select, mode select.
+  // Still loading (no scene yet) counts too: nothing has been played.
+  let currentOvl = '';
+  window.mp6AtSafePoint = () => /^(|bootdll|fileseldll|mdseldll|selmenuDLL|optiondll)$/i.test(currentOvl);
+  Module.mp6RumbleAvailable = rumble.available;
+  Module.mp6Rumble = (s, ms) => rumble.set(s, ms);
+  // Keep the last few log lines: an abort's reason is usually printed just
+  // before it (Aurora's FATAL lines go to stdout).
+  const recent = [];
+  const remember = (text) => { recent.push(text); if (recent.length > 12) recent.shift(); };
+  const logToConsole = params.has('log');
+  Module.print = (text) => {
+    if (logToConsole) console.log(text);
+    remember(text);
+    if (/FATAL/.test(text)) showError(text + (window.mp6GpuCalls ? ' | gpu calls: ' + window.mp6GpuCalls.join(' > ') : ''));
+    // The scene the game is in: an update restarts only at a menu.
+    const scene = /ovl\.start=(\w+)/.exec(text);
+    if (scene) {
+      currentOvl = scene[1];
+      if (window.mp6UpdatePending && window.mp6AtSafePoint()) location.reload();
+    }
+  };
+  globalThis.mp6FrameHook = () => loadingDone();
+  Module.printErr = (text) => {
+    if (logToConsole) console.warn(text);
+    remember(text);
+    if (/abort/i.test(text)) showError(text + ' | last log: ' + recent.join(' / '));
+    else if (/exception|RuntimeError|FATAL/i.test(text)) showError(text);
+  };
+  const errors = [];
+  // Runtime probes (dev): coroutine switches and ASYNCIFY sleeps are the
+  // costly unwind/rewind events; GPU queue latency (submit -> work done)
+  // says whether the GPU keeps up.
+  const gpuMem = { bytes: 0, textures: 0, buffers: 0, staging: 0 };
+  // Objects released without destroy() are subtracted when collected.
+  // ?gpunogc: count only explicit destroy() (what Safari's late collector
+  // effectively leaves), to measure on a PC what an iPhone accumulates.
+  const gpuGc = typeof FinalizationRegistry !== 'undefined' && !params.has('gpunogc')
+    ? new FinalizationRegistry((tok) => { if (!tok.gone) gpuGone(tok); }) : null;
+  // Live allocations by label, for gpuTop() in reports: which kind of object
+  // the memory is in when an iPhone report shows gpuMB climbing.
+  const gpuLive = new Set();
+  const gpuTrack = (obj, bytes, kind, label) => { const tok = { bytes, kind, gone: false, label: label || kind }; obj.__mp6Tok = tok; gpuMem.bytes += bytes; gpuMem[kind]++; gpuLive.add(tok); if (gpuGc) gpuGc.register(obj, tok); };
+  const gpuGone = (tok) => { tok.gone = true; gpuMem.bytes -= tok.bytes; gpuMem[tok.kind]--; gpuLive.delete(tok); };
+  window.mp6GpuTop = (n = 6) => {
+    const by = new Map();
+    for (const t of gpuLive) { const e = by.get(t.label) || [0, 0]; e[0] += t.bytes; e[1]++; by.set(t.label, e); }
+    return [...by].sort((a, b) => b[1][0] - a[1][0]).slice(0, n).map(([l, [b, c]]) => `${l} ${Math.round(b / 1048576)}MB x${c}`);
+  };
+  const probe = { swaps: 0, swapMs: 0, sleeps: 0, gpuSubmits: 0, gpuLatMs: 0, gpuLatMax: 0, pipelines: 0, pipelineMs: 0, shaders: 0 };
+  function instrumentRuntime() {
+  }
+  if (typeof GPUDevice !== 'undefined') {
+    // New pipelines/shaders: a first use waits for the driver to compile.
+    const wrap = (name, field, timeField) => {
+      const orig = GPUDevice.prototype[name];
+      if (!orig) return;
+      GPUDevice.prototype[name] = function (...args) {
+        const t0 = performance.now();
+        try { return orig.apply(this, args); } finally {
+          probe[field]++;
+          if (field === 'pipelines') shaderPrep.note();
+          if (timeField) probe[timeField] += performance.now() - t0;
+        }
+      };
+    };
+    wrap('createRenderPipeline', 'pipelines', 'pipelineMs');
+    wrap('createComputePipeline', 'pipelines', 'pipelineMs');
+    wrap('createRenderPipelineAsync', 'pipelines', 'pipelineMs');
+    wrap('createShaderModule', 'shaders', null);
+    // Live GPU memory estimate (textures + buffers the page created and has
+    // not destroyed), reported as gpuMB: iOS kills the page when the total
+    // gets too big, which looks like a freeze with no error.
+    const bpp = (f) => /32float|rgba16|rg32/.test(f) ? (/rgba32/.test(f) ? 16 : 8) : /depth32|depth24|rgba8|bgra8|r32|rg16|rgb10|rg11/.test(f) ? 4 : /rg8|r16|depth16/.test(f) ? 2 : 1;
+    const ct = GPUDevice.prototype.createTexture, cb = GPUDevice.prototype.createBuffer;
+    GPUDevice.prototype.createTexture = function (d) {
+      const t = ct.call(this, d);
+      try {
+        const sz = d.size.width ? d.size : { width: d.size[0], height: d.size[1] || 1, depthOrArrayLayers: d.size[2] || 1 };
+        const bytes = sz.width * (sz.height || 1) * (sz.depthOrArrayLayers || 1) * bpp(String(d.format)) * (d.sampleCount || 1) * ((d.mipLevelCount || 1) > 1 ? 1.34 : 1);
+        gpuTrack(t, bytes, 'textures', 'tex ' + (d.label || '?'));
+      } catch (e) {}
+      return t;
+    };
+    GPUDevice.prototype.createBuffer = function (d) {
+      const b = cb.call(this, d);
+      gpuTrack(b, d.size || 0, 'buffers', 'buf ' + (d.label || '?'));
+      return b;
+    };
+    for (const cls of ['GPUTexture', 'GPUBuffer']) {
+      const proto = window[cls] && window[cls].prototype;
+      if (!proto || !proto.destroy) continue;
+      const orig = proto.destroy;
+      proto.destroy = function () {
+        const tok = this.__mp6Tok; if (tok && !tok.gone) gpuGone(tok);
+        return orig.call(this);
+      };
+    }
+  }
+  if (typeof GPUQueue !== 'undefined') {
+    const submit = GPUQueue.prototype.submit;
+    let gpuInFlight = 0, gpuLastLat = 0;
+    // writeBuffer/writeTexture copy into staging memory the browser holds
+    // until the GPU has run the next submit: counted as live GPU memory from
+    // that submit until its work is done, so the budget sees it.
+    let queueWriteBytes = 0;
+    for (const name of ['writeBuffer', 'writeTexture']) {
+      const orig = GPUQueue.prototype[name];
+      if (!orig) continue;
+      GPUQueue.prototype[name] = function (...args) {
+        try {
+          if (name === 'writeBuffer') queueWriteBytes += args[4] !== undefined ? args[4] : (args[2] && args[2].byteLength) || 0;
+          else { const sz = args[3]; const w = sz.width !== undefined ? sz.width : sz[0], h = sz.height !== undefined ? sz.height : (sz[1] || 1); queueWriteBytes += (args[2].bytesPerRow || w * 4) * (args[2].rowsPerImage || h); }
+        } catch (e) {}
+        return orig.apply(this, args);
+      };
+    }
+    GPUQueue.prototype.submit = function (buffers) {
+      const t0 = performance.now();
+      let stagingTok = null;
+      if (queueWriteBytes > 0) {
+        stagingTok = { bytes: queueWriteBytes, kind: 'staging', gone: false, label: 'buf Queue write staging' };
+        gpuMem.bytes += stagingTok.bytes; gpuMem.staging++; gpuLive.add(stagingTok);
+        queueWriteBytes = 0;
+      }
+      const r = submit.call(this, buffers);
+      gpuInFlight++;
+      globalThis.mp6GpuIdle = false;
+      this.onSubmittedWorkDone().then(() => {
+        if (stagingTok) gpuGone(stagingTok);
+        const dt = performance.now() - t0;
+        gpuInFlight--; gpuLastLat = dt;
+        // Aurora only prewarms saved shaders while this is true, so the
+        // GPU process never builds up a backlog (Safari kills it if it does).
+        globalThis.mp6GpuIdle = gpuInFlight <= 1 && dt < 50;
+        probe.gpuSubmits++; probe.gpuLatMs += dt; if (dt > probe.gpuLatMax) probe.gpuLatMax = dt;
+      });
+      return r;
+    };
+  }
+  // "Preparing graphics" notice while the saved shader set is being built
+  // (Aurora builds every cached pipeline right after start, so gameplay
+  // doesn't stall on first use). Hidden once no new pipeline appeared for 2 s.
+  const shaderPrep = {
+    count: 0, timer: 0,
+    note() {
+      this.count++;
+      const el = document.getElementById('prep');
+      if (this.count >= 32) {
+        el.style.display = 'block';
+        el.textContent = 'Preparing graphics… ' + this.count + ' shaders';
+      }
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => { el.style.display = 'none'; }, 2000);
+    },
+  };
+    // GPU memory budget: wasm heap + live GPU bytes against the iPhone's kill
+    // line (pages died at ~1.42-1.57 GB). Level 1 frees idle caches sooner,
+    // level 2 also turns ambient occlusion off until memory comes back down.
+    // ?gpubudget=<MB> sets the level-2 line (level 1 starts 200 MB below it).
+    const budgetCritical = Number(params.get('gpubudget')) || 1150;
+    Module.mp6GpuLevel = 0;
+    setInterval(() => {
+      const totalMB = ((typeof HEAP8 !== 'undefined' ? HEAP8.length : 0) + gpuMem.bytes) / 1048576;
+      const was = Module.mp6GpuLevel;
+      // Rise at once, fall back only well below each line (no flapping).
+      let level = totalMB > budgetCritical ? 2 : totalMB > budgetCritical - 200 ? 1 : 0;
+      if (level < was && totalMB > (was === 2 ? budgetCritical - 120 : budgetCritical - 280)) level = was;
+      if (level !== was) {
+        Module.mp6GpuLevel = level;
+        Module.print && Module.print(`[MP6-GPU-BUDGET] level ${was} -> ${level} at ${Math.round(totalMB)} MB (gpu ${Math.round(gpuMem.bytes / 1048576)} MB: ${window.mp6GpuTop(3).join(', ')})`);
+      }
+    }, 1000);
+
+  function startEngine(source) {
+    setupEl.style.display = 'none';
+    statusEl.style.color = '';
+    statusEl.textContent = '';
+    loadingEl.style.display = 'flex';
+    stage('Loading the engine', 0.05);
+    Module.mp6ContentSource = source;
+    const s = document.createElement('script');
+    s.onload = () => stage('Compiling the engine', 0.15);
+    s.src = 'mp6native.js';
+    document.body.appendChild(s);
+  }
+
+  async function gameIdOf(blob) {
+    return new TextDecoder('latin1').decode(await blob.slice(0, 6).arrayBuffer());
+  }
+
+  async function storedIso() {
+    try {
+      const dir = await navigator.storage.getDirectory();
+      const file = await (await dir.getFileHandle(ISO_NAME)).getFile();
+      return file.size > 0 && (await gameIdOf(file)) === GAME_ID ? file : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Copy the picked image into the origin-private file system in chunks,
+  // showing progress. Returns the stored File, or null if this browser
+  // cannot write there (the picked file is then used for this session only).
+  async function storeIso(file) {
+    let dir, writable;
+    try {
+      dir = await navigator.storage.getDirectory();
+      const handle = await dir.getFileHandle(ISO_NAME, { create: true });
+      if (!handle.createWritable) return null;
+      writable = await handle.createWritable();
+    } catch {
+      return null;
+    }
+    progressEl.style.display = 'block';
+    const CHUNK = 16 * 1024 * 1024;
+    try {
+      for (let off = 0; off < file.size; off += CHUNK) {
+        await writable.write(await file.slice(off, off + CHUNK).arrayBuffer());
+        progressEl.value = Math.min(1, (off + CHUNK) / file.size);
+        setupText.textContent = `Copying the disc image into the app… ${Math.floor(progressEl.value * 100)}%`;
+      }
+      await writable.close();
+    } catch (e) {
+      try { await writable.abort(); await dir.removeEntry(ISO_NAME); } catch {}
+      throw e;
+    }
+    return storedIso();
+  }
+
+  async function onPick(file) {
+    if (!file) return;
+    if ((await gameIdOf(file)) !== GAME_ID) {
+      setupText.textContent = 'That file is not a Mario Party 6 (USA, GP6E01) GameCube disc image. ' +
+        'Compressed formats (.rvz, .ciso, .wbfs) are not supported yet; use a plain .iso.';
+      return;
+    }
+    document.getElementById('pick').style.display = 'none';
+    if (navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    let blob = null;
+    try {
+      blob = await storeIso(file);
+    } catch (e) {
+      setupText.textContent = 'Could not store the image (' + e.message + '); running it from the picked file.';
+    }
+    startEngine({ kind: 'iso', blob: blob || file });
+  }
+
+  // One launch per update, without delaying the start: the cached build boots
+  // at once while the service worker checks for a newer one in the background
+  // (the page's own navigation already started that check). A download that
+  // finishes before the game is past its title/file-select screens restarts
+  // straight into it (mp6AtSafePoint: nothing played yet), later ones wait for
+  // the next menu or a tap on the notice. The first install has no active
+  // worker yet and downloads everything in its install step.
+  function updateInBackground() {
+    if (!('serviceWorker' in navigator) || !isSecureContext || params.has('noupdate')) return;
+    navigator.serviceWorker.ready.then((r) => r.active && r.active.postMessage('mp6-check-update')).catch(() => {});
+  }
+
+  async function main() {
+    if (!navigator.gpu) {
+      loadingEl.style.display = 'none';
+      statusEl.textContent = 'This browser has no WebGPU support (needs iOS 26 Safari or a recent Chrome/Edge).';
+      return;
+    }
+    updateInBackground();
+    stage('Opening your game disc', 0.02);
+    const stored = typeof pcDisc !== 'undefined' && pcDisc ? null : await storedIso();
+    if (stored) {
+      startEngine({ kind: 'iso', blob: stored });
+      return;
+    }
+    loadingEl.style.display = 'none';
+    setupEl.style.display = 'flex';
+    document.getElementById('iso-input').addEventListener('change', (e) => onPick(e.target.files[0]));
+  }
+
+
+  document.getElementById('forget').addEventListener('click', async () => {
+    try { await (await navigator.storage.getDirectory()).removeEntry(ISO_NAME); } catch {}
+    location.reload();
+  });
+  if (params.has('forget')) document.getElementById('forget').hidden = false;
+
+  // The service worker starts the app from its cached build and downloads
+  // newer builds in the background; this shows that download's progress.
+  var engineBuild = null;
+  if ('serviceWorker' in navigator && isSecureContext) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    const updateEl = document.getElementById('update');
+    let hideTimer = 0;
+    const note = (text, ms) => {
+      updateEl.textContent = text;
+      updateEl.style.display = 'block';
+      clearTimeout(hideTimer);
+      if (ms) hideTimer = setTimeout(() => { updateEl.style.display = 'none'; }, ms);
+    };
+    updateEl.addEventListener('click', () => { if (updateEl.dataset.ready) location.reload(); });
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const m = e.data || {};
+      if ('mp6Version' in m) engineBuild = m.mp6Version;
+      if (m.mp6Update === 'downloading') note('Downloading an update…');
+      else if (m.mp6Update === 'progress') note('Downloading an update… ' +
+        (m.total ? Math.floor(100 * m.done / m.total) + '%' : Math.round(m.done / 1048576) + ' MB'));
+      else if (m.mp6Update === 'failed') note('Update download failed; it will retry next launch.', 6000);
+      else if (m.mp6Update === 'ready') {
+        updateEl.dataset.ready = '1';
+        // Downloaded while playing: restart into it at the next menu (title,
+        // file select, mode select), never mid-party; until then one tap does it.
+        if (window.mp6AtSafePoint && window.mp6AtSafePoint()) location.reload();
+        else { window.mp6UpdatePending = true; note('Update ready. Tap here to restart into it, or it starts at the next menu.'); }
+      }
+    });
+    navigator.serviceWorker.ready.then((r) => r.active && r.active.postMessage('mp6-version')).catch(() => {});
+    // An installed iPhone app is mostly resumed, not relaunched, so a check
+    // that ran only on page loads could leave it on an old build for hours.
+    // Ask for one on every return to the app as well.
+    const askUpdate = () => navigator.serviceWorker.ready.then((r) => r.active && r.active.postMessage('mp6-check-update')).catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) askUpdate(); });
+  }
+  main();
+</script>
+</body>
+</html>

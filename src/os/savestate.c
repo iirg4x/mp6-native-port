@@ -34,6 +34,7 @@
 #include "mp6_savestate.h"
 
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -93,6 +94,8 @@ static const char kImageAnchor[] = "mp6-savestate-anchor";
  * it describes the RUNNING process (a restored state can never smuggle in
  * a stale value of it). */
 static int g_wasRestored;
+/* Set while servicing an MP6_LOAD_STATE load (mp6_savestate_tick). */
+static int g_restoreKeepsScript;
 
 int mp6_savestate_was_restored(void) { return g_wasRestored; }
 
@@ -315,6 +318,242 @@ static int mp6_ss_collect_regions(Mp6SavestateRegion *out, int maxOut, uint64_t 
     return n;
 }
 
+/* ------------------------------------------------------------------
+ * Payload: independent 1 MB blocks.
+ *
+ * The regions' bytes, concatenated in table order, are cut into
+ * MP6_SS_BLOCK-byte blocks. A block that is all zeros (most of the arena:
+ * 88% of a board-time capture) is stored as nothing; every other block is
+ * its own zlib stream (level 1, adler-checked). Independent blocks let
+ * capture and restore run on every core, and a zero block costs a scan
+ * instead of a trip through deflate/inflate. The payload is
+ *
+ *     uint32 blockSize, uint32 blockCount, uint32 bytes[blockCount],
+ *     then each non-empty block's stream in order
+ *
+ * and hdr.compressedBytes is its whole length, so everything around it
+ * (the widescreen tail, the probe) is laid out as before.
+ * ------------------------------------------------------------------ */
+#define MP6_SS_BLOCK (1u << 20)
+
+/* A small worker pool for one capture or restore at a time, run from the
+ * game thread at a frame boundary; the game thread works too. On a host
+ * without threads (the web build) everything runs on the calling thread. */
+typedef void (*Mp6SsJobFn)(int index, void *ctx);
+
+static Mp6Sem g_ssWork, g_ssDone;
+static int g_ssWorkers = -1; /* -1 = pool not created yet */
+static Mp6SsJobFn g_ssJobFn;
+static void *g_ssJobCtx;
+static int g_ssJobCount;
+static _Atomic int g_ssJobNext;
+
+static void mp6_ss_run_jobs(void)
+{
+    int i;
+    while ((i = atomic_fetch_add(&g_ssJobNext, 1)) < g_ssJobCount) g_ssJobFn(i, g_ssJobCtx);
+}
+
+static void mp6_ss_worker_main(void *unused)
+{
+    (void)unused;
+    for (;;) {
+        mp6_host_sem_wait(&g_ssWork);
+        mp6_ss_run_jobs();
+        mp6_host_sem_post(&g_ssDone);
+    }
+}
+
+static void mp6_ss_parallel_for(int count, Mp6SsJobFn fn, void *ctx)
+{
+    int i;
+    if (g_ssWorkers < 0) {
+        int want = mp6_host_cpu_count() - 1;
+        g_ssWorkers = 0;
+        if (want > 7) want = 7;
+        if (want > 0 && mp6_host_sem_init(&g_ssWork) && mp6_host_sem_init(&g_ssDone)) {
+            for (i = 0; i < want; i++) {
+                if (mp6_host_thread_start(mp6_ss_worker_main, NULL) == 0) g_ssWorkers++;
+            }
+        }
+    }
+    g_ssJobFn = fn;
+    g_ssJobCtx = ctx;
+    g_ssJobCount = count;
+    atomic_store(&g_ssJobNext, 0);
+    for (i = 0; i < g_ssWorkers; i++) mp6_host_sem_post(&g_ssWork);
+    mp6_ss_run_jobs();
+    for (i = 0; i < g_ssWorkers; i++) mp6_host_sem_wait(&g_ssDone);
+}
+
+/* Capture: one block's bytes may span several regions. */
+typedef struct {
+    const Mp6SavestateRegion *regions;
+    int nRegion;
+    uint64_t rawBytes;
+    uint32_t blockCount;
+    uint32_t *blockBytes;     /* out: stream length, 0 = all-zero block */
+    unsigned char **blockData; /* out: the stream, malloc'd */
+    _Atomic int failed;
+} Mp6SsCaptureJobs;
+
+/* Calls fn(ptr, len, ctx) for each piece of raw offsets [begin, end). */
+static int mp6_ss_block_pieces(const Mp6SavestateRegion *regions, int nRegion, uint64_t begin,
+                               uint64_t end, int (*fn)(const unsigned char *, size_t, void *),
+                               void *ctx)
+{
+    uint64_t regionStart = 0;
+    int i;
+    for (i = 0; i < nRegion && begin < end; i++) {
+        uint64_t regionEnd = regionStart + regions[i].size;
+        if (begin < regionEnd) {
+            uint64_t stop = end < regionEnd ? end : regionEnd;
+            const unsigned char *src =
+                (const unsigned char *)(uintptr_t)regions[i].addr + (begin - regionStart);
+            if (!fn(src, (size_t)(stop - begin), ctx)) return 0;
+            begin = stop;
+        }
+        regionStart = regionEnd;
+    }
+    return 1;
+}
+
+static int mp6_ss_piece_is_zero(const unsigned char *p, size_t len, void *ctx)
+{
+    uint64_t acc = 0;
+    size_t i = 0;
+    (void)ctx;
+    for (; i < len && ((uintptr_t)(p + i) & 7u) != 0; i++) acc |= p[i];
+    for (; i + 64 <= len; i += 64) {
+        const uint64_t *w = (const uint64_t *)(const void *)(p + i);
+        acc |= w[0] | w[1] | w[2] | w[3] | w[4] | w[5] | w[6] | w[7];
+        if (acc) return 0;
+    }
+    for (; i < len; i++) acc |= p[i];
+    return acc == 0;
+}
+
+static int mp6_ss_piece_deflate(const unsigned char *p, size_t len, void *ctx)
+{
+    z_stream *zs = (z_stream *)ctx;
+    zs->next_in = (Bytef *)(uintptr_t)p;
+    zs->avail_in = (uInt)len;
+    return deflate(zs, Z_NO_FLUSH) == Z_OK && zs->avail_in == 0;
+}
+
+static void mp6_ss_capture_block(int index, void *ctxp)
+{
+    Mp6SsCaptureJobs *ctx = (Mp6SsCaptureJobs *)ctxp;
+    uint64_t begin = (uint64_t)index * MP6_SS_BLOCK;
+    uint64_t end = begin + MP6_SS_BLOCK < ctx->rawBytes ? begin + MP6_SS_BLOCK : ctx->rawBytes;
+    uLong bound = compressBound((uLong)(end - begin));
+    unsigned char *out;
+    z_stream zs;
+    int ok;
+
+    if (mp6_ss_block_pieces(ctx->regions, ctx->nRegion, begin, end, mp6_ss_piece_is_zero, NULL)) {
+        ctx->blockBytes[index] = 0;
+        return;
+    }
+    out = (unsigned char *)malloc(bound);
+    memset(&zs, 0, sizeof(zs));
+    if (out == NULL || deflateInit(&zs, 1) != Z_OK) {
+        free(out);
+        atomic_store(&ctx->failed, MP6_SAVESTATE_ERR_NOMEM);
+        return;
+    }
+    zs.next_out = out;
+    zs.avail_out = (uInt)bound;
+    ok = mp6_ss_block_pieces(ctx->regions, ctx->nRegion, begin, end, mp6_ss_piece_deflate, &zs) &&
+         deflate(&zs, Z_FINISH) == Z_STREAM_END;
+    ctx->blockBytes[index] = (uint32_t)zs.total_out;
+    deflateEnd(&zs);
+    if (!ok) {
+        free(out);
+        atomic_store(&ctx->failed, MP6_SAVESTATE_ERR_IO);
+        return;
+    }
+    ctx->blockData[index] = out;
+}
+
+/* Restore: every block inflates into its own slice of the scratch image. */
+typedef struct {
+    unsigned char *raw;            /* calloc'd: zero blocks are already right */
+    uint64_t rawBytes;
+    const unsigned char *payload;  /* the blocks' streams, back to back */
+    const uint32_t *blockBytes;
+    const uint64_t *blockOffset;   /* into payload */
+    _Atomic int failed;
+} Mp6SsRestoreJobs;
+
+/* Commit: every block copies (or, all-zero, clears) its slice of the live
+ * regions. Runs after the whole payload is proven intact; the pool's state
+ * lives in this file's carved-out statics, which the commit never touches. */
+typedef struct {
+    const unsigned char *raw;
+    uint64_t rawBytes;
+    const Mp6SavestateRegion *regions;
+    int nRegion;
+    const uint32_t *blockBytes;
+    void *aram; /* this process's ARAM buffer, latched before the commit */
+} Mp6SsCommitJobs;
+
+static void mp6_ss_commit_block(int index, void *ctxp)
+{
+    const Mp6SsCommitJobs *ctx = (const Mp6SsCommitJobs *)ctxp;
+    uint64_t begin = (uint64_t)index * MP6_SS_BLOCK;
+    uint64_t end = begin + MP6_SS_BLOCK < ctx->rawBytes ? begin + MP6_SS_BLOCK : ctx->rawBytes;
+    uint64_t regionStart = 0;
+    int zero = ctx->blockBytes[index] == 0;
+    int i;
+    for (i = 0; i < ctx->nRegion && begin < end; i++) {
+        uint64_t regionEnd = regionStart + ctx->regions[i].size;
+        if (begin < regionEnd) {
+            uint64_t stop = end < regionEnd ? end : regionEnd;
+            /* ARAM is the ONE region whose base is legitimately not pinned:
+             * it is a host calloc, not a fixed-address reservation. Its
+             * recorded address is therefore ADVISORY (diagnostics only) and
+             * the payload goes into whatever buffer THIS process allocated
+             * (sizes were checked equal before the commit). */
+            unsigned char *base = ctx->regions[i].kind == MP6_SS_REGION_ARAM
+                                      ? (unsigned char *)ctx->aram
+                                      : (unsigned char *)(uintptr_t)ctx->regions[i].addr;
+            unsigned char *dst = base + (begin - regionStart);
+            if (zero) memset(dst, 0, (size_t)(stop - begin));
+            else memcpy(dst, ctx->raw + begin, (size_t)(stop - begin));
+            begin = stop;
+        }
+        regionStart = regionEnd;
+    }
+}
+
+static void mp6_ss_restore_block(int index, void *ctxp)
+{
+    Mp6SsRestoreJobs *ctx = (Mp6SsRestoreJobs *)ctxp;
+    uint64_t begin = (uint64_t)index * MP6_SS_BLOCK;
+    uint64_t len = begin + MP6_SS_BLOCK < ctx->rawBytes ? MP6_SS_BLOCK : ctx->rawBytes - begin;
+    z_stream zs;
+    int zr;
+
+    if (ctx->blockBytes[index] == 0) return;
+    memset(&zs, 0, sizeof(zs));
+    if (inflateInit(&zs) != Z_OK) {
+        atomic_store(&ctx->failed, MP6_SAVESTATE_ERR_NOMEM);
+        return;
+    }
+    zs.next_in = (Bytef *)(uintptr_t)(ctx->payload + ctx->blockOffset[index]);
+    zs.avail_in = ctx->blockBytes[index];
+    /* Exactly the block's room: a stream that would write more (or less)
+     * than the block holds is a format error. */
+    zs.next_out = ctx->raw + begin;
+    zs.avail_out = (uInt)len;
+    zr = inflate(&zs, Z_FINISH);
+    if (zr != Z_STREAM_END || zs.total_out != len || zs.avail_in != 0) {
+        atomic_store(&ctx->failed, MP6_SAVESTATE_ERR_FORMAT);
+    }
+    inflateEnd(&zs);
+}
+
 /* ------------------------------------------------------------------ */
 
 int mp6_savestate_capture(const char *path)
@@ -324,12 +563,13 @@ int mp6_savestate_capture(const char *path)
     uint64_t rawBytes = 0;
     int nRegion, i, rc = MP6_SAVESTATE_OK;
     FILE *f = NULL;
-    z_stream zs;
-    unsigned char *outBuf = NULL;
-    const size_t kChunk = 1u << 20;
-    int zInit = 0;
+    Mp6SsCaptureJobs jobs;
+    uint32_t blockHead[2];
+    uint64_t payloadBytes;
     char tmpPath[560];
     uLong integrityCrc;
+
+    memset(&jobs, 0, sizeof(jobs));
 
     if (path == NULL) {
         return MP6_SAVESTATE_ERR_IO;
@@ -353,8 +593,20 @@ int mp6_savestate_capture(const char *path)
     }
     {
         int coroRegions = 0;
+        uint64_t poolLo = (uint64_t)(uintptr_t)mp6_coro_pool_base();
+        uint64_t poolHi = poolLo + (uint64_t)mp6_coro_pool_size();
         for (i = 0; i < nRegion; ++i) {
-            if (regions[i].kind == MP6_SS_REGION_CORO) ++coroRegions;
+            if (regions[i].kind != MP6_SS_REGION_CORO) continue;
+            ++coroRegions;
+            /* The web build keeps only its first slots at fixed addresses
+             * (src/host/coro_arena.c); a stack outside them would not be
+             * where a restoring run looks for it. */
+            if (regions[i].addr < poolLo || regions[i].addr + regions[i].size > poolHi) {
+                fprintf(stderr, "[SAVESTATE] refusing capture: coroutine slot %u is outside the "
+                                "fixed stack pool\n", regions[i].index);
+                fflush(stderr);
+                return MP6_SAVESTATE_ERR_UNSUPPORTED;
+            }
         }
         if (coroRegions == 0) {
             return MP6_SAVESTATE_ERR_UNSUPPORTED;
@@ -378,6 +630,10 @@ int mp6_savestate_capture(const char *path)
         fflush(stderr);
         return MP6_SAVESTATE_ERR_UNSUPPORTED;
     }
+
+    /* Host runtime state the coroutine backend keeps in captured memory
+     * (the web build's asyncify resume ids) must be current in the image. */
+    mp6_coro_savestate_precapture();
 
     memset(&hdr, 0, sizeof(hdr));
     hdr.magic = MP6_SAVESTATE_MAGIC;
@@ -421,66 +677,39 @@ int mp6_savestate_capture(const char *path)
         goto done;
     }
 
-    outBuf = (unsigned char *)malloc(kChunk);
-    if (outBuf == NULL) {
+    jobs.regions = regions;
+    jobs.nRegion = nRegion;
+    jobs.rawBytes = rawBytes;
+    jobs.blockCount = (uint32_t)((rawBytes + MP6_SS_BLOCK - 1) / MP6_SS_BLOCK);
+    jobs.blockBytes = (uint32_t *)calloc(jobs.blockCount, sizeof(uint32_t));
+    jobs.blockData = (unsigned char **)calloc(jobs.blockCount, sizeof(unsigned char *));
+    if (jobs.blockBytes == NULL || jobs.blockData == NULL) {
         rc = MP6_SAVESTATE_ERR_NOMEM;
         goto done;
     }
-    memset(&zs, 0, sizeof(zs));
-    /* Level 1: this is a debugging tool run interactively, and the bulk of
-     * the payload is long zero runs that even the fastest level collapses
-     * completely. Spending seconds of the user's time on level 9 to shave
-     * a mostly-zero stream is the wrong trade. */
-    if (deflateInit(&zs, 1) != Z_OK) {
-        rc = MP6_SAVESTATE_ERR_NOMEM;
+    mp6_ss_parallel_for((int)jobs.blockCount, mp6_ss_capture_block, &jobs);
+    if (atomic_load(&jobs.failed) != 0) {
+        rc = atomic_load(&jobs.failed);
         goto done;
     }
-    zInit = 1;
-
-    for (i = 0; i < nRegion; i++) {
-        zs.next_in = (Bytef *)(uintptr_t)regions[i].addr;
-        zs.avail_in = (uInt)regions[i].size;
-        /* Region sizes here are well under 4 GB each, so one avail_in pass
-         * per region is safe; the loop below drains as many output chunks
-         * as that input produces. */
-        while (zs.avail_in > 0) {
-            zs.next_out = outBuf;
-            zs.avail_out = (uInt)kChunk;
-            if (deflate(&zs, Z_NO_FLUSH) != Z_OK) {
-                rc = MP6_SAVESTATE_ERR_IO;
-                goto done;
-            }
-            {
-                size_t produced = kChunk - zs.avail_out;
-                if (produced && fwrite(outBuf, 1, produced, f) != produced) {
-                    rc = MP6_SAVESTATE_ERR_IO;
-                    goto done;
-                }
-            }
-        }
+    blockHead[0] = MP6_SS_BLOCK;
+    blockHead[1] = jobs.blockCount;
+    payloadBytes = sizeof(blockHead) + (uint64_t)jobs.blockCount * sizeof(uint32_t);
+    if (fwrite(blockHead, sizeof(blockHead), 1, f) != 1 ||
+        fwrite(jobs.blockBytes, sizeof(uint32_t), jobs.blockCount, f) != jobs.blockCount) {
+        rc = MP6_SAVESTATE_ERR_IO;
+        goto done;
     }
-    /* Flush the deflate tail. */
-    for (;;) {
-        int zr;
-        size_t produced;
-        zs.next_out = outBuf;
-        zs.avail_out = (uInt)kChunk;
-        zr = deflate(&zs, Z_FINISH);
-        produced = kChunk - zs.avail_out;
-        if (produced && fwrite(outBuf, 1, produced, f) != produced) {
+    for (i = 0; i < (int)jobs.blockCount; i++) {
+        if (jobs.blockBytes[i] == 0) continue;
+        if (fwrite(jobs.blockData[i], 1, jobs.blockBytes[i], f) != jobs.blockBytes[i]) {
             rc = MP6_SAVESTATE_ERR_IO;
             goto done;
         }
-        if (zr == Z_STREAM_END) {
-            break;
-        }
-        if (zr != Z_OK) {
-            rc = MP6_SAVESTATE_ERR_IO;
-            goto done;
-        }
+        payloadBytes += jobs.blockBytes[i];
     }
 
-    hdr.compressedBytes = (uint64_t)zs.total_out;
+    hdr.compressedBytes = payloadBytes;
 
     /* append the widescreen native-snapshot blob (see
      * mp6_widescreen_savestate_blob_size's comment for why these host-heap
@@ -554,14 +783,15 @@ int mp6_savestate_capture(const char *path)
     printf("[SAVESTATE] captured %s: %d regions, %.1f MB raw -> %.1f MB compressed\n",
            path, nRegion,
            (double)rawBytes / (1024.0 * 1024.0),
-           (double)zs.total_out / (1024.0 * 1024.0));
+           (double)payloadBytes / (1024.0 * 1024.0));
     fflush(stdout);
 
 done:
-    if (zInit) {
-        deflateEnd(&zs);
+    if (jobs.blockData != NULL) {
+        for (i = 0; i < (int)jobs.blockCount; i++) free(jobs.blockData[i]);
     }
-    free(outBuf);
+    free(jobs.blockData);
+    free(jobs.blockBytes);
     if (f) {
         fclose(f);
         mp6_remove_utf8(tmpPath); /* failed capture: clean up the partial temp, leave the old slot alone */
@@ -577,16 +807,15 @@ int mp6_savestate_restore(const char *path)
     Mp6SavestateHeader hdr;
     FILE *f = NULL;
     unsigned char *raw = NULL;
-    unsigned char *inBuf = NULL;
+    unsigned char *payload = NULL;
+    uint32_t *blockBytes = NULL;
+    uint64_t *blockOffset = NULL;
     void *wsBlob = NULL;
     size_t wsSize = 0;
-    z_stream zs;
-    int zInit = 0, rc = MP6_SAVESTATE_OK, i;
+    int rc = MP6_SAVESTATE_OK, i;
     int64_t rebasedRtcBase = 0;
     uint32_t expectedIntegrity = 0;
     uLong integrityCrc = 0;
-    uint64_t off;
-    const size_t kChunk = 1u << 20;
 
     if (path == NULL) {
         return MP6_SAVESTATE_ERR_IO;
@@ -860,61 +1089,64 @@ int mp6_savestate_restore(const char *path)
         rc = MP6_SAVESTATE_ERR_FORMAT;
         goto done;
     }
-    raw = (unsigned char *)malloc((size_t)hdr.rawBytes + 1u);
-    inBuf = (unsigned char *)malloc(kChunk);
-    if (raw == NULL || inBuf == NULL) {
-        rc = MP6_SAVESTATE_ERR_NOMEM;
-        goto done;
-    }
-    memset(&zs, 0, sizeof(zs));
-    if (inflateInit(&zs) != Z_OK) {
-        rc = MP6_SAVESTATE_ERR_NOMEM;
-        goto done;
-    }
-    zInit = 1;
-    zs.next_out = raw;
-    zs.avail_out = (uInt)hdr.rawBytes + 1u;
+    /* Read the whole payload, then inflate its blocks (in parallel) into a
+     * zeroed scratch image; zero blocks need no work at all. */
     {
-        uint64_t compressedLeft = hdr.compressedBytes;
-        for (;;) {
-        uLong beforeIn, beforeOut;
-        int zr;
-        if (zs.avail_in == 0) {
-            size_t want, got;
-            if (compressedLeft == 0) {
-                rc = MP6_SAVESTATE_ERR_FORMAT; /* exact declared stream ended before trailer */
-                goto done;
-            }
-            want = compressedLeft < kChunk ? (size_t)compressedLeft : kChunk;
-            got = fread(inBuf, 1, want, f);
-            if (got != want) {
-                rc = MP6_SAVESTATE_ERR_FORMAT; /* exact early EOF / read error */
-                goto done;
-            }
-            compressedLeft -= got;
-            zs.next_in = inBuf;
-            zs.avail_in = (uInt)got;
-        }
-        beforeIn = zs.total_in;
-        beforeOut = zs.total_out;
-        zr = inflate(&zs, Z_NO_FLUSH);
-        if (zr == Z_STREAM_END) {
-            if (compressedLeft != 0 || zs.avail_in != 0) {
-                rc = MP6_SAVESTATE_ERR_FORMAT; /* header includes bytes outside the stream */
-                goto done;
-            }
-            break;
-        }
-        if (zr != Z_OK || zs.avail_out == 0 ||
-            (zs.total_in == beforeIn && zs.total_out == beforeOut)) {
+        uint32_t blockHead[2];
+        uint32_t blockCount = (uint32_t)((hdr.rawBytes + MP6_SS_BLOCK - 1) / MP6_SS_BLOCK);
+        uint64_t tableBytes = sizeof(blockHead) + (uint64_t)blockCount * sizeof(uint32_t);
+        uint64_t streamBytes = 0;
+        Mp6SsRestoreJobs jobs;
+
+        if (hdr.compressedBytes < tableBytes ||
+            fread(blockHead, sizeof(blockHead), 1, f) != 1 ||
+            blockHead[0] != MP6_SS_BLOCK || blockHead[1] != blockCount) {
             rc = MP6_SAVESTATE_ERR_FORMAT;
             goto done;
         }
+        raw = (unsigned char *)calloc(1, (size_t)hdr.rawBytes);
+        blockBytes = (uint32_t *)malloc((size_t)blockCount * sizeof(uint32_t));
+        blockOffset = (uint64_t *)malloc((size_t)blockCount * sizeof(uint64_t));
+        if (raw == NULL || blockBytes == NULL || blockOffset == NULL) {
+            rc = MP6_SAVESTATE_ERR_NOMEM;
+            goto done;
         }
-    }
-    if (zs.total_out != hdr.rawBytes) {
-        rc = MP6_SAVESTATE_ERR_FORMAT;
-        goto done;
+        if (fread(blockBytes, sizeof(uint32_t), blockCount, f) != blockCount) {
+            rc = MP6_SAVESTATE_ERR_FORMAT;
+            goto done;
+        }
+        for (i = 0; i < (int)blockCount; i++) {
+            blockOffset[i] = streamBytes;
+            if (blockBytes[i] > compressBound(MP6_SS_BLOCK)) {
+                rc = MP6_SAVESTATE_ERR_FORMAT;
+                goto done;
+            }
+            streamBytes += blockBytes[i];
+        }
+        if (tableBytes + streamBytes != hdr.compressedBytes) {
+            rc = MP6_SAVESTATE_ERR_FORMAT; /* the table must account for the payload exactly */
+            goto done;
+        }
+        payload = (unsigned char *)malloc(streamBytes ? (size_t)streamBytes : 1u);
+        if (payload == NULL) {
+            rc = MP6_SAVESTATE_ERR_NOMEM;
+            goto done;
+        }
+        if (streamBytes != 0 && fread(payload, 1, (size_t)streamBytes, f) != streamBytes) {
+            rc = MP6_SAVESTATE_ERR_FORMAT; /* exact early EOF / read error */
+            goto done;
+        }
+        memset(&jobs, 0, sizeof(jobs));
+        jobs.raw = raw;
+        jobs.rawBytes = hdr.rawBytes;
+        jobs.payload = payload;
+        jobs.blockBytes = blockBytes;
+        jobs.blockOffset = blockOffset;
+        mp6_ss_parallel_for((int)blockCount, mp6_ss_restore_block, &jobs);
+        if (atomic_load(&jobs.failed) != 0) {
+            rc = atomic_load(&jobs.failed);
+            goto done;
+        }
     }
 
     /* Validate and materialize the entire tail before touching live memory.
@@ -992,6 +1224,9 @@ int mp6_savestate_restore(const char *path)
          * and for determinism. */
         int latchedMaxTicks = mp6_max_ticks;
         int latchedUnlimited = mp6_ticks_unlimited;
+        /* A state opened with MP6_LOAD_STATE runs on under THIS run's
+         * --input-script (see mp6_input_script_latch). */
+        void *latchedScript = g_restoreKeepsScript ? mp6_input_script_latch() : NULL;
         Mp6SsShimHostConfig latchedShimConfig;
         Mp6SsAllocDiagHostConfig latchedAllocConfig;
         mp6_shims_savestate_capture_host_config(&latchedShimConfig);
@@ -1017,21 +1252,16 @@ int mp6_savestate_restore(const char *path)
      * which the memory is unreachable and leaks on every load. */
     mp6_widescreen_savestate_prerestore();
 
-    off = 0;
-    for (i = 0; i < (int)hdr.regionCount; i++) {
-        if (fileRegions[i].kind == MP6_SS_REGION_ARAM) {
-            /* ARAM is the ONE region whose base is legitimately not pinned:
-             * it is a host calloc, not a fixed-address reservation. Its
-             * recorded address is therefore ADVISORY (diagnostics only) and
-             * the payload goes into whatever buffer THIS process allocated.
-             * Size must agree exactly -- a differing size means a different
-             * build's ARAM constant, which the build stamp should already
-             * have rejected, so this is belt-and-braces. */
-            memcpy(latchedAram, raw + off, latchedAramSize);
-        } else {
-            memcpy((void *)(uintptr_t)fileRegions[i].addr, raw + off, (size_t)fileRegions[i].size);
-        }
-        off += fileRegions[i].size;
+    {
+        Mp6SsCommitJobs commit;
+        commit.raw = raw;
+        commit.rawBytes = hdr.rawBytes;
+        commit.regions = fileRegions;
+        commit.nRegion = (int)hdr.regionCount;
+        commit.blockBytes = blockBytes;
+        commit.aram = latchedAram;
+        mp6_ss_parallel_for((int)((hdr.rawBytes + MP6_SS_BLOCK - 1) / MP6_SS_BLOCK),
+                            mp6_ss_commit_block, &commit);
     }
 
     /* Re-derive host-side state that the commit loop just desynchronized.
@@ -1047,10 +1277,17 @@ int mp6_savestate_restore(const char *path)
     /* put the RUNNING invocation's tick budget back (latched above). */
     mp6_max_ticks = latchedMaxTicks;
     mp6_ticks_unlimited = latchedUnlimited;
+    mp6_input_script_unlatch(latchedScript);
     mp6_shims_savestate_apply_host_config(&latchedShimConfig);
     mp6_malloc_savestate_apply_host_config(&latchedAllocConfig);
     }
 
+    /* Before anything can resume a restored coroutine. */
+    if (mp6_coro_savestate_rehydrate() != 0) {
+        fprintf(stderr, "[SAVESTATE] WARNING: the coroutine backend could not re-establish its "
+                        "resume state; restored processes may not run\n");
+        fflush(stderr);
+    }
     mp6_dvd_savestate_rehydrate();
     mp6_os_time_savestate_apply_rebase(rebasedRtcBase);
 
@@ -1105,11 +1342,10 @@ int mp6_savestate_restore(const char *path)
     fflush(stdout);
 
 done:
-    if (zInit) {
-        inflateEnd(&zs);
-    }
     free(raw);
-    free(inBuf);
+    free(payload);
+    free(blockBytes);
+    free(blockOffset);
     free(wsBlob);
     if (f) {
         fclose(f);
@@ -1145,6 +1381,9 @@ static long g_loadAtTick = -1;
  * which is precisely what makes them able to break the cycle. */
 static int g_saveFired;
 static int g_loadFired;
+/* MP6_LOAD_STATE=<file>: load that state once the boot has settled (at
+ * MP6_SAVESTATE_LOAD_AT_TICK when given), for reproducing a saved moment. */
+static char g_loadStatePath[512];
 static char g_slotPath[512];
 static int g_slotPathParsed;
 static int g_slotPathValid;
@@ -1351,6 +1590,18 @@ void mp6_savestate_tick(void)
     if (!g_tickLeversParsed) {
         g_saveAtTick = mp6_ss_parse_tick_env("MP6_SAVESTATE_SAVE_AT_TICK");
         g_loadAtTick = mp6_ss_parse_tick_env("MP6_SAVESTATE_LOAD_AT_TICK");
+        {
+            const char *loadState = getenv("MP6_LOAD_STATE");
+            if (loadState && loadState[0]) {
+                int written = snprintf(g_loadStatePath, sizeof(g_loadStatePath), "%s", loadState);
+                if (written < 0 || (size_t)written >= sizeof(g_loadStatePath)) {
+                    g_loadStatePath[0] = '\0';
+                    fprintf(stderr, "[SAVESTATE] MP6_LOAD_STATE path is too long -- ignored\n");
+                } else if (g_loadAtTick < 0) {
+                    g_loadAtTick = 60;
+                }
+            }
+        }
         g_tickLeversParsed = 1;
     }
 
@@ -1368,6 +1619,10 @@ void mp6_savestate_tick(void)
         } else if (!g_loadFired && g_loadAtTick >= 0 && mp6_tick_count >= g_loadAtTick) {
             g_loadFired = 1;
             g_pending = MP6_SS_PENDING_LOAD;
+            if (g_loadStatePath[0]) {
+                memcpy(g_requestPath, g_loadStatePath, sizeof(g_loadStatePath));
+                g_requestPathInvalid = 0;
+            }
         }
     }
 
@@ -1390,7 +1645,9 @@ void mp6_savestate_tick(void)
         } else if (action == MP6_SS_PENDING_SAVE) {
             r = mp6_savestate_capture(path);
         } else {
+            g_restoreKeepsScript = g_loadStatePath[0] && strcmp(path, g_loadStatePath) == 0;
             r = mp6_savestate_restore(path);
+            g_restoreKeepsScript = 0;
         }
         if (r != MP6_SAVESTATE_OK) {
             fprintf(stderr, "[SAVESTATE] %s failed: %s\n",

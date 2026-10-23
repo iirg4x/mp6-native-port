@@ -1,0 +1,5 @@
+--- a/src/REL/m625Dll/text_296C.c
++++ b/src/REL/m625Dll/text_296C.c
+@@ -2069 +2069 @@
+-    s16 nearbyPlayer;
++    s16 nearbyPlayer = 0;

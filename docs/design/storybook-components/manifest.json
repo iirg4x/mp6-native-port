@@ -1,0 +1,2478 @@
+{
+  "version": 1,
+  "status": "visual-only-awaiting-approval",
+  "viewport": [
+    1672,
+    941
+  ],
+  "referenceSHA256": "8c8bb4a4795ec487adffb55093300fd3f8c035908eda8c3eab6f6a03e648a5dd",
+  "background": {
+    "day": "#fff000",
+    "night": "#080896",
+    "mask": "textures/zigzag-mask.png",
+    "textureSize": [
+      2048,
+      1024
+    ],
+    "contentRect": [
+      0,
+      0,
+      1672,
+      941
+    ]
+  },
+  "particles": [
+    {
+      "id": "confetti-1",
+      "type": "confetti",
+      "texture": "textures/particle-confetti.png",
+      "position": [
+        68.5,
+        20.5
+      ],
+      "size": 35,
+      "color": "#03c5ef",
+      "phase": 0
+    },
+    {
+      "id": "confetti-2",
+      "type": "confetti",
+      "texture": "textures/particle-confetti.png",
+      "position": [
+        29,
+        75
+      ],
+      "size": 35,
+      "color": "#ee35d7",
+      "phase": 0.73
+    },
+    {
+      "id": "confetti-3",
+      "type": "confetti",
+      "texture": "textures/particle-confetti.png",
+      "position": [
+        30.5,
+        156.5
+      ],
+      "size": 35,
+      "color": "#19d648",
+      "phase": 1.46
+    },
+    {
+      "id": "confetti-4",
+      "type": "confetti",
+      "texture": "textures/particle-confetti.png",
+      "position": [
+        23.5,
+        268.5
+      ],
+      "size": 35,
+      "color": "#7536f1",
+      "phase": 2.19
+    },
+    {
+      "id": "confetti-5",
+      "type": "confetti",
+      "texture": "textures/particle-confetti.png",
+      "position": [
+        15,
+        412
+      ],
+      "size": 35,
+      "color": "#03c5ef",
+      "phase": 2.92
+    },
+    {
+      "id": "confetti-6",
+      "type": "confetti",
+      "texture": "textures/particle-confetti.png",
+      "position": [
+        210,
+        920
+      ],
+      "size": 35,
+      "color": "#ee35d7",
+      "phase": 3.65
+    },
+    {
+      "id": "confetti-7",
+      "type": "confetti",
+      "texture": "textures/particle-confetti.png",
+      "position": [
+        321,
+        900
+      ],
+      "size": 35,
+      "color": "#19d648",
+      "phase": 4.38
+    },
+    {
+      "id": "sky-star-1",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1264.5,
+        14.5
+      ],
+      "size": 29,
+      "color": "#fff349",
+      "phase": 5.109999999999999
+    },
+    {
+      "id": "sky-star-2",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1452.5,
+        27.5
+      ],
+      "size": 43,
+      "color": "#fff349",
+      "phase": 5.84
+    },
+    {
+      "id": "sky-star-3",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1501.5,
+        59
+      ],
+      "size": 29,
+      "color": "#fff349",
+      "phase": 6.57
+    },
+    {
+      "id": "sky-star-4",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1650.5,
+        109
+      ],
+      "size": 34,
+      "color": "#fff349",
+      "phase": 7.3
+    },
+    {
+      "id": "sky-star-5",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1649.5,
+        172.5
+      ],
+      "size": 43,
+      "color": "#fff349",
+      "phase": 8.03
+    },
+    {
+      "id": "sky-star-6",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1654.5,
+        249
+      ],
+      "size": 26,
+      "color": "#fff349",
+      "phase": 8.76
+    },
+    {
+      "id": "sky-star-7",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1652.5,
+        313.5
+      ],
+      "size": 35,
+      "color": "#fff349",
+      "phase": 9.49
+    },
+    {
+      "id": "sky-star-8",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1658.5,
+        469.5
+      ],
+      "size": 25,
+      "color": "#fff349",
+      "phase": 10.219999999999999
+    },
+    {
+      "id": "sky-star-9",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1380.5,
+        896.5
+      ],
+      "size": 35,
+      "color": "#fff349",
+      "phase": 10.95
+    },
+    {
+      "id": "sky-star-10",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1537.5,
+        912
+      ],
+      "size": 35,
+      "color": "#fff349",
+      "phase": 11.68
+    },
+    {
+      "id": "sky-star-11",
+      "type": "star",
+      "texture": "textures/particle-star.png",
+      "position": [
+        1641,
+        914.5
+      ],
+      "size": 31,
+      "color": "#fff349",
+      "phase": 12.41
+    }
+  ],
+  "layers": [
+    {
+      "id": "night-moon",
+      "group": "Animated sky",
+      "texture": "textures/night-moon.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        108,
+        113
+      ],
+      "position": [
+        1539,
+        5
+      ],
+      "pivot": [
+        54,
+        56
+      ],
+      "animation": "moon-rock",
+      "source": "approved-reference-cutout"
+    },
+    {
+      "id": "day-sun",
+      "group": "Animated sky",
+      "texture": "textures/day-sun.png",
+      "textureSize": [
+        256,
+        256
+      ],
+      "contentRect": [
+        2,
+        2,
+        169,
+        171
+      ],
+      "position": [
+        89,
+        32
+      ],
+      "pivot": [
+        84,
+        84
+      ],
+      "animation": "sun-turn",
+      "source": "imagegen-recovered-hidden-sun"
+    },
+    {
+      "id": "chapter-picture-plate",
+      "group": "Chapter tabs",
+      "texture": "textures/chapter-picture-plate.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        229,
+        106
+      ],
+      "position": [
+        274,
+        14
+      ],
+      "pivot": [
+        114.5,
+        53
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "red-tab"
+    },
+    {
+      "id": "chapter-picture-label",
+      "group": "Chapter labels",
+      "texture": "textures/chapter-picture-label.png",
+      "textureSize": [
+        128,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        106,
+        29
+      ],
+      "position": [
+        339,
+        42
+      ],
+      "pivot": [
+        53,
+        14.5
+      ],
+      "text": "Picture",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "chapter-sound-plate",
+      "group": "Chapter tabs",
+      "texture": "textures/chapter-sound-plate.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        205,
+        97
+      ],
+      "position": [
+        509,
+        25
+      ],
+      "pivot": [
+        102.5,
+        48.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "ivory"
+    },
+    {
+      "id": "chapter-sound-label",
+      "group": "Chapter labels",
+      "texture": "textures/chapter-sound-label.png",
+      "textureSize": [
+        128,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        85,
+        28
+      ],
+      "position": [
+        568,
+        43
+      ],
+      "pivot": [
+        42.5,
+        14
+      ],
+      "text": "Sound",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "chapter-controls-plate",
+      "group": "Chapter tabs",
+      "texture": "textures/chapter-controls-plate.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        220,
+        97
+      ],
+      "position": [
+        727,
+        25
+      ],
+      "pivot": [
+        110,
+        48.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "ivory"
+    },
+    {
+      "id": "chapter-controls-label",
+      "group": "Chapter labels",
+      "texture": "textures/chapter-controls-label.png",
+      "textureSize": [
+        128,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        115,
+        29
+      ],
+      "position": [
+        777,
+        45
+      ],
+      "pivot": [
+        57.5,
+        14.5
+      ],
+      "text": "Controls",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "chapter-game-plate",
+      "group": "Chapter tabs",
+      "texture": "textures/chapter-game-plate.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        211,
+        96
+      ],
+      "position": [
+        963,
+        27
+      ],
+      "pivot": [
+        105.5,
+        48
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "ivory"
+    },
+    {
+      "id": "chapter-game-label",
+      "group": "Chapter labels",
+      "texture": "textures/chapter-game-label.png",
+      "textureSize": [
+        128,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        80,
+        26
+      ],
+      "position": [
+        1028,
+        47
+      ],
+      "pivot": [
+        40,
+        13
+      ],
+      "text": "Game",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "chapter-extras-plate",
+      "group": "Chapter tabs",
+      "texture": "textures/chapter-extras-plate.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        216,
+        99
+      ],
+      "position": [
+        1186,
+        27
+      ],
+      "pivot": [
+        108,
+        49.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "ivory"
+    },
+    {
+      "id": "chapter-extras-label",
+      "group": "Chapter labels",
+      "texture": "textures/chapter-extras-label.png",
+      "textureSize": [
+        128,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        87,
+        25
+      ],
+      "position": [
+        1249,
+        48
+      ],
+      "pivot": [
+        43.5,
+        12.5
+      ],
+      "text": "Extras",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "chapter-sun-badge",
+      "group": "Chapter tabs",
+      "texture": "textures/chapter-sun-badge.png",
+      "textureSize": [
+        64,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        48,
+        52
+      ],
+      "position": [
+        286,
+        28
+      ],
+      "pivot": [
+        24,
+        26
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "chapter-favourite-star",
+      "group": "Chapter tabs",
+      "texture": "textures/chapter-favourite-star.png",
+      "textureSize": [
+        32,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        23,
+        23
+      ],
+      "position": [
+        464,
+        54
+      ],
+      "pivot": [
+        11.5,
+        11.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "book-red-cover",
+      "group": "Book",
+      "texture": "textures/book-red-cover.png",
+      "textureSize": [
+        2048,
+        1024
+      ],
+      "contentRect": [
+        2,
+        2,
+        1667,
+        791
+      ],
+      "position": [
+        3,
+        76
+      ],
+      "pivot": [
+        833.5,
+        395.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "book"
+    },
+    {
+      "id": "book-left-page-stack",
+      "group": "Book",
+      "texture": "textures/book-left-page-stack.png",
+      "textureSize": [
+        1024,
+        1024
+      ],
+      "contentRect": [
+        2,
+        2,
+        810,
+        772
+      ],
+      "position": [
+        26,
+        78
+      ],
+      "pivot": [
+        405,
+        386
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "book"
+    },
+    {
+      "id": "book-right-page-stack",
+      "group": "Book",
+      "texture": "textures/book-right-page-stack.png",
+      "textureSize": [
+        1024,
+        1024
+      ],
+      "contentRect": [
+        2,
+        2,
+        808,
+        765
+      ],
+      "position": [
+        836,
+        85
+      ],
+      "pivot": [
+        404,
+        382.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "book"
+    },
+    {
+      "id": "book-left-page",
+      "group": "Book",
+      "texture": "textures/book-left-page.png",
+      "textureSize": [
+        1024,
+        1024
+      ],
+      "contentRect": [
+        2,
+        2,
+        791,
+        758
+      ],
+      "position": [
+        45,
+        79
+      ],
+      "pivot": [
+        395.5,
+        379
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "book"
+    },
+    {
+      "id": "book-right-page",
+      "group": "Book",
+      "texture": "textures/book-right-page.png",
+      "textureSize": [
+        1024,
+        1024
+      ],
+      "contentRect": [
+        2,
+        2,
+        785,
+        753
+      ],
+      "position": [
+        836,
+        84
+      ],
+      "pivot": [
+        392.5,
+        376.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "book"
+    },
+    {
+      "id": "page-ornament-top-left",
+      "group": "Page ornaments",
+      "texture": "textures/page-ornament-top-left.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        77,
+        79
+      ],
+      "position": [
+        107,
+        107
+      ],
+      "pivot": [
+        38.5,
+        39.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "page-ornament-bottom-left",
+      "group": "Page ornaments",
+      "texture": "textures/page-ornament-bottom-left.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        96,
+        79
+      ],
+      "position": [
+        710,
+        721
+      ],
+      "pivot": [
+        48,
+        39.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "page-ornament-top-right",
+      "group": "Page ornaments",
+      "texture": "textures/page-ornament-top-right.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        76,
+        80
+      ],
+      "position": [
+        1503,
+        105
+      ],
+      "pivot": [
+        38,
+        40
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "heading-sun-emblem",
+      "group": "Headings",
+      "texture": "textures/heading-sun-emblem.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        125,
+        124
+      ],
+      "position": [
+        177,
+        112
+      ],
+      "pivot": [
+        62.5,
+        62
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "heading-picture",
+      "group": "Headings",
+      "texture": "textures/heading-picture.png",
+      "textureSize": [
+        512,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        286,
+        72
+      ],
+      "position": [
+        333,
+        126
+      ],
+      "pivot": [
+        143,
+        36
+      ],
+      "text": "Picture",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "heading-subtitle",
+      "group": "Headings",
+      "texture": "textures/heading-subtitle.png",
+      "textureSize": [
+        512,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        363,
+        31
+      ],
+      "position": [
+        299,
+        213
+      ],
+      "pivot": [
+        181.5,
+        15.5
+      ],
+      "text": "Make the adventure shine.",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "heading-your-adventure",
+      "group": "Headings",
+      "texture": "textures/heading-your-adventure.png",
+      "textureSize": [
+        512,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        297,
+        38
+      ],
+      "position": [
+        1072,
+        125
+      ],
+      "pivot": [
+        148.5,
+        19
+      ],
+      "text": "Your adventure",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "heading-moon-emblem",
+      "group": "Headings",
+      "texture": "textures/heading-moon-emblem.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        63,
+        67
+      ],
+      "position": [
+        1450,
+        112
+      ],
+      "pivot": [
+        31.5,
+        33.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "selected-row-ribbon",
+      "group": "Selection",
+      "texture": "textures/selected-row-ribbon.png",
+      "textureSize": [
+        1024,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        681,
+        76
+      ],
+      "position": [
+        131,
+        264
+      ],
+      "pivot": [
+        340.5,
+        38
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "ribbon"
+    },
+    {
+      "id": "selected-row-star",
+      "group": "Selection",
+      "texture": "textures/selected-row-star.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        67,
+        66
+      ],
+      "position": [
+        114,
+        273
+      ],
+      "pivot": [
+        33.5,
+        33
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "widescreen-label",
+      "group": "Option labels",
+      "texture": "textures/widescreen-label.png",
+      "textureSize": [
+        256,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        201,
+        34
+      ],
+      "position": [
+        192,
+        283
+      ],
+      "pivot": [
+        100.5,
+        17
+      ],
+      "text": "Widescreen",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "widescreen-value",
+      "group": "Option values",
+      "texture": "textures/widescreen-value.png",
+      "textureSize": [
+        64,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        46,
+        26
+      ],
+      "position": [
+        646,
+        288
+      ],
+      "pivot": [
+        23,
+        13
+      ],
+      "text": "On",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "widescreen-previous",
+      "group": "Option arrows",
+      "texture": "textures/widescreen-previous.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        20,
+        34
+      ],
+      "position": [
+        562,
+        285
+      ],
+      "pivot": [
+        10,
+        17
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "widescreen-next",
+      "group": "Option arrows",
+      "texture": "textures/widescreen-next.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        20,
+        34
+      ],
+      "position": [
+        747,
+        286
+      ],
+      "pivot": [
+        10,
+        17
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "anti-aliasing-label",
+      "group": "Option labels",
+      "texture": "textures/anti-aliasing-label.png",
+      "textureSize": [
+        256,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        225,
+        41
+      ],
+      "position": [
+        184,
+        359
+      ],
+      "pivot": [
+        112.5,
+        20.5
+      ],
+      "text": "Anti-Aliasing",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "anti-aliasing-value",
+      "group": "Option values",
+      "texture": "textures/anti-aliasing-value.png",
+      "textureSize": [
+        128,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        109,
+        29
+      ],
+      "position": [
+        615,
+        361
+      ],
+      "pivot": [
+        54.5,
+        14.5
+      ],
+      "text": "Smooth",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "anti-aliasing-previous",
+      "group": "Option arrows",
+      "texture": "textures/anti-aliasing-previous.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        31
+      ],
+      "position": [
+        563,
+        362
+      ],
+      "pivot": [
+        9.5,
+        15.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "anti-aliasing-next",
+      "group": "Option arrows",
+      "texture": "textures/anti-aliasing-next.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        32
+      ],
+      "position": [
+        747,
+        362
+      ],
+      "pivot": [
+        9.5,
+        16
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "anti-aliasing-rule",
+      "group": "Option rules",
+      "texture": "textures/anti-aliasing-rule.png",
+      "textureSize": [
+        1024,
+        8
+      ],
+      "contentRect": [
+        2,
+        2,
+        623,
+        3
+      ],
+      "position": [
+        165,
+        412
+      ],
+      "pivot": [
+        311.5,
+        1.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "ambient-occlusion-label",
+      "group": "Option labels",
+      "texture": "textures/ambient-occlusion-label.png",
+      "textureSize": [
+        512,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        313,
+        33
+      ],
+      "position": [
+        183,
+        430
+      ],
+      "pivot": [
+        156.5,
+        16.5
+      ],
+      "text": "Ambient Occlusion",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "ambient-occlusion-value",
+      "group": "Option values",
+      "texture": "textures/ambient-occlusion-value.png",
+      "textureSize": [
+        64,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        47,
+        27
+      ],
+      "position": [
+        646,
+        435
+      ],
+      "pivot": [
+        23.5,
+        13.5
+      ],
+      "text": "On",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "ambient-occlusion-previous",
+      "group": "Option arrows",
+      "texture": "textures/ambient-occlusion-previous.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        32
+      ],
+      "position": [
+        563,
+        434
+      ],
+      "pivot": [
+        9.5,
+        16
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "ambient-occlusion-next",
+      "group": "Option arrows",
+      "texture": "textures/ambient-occlusion-next.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        33
+      ],
+      "position": [
+        747,
+        434
+      ],
+      "pivot": [
+        9.5,
+        16.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "ambient-occlusion-rule",
+      "group": "Option rules",
+      "texture": "textures/ambient-occlusion-rule.png",
+      "textureSize": [
+        1024,
+        8
+      ],
+      "contentRect": [
+        2,
+        2,
+        623,
+        3
+      ],
+      "position": [
+        165,
+        485
+      ],
+      "pivot": [
+        311.5,
+        1.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "shadow-quality-label",
+      "group": "Option labels",
+      "texture": "textures/shadow-quality-label.png",
+      "textureSize": [
+        512,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        261,
+        42
+      ],
+      "position": [
+        183,
+        501
+      ],
+      "pivot": [
+        130.5,
+        21
+      ],
+      "text": "Shadow Quality",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "shadow-quality-value",
+      "group": "Option values",
+      "texture": "textures/shadow-quality-value.png",
+      "textureSize": [
+        64,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        41,
+        29
+      ],
+      "position": [
+        648,
+        506
+      ],
+      "pivot": [
+        20.5,
+        14.5
+      ],
+      "text": "4x",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "shadow-quality-previous",
+      "group": "Option arrows",
+      "texture": "textures/shadow-quality-previous.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        32
+      ],
+      "position": [
+        563,
+        507
+      ],
+      "pivot": [
+        9.5,
+        16
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "shadow-quality-next",
+      "group": "Option arrows",
+      "texture": "textures/shadow-quality-next.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        21,
+        34
+      ],
+      "position": [
+        746,
+        507
+      ],
+      "pivot": [
+        10.5,
+        17
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "shadow-quality-rule",
+      "group": "Option rules",
+      "texture": "textures/shadow-quality-rule.png",
+      "textureSize": [
+        1024,
+        8
+      ],
+      "contentRect": [
+        2,
+        2,
+        623,
+        3
+      ],
+      "position": [
+        165,
+        557
+      ],
+      "pivot": [
+        311.5,
+        1.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "unlocked-fps-label",
+      "group": "Option labels",
+      "texture": "textures/unlocked-fps-label.png",
+      "textureSize": [
+        256,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        231,
+        33
+      ],
+      "position": [
+        182,
+        576
+      ],
+      "pivot": [
+        115.5,
+        16.5
+      ],
+      "text": "Unlocked FPS",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "unlocked-fps-value",
+      "group": "Option values",
+      "texture": "textures/unlocked-fps-value.png",
+      "textureSize": [
+        64,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        47,
+        27
+      ],
+      "position": [
+        646,
+        581
+      ],
+      "pivot": [
+        23.5,
+        13.5
+      ],
+      "text": "On",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "unlocked-fps-previous",
+      "group": "Option arrows",
+      "texture": "textures/unlocked-fps-previous.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        33
+      ],
+      "position": [
+        563,
+        580
+      ],
+      "pivot": [
+        9.5,
+        16.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "unlocked-fps-next",
+      "group": "Option arrows",
+      "texture": "textures/unlocked-fps-next.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        20,
+        33
+      ],
+      "position": [
+        746,
+        580
+      ],
+      "pivot": [
+        10,
+        16.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "unlocked-fps-rule",
+      "group": "Option rules",
+      "texture": "textures/unlocked-fps-rule.png",
+      "textureSize": [
+        1024,
+        8
+      ],
+      "contentRect": [
+        2,
+        2,
+        623,
+        3
+      ],
+      "position": [
+        165,
+        631
+      ],
+      "pivot": [
+        311.5,
+        1.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "picture-preset-label",
+      "group": "Option labels",
+      "texture": "textures/picture-preset-label.png",
+      "textureSize": [
+        256,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        232,
+        32
+      ],
+      "position": [
+        200,
+        651
+      ],
+      "pivot": [
+        116,
+        16
+      ],
+      "text": "Picture Preset",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "picture-preset-value",
+      "group": "Option values",
+      "texture": "textures/picture-preset-value.png",
+      "textureSize": [
+        128,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        114,
+        27
+      ],
+      "position": [
+        611,
+        656
+      ],
+      "pivot": [
+        57,
+        13.5
+      ],
+      "text": "Custom",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "picture-preset-previous",
+      "group": "Option arrows",
+      "texture": "textures/picture-preset-previous.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        32
+      ],
+      "position": [
+        563,
+        655
+      ],
+      "pivot": [
+        9.5,
+        16
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "picture-preset-next",
+      "group": "Option arrows",
+      "texture": "textures/picture-preset-next.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        19,
+        34
+      ],
+      "position": [
+        747,
+        655
+      ],
+      "pivot": [
+        9.5,
+        17
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "picture-preset-rule",
+      "group": "Option rules",
+      "texture": "textures/picture-preset-rule.png",
+      "textureSize": [
+        1024,
+        8
+      ],
+      "contentRect": [
+        2,
+        2,
+        598,
+        3
+      ],
+      "position": [
+        190,
+        706
+      ],
+      "pivot": [
+        299,
+        1.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "preview-photo",
+      "group": "Preview",
+      "texture": "textures/preview-photo.png",
+      "textureSize": [
+        1024,
+        512
+      ],
+      "contentRect": [
+        2,
+        2,
+        690,
+        377
+      ],
+      "position": [
+        871,
+        194
+      ],
+      "pivot": [
+        345,
+        188.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "preview-corner-top-left",
+      "group": "Photo corners",
+      "texture": "textures/preview-corner-top-left.png",
+      "textureSize": [
+        128,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        61,
+        60
+      ],
+      "position": [
+        862,
+        187
+      ],
+      "pivot": [
+        30.5,
+        30
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "preview-corner-top-right",
+      "group": "Photo corners",
+      "texture": "textures/preview-corner-top-right.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        62,
+        62
+      ],
+      "position": [
+        1509,
+        187
+      ],
+      "pivot": [
+        31,
+        31
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "preview-corner-bottom-left",
+      "group": "Photo corners",
+      "texture": "textures/preview-corner-bottom-left.png",
+      "textureSize": [
+        64,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        59,
+        62
+      ],
+      "position": [
+        861,
+        522
+      ],
+      "pivot": [
+        29.5,
+        31
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "preview-corner-bottom-right",
+      "group": "Photo corners",
+      "texture": "textures/preview-corner-bottom-right.png",
+      "textureSize": [
+        128,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        62,
+        59
+      ],
+      "position": [
+        1516,
+        525
+      ],
+      "pivot": [
+        31,
+        29.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "preview-caption",
+      "group": "Help",
+      "texture": "textures/preview-caption.png",
+      "textureSize": [
+        256,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        148,
+        25
+      ],
+      "position": [
+        1121,
+        582
+      ],
+      "pivot": [
+        74,
+        12.5
+      ],
+      "text": "Game preview",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "help-heading",
+      "group": "Help",
+      "texture": "textures/help-heading.png",
+      "textureSize": [
+        256,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        244,
+        41
+      ],
+      "position": [
+        889,
+        621
+      ],
+      "pivot": [
+        122,
+        20.5
+      ],
+      "text": "Widescreen",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "help-description",
+      "group": "Help",
+      "texture": "textures/help-description.png",
+      "textureSize": [
+        1024,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        515,
+        37
+      ],
+      "position": [
+        897,
+        674
+      ],
+      "pivot": [
+        257.5,
+        18.5
+      ],
+      "text": "See more of the board without stretching it.",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "help-divider-left",
+      "group": "Help",
+      "texture": "textures/help-divider-left.png",
+      "textureSize": [
+        512,
+        16
+      ],
+      "contentRect": [
+        2,
+        2,
+        277,
+        11
+      ],
+      "position": [
+        906,
+        736
+      ],
+      "pivot": [
+        138.5,
+        5.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "help-divider-star",
+      "group": "Help",
+      "texture": "textures/help-divider-star.png",
+      "textureSize": [
+        64,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        30,
+        31
+      ],
+      "position": [
+        1189,
+        727
+      ],
+      "pivot": [
+        15,
+        15.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "help-divider-right",
+      "group": "Help",
+      "texture": "textures/help-divider-right.png",
+      "textureSize": [
+        256,
+        16
+      ],
+      "contentRect": [
+        2,
+        2,
+        200,
+        11
+      ],
+      "position": [
+        1225,
+        736
+      ],
+      "pivot": [
+        100,
+        5.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "help-caption",
+      "group": "Help",
+      "texture": "textures/help-caption.png",
+      "textureSize": [
+        512,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        255,
+        27
+      ],
+      "position": [
+        1068,
+        769
+      ],
+      "pivot": [
+        127.5,
+        13.5
+      ],
+      "text": "Changes apply as you play.",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "cloud-left-rear",
+      "group": "Clouds",
+      "texture": "textures/cloud-left-rear.png",
+      "textureSize": [
+        512,
+        512
+      ],
+      "contentRect": [
+        2,
+        2,
+        285,
+        277
+      ],
+      "position": [
+        0,
+        593
+      ],
+      "pivot": [
+        142.5,
+        138.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "cloud-right-rear",
+      "group": "Clouds",
+      "texture": "textures/cloud-right-rear.png",
+      "textureSize": [
+        512,
+        512
+      ],
+      "contentRect": [
+        2,
+        2,
+        285,
+        261
+      ],
+      "position": [
+        1387,
+        613
+      ],
+      "pivot": [
+        142.5,
+        130.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "brighton-cutout",
+      "group": "Hosts",
+      "texture": "textures/brighton-cutout.png",
+      "textureSize": [
+        256,
+        256
+      ],
+      "contentRect": [
+        2,
+        2,
+        229,
+        248
+      ],
+      "position": [
+        0,
+        603
+      ],
+      "pivot": [
+        114.5,
+        124
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "twila-cutout",
+      "group": "Hosts",
+      "texture": "textures/twila-cutout.png",
+      "textureSize": [
+        256,
+        256
+      ],
+      "contentRect": [
+        2,
+        2,
+        187,
+        195
+      ],
+      "position": [
+        1450,
+        625
+      ],
+      "pivot": [
+        93.5,
+        97.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "twila-star-cutout",
+      "group": "Hosts",
+      "texture": "textures/twila-star-cutout.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        67,
+        65
+      ],
+      "position": [
+        1396,
+        774
+      ],
+      "pivot": [
+        33.5,
+        32.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "cloud-left-front",
+      "group": "Clouds",
+      "texture": "textures/cloud-left-front.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        153,
+        115
+      ],
+      "position": [
+        0,
+        797
+      ],
+      "pivot": [
+        76.5,
+        57.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "cloud-right-front",
+      "group": "Clouds",
+      "texture": "textures/cloud-right-front.png",
+      "textureSize": [
+        256,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        219,
+        89
+      ],
+      "position": [
+        1448,
+        799
+      ],
+      "pivot": [
+        109.5,
+        44.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-holder",
+      "group": "Footer",
+      "texture": "textures/footer-holder.png",
+      "textureSize": [
+        1024,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        800,
+        77
+      ],
+      "position": [
+        436,
+        857
+      ],
+      "pivot": [
+        400,
+        38.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": "footer"
+    },
+    {
+      "id": "footer-a-button",
+      "group": "Footer buttons",
+      "texture": "textures/footer-a-button.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        61,
+        62
+      ],
+      "position": [
+        517,
+        864
+      ],
+      "pivot": [
+        30.5,
+        31
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-choose",
+      "group": "Footer labels",
+      "texture": "textures/footer-choose.png",
+      "textureSize": [
+        128,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        80,
+        23
+      ],
+      "position": [
+        583,
+        883
+      ],
+      "pivot": [
+        40,
+        11.5
+      ],
+      "text": "Choose",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-b-button",
+      "group": "Footer buttons",
+      "texture": "textures/footer-b-button.png",
+      "textureSize": [
+        128,
+        128
+      ],
+      "contentRect": [
+        2,
+        2,
+        61,
+        62
+      ],
+      "position": [
+        721,
+        864
+      ],
+      "pivot": [
+        30.5,
+        31
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-back",
+      "group": "Footer labels",
+      "texture": "textures/footer-back.png",
+      "textureSize": [
+        64,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        55,
+        23
+      ],
+      "position": [
+        786,
+        883
+      ],
+      "pivot": [
+        27.5,
+        11.5
+      ],
+      "text": "Back",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-l-button",
+      "group": "Footer buttons",
+      "texture": "textures/footer-l-button.png",
+      "textureSize": [
+        128,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        66,
+        51
+      ],
+      "position": [
+        897,
+        870
+      ],
+      "pivot": [
+        33,
+        25.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-slash",
+      "group": "Footer labels",
+      "texture": "textures/footer-slash.png",
+      "textureSize": [
+        32,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        15,
+        32
+      ],
+      "position": [
+        964,
+        880
+      ],
+      "pivot": [
+        7.5,
+        16
+      ],
+      "text": "/",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-r-button",
+      "group": "Footer buttons",
+      "texture": "textures/footer-r-button.png",
+      "textureSize": [
+        128,
+        64
+      ],
+      "contentRect": [
+        2,
+        2,
+        68,
+        51
+      ],
+      "position": [
+        981,
+        870
+      ],
+      "pivot": [
+        34,
+        25.5
+      ],
+      "text": null,
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    },
+    {
+      "id": "footer-chapters",
+      "group": "Footer labels",
+      "texture": "textures/footer-chapters.png",
+      "textureSize": [
+        128,
+        32
+      ],
+      "contentRect": [
+        2,
+        2,
+        97,
+        28
+      ],
+      "position": [
+        1059,
+        883
+      ],
+      "pivot": [
+        48.5,
+        14
+      ],
+      "text": "Chapters",
+      "source": "approved-reference-cutout",
+      "hiddenBacking": null
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+--- a/include/dolphin/math.h
++++ b/include/dolphin/math.h
+@@ -2,0 +3,4 @@
++
++#ifndef __MWERKS__
++#include <math.h>
++#else
+@@ -88,0 +93 @@
++#endif /* _DOLPHIN_MATH */

@@ -1,0 +1,17 @@
+--- a/src/REL/mgmtournamentdll/bracket.c
++++ b/src/REL/mgmtournamentdll/bracket.c
+@@ -0,0 +1,2 @@
++#include "mp6_widescreen.h"
++#include "mp6_mgmtournament_native.h"
+@@ -27,4 +29,4 @@
+-void fn_1_31B8(void);
+-void fn_1_4424(OMOBJ *object);
+-void fn_1_4850(void);
+-s16 fn_1_A42C(void);
++
++
++
++
+@@ -66,0 +69,2 @@
++    /* Continue only the sky perimeter; stage geometry remains native. */
++    mp6_widescreen_extend_backdrop_frame(lbl_1_bss_DC->mdlId[1], "grid83");

@@ -7,7 +7,9 @@ def instrument(source):
     region=source[start:end]
     pattern=re.compile(r'((void|u32|f32) (PS(?:MTX|VEC)\w+)\([^{}]+\)) \{\s*(return )?(C_\w+\([^;]+\);)\s*\}')
     matches=list(pattern.finditer(region))
-    assert len(matches)==19, [m[3] for m in matches]
+    # Every one-call wrapper over the C_ implementations, however many the bridge has.
+    assert len(matches)>=19, [m[3] for m in matches]
+    count=len(matches)
     names=[]
     def replace(match):
         index=len(names); names.append(match[3])
@@ -29,14 +31,14 @@ def instrument(source):
     region=pattern.sub(replace,region)
     prefix='''#include <stdio.h>
 static int mp6_math_active;
-static unsigned long long mp6_math_calls[19],mp6_math_samples[19],mp6_math_ns[19];
+static unsigned long long mp6_math_calls[COUNT],mp6_math_samples[COUNT],mp6_math_ns[COUNT];
 static void mp6_math_report(void) {
-    static const char* names[19]={NAMES};
-    for (unsigned i=0;i<19;++i) fprintf(stderr,
+    static const char* names[COUNT]={NAMES};
+    for (unsigned i=0;i<COUNT;++i) fprintf(stderr,
         "[ENGINE-MATH] %s calls=%llu samples=%llu sampled_ns=%llu\\n",
         names[i],mp6_math_calls[i],mp6_math_samples[i],mp6_math_ns[i]);
 }
-'''.replace('NAMES',','.join('"'+name+'"' for name in names))
+'''.replace('NAMES',','.join('"'+name+'"' for name in names)).replace('COUNT',str(count))
     source=prefix+source[:start]+region+source[end:]
     marker='    if (qaBoardAge>=1800 && qaBoardAge<5800) {'
     assert source.count(marker)==1

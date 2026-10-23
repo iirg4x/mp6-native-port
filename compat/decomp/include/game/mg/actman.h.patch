@@ -1,0 +1,13 @@
+--- a/include/game/mg/actman.h
++++ b/include/game/mg/actman.h
+@@ -0,0 +1 @@
++#include <stdint.h>
+@@ -13 +14 @@
+-typedef void (*MGACTOR_CORRECT_HOOK)(MGACTOR *actorP, int param);
++typedef void (*MGACTOR_CORRECT_HOOK)(MGACTOR *actorP, intptr_t param);
+@@ -98 +99 @@
+-    int correctHookParam;
++    intptr_t correctHookParam;
+@@ -145 +146 @@
+-    int correctHookParam;
++    intptr_t correctHookParam;

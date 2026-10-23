@@ -48,4 +48,25 @@ private:
     Rml::String mSuffix;
 };
 
+// Range control for player settings. NumberButton keeps numeric entry for tools.
+class SliderButton : public BaseControlledSelectButton {
+public:
+    using Props = NumberButton::Props;
+    SliderButton(Rml::Element *parent, Props props);
+    bool can_step(int direction) const override {
+        return !disabled() && (direction<0 ? mSliderProps.getValue()>mSliderProps.min : mSliderProps.getValue()<mSliderProps.max);
+    }
+    void update() override;
+    bool disabled() const override;
+    bool modified() const override;
+protected:
+    Rml::String format_value() override;
+    bool handle_nav_command(NavCommand cmd) override;
+private:
+    void set_value(int value);
+    Props mSliderProps;
+    Rml::Element *mRange = nullptr;
+    int mLastValue = INT_MIN;
+};
+
 } // namespace mp6::ui

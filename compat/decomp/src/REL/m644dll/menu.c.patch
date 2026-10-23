@@ -1,0 +1,13 @@
+--- a/src/REL/m644dll/menu.c
++++ b/src/REL/m644dll/menu.c
+@@ -36,4 +36,4 @@
+-s32 fn_1_913C(s32);
+-
+-s32 fn_1_559C(s16);
+-s32 fn_1_56D4(s32);
++void fn_1_913C(s32 team_index);
++
++void fn_1_559C(s32 group);
++void fn_1_56D4(s32 group);
+@@ -69 +68,0 @@
+-s32 fn_1_367CC(s32 *player);

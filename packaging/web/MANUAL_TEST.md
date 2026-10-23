@@ -58,7 +58,7 @@ real disc): everything below. Serve `packaging/web/` locally
 - [ ] Once a release exists: "Fetch latest release automatically" downloads
       and reports the right file count; `Start` becomes available without
       also needing the manual path.
-- [ ] Force a failure (e.g. block `api.github.com` in devtools' network
+- [ ] Force a failure (e.g. block `api.github.com` in the browser developer tools' network
       conditions, or test before any release exists): manual fallback
       section appears with a working Releases link; download the zip by
       hand and drop it on the manual drop zone -- it loads the same as

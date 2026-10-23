@@ -1,0 +1,4 @@
+--- a/src/REL/mgmbingodll/text_10548.c
++++ b/src/REL/mgmbingodll/text_10548.c
+@@ -3,0 +4 @@
++#include "game/audio.h"

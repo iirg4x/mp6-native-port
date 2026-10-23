@@ -17,6 +17,10 @@ class ReplayCameraCache(unittest.TestCase):
                        source.index('static uint32_t next_generation')]
         functions = source[source.index('void mp6_fi_model_snapshot'):
                            source.index('static int animlog_enabled')]
+        # The CPU-deformed buffer registry sits between the camera functions
+        # and reset; it needs the HSF model types and is not under test here.
+        deformed = functions.index('/* ---- CPU-deformed vertex buffers')
+        functions = functions[:deformed] + functions[functions.index('void mp6_fi_model_reset'):]
         functions = functions.replace('static int fi_camera_stable_uncached(int camera_id)\n{',
             'static int fi_camera_stable_uncached(int camera_id)\n{\n    ++calculations;')
         with tempfile.TemporaryDirectory(prefix='fi-camera-', dir=ROOT/'build') as tmp:

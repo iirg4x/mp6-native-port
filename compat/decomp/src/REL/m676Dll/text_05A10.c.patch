@@ -1,0 +1,54 @@
+--- a/src/REL/m676Dll/text_05A10.c
++++ b/src/REL/m676Dll/text_05A10.c
+@@ -7,7 +7,7 @@
+-#include "include/game/charman.h"
+-#include "include/game/memory.h"
+-#include "include/game/audio.h"
+-#include "include/game/gamework.h"
+-#include "include/game/pad.h"
+-#include "include/game/frand.h"
+-#include "include/string.h"
++#include "game/charman.h"
++#include "game/memory.h"
++#include "game/audio.h"
++#include "game/gamework.h"
++#include "game/pad.h"
++#include "game/frand.h"
++#include <string.h>
+@@ -45,5 +45,4 @@
+-extern s32 fn_1_3DD0(void *value);
+-
+-extern s32 fn_1_A70(f32 x, f32 y, f32 z, f32 radius);
+-extern void fn_1_4F08(s32 effect, s32 handle, void *position, s32 mode,
+-    s32 flags);
++extern s32 fn_1_3DD0(Vec *position);
++
++extern void fn_1_A70(f32 x, f32 y, f32 z, f32 w);
++extern void fn_1_4F08(int effect, int handle, Vec *position, int panEnabled, int volumeEnabled);
+@@ -59,4 +58,4 @@
+-extern void fn_1_15C0(s32 playerIndex);
+-extern f32 fn_1_5490(Vec *start, Vec *end);
+-extern f32 fn_1_552C(Vec *start, Vec *end);
+-extern f32 fn_1_52C0(f32 start, f32 end, f32 amount);
++extern void fn_1_15C0(unsigned int player);
++extern float fn_1_5490(HuVecF *from, HuVecF *to);
++extern float fn_1_552C(Vec *first, Vec *second);
++extern float fn_1_52C0(float start, float end, float factor);
+@@ -72,2 +71,2 @@
+-extern s32 fn_1_1630(s32 playerIndex);
+-extern s32 fn_1_1650(void);
++extern void fn_1_1630(unsigned int player);
++extern int fn_1_1650(void);
+@@ -282 +281 @@
+-    state = HuMemDirectMallocNum(HEAP_HEAP, 448, HU_MEMNUM_OVL);
++    state = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*state), HU_MEMNUM_OVL);
+@@ -284 +283 @@
+-    memset(state, 0, 448);
++    memset(state, 0, sizeof(*state));
+@@ -457,2 +456 @@
+-        /* No value is returned on this path. */
+-        return;
++        return done;
+@@ -568 +566 @@
+-    CharModelVoicePanSet((s16)work->character, (s16)fn_1_3DD0(&state->actor.position.x));
++    CharModelVoicePanSet((s16)work->character, (s16)fn_1_3DD0(&state->actor.position));

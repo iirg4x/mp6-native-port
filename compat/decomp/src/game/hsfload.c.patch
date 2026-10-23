@@ -1,12 +1,10 @@
 --- a/src/game/hsfload.c
 +++ b/src/game/hsfload.c
-@@ -2,0 +3 @@
+@@ -3,0 +4 @@
 +#include "game/memory.h"
-@@ -5 +6,10 @@
+@@ -6 +7,8 @@
 -
-+#include "mp6_shim_log.h"
 +#include "mp6_hsf_native.h"
-+#include <stdlib.h>
 +
 +/* The original 32-bit, big-endian in-place loader is not a callable native
 + * fallback: LoadHSF below unconditionally routes real input through the
@@ -14,16 +12,17 @@
 + * source patch as format provenance, but do not compile pointer-truncating
 + * dead code into the 64-bit port. */
 +#if 0
-@@ -58,0 +69,4 @@
+@@ -60,0 +69,5 @@
 +#endif
 +char *StringTable;
-+static s32 SearchObjectSetName(HSF_DATA *data, char *name);
-+static char *GetString(u32 *strOfs);
-@@ -62,28 +76,67 @@
--    HSF_DATA *hsf;
++static s32 SearchObjectSetName(HSF_DATA *model, char *name);
++static char *GetString(u32 *stringOffset);
++
+@@ -65,28 +78,37 @@
+-    HSF_DATA *model;
 -    Model.root = NULL;
 -    objtop = NULL;
--    FileLoad(data);
+-    FileLoad(hsfFile);
 -    SceneLoad();
 -    ColorLoad();
 -    PaletteLoad();
@@ -43,11 +42,11 @@
 -    MapAttrLoad();
 -    MotionLoad();
 -    MatrixLoad();
--    hsf = SetHsfModel();
--    InitEnvelope(hsf);
+-    model = SetHsfModel();
+-    InitEnvelope(model);
 -    objtop = NULL;
--    return hsf;
--    
+-    return model;
+-
 +    /* Real HSF (3D model) loading now goes through a from-scratch native
 +     * deserializer (src/hsf/hsf_load_native.c) that reads this
 +     * file's big-endian, 32-bit-pointer-width bytes explicitly (never
@@ -62,38 +61,8 @@
 +     * unreachable 32-bit pointer truncations in this 64-bit build. See
 +     * hsf_load_native.c for the checked logic that replaced them.
 +     *
-+     * MP6_HSF_STUB=1 (checked once per call, negligible cost) selects the
-+     * OLD, always-empty, M2-era inert stub instead -- kept only so a
-+     * future debugging session can isolate "is the bug in the new
-+     * deserializer, or somewhere else in the HSF consumption path
-+     * (hsfdraw.c/hsfman.c/hsfmotion.c)?" by comparing behavior with HSF
-+     * loading forced back to a safe no-op. Never the default. */
-+    const char *mp6StubEnv = getenv("MP6_HSF_STUB");
-+    if (mp6StubEnv != NULL && mp6StubEnv[0] == '1') {
-+        HSF_DATA *hsf;
-+        HSF_OBJECT *root;
-+
-+        MP6_LOG_ONCE("HSF", "LoadHSF-stub-forced");
-+
-+        hsf = HuMemDirectMalloc(HEAP_MODEL, sizeof(HSF_DATA));
-+        root = HuMemDirectMalloc(HEAP_MODEL, sizeof(HSF_OBJECT));
-+        if (hsf == NULL || root == NULL) {
-+            OSReport("[FATAL] LoadHSF forced-stub allocation failed\n");
-+            _Exit(EXIT_FAILURE);
-+        }
-+        memset(hsf, 0, sizeof(HSF_DATA));
-+        memset(root, 0, sizeof(HSF_OBJECT));
-+        root->type = HSF_OBJ_ROOT;
-+        root->name = "";
-+        hsf->root = root;
-+        hsf->object = root;
-+        hsf->objectNum = 0;
-+        /* The forced stub deliberately does not inspect `data`: unlike the
-+         * real loader it has no validated length.  Do not turn a diagnostic
-+         * fallback into an unbounded 8-byte read. */
-+        StringTable = NULL;
-+        return hsf;
-+    }
++     * MP6_HSF_STUB=1 (a debugging aid that loads every model empty) is
++     * handled inside MP6_LoadHSFNative. */
 +    /* Replicates the ONE global side effect of the original FileLoad()
 +     * that this body-replacement dropped, but only after the native loader
 +     * has validated the allocation, full section graph, and string extent.
@@ -114,43 +83,43 @@
 +     * pointer"). MP6_LoadHSFNative clears the out-pointer before preflight;
 +     * malformed input therefore leaves this global NULL and returns a safe
 +     * inert model instead of publishing an attacker-controlled address. */
-+    return MP6_LoadHSFNative(data, &StringTable);
-@@ -111,0 +165 @@
++    return MP6_LoadHSFNative(hsfFile, &StringTable);
+@@ -116,0 +139 @@
 +#if 0
-@@ -168,0 +223 @@
+@@ -177,0 +201 @@
 +#endif
-@@ -174,0 +230 @@
+@@ -184,0 +209 @@
 +#if 0
-@@ -973,0 +1030 @@
+@@ -1050,0 +1076 @@
 +#endif
-@@ -979,0 +1037,4 @@
+@@ -1057,0 +1084,4 @@
 +    if(name == NULL) {
 +        buf[0] = '\0';
 +        return buf;
 +    }
-@@ -985 +1046 @@
+@@ -1063 +1093 @@
 -            name = (s8 *)nameP+1;
 +            name = (s8 *)nameP + 1;
-@@ -990 +1051 @@
+@@ -1068 +1098 @@
 -    while(*name) {
 +    while(*name && (size_t)index < sizeof(buf) - 1u) {
-@@ -994 +1055 @@
+@@ -1072 +1102 @@
 -        if(*name == '_' && !isalpha(name[1])) {
 +        if(*name == '_' && !isalpha((unsigned char)name[1])) {
-@@ -1008 +1069,3 @@
+@@ -1087 +1117,3 @@
 -    s32 temp = 0;
 +    if(name1 == NULL || name2 == NULL) {
 +        return name1 == name2 ? 0 : (name1 == NULL ? -1 : 1);
 +    }
-@@ -1010,0 +1074 @@
+@@ -1089,0 +1122 @@
 +#if 0
-@@ -1409,0 +1474 @@
+@@ -1502,0 +1536 @@
 +#endif
-@@ -1422,0 +1488 @@
+@@ -1516,0 +1551 @@
 +#if 0
-@@ -1521,0 +1588 @@
+@@ -1624,0 +1660 @@
 +#endif
-@@ -1527,0 +1595 @@
+@@ -1631,0 +1668 @@
 +#if 0
-@@ -1533,0 +1602 @@
+@@ -1638,0 +1676 @@
 +#endif

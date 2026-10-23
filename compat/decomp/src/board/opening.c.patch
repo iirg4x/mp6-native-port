@@ -1,22 +1,25 @@
 --- a/src/board/opening.c
 +++ b/src/board/opening.c
-@@ -27,0 +28,3 @@
-+
+@@ -28,0 +29 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -29,0 +30,3 @@
 +#include "mp6_events.h" /* board.diceseat / board.turnorder observability */
 +#include <stdio.h>
-@@ -31 +34 @@
++
+@@ -32 +35 @@
 -extern s16 mbMasuFind_TypeListGet2(s16 id, s16 type, BOOL hookF, BOOL dispF, s16 *list);
 +extern int mbMasuFind_TypeListGet2(s16 id, s16 type, BOOL hookF, BOOL dispF, s16 *list);
-@@ -44 +47 @@
+@@ -45 +48 @@
 -extern MBMODELID mbGuideModelGet(OMOBJ *obj);
 +extern int mbGuideModelGet(OMOBJ *obj);
-@@ -174 +177,4 @@
+@@ -182 +185,4 @@
 -typedef float (*OPENINGCURVEEVALFUNC)();
 +/* Native ABI: preserve float arguments and full-width callback pointers. */
 +typedef float (*OPENINGCURVEEVALFUNC)(HuVecF *a, HuVecF *b, HuVecF *c,
 +    HuVecF *d, float t);
 +
-@@ -303,0 +310,46 @@
+@@ -322 +328,46 @@
+-// Runs as the child created by mbev_OpeningParty, presenting the guide, player order, and intro.
 +/* Turn-order observability (port-only; no behavioural effect).
 + *
 + * The board opening's turn-order dice decide the whole game's turn
@@ -63,13 +66,20 @@
 +        GwSystem.boardNo, buf);
 +}
 +
-@@ -455,0 +508 @@
+@@ -474,0 +526 @@
 +    OpeningTurnOrderReport("dice", orderTbl);
-@@ -456,0 +510 @@
+@@ -475,0 +528 @@
 +    OpeningTurnOrderReport("seated", NULL);
-@@ -942 +996 @@
+@@ -804 +858,2 @@
+-                if (!GwPlayer[playerNo].comF
++                /* [MP6] Quick Party: skip the solo board guide as START would. */
++                if (mp6_quick_play_scene() || (!GwPlayer[playerNo].comF
+@@ -806 +861 @@
+-                        & PAD_BUTTON_START)) {
++                        & PAD_BUTTON_START))) {
+@@ -980 +1033 @@
 -            distance = OpeningCurveLength((OPENINGCURVEEVALFUNC)(u32)OpeningCurveEval,
 +            distance = OpeningCurveLength(OpeningCurveEval,
-@@ -954 +1008 @@
+@@ -992 +1045 @@
 -            t = OpeningCurveNewton((OPENINGCURVEEVALFUNC)(u32)OpeningCurveEval,
 +            t = OpeningCurveNewton(OpeningCurveEval,

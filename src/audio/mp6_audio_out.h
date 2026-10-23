@@ -27,11 +27,19 @@ extern "C" {
  * but there's no reason to make that a hard requirement). */
 void mp6_audio_out_init(void);
 
+/* Brings up SDL audio with the port's device buffer settings; every caller
+ * that opens an SDL audio stream goes through this first. 1 = ready. */
+int mp6_audio_sdl_init(void);
+
 /* Not currently called from anywhere -- there is no process-exit hook
  * reachable from here without touching src/os/*.c or
  * src/gx/aurora_bridge.c. Declared for completeness/future use;
  * the OS reclaims the audio device on process exit either way. */
 void mp6_audio_out_shutdown(void);
+
+/* Temporarily mute gameplay while settings plays disc music. Restores the
+ * current master gain rather than a stale value saved on menu entry. */
+void mp6_audio_set_menu_override(int active);
 
 #ifdef __cplusplus
 }

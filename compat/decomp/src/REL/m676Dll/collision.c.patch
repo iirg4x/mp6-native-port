@@ -1,0 +1,11 @@
+--- a/src/REL/m676Dll/collision.c
++++ b/src/REL/m676Dll/collision.c
+@@ -11 +11 @@
+-void fn_1_5698(Vec *start, Vec *end, f32 factor, Vec *result);
++void fn_1_5698(Point3d *start, Point3d *end, f32 factor, Point3d *out);
+@@ -75 +75 @@
+-    data = HuMemDirectMallocNum(HEAP_HEAP, M676_COLLISION_WORK_SIZE, HU_MEMNUM_OVL);
++    data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M676CollisionWork), HU_MEMNUM_OVL);
+@@ -77 +77 @@
+-    memset(data, 0, M676_COLLISION_WORK_SIZE);
++    memset(data, 0, sizeof(M676CollisionWork));

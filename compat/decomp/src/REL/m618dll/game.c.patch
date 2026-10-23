@@ -1,0 +1,42 @@
+--- a/src/REL/m618dll/game.c
++++ b/src/REL/m618dll/game.c
+@@ -1 +1 @@
+-/* Lift Leapers course setup, movement, CPU decisions, and results. */
++#include "mp6_widescreen.h"
+@@ -51 +51,2 @@
+-unsigned char m618UnknownBss3C[4]; /* Four bytes whose game use is not established. */
++#include "mp6_m618_widescreen.h"
++unsigned char m618UnknownBss3C[4]; /* Retail interval; original purpose unknown. */
+@@ -58,0 +60 @@
++    portWideWallsInit();
+@@ -263,0 +266 @@
++            portBackdropCameras[3][1] = (u16) lbl_1_data_28[lbl_1_bss_54C];
+@@ -264,0 +268 @@
++            portBackdropCameras[3][2] = (u16) lbl_1_data_28[lbl_1_bss_54C];
+@@ -268,0 +273 @@
++            portWallCameras[3][0] = (u16) lbl_1_data_28[lbl_1_bss_54C];
+@@ -383,0 +389 @@
++    portWideWallsUpdate();
+@@ -1007,0 +1014 @@
++    portWideWallsUpdate();
+@@ -1062,0 +1070,2 @@
++        if (i == 1) portWideBackdropCreate(i, 0, DATANUM(DATA_m618, 76), "ita01", 1, 0.0f, 0.0f);
++        if (i == 3) portWideBackdropCreate(i, 0, DATANUM(DATA_m618, 79), "mekureru00", -1, 0.0f, 0.0f);
+@@ -1068,0 +1078 @@
++            if (i == 3) portWideBackdropCreate(i, 1, DATANUM(DATA_m618, 80), "4st_haikei01", 2, 1524.685f, 0.0f);
+@@ -1075,0 +1086 @@
++            portWideBackdropCreate(i, 2, DATANUM(DATA_m618, 81), "4st_haikei02", 2, 1499.445f, -30.255f);
+@@ -1123,0 +1135,7 @@
++        if (i == 0) {
++            portWideWallCreate(i, 0, DATANUM(DATA_m618, 83), "1st_kabe00", -428.1176f);
++        } else if (i == 2) {
++            portWideWallCreate(i, 0, DATANUM(DATA_m618, 96), "3st_kabe00", 2000.0f);
++        } else if (i == 3) {
++            portWideWallCreate(i, 0, DATANUM(DATA_m618, 101), "4st_kabe00", 950.0029f);
++        }
+@@ -1128,0 +1147,5 @@
++            if (i == 0) {
++                portWideWallCreate(i, 1, DATANUM(DATA_m618, 84), "1st_kabe01", 2852.8894f);
++            } else if (i == 2) {
++                portWideWallCreate(i, 1, DATANUM(DATA_m618, 97), "3st_kabe01", -412.0f);
++            }

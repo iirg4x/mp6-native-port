@@ -123,9 +123,17 @@ static inline int mp6_fullpath_utf8(char *dst, size_t dstSize, const char *path)
 
 #else
 
+#ifdef __EMSCRIPTEN__
+#include "mp6_web_content.h"
+#endif
+
 static inline FILE *mp6_fopen_utf8(const char *path, const char *mode)
 {
+#ifdef __EMSCRIPTEN__
+    return mp6_web_fopen(path, mode); /* async game content in the browser */
+#else
     return fopen(path, mode);
+#endif
 }
 
 static inline int mp6_utf8_path_supported(const char *path)

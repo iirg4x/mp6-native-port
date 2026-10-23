@@ -36,11 +36,15 @@ static Vec4<float> unpack_color(u32 value) {
 namespace reference {
 State g_gxState; Logger Log;
 void copy_tex(u32,bool) { ++g_gxState.copies; }
+bool g_pipelineConfigDirty=false;
+void mark_pipeline_state_dirty() { g_pipelineConfigDirty=true; g_gxState.stateDirty=true; }
 #include "register_reference.inc"
 }
 namespace candidate {
 State g_gxState; Logger Log;
 void copy_tex(u32,bool) { ++g_gxState.copies; }
+bool g_pipelineConfigDirty=false;
+void mark_pipeline_state_dirty() { g_pipelineConfigDirty=true; g_gxState.stateDirty=true; }
 #include "register_subject.inc"
 }
 void equal() {

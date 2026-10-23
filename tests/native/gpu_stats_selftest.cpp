@@ -1,5 +1,6 @@
 // The production non-Tracy implementation, with deterministic deferred queries.
 #include <aurora/aurora.h>
+#include <aurora/gpu_timing_snapshot.h>
 #include <algorithm>
 #include <array>
 #include <atomic>

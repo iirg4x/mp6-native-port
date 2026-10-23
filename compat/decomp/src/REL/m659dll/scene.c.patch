@@ -1,0 +1,11 @@
+--- a/src/REL/m659Dll/scene.c
++++ b/src/REL/m659Dll/scene.c
+@@ -13,0 +14 @@
++#include "mp6_widescreen.h"
+@@ -113,0 +115,6 @@
++    /* The original gradient ends at local Y=-13804.753, projecting to row
++     * 461.56 at the opening depth (18.44 native pixels short of the bottom).
++     * The bottom frustum reaches Y=-17660.68 with lateral ship motion at
++     * 21:9; -18000 adds overscan. Continue its colors even at native aspect. */
++    mp6_widescreen_extend_color_rim_bottom(model, "642nightSKYa1",
++                                          0.0f, 21.9824f, -18000.0f);

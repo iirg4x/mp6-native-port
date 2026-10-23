@@ -1,0 +1,44 @@
+--- a/src/REL/m636dll/main.c
++++ b/src/REL/m636dll/main.c
+@@ -8,6 +7,0 @@
+-#define PIXEL_CAMERA_OBJECT_OFFSET 12
+-#define PIXEL_CAMERA_MODEL_OFFSET 20
+-#define PIXEL_TIMER_OFFSET 68
+-#define PIXEL_MUSIC_HANDLE_OFFSET 628
+-#define PIXEL_EXTRA_SCENE_MODEL_OFFSET 632
+-#define PIXEL_EXTRA_SCENE_MOTION_OFFSET 634
+@@ -67 +61 @@
+-    (*(HUPROCESS **)((s8 *)(&lbl_1_bss_0) + (0))) = MgActorObjectSetup();
++    (lbl_1_bss_0.actorManager) = MgActorObjectSetup();
+@@ -78,2 +72,2 @@
+-    (*(OMOBJ **) ((s8 *) (&lbl_1_bss_0) + (PIXEL_CAMERA_OBJECT_OFFSET))) =
+-        omAddObjEx((*(HUPROCESS **) ((s8 *) (&lbl_1_bss_0) + (0))), PIXEL_CAMERA_UPDATE_PRIORITY,
++    (lbl_1_bss_0.cameraObject) =
++        omAddObjEx((lbl_1_bss_0.actorManager), PIXEL_CAMERA_UPDATE_PRIORITY,
+@@ -81 +75 @@
+-    (*(s16 *)((s8 *)(&lbl_1_bss_0) + (PIXEL_CAMERA_MODEL_OFFSET))) = -1;
++    (lbl_1_bss_0.cameraModel) = -1;
+@@ -85,2 +79,2 @@
+-    (*(MGTIMER **)((s8 *)(&lbl_1_bss_0) + (PIXEL_TIMER_OFFSET))) = MgTimerCreate(0);
+-    omAddObjEx((*(HUPROCESS **) ((s8 *) (&lbl_1_bss_0) + (0))), PIXEL_SCENE_SETUP_PRIORITY,
++    (lbl_1_bss_0.timer) = MgTimerCreate(0);
++    omAddObjEx((lbl_1_bss_0.actorManager), PIXEL_SCENE_SETUP_PRIORITY,
+@@ -177,3 +171,3 @@
+-    BSS16(PIXEL_EXTRA_SCENE_MODEL_OFFSET) = READ_MODEL(PIXEL_EXTRA_SCENE_MODEL_RESOURCE);
+-    BSS16(PIXEL_EXTRA_SCENE_MOTION_OFFSET) =
+-        READ_MOTION(BSS16(PIXEL_EXTRA_SCENE_MODEL_OFFSET), PIXEL_EXTRA_SCENE_MOTION_RESOURCE);
++    lbl_1_bss_0.extraSceneModel = READ_MODEL(PIXEL_EXTRA_SCENE_MODEL_RESOURCE);
++    lbl_1_bss_0.extraSceneMotion =
++        READ_MOTION(lbl_1_bss_0.extraSceneModel, PIXEL_EXTRA_SCENE_MOTION_RESOURCE);
+@@ -251,2 +245,2 @@
+-        /* The yaw setter receives the player base here rather than its actor. */
+-        MgActorRotYSet((MGACTOR *)lbl_1_bss_0.players[setupIndex], (90.0f));
++        /* The actor manager owns the player's transform. */
++        MgActorRotYSet(lbl_1_bss_0.players[setupIndex]->actor, (90.0f));
+@@ -257,2 +251 @@
+-    /* Scene setup creates another timer and replaces the earlier stored timer pointer. */
+-    *(MGTIMER **)((u8 *)&lbl_1_bss_0 + PIXEL_TIMER_OFFSET) = MgTimerCreate(0);
++    /* Reuse the timer created at entry; a second create would orphan its child process. */
+@@ -261 +254 @@
+-    BSS32(PIXEL_MUSIC_HANDLE_OFFSET) = -1;
++    lbl_1_bss_0.musicHandle = -1;

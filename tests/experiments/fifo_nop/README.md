@@ -37,3 +37,13 @@ original APK and player-file hashes were verified after restoration, the owned
 profiling root was removed, and USB stay-awake remained enabled at the user's
 request. See that session's `restoration.json`. Nothing was sent to Google or
 uploaded for distribution.
+
+## Current combined `0080` integration note (2026-10-07)
+
+This README remains historical evidence for the non-adopted 2026-09-12
+candidate. Current combined work has integrated permanent `0080` exact-measured
+source via patch SHA `d90a31d34ca61dd897c7e92ba2cfa1c808b42351424849577e198386a6deb633`
+for the FIFO NOP-padding/BP-decode path. The verified normal playable build is
+PC-only evidence; paced FIFO ABBA remains pending. Nothing here claims an
+Android or displayed-FPS gain, and the published APK/shipping build and tablet
+were untouched.

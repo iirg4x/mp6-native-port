@@ -1,11 +1,14 @@
-# Mario Party 6 Native Port
+# Starlit Party
 
-A native Windows and Android port using recovered Mario Party 6 code,
-Aurora, SDL3 and Dawn/WebGPU. No emulator is involved.
+A native Windows, Android and browser (iPhone) port of Mario Party 6, built on
+recovered game code, Aurora, SDL3 and Dawn/WebGPU. No emulator is involved.
+Starlit Party is an unofficial fan project, not affiliated with or endorsed by
+Nintendo or Hudson Soft.
 
-Menus, audio, memory-card saves and Towering Treetop board gameplay run natively.
-Minigames are not available yet: the board skips their transition and continues
-to the next turn. Other incomplete overlays are not playable.
+All six Party Mode boards, Solo Mode, Mini-Game Mode, Mic Mode, the Star Bank,
+the Option menu, and the opening, ending and credits run natively, with
+widescreen support. 49 of the game's 81 minigames are playable; boards skip the
+rest with an on-screen notice. See the [0.5.0 release notes](docs/releases/0.5.0.md).
 
 ## Build and play
 

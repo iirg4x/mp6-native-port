@@ -9,9 +9,11 @@ ROOT=Path(__file__).resolve().parents[1]
 
 class SamplerMemo(unittest.TestCase):
     def test_keys_slots_and_reset(self):
-        source=(ROOT/'build/aurora-release-source/lib/gx/gx.cpp').read_text()
-        self.assertEqual(source,(ROOT/'build/android-aurora-source/lib/gx/gx.cpp').read_text())
-        subject=source[source.index('struct SamplerMemoKey {'):source.index('GXBindGroups build_bind_groups')]
+        source=(ROOT/'third_party/aurora/lib/gx/gx.cpp').read_text()
+        self.assertEqual(source,(ROOT/'third_party/aurora/lib/gx/gx.cpp').read_text())
+        # The sampler memo and texture_sampler; the bind-group memo between them is not under test.
+        subject=(source[source.index('struct SamplerMemoKey {'):source.index('struct TextureBindGroupMemoKey {')]+
+                 source[source.index('static WGPUSampler texture_sampler('):source.index('GXBindGroups build_bind_groups')])
         self.assertIn('sSamplerMemo = {};',source[source.index('void initialize()'):])
         self.assertIn('sSamplerMemo = {};',source[source.index('void shutdown()'):])
         with tempfile.TemporaryDirectory(prefix='sampler-memo-',dir=ROOT/'build') as tmp:

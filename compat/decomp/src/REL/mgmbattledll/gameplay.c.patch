@@ -1,0 +1,8 @@
+--- a/src/REL/mgmbattledll/gameplay.c
++++ b/src/REL/mgmbattledll/gameplay.c
+@@ -191 +191 @@
+-            memset(lbl_1_data_4F0, 0, 8);
++            memset(lbl_1_data_4F0, 0, sizeof(lbl_1_data_4F0));
+@@ -200 +200 @@
+-                        memset(lbl_1_data_4F0, 0, 8);
++                        memset(lbl_1_data_4F0, 0, sizeof(lbl_1_data_4F0));

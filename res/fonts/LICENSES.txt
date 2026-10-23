@@ -1,5 +1,10 @@
 Font licenses for the fonts bundled in this directory.
 
+BreeSerif-Regular.ttf
+  Bree Serif — Copyright (c) 2011 TypeTogether (www.type-together.com).
+  SIL Open Font License, Version 1.1. Full text: BreeSerif-OFL.txt.
+  Unmodified Google Fonts distribution. Storybook menu headings and controls.
+
 Inter-Regular.ttf, Inter-Bold.ttf
   Inter — Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
   SIL Open Font License, Version 1.1. Redistributable. Full text: https://openfontlicense.org
@@ -17,3 +22,8 @@ N64Party-Monochromatic.otf
   No public license text. The MP6 port maintainer confirmed permission to
   redistribute this font with the port on 2026-09-12. Original credit retained.
   See docs/PARTYBOARD_PROVENANCE.md for the permission record and provenance.
+
+TitanOne-Regular.ttf
+  Titan One — Copyright Rodrigo Fuenzalida.
+  SIL Open Font License, Version 1.1. See TitanOne-OFL.txt.
+  https://github.com/google/fonts/tree/main/ofl/titanone

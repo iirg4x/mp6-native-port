@@ -1,0 +1,43 @@
+--- a/src/REL/m625Dll/text_13C04.c
++++ b/src/REL/m625Dll/text_13C04.c
+@@ -34,2 +34,2 @@
+-extern s32 fn_1_41C(s32);
+-extern s32 fn_1_3E8C(s32);
++extern s32 fn_1_41C(s16 frame);
++extern s32 fn_1_3E8C(s16 player);
+@@ -37 +37 @@
+-extern void fn_1_4E60(void);
++extern void fn_1_4E60(s16 mode, s16 frameNo);
+@@ -42,2 +42,2 @@
+-extern s32 fn_1_EF24(s16);
+-extern void fn_1_12F98(s16, s32);
++extern s16 fn_1_EF24(s16 playerIndex);
++extern void fn_1_12F98(s16 player, s16 frames);
+@@ -47,2 +47,2 @@
+-extern u8 fn_1_CB4(s16);
+-extern u8 fn_1_C438(void);
++extern s32 fn_1_CB4(s16 frame);
++extern s32 fn_1_C438(void);
+@@ -80 +80 @@
+-void fn_1_13D30(s32 mode, s32 frameNo)
++void fn_1_13D30(s16 mode, s16 frameNo)
+@@ -94 +94 @@
+-void fn_1_13DAC(s32 mode, s16 frameNo)
++void fn_1_13DAC(s16 mode, s16 frameNo)
+@@ -102 +102 @@
+-    fn_1_4E60();
++    fn_1_4E60(mode, frameNo);
+@@ -106 +106 @@
+-void fn_1_13E14(void) {
++void fn_1_13E14(s16 mode, s16 frameNo) {
+@@ -114 +114 @@
+-void fn_1_13E58(void) {
++void fn_1_13E58(s16 mode, s16 frameNo) {
+@@ -171 +171 @@
+-void fn_1_14020(void) {
++void fn_1_14020(s16 mode, s16 frameNo) {
+@@ -176,2 +176,2 @@
+-    30, 2, fn_1_13C04, (MGSEQ_FUNC)fn_1_13D30, (MGSEQ_FUNC)fn_1_13DAC, (MGSEQ_FUNC)fn_1_13E58,
+-    fn_1_13EF8, fn_1_13F64, fn_1_13FEC, fn_1_13FEC, (MGSEQ_FUNC)fn_1_14020
++    30, 2, fn_1_13C04, fn_1_13D30, fn_1_13DAC, fn_1_13E58,
++    fn_1_13EF8, fn_1_13F64, fn_1_13FEC, fn_1_13FEC, fn_1_14020

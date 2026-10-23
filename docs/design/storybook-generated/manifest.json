@@ -1,0 +1,273 @@
+{
+  "status": "approved-native-integrated",
+  "artOrigin": "fresh imagegen output; not sliced from the concept",
+  "book": "one half texture, mirrored in rendering",
+  "assets": {
+    "brighton": {
+      "file": "assets/brighton.png",
+      "size": [
+        512,
+        512
+      ],
+      "content": [
+        18,
+        4,
+        475,
+        504
+      ],
+      "sha256": "287247bcb52ffbbd2387d51025e66b422325614a3779eadd77842506dbfdda98"
+    },
+    "twila": {
+      "file": "assets/twila.png",
+      "size": [
+        512,
+        512
+      ],
+      "content": [
+        30,
+        4,
+        451,
+        504
+      ],
+      "sha256": "55b732d257f6323723a59111e51906695887f847d19dd05dd1afc83d518deedf"
+    },
+    "cloud": {
+      "file": "assets/cloud.png",
+      "size": [
+        512,
+        256
+      ],
+      "content": [
+        4,
+        46,
+        504,
+        163
+      ],
+      "sha256": "7f519183bc99c243c52aabd5605f180ac6abb0ed5087c5926ad75b55f5e20181"
+    },
+    "sky-sun": {
+      "file": "assets/sky-sun.png",
+      "size": [
+        256,
+        256
+      ],
+      "content": [
+        4,
+        8,
+        248,
+        240
+      ],
+      "sha256": "3d55b32d951aaf169f121f27f08ab10828eaba69729257d1062c92e24cef6799"
+    },
+    "sky-moon": {
+      "file": "assets/sky-moon.png",
+      "size": [
+        256,
+        256
+      ],
+      "content": [
+        15,
+        4,
+        225,
+        248
+      ],
+      "sha256": "89f696017e6c07ded1dc3096254b6602be7676d32549fe2ddee03f77921740f4"
+    },
+    "book-half": {
+      "file": "assets/book-half.png",
+      "size": [
+        1024,
+        1024
+      ],
+      "content": [
+        12,
+        4,
+        1000,
+        1016
+      ],
+      "sha256": "5281d2dff390d842c1f5907383fd4859a2633ab61d38f0d69265f6d0678e02de"
+    },
+    "selection-ribbon": {
+      "file": "assets/selection-ribbon.png",
+      "size": [
+        1024,
+        128
+      ],
+      "content": [
+        4,
+        8,
+        1016,
+        112
+      ],
+      "sha256": "d1b77a8cf9da5d013e23069557511265bef85bff62281b914a2a117d77da962f"
+    },
+    "cursor-star": {
+      "file": "assets/cursor-star.png",
+      "size": [
+        128,
+        128
+      ],
+      "content": [
+        4,
+        5,
+        120,
+        117
+      ],
+      "sha256": "c60269e61c85d4f1072f4e233973fe949745e93213c1b1afbc65aced343e7cb4"
+    },
+    "cloud-round": {
+      "file": "assets/cloud-round.png",
+      "size": [
+        512,
+        512
+      ],
+      "content": [
+        4,
+        138,
+        504,
+        235
+      ],
+      "sha256": "6061f840d5dc77b0a8ef05c1049e6e3e9db9b99bffa0d2dd2561b8e4b7672648"
+    },
+    "cloud-bank": {
+      "file": "assets/cloud-bank.png",
+      "size": [
+        512,
+        256
+      ],
+      "content": [
+        4,
+        45,
+        504,
+        165
+      ],
+      "sha256": "ccc27ec2ba1e7e7e6c2ff50e94989e3e938203064fddb835099a3abcadf9070d"
+    },
+    "bubble-star": {
+      "file": "assets/bubble-star.png",
+      "size": [
+        128,
+        128
+      ],
+      "content": [
+        4,
+        9,
+        120,
+        110
+      ],
+      "sha256": "a8084a509309b30f1878717ac92219401d47237d6539dee69d79ecd8a59def9d"
+    },
+    "button-round": {
+      "file": "assets/button-round.png",
+      "size": [
+        128,
+        128
+      ],
+      "content": [
+        4,
+        4,
+        120,
+        119
+      ],
+      "sha256": "e6a2e78b05e81916d3d3b143c6aadb1dbbac7a5176dd4e5fc5d39bf1ebdf9e49"
+    },
+    "button-shoulder": {
+      "file": "assets/button-shoulder.png",
+      "size": [
+        128,
+        128
+      ],
+      "content": [
+        4,
+        34,
+        120,
+        59
+      ],
+      "sha256": "690b8568b65c769fd510796155ec1b8cedd8728c448c31a8a25347df1716d174"
+    },
+    "tab-selected": {
+      "file": "assets/tab-selected.png",
+      "size": [
+        512,
+        256
+      ],
+      "content": [
+        4,
+        56,
+        504,
+        144
+      ],
+      "sha256": "21a8331879e3cd93681b558f6a169b78b76002298b667fcf2c3e500ce5cf66e9"
+    },
+    "zigzag-mask": {
+      "file": "assets/zigzag-mask.png",
+      "size": [
+        64,
+        126
+      ],
+      "content": [
+        0,
+        0,
+        64,
+        126
+      ],
+      "origin": "opaque black/white seamless luminance tile; one shared mask"
+    },
+    "game-preview": {
+      "file": "assets/game-preview.png",
+      "size": [
+        1024,
+        512
+      ],
+      "content": [
+        4,
+        38,
+        1016,
+        435
+      ],
+      "origin": "user-provided actual in-game screenshot, not imagegen or concept crop"
+    },
+    "chapter-sound": {
+      "file": "assets/chapter-sound.png",
+      "size": [
+        512,
+        512
+      ],
+      "content": [
+        4,
+        27,
+        504,
+        457
+      ],
+      "sha256": "99dad69977b2762cf044b77d38458371f847e0472c1a67759fff1638f55814f5"
+    },
+    "chapter-game": {
+      "file": "assets/chapter-game.png",
+      "size": [
+        512,
+        512
+      ],
+      "content": [
+        4,
+        19,
+        504,
+        474
+      ],
+      "sha256": "16df6a19024e68aac0b6d91412dd74d2f53a84407d1978a4ef41125e8146d783"
+    },
+    "chapter-picture": {
+      "file": "assets/chapter-picture.png",
+      "size": [
+        512,
+        512
+      ],
+      "content": [
+        46,
+        54,
+        423,
+        402
+      ],
+      "origin": "built-in imagegen; generated alpha preserved"
+    }
+  }
+}

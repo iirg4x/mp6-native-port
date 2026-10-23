@@ -895,6 +895,26 @@ class IncrementalBuildTests(unittest.TestCase):
             build._reset_fingerprint_caches()  # next build invocation
             self.assertTrue(build.needs_rebuild(source, obj, cmd))
 
+    def test_new_header_shadow_invalidates_old_upstream_depfile(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(build, "NATIVE_ROOT", root):
+            _compiler, source, _header, obj, cmd = self._seed(root)
+            self.assertFalse(build.needs_rebuild(source, obj, cmd))
+            shadow = pathlib.Path(root, "compat/decomp/include/game/shared.h.patch")
+            shadow.parent.mkdir(parents=True)
+            shadow.write_text("new native header layout")
+            self.assertTrue(build.needs_rebuild(source, obj, cmd))
+
+    def test_link_response_file_round_trips_spaces_and_backslashes(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = pathlib.Path(root, "source with spaces.c")
+            obj = pathlib.Path(root, "object with spaces.o")
+            source.write_text("int response_file_test(void) { return 7; }\n")
+            rsp = pathlib.Path(root, "link args.rsp")
+            result = build.run_link_command(
+                [build.ZIG, "cc", "-c", str(source), "-o", str(obj)], str(rsp), driver_args=2)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(obj.is_file())
+
     def test_non_executable_zig_tree_change_invalidates_command_fingerprint(self):
         with tempfile.TemporaryDirectory() as root:
             zig = os.path.join(root, "zig.exe")

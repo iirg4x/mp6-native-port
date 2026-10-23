@@ -15,18 +15,31 @@ typedef struct Mp6AoView {
 
 void mp6_ao_camera_end(int camera); /* Hu3DExec, before front sprites */
 void mp6_ao_camera_begin(int camera); /* real game camera boundary */
+void mp6_ao_camera_configured(int camera); /* immediately after Hu3DCameraSet */
+void mp6_ao_camera_exclude(int camera); /* current depth segment is 2D/copy-only */
+void mp6_ao_depth_about_to_clear(int camera); /* flush before Hu3DZClear destroys depth */
 void mp6_ao_depth_cleared(int camera); /* after Hu3DZClear's GXEnd */
 int mp6_ao_camera_has_depth(int camera); /* real-frame admission only */
 void mp6_ao_decals(int camera, int after); /* brackets the original space draw */
 void mp6_ao_capture_decals(int camera, int after); /* renderer + retained frames */
 void mp6_ao_begin_frame(void); /* each admitted real OR interpolated frame */
+void mp6_ao_register_pipeline_type(void); /* before the first-launch shader build */
 void mp6_ao_apply(const Mp6AoView *view); /* real and retained-stream frames */
+/* Mobile Unlocked FPS: interpolated frames re-composite the AO their tick
+ * frame computed instead of recomputing it (see ambient_occlusion.cpp). */
+int mp6_ao_replay_reuses_tick(void);
+void mp6_ao_apply_retained(const Mp6AoView *view);
 void mp6_ao_shutdown(void); /* before Aurora/device teardown */
 void mp6_ao_foliage_render(int camera, int enabled); /* HSF alpha coverage only */
 int mp6_ao_foliage_begin(int camera); /* private target, also replayed */
 int mp6_ao_foliage_target_size(unsigned *width, unsigned *height);
+int mp6_ao_foliage_uses_msaa_seed(void); /* sample-zero seed vs pixel-center replay */
 void mp6_ao_foliage_camera(int camera); /* logical EFB -> private target pixels */
 void mp6_ao_foliage_end(int camera);
+/* Internal adapter boundary: resets the saved camera scope without touching
+ * GPU state. Called by mp6_ao_camera_begin before the next Hu3DCameraSet. */
+void mp6_ao_camera_snapshot_reset(int camera);
+void mp6_ao_camera_consume(int camera); /* internal: claim one real depth epoch */
 /* Called AFTER resolve_pass drains GX. Retains only values + a byte boundary,
  * never a texture/host pointer. The replay builder remaps the boundary when
  * removing offscreen and copy commands. */

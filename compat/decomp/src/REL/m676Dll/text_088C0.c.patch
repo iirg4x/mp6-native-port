@@ -1,0 +1,37 @@
+--- a/src/REL/m676Dll/text_088C0.c
++++ b/src/REL/m676Dll/text_088C0.c
+@@ -52,3 +52,3 @@
+-extern void fn_1_5698(Vec *start, Vec *end, f32 factor, Vec *result);
+-
+-extern f32 fn_1_52C0(f32 start, f32 end, f32 speed);
++extern void fn_1_5698(Point3d *start, Point3d *end, f32 factor, Point3d *out);
++
++extern float fn_1_52C0(float start, float end, float factor);
+@@ -59,3 +59,3 @@
+-extern s32 fn_1_13F54(void *registration);
+-
+-extern f32 fn_1_5490(Vec *start, Vec *end);
++extern int fn_1_13F54(void *registration);
++
++extern float fn_1_5490(HuVecF *from, HuVecF *to);
+@@ -82 +82 @@
+-extern f32 fn_1_552C(Vec *first, Vec *second);
++extern float fn_1_552C(Vec *first, Vec *second);
+@@ -96 +96 @@
+-void fn_1_9300(s32 objectAddress);
++void fn_1_9300(OMOBJ *object);
+@@ -230 +230 @@
+-    managerWork = HuMemDirectMallocNum(HEAP_HEAP, 12, HU_MEMNUM_OVL);
++    managerWork = HuMemDirectMallocNum(HEAP_HEAP, sizeof(M676SceneManagerWork), HU_MEMNUM_OVL);
+@@ -232 +232 @@
+-    memset(managerWork, 0, 12);
++    memset(managerWork, 0, sizeof(M676SceneManagerWork));
+@@ -464,4 +464,4 @@
+-void fn_1_9300(s32 objectAddress)
+-{
+-    fn_1_9338((OMOBJ *) objectAddress);
+-    fn_1_93F4((OMOBJ *) objectAddress);
++void fn_1_9300(OMOBJ *object)
++{
++    fn_1_9338(object);
++    fn_1_93F4(object);

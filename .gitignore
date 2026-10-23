@@ -42,14 +42,23 @@ __pycache__/
 
 # Misc caches
 .cache/
+.playwright-cli/
+output/
 
-# Images (this repo ships no art; keep it that way)
+# Images: no retail or extracted art. The launcher's own generated artwork
+# (res/menu, see its README) and the app icon (packaging/icon-src, plus what
+# tools/make_app_icons.py builds from it) are the exceptions: builds and
+# releases need them.
 *.png
 *.jpg
 *.jpeg
 *.gif
 *.webp
 *.bmp
+!res/menu/**/*.png
+!packaging/icon-src/*.png
+!packaging/pwa/icons/*.png
+!packaging/android/app/src/main/res/**/*.png
 
 # Android (packaging/android): generated project state, local SDK/NDK
 # pointers, gradle caches, and packaged outputs.
@@ -68,3 +77,4 @@ packaging/android/app/src/main/jniLibs/
 /dist/
 /toolchain/
 setup/**/__pycache__/
+

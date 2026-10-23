@@ -207,6 +207,29 @@ static int mp6_hsf_v_bitmap_bytes(uint8_t fmt, uint8_t pix, uint16_t w,
     return tile <= (uint64_t)INT_MAX;
 }
 
+/* GX stores a whole tiled image at each mip level, including the small
+ * sub-tile tail. maxLod is inclusive, as in GXInitTexObjLOD. Shared with
+ * the loader so allocation and preflight cannot disagree. */
+static int mp6_hsf_v_bitmap_chain_bytes(uint8_t fmt, uint8_t pix,
+                                        uint16_t w, uint16_t h,
+                                        uint32_t maxLod, uint64_t *bytes)
+{
+    uint64_t total = 0;
+    uint32_t level;
+    if (maxLod > 15u || bytes == NULL) return 0;
+    for (level = 0; level <= maxLod; ++level) {
+        uint64_t naive, tile;
+        if (!mp6_hsf_v_bitmap_bytes(fmt, pix, w, h, &naive, &tile)
+                || tile > (uint64_t)INT_MAX - total) return 0;
+        total += tile;
+        if (w == 1u && h == 1u) break;
+        w = w > 1u ? (uint16_t)(w >> 1) : 1u;
+        h = h > 1u ? (uint16_t)(h >> 1) : 1u;
+    }
+    *bytes = total;
+    return 1;
+}
+
 static int32_t mp6_hsf_v_buffer_count(const MP6HsfPreflightCtx *c,
                                       unsigned secId, int32_t id)
 {
@@ -537,6 +560,21 @@ static int mp6_hsf_preflight(const void *data, size_t capacity,
                 return mp6_hsf_v_fail(&c, "attribute bitmap index outside section",
                                       (uint32_t)j, (uint32_t)bmp);
             }
+            if (bmp >= 0 && (mp6_hsf_v_u32(r + 124) & 0x80u)
+                    && mp6_hsf_v_u32(r + 120) > 0u) {
+                const MP6HsfPreflightSection *bs = &c.sec[MP6_HSF_SEC_BITMAP];
+                const uint8_t *br = c.b + bs->ofs + (size_t)bmp * 32u;
+                uint64_t pool = (uint64_t)bs->ofs + (uint64_t)(uint32_t)bs->num * 32u;
+                uint64_t bytes;
+                uint32_t lod = mp6_hsf_v_u32(r + 120);
+                if (!mp6_hsf_v_bitmap_chain_bytes(br[8], br[9],
+                        mp6_hsf_v_u16(br + 10), mp6_hsf_v_u16(br + 12), lod, &bytes)
+                        || !mp6_hsf_v_work(&c, 16u)
+                        || !mp6_hsf_v_range(&c, pool + mp6_hsf_v_u32(br + 28), bytes)) {
+                    return mp6_hsf_v_fail(&c, "attribute mip chain outside file",
+                                          (uint32_t)j, lod);
+                }
+            }
         }
     }
 
@@ -587,6 +625,20 @@ static int mp6_hsf_preflight(const void *data, size_t capacity,
                                                "bitmap allocation overflow")) {
                 return mp6_hsf_v_fail(&c, "invalid bitmap dimensions/data",
                                       (uint32_t)j, (uint32_t)tile);
+            }
+            /* Bitmap maxLod is a level COUNT; an attribute's maxLod above
+             * is an inclusive level index. Both can request the same pool. */
+            if (mp6_hsf_v_u32(r + 4) > 1u) {
+                uint64_t bytes;
+                uint32_t lod = mp6_hsf_v_u32(r + 4) - 1u;
+                if (!mp6_hsf_v_bitmap_chain_bytes(r[8], r[9], (uint16_t)w,
+                        (uint16_t)h, lod, &bytes)
+                        || !mp6_hsf_v_nested_count(&c, (uint32_t)bytes, 1,
+                                                  "bitmap mip allocation overflow")
+                        || !mp6_hsf_v_range(&c, pool + dataOfs, bytes)) {
+                    return mp6_hsf_v_fail(&c, "bitmap mip chain outside file",
+                                          (uint32_t)j, lod);
+                }
             }
             if (indexed) {
                 const MP6HsfPreflightSection *ps =

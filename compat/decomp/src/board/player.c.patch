@@ -1,18 +1,42 @@
 --- a/src/board/player.c
 +++ b/src/board/player.c
-@@ -174,0 +176 @@
+@@ -1,0 +2 @@
++#include "mp6_test_capsule_sweep.h" /* MP6_TEST_CAPSULE_SWEEP */
+@@ -26,0 +28 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -164,0 +167 @@ static inline void HuVecMul(
 +#ifdef __MWERKS__
-@@ -189,0 +192,5 @@
+@@ -179,0 +183,5 @@ static inline void HuVecMul(
 +#else
 +    dstP->x = srcP->x * scaleP->x;
 +    dstP->y = srcP->y * scaleP->y;
 +    dstP->z = srcP->z * scaleP->z;
 +#endif
-@@ -194,0 +202 @@
+@@ -185,0 +194 @@ static inline void HuVecCopy(
 +#ifdef __MWERKS__
-@@ -203,0 +212,5 @@
+@@ -194,0 +204,5 @@ static inline void HuVecCopy(
 +#else
 +    dstP->x = srcP->x;
 +    dstP->y = srcP->y;
 +    dstP->z = srcP->z;
 +#endif
+@@ -707,0 +722,9 @@ static BOOL DiceRun(int playerNo)
++    { /* MP6_TEST_CAPSULE_SWEEP (src/os/test_capsule_sweep.c): hold the swept capsule. */
++        const int mp6SweepCapsule = mp6_test_capsule_sweep_pick(playerNo, GwSystem.turnNo);
++        if (mp6SweepCapsule >= 0 && GwPlayer[playerNo].comF && GwPlayer[playerNo].capsuleUse == -1) {
++            while (mbPlayerCapsuleNumGet(playerNo) > 0) {
++                mbPlayerCapsuleRemove(playerNo, 0);
++            }
++            mbPlayerCapsuleAdd(playerNo, mp6SweepCapsule);
++        }
++    }
+@@ -1114,0 +1138,6 @@ void mbPlayerMoveMain(int playerNo, HuVecF *srcPos, HuVecF *dstPos, u32 motNo,
++    /* [MP6] Quick Party: walking, jumping and climbing between spaces take
++     * 1/scale as many frames, and the run animation keeps pace with them. */
++    if (mp6_quick_play_scale_ticks(maxTime) != maxTime && maxTime > 0) {
++        motSpeed *= (float)maxTime / (float)mp6_quick_play_scale_ticks(maxTime);
++        maxTime = (s16)mp6_quick_play_scale_ticks(maxTime);
++    }
+@@ -1262,0 +1292,2 @@ void mbPlayerRotateStart(int playerNo, s16 endAngle, s16 maxTime)
++    /* [MP6] Quick Party: board turns-on-the-spot run at the board time scale. */
++    maxTime = (s16)mp6_quick_play_scale_ticks(maxTime);

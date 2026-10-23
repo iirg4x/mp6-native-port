@@ -1,0 +1,51 @@
+bootdll	data/effect.bin	data/win.bin	data/gamemes.bin	data/mgconst.bin	mess/messdata_eng.bin	data/title.bin
+mdpartydll	mess/messdata_eng.bin	data/mdparty.bin	data/mariomot.bin	data/luigimot.bin	data/peachmot.bin	data/yoshimot.bin	data/board_us.bin	data/capsule.bin	data/w01.bin
+w01dll	data/capsule.bin	mess/messdata_eng.bin	data/bmasu.bin	data/capsuleshop.bin	data/yoshimdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/mariomdl2.bin	data/capsulechar4.bin
+selmenuDLL	data/mariomot.bin	data/luigimot.bin	data/peachmot.bin	data/yoshimot.bin
+w03dll	data/board_us.bin	data/capsule.bin	mess/messdata_eng.bin	data/bmasu.bin	data/w03.bin	data/mariomot.bin	data/luigimot.bin	data/peachmot.bin	data/yoshimot.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin	data/capsulechar4.bin
+w04dll	data/board_us.bin	data/capsule.bin	mess/messdata_eng.bin	data/bmasu.bin	data/w04.bin	data/mariomot.bin	data/luigimot.bin	data/peachmot.bin	data/yoshimot.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin	data/capsulechar4.bin
+w05dll	data/board_us.bin	data/capsule.bin	mess/messdata_eng.bin	data/bmasu.bin	data/w05.bin	data/mariomot.bin	data/luigimot.bin	data/peachmot.bin	data/yoshimot.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin	data/capsulechar4.bin
+w06dll	data/board_us.bin	data/capsule.bin	mess/messdata_eng.bin	data/bmasu.bin	data/w06.bin	data/mariomot.bin	data/luigimot.bin	data/peachmot.bin	data/yoshimot.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin	data/capsulechar1.bin	data/capsulechar4.bin
+m602dll	mess/messdata_eng.bin	data/m602.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m608dll	mess/messdata_eng.bin	data/m608.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m609dll	mess/messdata_eng.bin	data/m609.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin	data/mario.bin	data/luigi.bin	data/peach.bin	data/yoshi.bin
+m612dll	mess/messdata_eng.bin	data/yoshimdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/mariomdl2.bin
+m613dll	mess/messdata_eng.bin	data/m613.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin
+m618dll	mess/messdata_eng.bin	data/m618.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin
+m619dll	mess/messdata_eng.bin	data/m619.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m621dll	mess/messdata_eng.bin	data/m621.bin	data/mariomdl3.bin	data/luigimdl3.bin	data/peachmdl3.bin	data/yoshimdl3.bin
+m625dll	mess/messdata_eng.bin	data/m625.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m626dll	mess/messdata_eng.bin	data/yoshimdl2.bin	data/yoshi.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/mariomdl2.bin	data/mario.bin
+m627dll	mess/messdata_eng.bin	data/m627.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m629dll	mess/messdata_eng.bin	data/mariomdl1.bin	data/mario.bin	data/m629.bin	data/luigimdl1.bin	data/peachmdl1.bin	data/yoshimdl1.bin
+m630dll	mess/messdata_eng.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin	data/peachmdl1.bin	data/peach.bin	data/yoshimdl1.bin	data/yoshi.bin	data/m630.bin
+m631dll	mess/messdata_eng.bin	data/mariomdl1.bin	data/luigimdl1.bin	data/peachmdl1.bin	data/yoshimdl1.bin	data/m631.bin
+m632dll	mess/messdata_eng.bin	data/m632.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin	data/peachmdl1.bin	data/peach.bin	data/yoshimdl1.bin	data/yoshi.bin
+m633dll	mess/messdata_eng.bin	data/m633.bin	data/m606.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin	data/peachmdl1.bin	data/peach.bin	data/yoshimdl1.bin	data/yoshi.bin
+m635dll	mess/messdata_eng.bin	data/m635.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin	data/peachmdl1.bin	data/peach.bin	data/yoshimdl1.bin	data/yoshi.bin
+m636dll	mess/messdata_eng.bin	data/m636.bin	data/mariomdl3.bin	data/luigimdl3.bin	data/peachmdl3.bin	data/yoshimdl3.bin
+m637dll	mess/messdata_eng.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin	data/peachmdl1.bin	data/peach.bin	data/yoshimdl1.bin	data/yoshi.bin	data/m637.bin
+m638dll	mess/messdata_eng.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin	data/peachmdl1.bin	data/peach.bin	data/yoshimdl1.bin	data/yoshi.bin	data/m638.bin
+m640dll	mess/messdata_eng.bin	data/m640.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin
+m643dll	mess/messdata_eng.bin	data/m643.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin
+m644dll	mess/messdata_eng.bin	data/m644.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m646dll	mess/messdata_eng.bin	data/m646.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m647dll	mess/messdata_eng.bin	data/m647.bin	data/mariomdl3.bin	data/luigimdl3.bin	data/peachmdl3.bin	data/yoshimdl3.bin
+m649dll	mess/messdata_eng.bin	data/m649.bin	data/mariomdl3.bin	data/mario.bin	data/luigimdl3.bin	data/luigi.bin	data/peachmdl3.bin	data/peach.bin	data/yoshimdl3.bin	data/yoshi.bin
+m650dll	mess/messdata_eng.bin	data/m650.bin	data/mariomdl3.bin	data/mario.bin	data/luigimdl3.bin	data/luigi.bin	data/peachmdl3.bin	data/peach.bin	data/yoshimdl3.bin	data/yoshi.bin
+m651dll	mess/messdata_eng.bin	data/mariomdl0.bin	data/mario.bin	data/m651.bin	data/luigimdl0.bin	data/luigi.bin
+m656dll	mess/messdata_eng.bin	data/m656.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin
+m657dll	mess/messdata_eng.bin	data/m657.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin
+m658dll	mess/messdata_eng.bin	data/m658.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin
+m659dll	mess/messdata_eng.bin	data/m659.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin
+m660dll	mess/messdata_eng.bin	data/m660.bin	data/mariomdl1.bin	data/luigimdl1.bin
+m662dll	mess/messdata_eng.bin	data/mariomdl0.bin	data/luigimdl0.bin	data/m662.bin
+m664dll	mess/messdata_eng.bin	data/m664.bin	data/mariomdl3.bin	data/mario.bin	data/luigimdl3.bin	data/luigi.bin	data/peachmdl3.bin	data/peach.bin	data/yoshimdl3.bin	data/yoshi.bin
+m667dll	mess/messdata_eng.bin	data/m667.bin	data/mariomdl1.bin	data/luigimdl1.bin	data/peachmdl1.bin	data/yoshimdl1.bin
+m668dll	mess/messdata_eng.bin	data/m668.bin	data/mariomdl1.bin	data/mario.bin	data/luigimdl1.bin	data/luigi.bin	data/peachmdl1.bin	data/peach.bin	data/yoshimdl1.bin	data/yoshi.bin
+m674dll	mess/messdata_eng.bin	data/m674.bin	data/mariomdl3.bin	data/mario.bin	data/luigimdl3.bin	data/luigi.bin	data/peachmdl3.bin	data/peach.bin	data/yoshimdl3.bin	data/yoshi.bin
+m675dll	mess/messdata_eng.bin	data/m675.bin	data/mariomdl2.bin	data/mario.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin
+m676dll	mess/messdata_eng.bin	data/m676.bin	data/mariomdl2.bin	data/luigimdl2.bin	data/peachmdl2.bin	data/yoshimdl2.bin
+m680dll	mess/messdata_eng.bin	data/luigimdl2.bin	data/luigi.bin	data/peachmdl2.bin	data/peach.bin	data/yoshimdl2.bin	data/yoshi.bin	data/mariomdl2.bin	data/mario.bin	data/m680.bin
+instdll	mess/messdata_eng.bin	data/inst.bin	data/instpic.bin	data/luigimdl3.bin	data/mariomdl3.bin	data/yoshimdl3.bin	data/peachmdl3.bin	movie/m639.thp	data/m639.bin
+resultdll	mess/messdata_eng.bin	data/result.bin	data/yoshimdl1.bin	data/luigimdl1.bin	data/peachmdl1.bin	data/mariomdl1.bin	data/w01n.bin

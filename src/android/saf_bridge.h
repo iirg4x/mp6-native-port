@@ -60,6 +60,10 @@ void mp6_saf_tree_import_poll(Mp6ImportStatus *out);
 /* Requests cancellation of the Java import. */
 void mp6_saf_tree_import_cancel(void);
 
+/* Keeps read access to a picked document or tree across launches, so the
+ * same source can be imported again without the picker. 0 on success. */
+int mp6_saf_persist_uri(const char *uri);
+
 #ifdef __cplusplus
 }
 #endif

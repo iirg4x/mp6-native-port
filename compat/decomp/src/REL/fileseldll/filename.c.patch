@@ -1,8 +1,9 @@
 --- a/src/REL/fileseldll/filename.c
 +++ b/src/REL/fileseldll/filename.c
-@@ -8,0 +9 @@
+@@ -9,0 +10 @@
 +#include "game/frand.h"
 @@ -14,0 +16,18 @@
++
 +#pragma cplusplus on
 +double __frsqrte(double);
 +extern inline float mp6_fileseldll_sqrtf(float x)
@@ -20,13 +21,30 @@
 +    return x;
 +}
 +#pragma cplusplus reset
+@@ -227,2 +246,2 @@
+-/* FileselSelect calls this for an empty slot; read keyboard input until naming the new save
+- * ends. */
++void mp6_filesel_badge_park(void);
 +
-@@ -607 +626 @@ s16 fn_1_ABF8(s16 id, f32 refX, f32 refY, f32 dirX, f32 dirY)
--    len = sqrtf(dirX * dirX + dirY * dirY);
-+    len = mp6_fileseldll_sqrtf(dirX * dirX + dirY * dirY);
-@@ -616 +635 @@ s16 fn_1_ABF8(s16 id, f32 refX, f32 refY, f32 dirX, f32 dirY)
--            dist = sqrtf(px * px + py * py);
-+            dist = mp6_fileseldll_sqrtf(px * px + py * py);
-@@ -619 +638 @@ s16 fn_1_ABF8(s16 id, f32 refX, f32 refY, f32 dirX, f32 dirY)
--            angDist = sqrtf((px - ndx) * (px - ndx) + (py - ndy) * (py - ndy));
-+            angDist = mp6_fileseldll_sqrtf((px - ndx) * (px - ndx) + (py - ndy) * (py - ndy));
+@@ -292,0 +312,2 @@
++    /* Re-derive the hidden badge position when the window is resized. */
++    mp6_filesel_badge_park();
+@@ -627 +648 @@
+-    directionLength = sqrtf(directionX * directionX + directionY * directionY);
++    directionLength = mp6_fileseldll_sqrtf(directionX * directionX + directionY * directionY);
+@@ -636 +657 @@
+-            candidateDistance = sqrtf(candidateX * candidateX + candidateY * candidateY);
++            candidateDistance = mp6_fileseldll_sqrtf(candidateX * candidateX + candidateY * candidateY);
+@@ -639,8 +660,4 @@
+-            directionDistance =
+-                sqrtf((candidateX - normalizedDirectionX) * (candidateX - normalizedDirectionX) +
+-                      (candidateY - normalizedDirectionY) * (candidateY - normalizedDirectionY));
+-            if (keyboard[currentKeyIndex].val >= NAMEKEYBOARD_PAGE_ALPHA &&
+-                keyboard[currentKeyIndex].val <= NAMEKEYBOARD_CONFIRM &&
+-                keyboard[i].val >= NAMEKEYBOARD_PAGE_ALPHA &&
+-                keyboard[i].val <= NAMEKEYBOARD_CONFIRM && directionDistance < 0.1 &&
+-                candidateDistance < 55.0f + nearestDistance) {
++            directionDistance = mp6_fileseldll_sqrtf((candidateX - normalizedDirectionX) * (candidateX - normalizedDirectionX) + (candidateY - normalizedDirectionY) * (candidateY - normalizedDirectionY));
++            if (keyboard[currentKeyIndex].val >= NAMEKEYBOARD_PAGE_ALPHA && keyboard[currentKeyIndex].val <= NAMEKEYBOARD_CONFIRM &&
++                keyboard[i].val >= NAMEKEYBOARD_PAGE_ALPHA && keyboard[i].val <= NAMEKEYBOARD_CONFIRM &&
++                directionDistance < 0.1 && candidateDistance < 55.0f + nearestDistance) {

@@ -1,0 +1,31 @@
+--- a/src/REL/w06Dll/board_main.c
++++ b/src/REL/w06Dll/board_main.c
+@@ -0,0 +1,6 @@
++#include "mp6_widescreen.h"
++#include "stdio.h"
++#include "mp6_board_compat.h"
++#include "game/hsfex.h"
++void CharEffectHipDropCreate(s16 charNo, HuVecF *pos);
++#include "mp6_board_window.h"
+@@ -163,2 +169 @@
+-void fn_1_99C(OMOBJ *obj);
+-void mbObjectSetup(s32 boardNo, void (*init)(void), void (*close)(OMOBJ *));
++void fn_1_99C(void);
+@@ -289,0 +295,2 @@
++    /* Continue the authored cloud wall, not the castle or foreground props. */
++    mp6_widescreen_extend_wall_outer_sides(mbObjModelIDGet(lbl_1_bss_4B4), "cyl546", 0, 2, 1);
+@@ -388 +395 @@
+-void fn_1_99C(OMOBJ *obj)
++void fn_1_99C(void)
+@@ -1063 +1070 @@
+-            mbWinTopInsertMesSet((u32)priceText, 0);
++            mp6_board_window_top_insert_text(priceText, 0);
+@@ -3197 +3204 @@
+-                mbWinTopInsertMesSet((u32)coinText, 0);
++                mp6_board_window_top_insert_text(coinText, 0);
+@@ -4577,0 +4585 @@
++    GXEnd();
+@@ -4853,0 +4862,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

@@ -41,7 +41,7 @@ function makeFileList(prefix, { withBoot = true, gameId = "GP6E01" } = {}) {
         new FakeFile(`${prefix}sys/fst.bin`, textBytes("fake-fst-bytes")),
         new FakeFile(`${prefix}files/opening.bnr`, textBytes("banner")),
         new FakeFile(`${prefix}files/data/title.bin`, textBytes("title-data-longer-than-a-few-bytes")),
-        new FakeFile(`${prefix}files/movie/intro.thp`, textBytes("movie-not-wanted")),
+        new FakeFile(`${prefix}files/dll/bootDll.rel`, textBytes("dll-not-wanted")),
         new FakeFile(`${prefix}files/sound/MP6_SND.msm`, textBytes("snd")),
     ];
     if (withBoot) files.push(new FakeFile(`${prefix}sys/boot.bin`, bootBinWithGameId(gameId)));

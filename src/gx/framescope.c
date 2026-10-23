@@ -134,6 +134,11 @@ static void fs_log(const char *fmt, ...)
     char *dst;
     int off;
     if (!fs_armed || fs_count >= FS_MAX_LINES) return;
+    {   /* MP6_FRAMESCOPE_FROM=N: only draws N and later (a busy frame overflows the buffer) */
+        static int from = -2;
+        if (from == -2) { const char *e = getenv("MP6_FRAMESCOPE_FROM"); int v; from = (e && mp6_parse_i32_strict(e, 0, INT_MAX, &v)) ? v : 0; }
+        if ((int)mp6_current_draw_index() < from) return;
+    }
     dst = fs_lines[fs_count++];
     off = snprintf(dst, FS_LINE_LEN, "d%03d ", mp6_current_draw_index());
     va_start(ap, fmt);
@@ -377,6 +382,17 @@ void mp6_fs_GXCopyTex(void *dest, GXBool clear)
     fs_log("CopyTex     dest=%p clear=%d", dest, clear);
     GXCopyTex(dest, clear);
 }
+
+void mp6_fs_GXSetChanMatColor(GXChannelID chan, GXColor c)
+{ fs_log("ChanMatColor chan=%d rgba=(%d,%d,%d,%d)", chan, c.r, c.g, c.b, c.a); GXSetChanMatColor(chan, c); }
+void mp6_fs_GXSetChanCtrl(GXChannelID chan, GXBool en, GXColorSrc amb, GXColorSrc mat, u32 mask, GXDiffuseFn df, GXAttnFn at)
+{ fs_log("ChanCtrl    chan=%d light=%d amb=%d mat=%d mask=%u df=%d at=%d", chan, en, amb, mat, mask, df, at); GXSetChanCtrl(chan, en, amb, mat, mask, df, at); }
+void mp6_fs_GXSetTevColor(GXTevRegID id, GXColor c)
+{ fs_log("TevColor    reg=%d rgba=(%d,%d,%d,%d)", id, c.r, c.g, c.b, c.a); GXSetTevColor(id, c); }
+void mp6_fs_GXSetTevColorS10(GXTevRegID id, GXColorS10 c)
+{ fs_log("TevColorS10 reg=%d rgba=(%d,%d,%d,%d)", id, c.r, c.g, c.b, c.a); GXSetTevColorS10(id, c); }
+void mp6_fs_GXSetAlphaCompare(GXCompare c0, u8 r0, GXAlphaOp op, GXCompare c1, u8 r1)
+{ fs_log("AlphaCmp    %d/%d op=%d %d/%d", c0, r0, op, c1, r1); GXSetAlphaCompare(c0, r0, op, c1, r1); }
 
 void mp6_fs_GXSetZMode(GXBool en, GXCompare fn, GXBool upd)
 { fs_log("ZMode       en=%d fn=%d upd=%d", en, fn, upd); GXSetZMode(en, fn, upd); }

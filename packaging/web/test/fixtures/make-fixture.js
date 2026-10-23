@@ -9,7 +9,7 @@
 //
 //   data/title.bin        <- wanted (prefix "data")
 //   data2/x.bin            <- NOT wanted (prefix boundary: "data2" != "data" + '/')
-//   movie/foo.thp           <- NOT wanted (movie/ isn't in the wanted set at all)
+//   movie/foo.thp           <- wanted (prefix "movie")
 //   opening.bnr               <- wanted (exact match)
 //   sound/MP6_SND.msm          <- wanted (exact match)
 //   sound/MP6_Str.pdt           <- wanted (exact match)
@@ -171,7 +171,9 @@ export function buildSyntheticIso() {
         offset: f.discOffset,
         content: f.content,
     }));
-    const WANTED_PATHS = new Set(["data/title.bin", "opening.bnr", "sound/MP6_SND.msm", "sound/MP6_Str.pdt"]);
+    const WANTED_PATHS = new Set([
+        "data/title.bin", "movie/foo.thp", "opening.bnr", "sound/MP6_SND.msm", "sound/MP6_Str.pdt",
+    ]);
     const wantedFiles = allFiles.filter((f) => WANTED_PATHS.has(f.path));
 
     return {

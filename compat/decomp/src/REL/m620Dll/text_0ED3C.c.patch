@@ -1,0 +1,8 @@
+--- a/src/REL/m620Dll/text_0ED3C.c
++++ b/src/REL/m620Dll/text_0ED3C.c
+@@ -218 +218 @@
+-    data = HuMemDirectMallocNum(HEAP_HEAP, 196, HU_MEMNUM_OVL);
++    data = HuMemDirectMallocNum(HEAP_HEAP, 49 * sizeof(void *), HU_MEMNUM_OVL);
+@@ -220 +220 @@
+-    memset(data, 0, 196);
++    memset(data, 0, 49 * sizeof(void *));

@@ -22,20 +22,24 @@
  */
 #include "dspadpcm.h"
 
-static int16_t mp6_clamp16(int64_t v)
-{
-    if (v > 32767) return 32767;
-    if (v < -32768) return -32768;
-    return (int16_t)v;
-}
+/* Arithmetic right shift of a negative value is implementation-defined in C;
+ * every compiler this port builds with (clang via zig, the NDK and
+ * Emscripten) shifts arithmetically, which is the floor division the DSP's
+ * fixed point needs. Checked here so a compiler that did not would fail to
+ * build rather than decode wrongly. */
+_Static_assert((-2049 >> 11) == -2 && ((int64_t)-1 >> 1) == -1,
+               "DSP-ADPCM decode needs an arithmetic right shift");
 
-/* C's right shift of a negative signed integer is implementation-defined.
- * DSP fixed-point wants an arithmetic >> 11 (floor division), so spell that
- * operation portably after doing every multiply in int64_t. */
-static int64_t mp6_arshift11(int64_t v)
+static inline int16_t mp6_adpcm_sample(int32_t nibble, int32_t scale2048, int32_t c1, int32_t c2,
+                                       int32_t *hist1, int32_t *hist2)
 {
-    if (v >= 0) return v / 2048;
-    return -((-v + 2047) / 2048);
+    int64_t v = (int64_t)nibble * scale2048 + 1024 + (int64_t)c1 * *hist1 + (int64_t)c2 * *hist2;
+    v >>= 11;
+    if (v > 32767) v = 32767;
+    if (v < -32768) v = -32768;
+    *hist2 = *hist1;
+    *hist1 = (int32_t)v;
+    return (int16_t)v;
 }
 
 void mp6_dspadpcm_decode(const uint8_t *src, uint32_t numFrames,
@@ -46,34 +50,20 @@ void mp6_dspadpcm_decode(const uint8_t *src, uint32_t numFrames,
     int32_t hist2 = state->hist2;
     uint32_t f;
 
-    for (f = 0; f < numFrames; f++) {
-        const uint8_t *frame = src + (size_t)f * 8;
-        uint8_t header = frame[0];
-        /* Predictor index is 4 bits (0-15) in the header byte, but only 8
-         * coef pairs exist -- mask defensively (see dspadpcm.h). Real
-         * data keeps the predictor in 0-7 and never sets the top bit. */
-        int predictor = (header >> 4) & 0x7;
-        int scaleShift = header & 0xF;
-        int32_t scale = 1 << scaleShift;
-        int32_t c1 = coef->coef[predictor][0];
-        int32_t c2 = coef->coef[predictor][1];
-        int i;
+    for (f = 0; f < numFrames; f++, src += 8, out += 14) {
+        const uint8_t header = src[0];
+        const int predictor = (header >> 4) & 0x7;
+        const int32_t scale2048 = 2048 << (header & 0xF);
+        const int32_t c1 = coef->coef[predictor][0];
+        const int32_t c2 = coef->coef[predictor][1];
+        int b;
 
-        for (i = 0; i < 14; i++) {
-            uint8_t byte = frame[1 + i / 2];
-            int nibble = (i & 1) ? (byte & 0xF) : (byte >> 4);
-            int32_t signedNibble = (nibble > 7) ? (nibble - 16) : nibble;
-            int64_t sample = (int64_t)signedNibble * (int64_t)scale * 2048;
-            int16_t s16;
-
-            sample += 1024;
-            sample += (int64_t)c1 * hist1 + (int64_t)c2 * hist2;
-            sample = mp6_arshift11(sample);
-
-            s16 = mp6_clamp16(sample);
-            out[f * 14 + i] = s16;
-            hist2 = hist1;
-            hist1 = s16;
+        for (b = 0; b < 7; b++) {
+            /* Two signed nibbles, high first: sign-extend through int8_t. */
+            const uint8_t byte = src[1 + b];
+            out[2 * b] = mp6_adpcm_sample((int8_t)byte >> 4, scale2048, c1, c2, &hist1, &hist2);
+            out[2 * b + 1] = mp6_adpcm_sample((int8_t)(uint8_t)(byte << 4) >> 4, scale2048, c1, c2,
+                                              &hist1, &hist2);
         }
     }
 

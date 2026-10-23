@@ -1,0 +1,5 @@
+--- a/src/REL/m642dll/startup.c
++++ b/src/REL/m642dll/startup.c
+@@ -7 +7 @@
+-#include "include/game/mg/actman.h"
++#include "game/mg/actman.h"

@@ -1,0 +1,271 @@
+--- a/src/REL/mgmfreedll/menu.c
++++ b/src/REL/mgmfreedll/menu.c
+@@ -0,0 +1,2 @@
++#include "mp6_widescreen.h"
++#include "mp6_thp_video.h"
+@@ -98,12 +100,11 @@
+-/* Selection remapping entries consumed as signed halfwords by fn_1_CAD4. */
+-u8 lbl_1_data_2B8[200] = { 0, 0, 0, 1, 0, 2, 0, 3, 0, 1, 0, 0, 0, 2, 0, 3, 0, 2, 0, 0, 0, 1, 0,
+-                           3, 0, 3, 0, 0, 0, 1, 0, 2, 0, 0, 0, 1, 0, 2, 0, 3, 0, 0, 0, 1, 0, 2,
+-                           0, 3, 0, 0, 0, 1, 0, 2, 0, 3, 0, 0, 0, 2, 0, 1, 0, 3, 0, 0, 0, 3, 0,
+-                           1, 0, 2, 0, 0, 0, 1, 0, 2, 0, 3, 0, 0, 0, 1, 0, 2, 0, 3, 0, 0, 0, 1,
+-                           0, 2, 0, 3, 0, 0, 0, 1, 0, 2, 0, 3, 0, 0, 0, 2, 0, 1, 0, 3, 0, 0, 0,
+-                           3, 0, 1, 0, 2, 0, 1, 0, 2, 0, 0, 0, 3, 0, 1, 0, 3, 0, 0, 0, 2, 0, 2,
+-                           0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 3, 0, 0, 0, 2, 0, 1, 0, 3, 0,
+-                           0, 0, 3, 0, 1, 0, 2, 0, 1, 0, 2, 0, 0, 0, 3, 0, 1, 0, 3, 0, 0, 0, 2,
+-                           0, 2, 0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 3 };
+-/* Maps each on-screen player slot to its character-model/player index; reordering this table
+-* determines player groups when a minigame launches. */
++/* The REL stores these as big-endian halfwords.  Keep the native owner typed
++ * so little-endian hosts consume the same logical values. */
++s16 lbl_1_data_2B8[100] = {
++    0, 1, 2, 3, 1, 0, 2, 3, 2, 0, 1, 3, 3, 0, 1, 2,
++    0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 2, 1, 3,
++    0, 3, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3,
++    0, 1, 2, 3, 0, 2, 1, 3, 0, 3, 1, 2, 1, 2, 0, 3,
++    1, 3, 0, 2, 2, 3, 0, 1, 0, 1, 2, 3, 0, 2, 1, 3,
++    0, 3, 1, 2, 1, 2, 0, 3, 1, 3, 0, 2, 2, 3, 0, 1,
++    0, 1, 2, 3
++};
+@@ -166,2 +167,2 @@
+-/* The first word points to the active item-window object; the remaining bytes have no known use. */
+-u8 lbl_1_bss_28[8];
++/* Only the first REL word is consumed, as the active item-window object. */
++OMOBJ *lbl_1_bss_28;
+@@ -171,2 +172,2 @@
+-/* The first word points to the model-display object; the remaining bytes have no known use. */
+-u8 lbl_1_bss_C[16];
++/* Only the first REL word is consumed, as the model-display object. */
++OMOBJ *lbl_1_bss_C;
+@@ -278,0 +280,3 @@
++    /* Projected window masks follow the centered scene, not split-screen scaling. */
++    mp6_widescreen_camera_centered_scissor(HU3D_CAM1 | HU3D_CAM2 | HU3D_CAM3 |
++                                         HU3D_CAM4 | HU3D_CAM5, TRUE);
+@@ -483,3 +487,9 @@
+-        HuSprGrpMemberSet(lbl_1_bss_4AE, 1, lbl_1_bss_4AA[1]);
+-        HuSprGrpDrawNoSet(lbl_1_bss_4AE, 127);
+-        lbl_1_data_3AE = 5;
++        if (lbl_1_bss_4AA[1] < 0) {
++            /* If movie startup fails, keep the instruction still and
++             * finish startup so selection changes and teardown cannot wait forever. */
++            lbl_1_data_3AE = 100;
++        } else {
++            HuSprGrpMemberSet(lbl_1_bss_4AE, 1, lbl_1_bss_4AA[1]);
++            HuSprGrpDrawNoSet(lbl_1_bss_4AE, 127);
++            lbl_1_data_3AE = 5;
++        }
+@@ -491,0 +502,3 @@
++        } else if (!HuTHPProcCheck()) {
++            /* Missing/corrupt movies may fail after the sprite was created. */
++            lbl_1_data_3AE = 100;
+@@ -500,0 +514,2 @@
++            /* The native movie texture is filled directly from decoded frames. */
++            HuSprAttrSet(lbl_1_bss_4AE, 1, HUSPR_ATTR_DISPOFF);
+@@ -504,0 +520,3 @@
++        } else if (!HuTHPProcCheck()) {
++            /* Missing/corrupt movies may fail after the sprite was created. */
++            lbl_1_data_3AE = 100;
+@@ -529 +547,9 @@
+-        /* Read the instruction image before the later missing/locked-entry check. */
++        /* Empty and locked entries have no instruction asset to load. In
++         * particular, never index MgDataTbl with the menu's -1 sentinel. */
++        if (mode == 2 || mode == 0 || lbl_1_bss_580[category][index][0] < 0 ||
++            lbl_1_bss_580[category][index][1] == 0) {
++            HuTHPClose();
++            lbl_1_data_3AE = 100;
++            Hu3DAnimAnimSet(lbl_1_bss_4B0[5], lbl_1_bss_554[mode == 2 ? 7 : 6]);
++            return;
++        }
+@@ -537,9 +562,0 @@
+-        if (mode == 2) {
+-            Hu3DAnimAnimSet(lbl_1_bss_4B0[5], lbl_1_bss_554[7]);
+-            return;
+-        }
+-        if (lbl_1_bss_580[category][index][0] == -1 || lbl_1_bss_580[category][index][1] == 0 ||
+-            mode == 0) {
+-            Hu3DAnimAnimSet(lbl_1_bss_4B0[5], lbl_1_bss_554[6]);
+-            return;
+-        }
+@@ -558 +575,5 @@
+-    GXSetTexCopySrc(0, 320, 128, 128);
++    if (mp6_thp_copy_frame_rgba8(bitmap->data, 128, 128)) return;
++    /* The sprite pass is centered in the wide framebuffer. Capture that
++     * same origin; this texture remains 128x128 at every aspect ratio. */
++    GXSetTexCopySrc((mp6_widescreen_render_width() - 640) / 2,
++                    320, 128, 128);
+@@ -650,0 +672,5 @@
++    /* Wider paths must take proportionally longer: keep native world-units
++     * per simulation tick instead of accelerating scenery with the aspect. */
++    f32 travelStep = 1.0f / mp6_widescreen_scale_factor();
++    Hu3DMotionSpeedSet(obj->mdlId[5], travelStep);
++    Hu3DMotionSpeedSet(obj->mdlId[6], travelStep);
+@@ -651,0 +678,2 @@
++        /* Keep parked scenery beyond the live edge, including after resize. */
++        const float anchorX[4] = {0.0f, -1095.0f, -1100.0f, -882.0f};
+@@ -652,0 +681,2 @@
++        value = record->interpolationTime > 0.0f ? table[i][4] : table[i][3];
++
+@@ -658,0 +689 @@
++                    value = table[i][3];
+@@ -675 +706 @@
+-            if ((record->interpolationTime += 1.0f) > record->interpolationDuration) {
++            if ((record->interpolationTime += travelStep) > record->interpolationDuration) {
+@@ -678,3 +709,11 @@
+-            Hu3DModelPosSet(obj->mdlId[table[i][0]], value, 0.0f, 0.0f);
+-        }
+-    }
++        }
++        value += (mp6_widescreen_scale_factor() - 1.0f) * (value + anchorX[i]);
++        Hu3DModelPosSet(obj->mdlId[table[i][0]], value, 0.0f, 0.0f);
++    }
++    /* Each source contains two adjacent 2167-unit tiles. Continue that
++     * complete strip into the extra view without stretching clouds/hills. */
++    /* Foreground motion advances one 2200-unit strip per loop. Repeat the
++     * complete strip at that period instead of stretching its motion path. */
++    mp6_widescreen_tile_x(obj->mdlId[1], 2200.0f, 750.0f);
++    mp6_widescreen_tile_x(obj->mdlId[2], 4334.0f, 750.0f);
++    mp6_widescreen_tile_x(obj->mdlId[3], 4334.0f, 750.0f);
+@@ -682 +721,3 @@
+-    if ((record->value.countdown -= 1.0f) < 0.0f) {
++    /* This timer is in motion frames too: restarting at 1080 wall ticks
++     * truncates the slowed 1079-frame signpost path while still visible. */
++    if ((record->value.countdown -= travelStep) < 0.0f) {
+@@ -688 +729 @@
+-    if ((record->value.countdown -= 1.0f) < 0.0f) {
++    if ((record->value.countdown -= travelStep) < 0.0f) {
+@@ -797,0 +839,6 @@
++    /* Continue the two repeating canvases without enlarging their art. */
++    mp6_widescreen_extend_sides(obj->mdlId[0], "grid83", FALSE);
++    /* Animated roots own complete props; widen travel, not their meshes. */
++    mp6_widescreen_motion_x(obj->mdlId[5], "null70", 0.0f);
++    mp6_widescreen_motion_x(obj->mdlId[6], "null59", 0.0f);
++
+@@ -853,2 +900,3 @@
+-        Hu3DCameraScissorSet(1 << (i + 1), (u32)(screen.x - 32),
+-                             (u32)(screen.y - 96), 64, 64);
++        /* Keep signed projected bounds until the live canvas offset is applied. */
++        mp6_widescreen_camera_cutout(1 << (i + 1), screen.x - 32.0f,
++                                      screen.y - 96.0f, 64.0f, 64.0f);
+@@ -873,2 +921,3 @@
+-        Hu3DCameraScissorSet(1 << (i + 1), (u32)(screen.x - 32),
+-                             (u32)(screen.y - 96), 64, 64);
++        /* Keep signed projected bounds until the live canvas offset is applied. */
++        mp6_widescreen_camera_cutout(1 << (i + 1), screen.x - 32.0f,
++                                      screen.y - 96.0f, 64.0f, 64.0f);
+@@ -918,7 +967,3 @@
+-    f32 x;
+-    f32 width;
+-    f32 y;
+-    f32 height;
+-    s16 i;
+-
+-    Hu3DModelPosGet((*(OMOBJ **)lbl_1_bss_C)->mdlId[4], &position);
++    s16 i;
++
++    Hu3DModelPosGet(lbl_1_bss_C->mdlId[4], &position);
+@@ -933 +978 @@
+-    Hu3DModelPosGet((*(OMOBJ **)lbl_1_bss_C)->mdlId[4], &position);
++    Hu3DModelPosGet(lbl_1_bss_C->mdlId[4], &position);
+@@ -938,20 +983,2 @@
+-    x = screen.x;
+-    width = 90.0f;
+-    if (x <= 0.0f) {
+-        x = 0.0f;
+-        width = 90.0f + screen.x;
+-        if (width <= 0.0f) {
+-            width = 1.0f;
+-        }
+-    }
+-    y = screen.y;
+-    height = 128.0f;
+-    if (y <= 0.0f) {
+-        y = 0.0f;
+-        height = 128.0f + screen.y;
+-        /* Rechecking the already-zero Y forces it to 1; the computed height is left unclamped. */
+-        if (y <= 0.0f) {
+-            y = 1.0f;
+-        }
+-    }
+-    Hu3DCameraScissorSet(32, (u32)x, (u32)y, (u32)width, (u32)height);
++    /* Do not clip to the old 640-wide frame before applying its wide offset. */
++    mp6_widescreen_camera_cutout(32, screen.x, screen.y, 90.0f, 128.0f);
+@@ -1239 +1266 @@
+-    OMOBJ *obj = *(OMOBJ **)&lbl_1_bss_28[0];
++    OMOBJ *obj = lbl_1_bss_28;
+@@ -1272 +1299 @@
+-    OMOBJ *obj = *(OMOBJ **)&lbl_1_bss_28[0];
++    OMOBJ *obj = lbl_1_bss_28;
+@@ -1447 +1474 @@
+-        Hu3DModelPosGet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], &position);
++        Hu3DModelPosGet(lbl_1_bss_C->mdlId[10], &position);
+@@ -1456 +1483 @@
+-            Hu3DModelPosGet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], &position);
++            Hu3DModelPosGet(lbl_1_bss_C->mdlId[10], &position);
+@@ -1459,6 +1486,6 @@
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], &position);
+-        Hu3DModelPosGet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[11], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[12], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[13], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[14], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[10], &position);
++        Hu3DModelPosGet(lbl_1_bss_C->mdlId[10], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[11], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[12], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[13], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[14], &position);
+@@ -1466 +1493 @@
+-        Hu3DModelPosGet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], &position);
++        Hu3DModelPosGet(lbl_1_bss_C->mdlId[10], &position);
+@@ -1472 +1499 @@
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[10], &position);
+@@ -1487,5 +1514,5 @@
+-        Hu3DModelPosGet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[11], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[12], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[13], &position);
+-        Hu3DModelPosSetV((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[14], &position);
++        Hu3DModelPosGet(lbl_1_bss_C->mdlId[10], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[11], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[12], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[13], &position);
++        Hu3DModelPosSetV(lbl_1_bss_C->mdlId[14], &position);
+@@ -1509 +1536 @@
+-        Hu3DModelPosSet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], 200.0f, 0.0f, 0.0f);
++        Hu3DModelPosSet(lbl_1_bss_C->mdlId[10], 200.0f, 0.0f, 0.0f);
+@@ -1525 +1552 @@
+-        Hu3DModelPosSet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[10], 0.0f, 0.0f, 0.0f);
++        Hu3DModelPosSet(lbl_1_bss_C->mdlId[10], 0.0f, 0.0f, 0.0f);
+@@ -1571 +1598 @@
+-            Hu3DModelPosGet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[4], &position);
++            Hu3DModelPosGet(lbl_1_bss_C->mdlId[4], &position);
+@@ -1577 +1604 @@
+-        Hu3DModelObjMtxGet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[5], lbl_1_data_42A, matrix);
++        Hu3DModelObjMtxGet(lbl_1_bss_C->mdlId[5], lbl_1_data_42A, matrix);
+@@ -1625 +1652 @@
+-    fn_1_5E4C(*(OMOBJ **)&lbl_1_bss_28[0]);
++    fn_1_5E4C(lbl_1_bss_28);
+@@ -1770 +1797 @@
+-    *(OMOBJ **)lbl_1_bss_C = omAddObjEx(lbl_1_bss_8, 4096, 16, 16, -1, fn_1_2590);
++    lbl_1_bss_C = omAddObjEx(lbl_1_bss_8, 4096, 16, 16, -1, fn_1_2590);
+@@ -1775 +1802 @@
+-    *(OMOBJ **)lbl_1_bss_28 = omAddObjEx(lbl_1_bss_8, 4096, 0, 0, -1, fn_1_5894);
++    lbl_1_bss_28 = omAddObjEx(lbl_1_bss_8, 4096, 0, 0, -1, fn_1_5894);
+@@ -1860,2 +1887 @@
+-        Hu3DMotionSet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[13],
+-                      (*(OMOBJ **)&lbl_1_bss_C[0])->mtnId[13]);
++        Hu3DMotionSet(lbl_1_bss_C->mdlId[13], lbl_1_bss_C->mtnId[13]);
+@@ -1872,2 +1898 @@
+-        Hu3DMotionSet((*(OMOBJ **)&lbl_1_bss_C[0])->mdlId[14],
+-                      (*(OMOBJ **)&lbl_1_bss_C[0])->mtnId[14]);
++        Hu3DMotionSet(lbl_1_bss_C->mdlId[14], lbl_1_bss_C->mtnId[14]);
+@@ -2312 +2337 @@
+-            fn_1_CAD4((s16 *)(lbl_1_data_2B8 + rowNo * 48 + selection * 8), 1);
++            fn_1_CAD4(&lbl_1_data_2B8[rowNo * 24 + selection * 4], 1);
+@@ -2323 +2348 @@
+-            fn_1_CAD4((s16 *)(lbl_1_data_2B8 + rowNo * 48 + selection * 8), 1);
++            fn_1_CAD4(&lbl_1_data_2B8[rowNo * 24 + selection * 4], 1);
+@@ -2346 +2371 @@
+-        fn_1_CAD4((s16 *)(lbl_1_data_2B8 + 32), 0);
++        fn_1_CAD4(&lbl_1_data_2B8[16], 0);

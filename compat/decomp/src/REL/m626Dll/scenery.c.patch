@@ -1,0 +1,21 @@
+--- a/src/REL/m626Dll/scenery.c
++++ b/src/REL/m626Dll/scenery.c
+@@ -11,0 +12 @@
++#include "mp6_widescreen.h"
+@@ -24 +25 @@
+-s32 fn_1_3C94(s32);
++int fn_1_3C94(int dataNumber);
+@@ -27,2 +28,2 @@
+-void fn_1_DD8(Vec *);
+-void fn_1_1ECC(Vec *);
++void fn_1_DD8(HuVecF *direction);
++void fn_1_1ECC(HuVecF *direction);
+@@ -30,3 +31,3 @@
+-f32 fn_1_407C(Vec *, Vec *);
+-f32 fn_1_4118(Vec *, Vec *);
+-f32 fn_1_3EAC(f32, f32, f32);
++float fn_1_407C(HuVecF *origin, HuVecF *target);
++float fn_1_4118(Vec *first, Vec *second);
++float fn_1_3EAC(float start, float end, float factor);
+@@ -226,0 +228 @@
++        mp6_widescreen_scale_backdrop(model, "bg", 1);

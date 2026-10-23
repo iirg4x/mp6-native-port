@@ -1,0 +1,24 @@
+--- a/src/REL/mgmbattledll/main.c
++++ b/src/REL/mgmbattledll/main.c
+@@ -8,0 +9 @@
++#include "string.h"
+@@ -22,0 +24,6 @@
++void fn_1_E9C(void);
++void fn_1_ADA8(void);
++void fn_1_317C(void);
++s32 fn_1_17A74(void);
++s16 fn_1_EE48(s16 player);
++void fn_1_17E40(void);
+@@ -130 +137 @@
+-        memset(MgModeScore, 0, 8);
++        memset(MgModeScore, 0, sizeof(MgModeScore));
+@@ -132 +139 @@
+-        memset(MgModeWork, 0, 256);
++        memset(MgModeWork, 0, sizeof(MgModeWork));
+@@ -134,3 +141,3 @@
+-        memset(MgBattleOrder, 0, 4);
+-        memset(MgModeWorkInt, 0, 64);
+-        memset(MgModeWorkFloat, 0, 64);
++        memset(MgBattleOrder, 0, sizeof(MgBattleOrder));
++        memset(MgModeWorkInt, 0, sizeof(MgModeWorkInt));
++        memset(MgModeWorkFloat, 0, sizeof(MgModeWorkFloat));

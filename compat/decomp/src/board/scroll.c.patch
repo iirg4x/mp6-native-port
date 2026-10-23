@@ -1,0 +1,16 @@
+--- a/src/board/scroll.c
++++ b/src/board/scroll.c
+@@ -2,0 +3 @@
++#include "mp6_widescreen.h"
+@@ -19,0 +21 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -337,0 +340,2 @@
++        /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++        mp6_quick_play_hold("map view");
+@@ -769,0 +774,2 @@
++        /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++        mp6_quick_play_hold("board map");
+@@ -1289 +1290,2 @@
+-    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, 576.0f, 0.0f, 100.0f);
++    C_MTXOrtho(projection, 0.0f, 480.0f, -mp6_widescreen_half_width_delta(),
++        576.0f + mp6_widescreen_half_width_delta(), 0.0f, 100.0f);

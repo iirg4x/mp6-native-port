@@ -1,0 +1,25 @@
+--- a/src/REL/instDll/setup.c
++++ b/src/REL/instDll/setup.c
+@@ -2,0 +3 @@
++#include "mp6_widescreen.h"
+@@ -681,2 +682,2 @@
+-        HuWinPosSet(ctrlWinId[0], 1000, 0);
+-        HuWinPosSet(instWinId[0], 1000, 0);
++        HuWinPosSet(ctrlWinId[0], 1000+mp6_widescreen_half_width_delta(), 0);
++        HuWinPosSet(instWinId[0], 1000+mp6_widescreen_half_width_delta(), 0);
+@@ -688 +689 @@
+-            HuWinPosSet(ctrlWinId[0], ((1-HuSin((i/20.0)*90))*400)+ctrlPos.x, ctrlPos.y);
++            HuWinPosSet(ctrlWinId[0], ((1-HuSin((i/20.0)*90))*(400+mp6_widescreen_half_width_delta()))+ctrlPos.x, ctrlPos.y);
+@@ -710,2 +711,2 @@
+-                HuWinPosSet(ctrlWinId[1], 1000, 0);
+-                HuWinPosSet(instWinId[1], 1000, 0);
++                HuWinPosSet(ctrlWinId[1], 1000+mp6_widescreen_half_width_delta(), 0);
++                HuWinPosSet(instWinId[1], 1000+mp6_widescreen_half_width_delta(), 0);
+@@ -853 +854 @@
+-        HuWinPosSet(ctrlWinId[0], ((1-HuCos((i/10.0)*90))*400)+ctrlPos.x, ctrlPos.y);
++        HuWinPosSet(ctrlWinId[0], ((1-HuCos((i/10.0)*90))*(400+mp6_widescreen_half_width_delta()))+ctrlPos.x, ctrlPos.y);
+@@ -876 +877 @@
+-    mode = (s32)process->property;
++    mode = (s32)(intptr_t)process->property;
+@@ -1102,0 +1104 @@
++

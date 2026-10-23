@@ -11,6 +11,45 @@ from pathlib import Path
 import re
 
 
+def validate_history(log, rounds=20):
+    """Compare results' inputs with independently observed live board totals."""
+    errors = []
+    snapshots = {}
+    lines = log.splitlines()
+    for i, line in enumerate(lines):
+        match = re.match(r'\[BOARD-QA\] round.complete tick=\d+ turn=(\d+) ', line)
+        if not match:
+            continue
+        turn = int(match[1])
+        players = {}
+        for following in lines[i + 1:i + 5]:
+            player = re.match(r'\[BOARD-QA\] player=(\d+) .*?coin=(\d+) star=(\d+) ', following)
+            if player:
+                players[int(player[1])] = (int(player[2]), int(player[3]))
+        if turn in snapshots or set(players) != set(range(4)):
+            errors.append(f'invalid/duplicate round-history snapshot: {turn}')
+        snapshots[turn] = players
+    if set(snapshots) != set(range(1, rounds + 1)):
+        errors.append('missing complete live round-history snapshots')
+    observed = set()
+    for mode, player, values in re.findall(
+            r'\[RESULT-HISTORY\] mode=([01]) player=(\d+) values=([\d,]+)', log):
+        mode, player = int(mode), int(player)
+        points = [int(value) for value in values.split(',')]
+        observed.add((mode, player))
+        if len(points) not in ((rounds + 1, rounds + 2) if mode else (rounds + 1,)):
+            errors.append(f'invalid graph length: mode={mode} player={player}')
+            continue
+        for turn in range(1, rounds + 1):
+            actual = snapshots.get(turn, {}).get(player)
+            if actual is not None and points[turn] != actual[mode]:
+                errors.append(f'graph disagrees with round {turn}: mode={mode} player={player} '
+                              f'graph={points[turn]} actual={actual[mode]}')
+    if observed != {(mode, player) for mode in range(2) for player in range(4)}:
+        errors.append('missing coin/star graph histories for all four players')
+    return errors
+
+
 def validate(directory, required_events=(), min_turns=1, min_round=1, full_match=False,
              player_motions=False, scared_end=False, results=False):
     report = json.loads((directory / 'result.json').read_text())
@@ -22,6 +61,14 @@ def validate(directory, required_events=(), min_turns=1, min_round=1, full_match
         errors.append('missing QA completion marker')
     if '[MP6-CRASH]' in log or '[FATAL]' in log or '[AURORA FATAL:' in log:
         errors.append('crash/fatal marker present')
+    # A clean process exit is not proof of a valid render. Empty isolated cards
+    # may report this exact first-run miss; no GPU/allocator error is exempt.
+    expected_card_miss = '[AURORA ERROR: aurora::card] Failed to open file: MARIPA6'
+    for line in log.splitlines():
+        if (any(marker in line for marker in
+                ('Validation Error', '[AURORA ERROR', '[CRASH]', 'memory free error'))
+                and line.strip() != expected_card_miss):
+            errors.append('runtime error: ' + line)
     if '[TEST] input-script: unrecognized' in log or '[EVENT] script.timeout=' in log:
         errors.append('script input was unrecognized or an event wait timed out')
     events = collections.Counter()
@@ -54,6 +101,7 @@ def validate(directory, required_events=(), min_turns=1, min_round=1, full_match
     if max_round < min_round:
         errors.append(f'only reached round {max_round}; expected at least {min_round}')
     if full_match:
+        errors.extend(validate_history(log))
         request = report.get('request', {})
         if (request.get('route') != 'cpu-soak' or request.get('stop_round') != 0 or
             request.get('capsule', -1) != -1 or request.get('load_at') is not None):

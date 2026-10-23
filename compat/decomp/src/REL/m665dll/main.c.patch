@@ -1,0 +1,22 @@
+--- a/src/REL/m665dll/main.c
++++ b/src/REL/m665dll/main.c
+@@ -2,0 +3 @@
++void HuMCThresholdSet(u32 threshold);
+@@ -13,5 +14,5 @@
+-#include "include/game/mg/actman.h"
+-
+-#include "include/game/audio.h"
+-
+-#include "include/game/gamemes.h"
++#include "game/mg/actman.h"
++
++#include "game/audio.h"
++
++#include "game/gamemes.h"
+@@ -321,2 +322 @@
+-void fn_1_200(response)
+-SequenceUpdate *response;
++void fn_1_200(SequenceUpdate *response)
+@@ -380 +380 @@
+-        HuMCListenerCreate(lbl_1_bss_4, fn_1_200,
++        HuMCListenerCreate(lbl_1_bss_4, (MCResponseCallback)fn_1_200,

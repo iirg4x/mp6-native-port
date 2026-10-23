@@ -1,0 +1,50 @@
+--- a/src/REL/m674Dll/player.c
++++ b/src/REL/m674Dll/player.c
+@@ -3,0 +4 @@
++#include "game/audio.h"
+@@ -20 +21 @@
+-extern void fn_1_EE4(s32 slotIndex, u32 scoreIndex, u32 characterNo);
++extern void fn_1_EE4(s32 slotIndex, s32 scoreIndex, s32 characterNo);
+@@ -25,5 +26,5 @@
+-extern void fn_1_F1C(s32 player);
+-extern s32 fn_1_F3C(void);
+-extern s32 fn_1_4994(void);
+-extern s32 fn_1_4040(s32 resource, void *position);
+-extern void fn_1_47F4(s32 effect, s32 handle, void *position, s32 pan, s32 volume);
++extern void fn_1_F1C(unsigned int playerIndex);
++extern int fn_1_F3C(void);
++extern int fn_1_4994(int dataNum);
++extern s32 fn_1_4040(s32 effect, Vec *position);
++extern void fn_1_47F4(int effect, int handle, Vec *position, int flag, int value);
+@@ -31 +32 @@
+-extern f32 fn_1_4BAC(f32 start, f32 end, f32 factor);
++extern float fn_1_4BAC(float start, float end, float factor);
+@@ -33 +34 @@
+-extern f32 fn_1_4D7C(Vec *start, Vec *end);
++extern float fn_1_4D7C(HuVecF *firstPosition, HuVecF *secondPosition);
+@@ -36 +37 @@
+-extern M674Entry *fn_1_11444(s32 type, s32 index);
++extern M674Entry *fn_1_11444(u32 type, s32 id);
+@@ -184 +185 @@
+-    stateContext[0] = (u8 *)state + 372;
++    stateContext[0] = &state->config; /* [MP6] GameCube offset 372 */
+@@ -219 +220 @@
+-    work = HuMemDirectMallocNum(HEAP_HEAP, 488, HU_MEMNUM_OVL);
++    work = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*work), HU_MEMNUM_OVL);
+@@ -221 +222 @@
+-    memset(work, 0, 488);
++    memset(work, 0, sizeof(*work));
+@@ -272,3 +273,2 @@
+-    fn_1_E18(3);
+-
+-    state->state.shadowModel = fn_1_4994();
++    
++    state->state.shadowModel = fn_1_4994(fn_1_E18(3));
+@@ -392,2 +392 @@
+-            /* No value is returned on this path. */
+-            return;
++            return done;
+@@ -399,2 +398 @@
+-        /* No value is returned on this path. */
+-        return;
++        return done;

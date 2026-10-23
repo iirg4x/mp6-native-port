@@ -4,14 +4,14 @@ import subprocess
 import tempfile
 import unittest
 from tools import build
-from test_frame_resource_lifetimes import function
+from tests.test_frame_resource_lifetimes import function
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class BorrowedFoliageDepth(unittest.TestCase):
     def test_actual_pass_boundary(self):
-        source = (ROOT/'build/android-aurora-source/lib/gfx/common.cpp').read_text()
+        source = (ROOT/'third_party/aurora/lib/gfx/common.cpp').read_text()
         with tempfile.TemporaryDirectory(prefix='foliage-depth-', dir=ROOT/'build') as tmp:
             folder = Path(tmp)
             (folder/'borrowed_depth.inc').write_text(function(source, 'create_pass_from_efb_depth'))
@@ -25,8 +25,8 @@ class BorrowedFoliageDepth(unittest.TestCase):
 
     def test_shared_api_and_compatibility_fallback(self):
         for unit in ('lib/gfx/common.cpp', 'include/aurora/gfx.hpp'):
-            self.assertEqual((ROOT/'build/android-aurora-source'/unit).read_text(),
-                             (ROOT/'build/aurora-release-source'/unit).read_text())
+            self.assertEqual((ROOT/'third_party/aurora'/unit).read_text(),
+                             (ROOT/'third_party/aurora'/unit).read_text())
         source = (ROOT/'src/gx/ambient_occlusion.cpp').read_text()
         self.assertIn('!gfx::ao_compatibility_mode() && gfx::create_pass_from_efb_depth(source)', source)
         self.assertIn('job->sourceSamples=source.sampleCount;', source)

@@ -1,0 +1,5 @@
+--- a/include/REL/m621dll.h
++++ b/include/REL/m621dll.h
+@@ -168 +168 @@
+-void fn_1_3024(MGACTOR *actor, int param);
++void fn_1_3024(MGACTOR *actor, intptr_t param);

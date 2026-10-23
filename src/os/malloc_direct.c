@@ -47,6 +47,7 @@
 #include "game/memory.h"
 #include "game/init.h"
 #include "dolphin/os.h"
+#include "mp6_retaddr.h" /* MP6_RETURN_ADDRESS: free on the web */
 #include "mp6_boot.h" /* mp6_tick_count -- mp6_trace_heap_model's tick gate below */
 #include "mp6_savestate.h"
 #include "mp6_alloc_size.h"
@@ -475,7 +476,12 @@ int mp6_heap_block_info(const void *ptr, int32_t *heapOut,
     p = (uintptr_t)ptr;
     if (p < start + sizeof(MP6ShadowMemBlock)) return 0;
     blockAddr = p - sizeof(MP6ShadowMemBlock);
-    blk = (const MP6ShadowMemBlock *)((const char *)ptr - sizeof(MP6ShadowMemBlock));
+    /* Callers probe arbitrary pointers (e.g. a particle's colour array inside
+     * a larger allocation). Real block headers are always aligned, so a
+     * misaligned candidate is not a block start -- and reading it would be
+     * UB (the debug build's UBSan traps on it entering Party Mode). */
+    if (blockAddr % _Alignof(MP6ShadowMemBlock) != 0) return 0;
+    blk =(const MP6ShadowMemBlock *)((const char *)ptr - sizeof(MP6ShadowMemBlock));
     if (blk->magic != 165 || blk->flag != 1) return 0;
     if (blk->size <= (int32_t)sizeof(MP6ShadowMemBlock)) return 0;
     if ((uint32_t)blk->size > end - blockAddr) return 0;
@@ -508,7 +514,7 @@ uint32_t mp6_heap_pointer_tag(const void *ptr)
 
 void *HuMemDirectMalloc(HEAPID heap, s32 size)
 {
-    u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
+    u32 retaddr = (u32)(uintptr_t)MP6_RETURN_ADDRESS();
     s32 rawSize = size;
     if (!mp6_checked_direct_alloc_size("HuMemDirectMalloc", size, &size)) return NULL;
     {
@@ -522,7 +528,7 @@ void *HuMemDirectMalloc(HEAPID heap, s32 size)
 
 void *HuMemDirectMallocNum(HEAPID heap, s32 size, u32 num)
 {
-    u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
+    u32 retaddr = (u32)(uintptr_t)MP6_RETURN_ADDRESS();
     s32 rawSize = size;
     if (!mp6_checked_direct_alloc_size("HuMemDirectMallocNum", size, &size)) return NULL;
     {
@@ -536,21 +542,21 @@ void *HuMemDirectMallocNum(HEAPID heap, s32 size, u32 num)
 
 void *HuMemDirectTailMalloc(HEAPID heap, s32 size)
 {
-    u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
+    u32 retaddr = (u32)(uintptr_t)MP6_RETURN_ADDRESS();
     if (!mp6_checked_direct_alloc_size("HuMemDirectTailMalloc", size, &size)) return NULL;
     return HuMemTailMemoryAlloc(HeapTbl[heap], size, retaddr);
 }
 
 void *HuMemDirectTailMallocNum(HEAPID heap, s32 size, u32 num)
 {
-    u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
+    u32 retaddr = (u32)(uintptr_t)MP6_RETURN_ADDRESS();
     if (!mp6_checked_direct_alloc_size("HuMemDirectTailMallocNum", size, &size)) return NULL;
     return HuMemTailMemoryAllocNum(HeapTbl[heap], size, num, retaddr);
 }
 
 void *HuMemDirectRealloc(HEAPID heap, void *ptr, s32 size)
 {
-    u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
+    u32 retaddr = (u32)(uintptr_t)MP6_RETURN_ADDRESS();
     if (!mp6_checked_direct_alloc_size("HuMemDirectRealloc", size, &size)) return NULL;
     void *result = HuMemMemoryRealloc(HeapTbl[heap], ptr, size, retaddr);
     /* Even an in-place resize invalidates the old array extent. A failed
@@ -561,7 +567,7 @@ void *HuMemDirectRealloc(HEAPID heap, void *ptr, s32 size)
 
 void HuMemDirectFree(void *ptr)
 {
-    u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
+    u32 retaddr = (u32)(uintptr_t)MP6_RETURN_ADDRESS();
     mp6_alloc_census_trace_free("HuMemDirectFree", ptr, (u32)-256, retaddr);
     mp6_anim_before_direct_free(ptr);
     mp6_gxarray_before_direct_free(ptr);
@@ -615,7 +621,7 @@ static void mp6_heap_walk_tagged(HEAPID heap, u32 num, const char *context)
 
 void HuMemDirectFreeNum(HEAPID heap, u32 num)
 {
-    u32 retaddr = (u32)(uintptr_t)__builtin_return_address(0);
+    u32 retaddr = (u32)(uintptr_t)MP6_RETURN_ADDRESS();
     mp6_alloc_census_trace_call("HuMemDirectFreeNum(pre)", heap, 0, num, retaddr, NULL);
     mp6_heap_walk_tagged(heap, num, "BEFORE HuMemDirectFreeNum");
     /* Packed ANM parsing builds a native pointer graph whose lifetime tag

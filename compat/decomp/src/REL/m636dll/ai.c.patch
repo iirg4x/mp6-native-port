@@ -1,0 +1,453 @@
+--- a/src/REL/m636dll/ai.c
++++ b/src/REL/m636dll/ai.c
+@@ -6,7 +5,0 @@
+-#define PIXEL_PLAYER_SIDE_WORD_INDEX 26
+-#define PIXEL_PLAYER_SIDE_OFFSET 104
+-#define PIXEL_PLAYER_RECORD_OFFSET 120
+-#define PIXEL_CPU_MODE_OFFSET 156
+-#define PIXEL_CPU_FRAME_COUNTER_OFFSET 172
+-#define PIXEL_CPU_TARGET_CELL_OFFSET 188
+-#define PIXEL_CPU_STICK_DIRECTION_OFFSET 204
+@@ -27 +20 @@
+-             *(s32 *) ((u8 *) &lbl_1_bss_0 + PIXEL_CPU_TARGET_CELL_OFFSET + playerIndex * 4));
++             lbl_1_bss_0.targetCell[playerIndex]);
+@@ -38 +31 @@
+-    side = ((s32 *)((u8 *)&lbl_1_bss_0 + playerSlot * 4))[PIXEL_PLAYER_SIDE_WORD_INDEX];
++    side = lbl_1_bss_0.teamSide[playerSlot];
+@@ -124 +117 @@
+-    player = *(MGPLAYER **)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++    player = lbl_1_bss_0.players[playerIndex];
+@@ -131 +124 @@
+-        lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)]
++        lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]]
+@@ -134 +127 @@
+-        lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)]
++        lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]]
+@@ -139 +132 @@
+-    switch (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET)) {
++    switch (lbl_1_bss_0.cpuMode[playerIndex]) {
+@@ -147 +140 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -149 +142 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) =
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] =
+@@ -156,3 +149,3 @@
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET) = chosenCell;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) = PIXEL_CPU_MOVE;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++        lbl_1_bss_0.targetCell[playerIndex] = chosenCell;
++        lbl_1_bss_0.cpuMode[playerIndex] = PIXEL_CPU_MOVE;
++        lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -164 +157 @@
+-        targetCell = *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET);
++        targetCell = lbl_1_bss_0.targetCell[playerIndex];
+@@ -173,3 +166,2 @@
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET),
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                              PIXEL_CPU_TARGET_CELL_OFFSET)) == 0) {
++                    lbl_1_bss_0.teamSide[playerIndex],
++                    lbl_1_bss_0.targetCell[playerIndex]) == 0) {
+@@ -178 +170 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -180 +172 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -183 +175 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -185 +177 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -202,4 +194,3 @@
+-            *(Point3d *) ((u8 *) &lbl_1_bss_0 + playerIndex * 12 +
+-                          PIXEL_CPU_STICK_DIRECTION_OFFSET) = difference;
+-        }
+-        if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >=
++            lbl_1_bss_0.stickDirection[playerIndex] = difference;
++        }
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >=
+@@ -207,3 +198,3 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -212 +203 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -214 +205 @@
+-        if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >=
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >=
+@@ -216,3 +207,3 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -223,5 +214,5 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))--;
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) <= 0) {
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])--;
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] <= 0) {
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -231 +222 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) < 15) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] < 15) {
+@@ -233,3 +224,2 @@
+-        } else if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                             PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 16) {
+-            if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) <
++        } else if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 16) {
++            if (lbl_1_bss_0.cpuFrameCounter[playerIndex] <
+@@ -240 +230 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -242 +232 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -247 +237 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -250 +240 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 10) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 10) {
+@@ -252 +242 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++            lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -256 +246 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -278 +268 @@
+-    player = *(MGPLAYER **)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++    player = lbl_1_bss_0.players[playerIndex];
+@@ -285 +275 @@
+-        lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)]
++        lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]]
+@@ -288 +278 @@
+-        lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)]
++        lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]]
+@@ -293 +283 @@
+-    switch (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET)) {
++    switch (lbl_1_bss_0.cpuMode[playerIndex]) {
+@@ -299 +289 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -301 +291 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) =
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] =
+@@ -310,3 +300,3 @@
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET) = chosenCell;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) = PIXEL_CPU_MOVE;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++        lbl_1_bss_0.targetCell[playerIndex] = chosenCell;
++        lbl_1_bss_0.cpuMode[playerIndex] = PIXEL_CPU_MOVE;
++        lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -318 +308 @@
+-        targetCell = *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET);
++        targetCell = lbl_1_bss_0.targetCell[playerIndex];
+@@ -327,3 +317,2 @@
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET),
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                              PIXEL_CPU_TARGET_CELL_OFFSET)) == 0) {
++                    lbl_1_bss_0.teamSide[playerIndex],
++                    lbl_1_bss_0.targetCell[playerIndex]) == 0) {
+@@ -331 +320 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -333 +322 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -336 +325 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -338 +327 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -355,4 +344,3 @@
+-            *(Point3d *) ((u8 *) &lbl_1_bss_0 + playerIndex * 12 +
+-                          PIXEL_CPU_STICK_DIRECTION_OFFSET) = difference;
+-        }
+-        if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >=
++            lbl_1_bss_0.stickDirection[playerIndex] = difference;
++        }
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >=
+@@ -360,3 +348,3 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -365 +353 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -367 +355 @@
+-        if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >=
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >=
+@@ -369,3 +357,3 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -376,5 +364,5 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))--;
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) <= 0) {
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])--;
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] <= 0) {
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -384 +372 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) < 15) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] < 15) {
+@@ -386,3 +374,2 @@
+-        } else if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                             PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 16) {
+-            if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) <
++        } else if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 16) {
++            if (lbl_1_bss_0.cpuFrameCounter[playerIndex] <
+@@ -393 +380 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -395 +382 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -400 +387 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -403 +390 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 10) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 10) {
+@@ -405 +392 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++            lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -409 +396 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -431 +418 @@
+-    player = *(MGPLAYER **)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++    player = lbl_1_bss_0.players[playerIndex];
+@@ -438 +425 @@
+-        lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)]
++        lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]]
+@@ -441 +428 @@
+-        lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)]
++        lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]]
+@@ -446 +433 @@
+-    switch (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET)) {
++    switch (lbl_1_bss_0.cpuMode[playerIndex]) {
+@@ -449,3 +436,3 @@
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET) = chosenCell;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) = PIXEL_CPU_MOVE;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++        lbl_1_bss_0.targetCell[playerIndex] = chosenCell;
++        lbl_1_bss_0.cpuMode[playerIndex] = PIXEL_CPU_MOVE;
++        lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -457 +444 @@
+-        targetCell = *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET);
++        targetCell = lbl_1_bss_0.targetCell[playerIndex];
+@@ -468,3 +455,2 @@
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET),
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                              PIXEL_CPU_TARGET_CELL_OFFSET)) == 0) {
++                    lbl_1_bss_0.teamSide[playerIndex],
++                    lbl_1_bss_0.targetCell[playerIndex]) == 0) {
+@@ -472 +458 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -474 +460 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -477 +463 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -479 +465 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -496,4 +482,3 @@
+-            *(Point3d *) ((u8 *) &lbl_1_bss_0 + playerIndex * 12 +
+-                          PIXEL_CPU_STICK_DIRECTION_OFFSET) = difference;
+-        }
+-        if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >=
++            lbl_1_bss_0.stickDirection[playerIndex] = difference;
++        }
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >=
+@@ -501,3 +486,3 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -506 +491 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -508 +493 @@
+-        if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >=
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >=
+@@ -510,3 +495,3 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -517,5 +502,5 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))--;
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) <= 0) {
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])--;
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] <= 0) {
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -525 +510 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) < 15) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] < 15) {
+@@ -527,3 +512,2 @@
+-        } else if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                             PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 16) {
+-            if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) <
++        } else if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 16) {
++            if (lbl_1_bss_0.cpuFrameCounter[playerIndex] <
+@@ -534 +518 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -536 +520 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -541 +525 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -544 +528 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 10) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 10) {
+@@ -546 +530 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++            lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -550 +534 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -570 +554 @@
+-    player = *(MGPLAYER **)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++    player = lbl_1_bss_0.players[playerIndex];
+@@ -575 +559 @@
+-    switch (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET)) {
++    switch (lbl_1_bss_0.cpuMode[playerIndex]) {
+@@ -577 +561 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) < 15) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] < 15) {
+@@ -579,3 +563,2 @@
+-        } else if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                             PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 16) {
+-            if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) <
++        } else if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 16) {
++            if (lbl_1_bss_0.cpuFrameCounter[playerIndex] <
+@@ -586 +569 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -588 +571 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -593 +576 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -596 +579 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >= 10) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >= 10) {
+@@ -598 +581 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++            lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -602 +585 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -606 +589 @@
+-        if (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) == 0) {
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] == 0) {
+@@ -613,3 +596,3 @@
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET) = chosenCell;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) = PIXEL_CPU_MOVE;
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++        lbl_1_bss_0.targetCell[playerIndex] = chosenCell;
++        lbl_1_bss_0.cpuMode[playerIndex] = PIXEL_CPU_MOVE;
++        lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -621 +604 @@
+-        targetCell = *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET);
++        targetCell = lbl_1_bss_0.targetCell[playerIndex];
+@@ -623,2 +606 @@
+-        gridPosition.x += lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                                                   PIXEL_PLAYER_SIDE_OFFSET)][0];
++        gridPosition.x += lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]][0];
+@@ -626,2 +608 @@
+-        gridPosition.z += lbl_1_data_270[*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                                                   PIXEL_PLAYER_SIDE_OFFSET)][1];
++        gridPosition.z += lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]][1];
+@@ -634 +615 @@
+-        *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_TARGET_CELL_OFFSET) = targetCell;
++        lbl_1_bss_0.targetCell[playerIndex] = targetCell;
+@@ -642,3 +623,2 @@
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET),
+-                    *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 +
+-                              PIXEL_CPU_TARGET_CELL_OFFSET)) == 0) {
++                    lbl_1_bss_0.teamSide[playerIndex],
++                    lbl_1_bss_0.targetCell[playerIndex]) == 0) {
+@@ -646 +626 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -648 +628 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -651 +631 @@
+-                *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
++                lbl_1_bss_0.cpuMode[playerIndex] =
+@@ -653 +633 @@
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++                lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -671 +651 @@
+-        if (*(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) >=
++        if (lbl_1_bss_0.cpuFrameCounter[playerIndex] >=
+@@ -673,3 +653,3 @@
+-            *(s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_MODE_OFFSET) =
+-                PIXEL_CPU_CHOOSE;
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET) = 0;
++            lbl_1_bss_0.cpuMode[playerIndex] =
++                PIXEL_CPU_CHOOSE;
++            lbl_1_bss_0.cpuFrameCounter[playerIndex] = 0;
+@@ -678 +658 @@
+-        (*(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_CPU_FRAME_COUNTER_OFFSET))++;
++        (lbl_1_bss_0.cpuFrameCounter[playerIndex])++;
+@@ -710 +690 @@
+-        *(MGPLAYER **) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++        lbl_1_bss_0.players[playerIndex];
+@@ -715 +695 @@
+-            *(MGPLAYER **) ((u8 *) &lbl_1_bss_0 + teammateIndex * 4 + PIXEL_PLAYER_RECORD_OFFSET);
++            lbl_1_bss_0.players[teammateIndex];
+@@ -717,2 +697,2 @@
+-            *(s32 *)((u8 *)&lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET) ==
+-                *(s32 *)((u8 *)&lbl_1_bss_0 + teammateIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET) &&
++            lbl_1_bss_0.teamSide[playerIndex] ==
++                lbl_1_bss_0.teamSide[teammateIndex] &&
+@@ -722,2 +702 @@
+-                teammatePosition.x += lbl_1_data_270[*(
+-                    s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)][0];
++                teammatePosition.x += lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]][0];
+@@ -725,2 +704 @@
+-                teammatePosition.z += lbl_1_data_270[*(
+-                    s32 *) ((u8 *) &lbl_1_bss_0 + playerIndex * 4 + PIXEL_PLAYER_SIDE_OFFSET)][1];
++                teammatePosition.z += lbl_1_data_270[lbl_1_bss_0.teamSide[playerIndex]][1];

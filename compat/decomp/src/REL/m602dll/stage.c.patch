@@ -1,0 +1,7 @@
+--- a/src/REL/m602dll/stage.c
++++ b/src/REL/m602dll/stage.c
+@@ -3,0 +4 @@
++#include "mp6_widescreen.h"
+@@ -205,0 +207,2 @@
++        /* These three views feed a 576x288 card atlas, not the window. */
++        mp6_widescreen_camera_native_target(lbl_1_data_124[stageIndex].cameraBit, 1);

@@ -1,0 +1,7 @@
+--- a/src/REL/m650dll/obstacle.c
++++ b/src/REL/m650dll/obstacle.c
+@@ -154 +154,3 @@
+-    Mtx transform;
++    /* Retain all four initialized rows without corrupting the host stack.
++     * The matrix APIs consume the same first three rows. */
++    Mtx44 transform;

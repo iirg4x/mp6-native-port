@@ -19,7 +19,7 @@ class FrameProfileTests(unittest.TestCase):
 
     def test_current_source_transforms_are_diagnostic_only(self):
         for relative,(_,transform) in TRANSFORMS.items():
-            path=ROOT/'build/aurora-release-source'/relative
+            path=ROOT/'third_party/aurora'/relative
             if not path.exists(): self.skipTest('configured local renderer unavailable')
             source=path.read_text()
             result=transform(source)

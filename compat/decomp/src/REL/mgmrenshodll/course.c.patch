@@ -1,0 +1,19 @@
+--- a/src/REL/mgmrenshodll/course.c
++++ b/src/REL/mgmrenshodll/course.c
+@@ -0,0 +1 @@
++#include "mp6_widescreen.h"
+@@ -120,0 +122,14 @@
++    /* The authored cave is open above its 500/550-unit strip rails.
++     * Continue only those rims, before shadow/motion ownership is bound.
++     * Native tunnel faces, signs, props and camera motion remain untouched. */
++    if (modelIndex == 0) {
++        mp6_widescreen_extend_strip_rim(lbl_1_bss_FC->mdlId[modelIndex],
++                                      "grid537", 500.0f, 550.0f);
++    } else if (modelIndex == 1) {
++        const char *rims[] = { "grid267", "grid274", "grid275", "grid276",
++            "grid277", "grid278", "grid279", "grid280", "grid281", "grid282", "grid283" };
++        for (int rim = 0; rim < (int)(sizeof(rims) / sizeof(rims[0])); ++rim) {
++            mp6_widescreen_extend_strip_rim(lbl_1_bss_FC->mdlId[modelIndex],
++                                          rims[rim], 500.0f, 550.0f);
++        }
++    }

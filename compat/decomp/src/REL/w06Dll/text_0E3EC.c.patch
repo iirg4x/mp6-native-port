@@ -1,0 +1,4 @@
+--- a/src/REL/w06Dll/text_0E3EC.c
++++ b/src/REL/w06Dll/text_0E3EC.c
+@@ -0,0 +1 @@
++#include "game/board/masu.h"

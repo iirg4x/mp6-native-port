@@ -1,0 +1,55 @@
+--- a/src/REL/m627dll/gameplay.c
++++ b/src/REL/m627dll/gameplay.c
+@@ -19,0 +20 @@
++#include "mp6_widescreen.h"
+@@ -36 +36,0 @@
+-u32 __cvt_fp2unsigned(f64 value);
+@@ -572,2 +572,2 @@
+-    fn_1_A0(10, 108, fn_1_A64);
+-    lbl_1_bss_2C = fn_1_A0(10, 36, fn_1_2BF4);
++    fn_1_A0(10, sizeof(M627CameraState), fn_1_A64);
++    lbl_1_bss_2C = fn_1_A0(10, sizeof(M627MapWork), fn_1_2BF4);
+@@ -577 +577 @@
+-        lbl_1_bss_18[playerOrCameraIndex] = fn_1_A0(20, 100, fn_1_39A8);
++        lbl_1_bss_18[playerOrCameraIndex] = fn_1_A0(20, sizeof(M627PlayerWork), fn_1_39A8);
+@@ -582 +582 @@
+-        lbl_1_bss_8[playerOrCameraIndex] = fn_1_A0(20, 52, fn_1_6CE0);
++        lbl_1_bss_8[playerOrCameraIndex] = fn_1_A0(20, sizeof(M627ActorWork), fn_1_6CE0);
+@@ -738 +738 @@
+-        Hu3DCameraScissorSet(1, 0, 0, __cvt_fp2unsigned(splitBoundaryX) - 2, 480);
++        Hu3DCameraScissorSet(1, 0, 0, ((u32)splitBoundaryX) - 2, 480);
+@@ -749,2 +749,2 @@
+-            cameraTwoScissorWidth = 638 - __cvt_fp2unsigned(splitBoundaryX);
+-            Hu3DCameraScissorSet(2, __cvt_fp2unsigned(splitBoundaryX) + 2, 0,
++            cameraTwoScissorWidth = 638 - ((u32)splitBoundaryX);
++            Hu3DCameraScissorSet(2, ((u32)splitBoundaryX) + 2, 0,
+@@ -1005 +1005 @@
+-            Hu3DCameraScissorSet(1, 0, 0, __cvt_fp2unsigned(cameraOneScissorWidth) - 2, 480);
++            Hu3DCameraScissorSet(1, 0, 0, ((u32)cameraOneScissorWidth) - 2, 480);
+@@ -1013,3 +1013,3 @@
+-        if (638 - __cvt_fp2unsigned(cameraOneScissorWidth) != 0) {
+-            Hu3DCameraScissorSet(2, __cvt_fp2unsigned(cameraOneScissorWidth) + 2, 0,
+-                                 638 - __cvt_fp2unsigned(cameraOneScissorWidth), 480);
++        if (638 - ((u32)cameraOneScissorWidth) != 0) {
++            Hu3DCameraScissorSet(2, ((u32)cameraOneScissorWidth) + 2, 0,
++                                 638 - ((u32)cameraOneScissorWidth), 480);
+@@ -1284,0 +1285,16 @@
++    /* stage_si13 mixes room materials; continue only the REPEAT floor's
++     * material-3 outer X edges before collision setup snapshots the scene. */
++    mp6_widescreen_extend_terrain_outer_sides_material(
++        setup->modelsObject->mdlId[2], "stage_si13", 0.0f, 1.0f, 0, 3);
++    {
++        /* The upper brick wall is a different surface in the same mixed
++         * room mesh. Give its margins an independent static owner. */
++        static const MP6WSStaticMargin wall[] = {
++            {"stage_si13", MP6_WS_MARGIN_WALL, 2, 0.0f, 1.0f, TRUE}
++        };
++        HU3D_MODELID border = Hu3DModelCreateData(DATANUM(DATA_m627, 3));
++        if (border != HU3D_MODELID_NONE) {
++            Hu3DModelCameraSet(border, Hu3DData[setup->modelsObject->mdlId[2]].cameraBit);
++            mp6_widescreen_static_margins(border, wall, 1);
++        }
++    }
+@@ -1299 +1315 @@
+-                                             setup->boundaryCount << 6,
++                                             setup->boundaryCount * sizeof(M627BoundaryLine),

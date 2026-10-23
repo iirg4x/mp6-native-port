@@ -1,0 +1,11 @@
+--- a/src/REL/mgmdecathlondll/results.c
++++ b/src/REL/mgmdecathlondll/results.c
+@@ -2,0 +3,2 @@
++#include "string.h"
++extern void fn_1_9AAC(s16 playerNo, s16 motionState);
+@@ -83,2 +85,3 @@
+-    modelObject->data = HuMemDirectMallocNum(HEAP_HEAP, 816, HU_MEMNUM_OVL);
+-    memset(modelObject->data, 0, 816);
++    modelObject->data = HuMemDirectMallocNum(
++        HEAP_HEAP, sizeof(DecathlonModelGroup) * 4, HU_MEMNUM_OVL);
++    memset(modelObject->data, 0, sizeof(DecathlonModelGroup) * 4);

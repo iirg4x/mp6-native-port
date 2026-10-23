@@ -1,0 +1,8 @@
+--- a/src/REL/m643DLL/startup.c
++++ b/src/REL/m643DLL/startup.c
+@@ -11,2 +10,0 @@
+-void fn_1_17A0(OMOBJ *object);
+-void *fn_1_16C(s32 priority, u32 bytes, OMOBJ_FUNC callback);
+@@ -28 +26 @@
+-    fn_1_16C(100, 12U, fn_1_17A0);
++    fn_1_16C(100, sizeof(M643SequenceWork), fn_1_17A0);

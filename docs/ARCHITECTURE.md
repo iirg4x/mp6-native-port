@@ -21,15 +21,19 @@ Native code is grouped by subsystem: `src/gx/` (rendering, presentation and UI),
 `src/audio/`, `src/hsf/`, `src/dvd/`, `src/os/` (scheduler, heaps and saves),
 and `src/host/` (Windows/Android OS calls). See [Code map](CODE_MAP.md).
 
-Minigames are unavailable. `src/os/minigame_stub.c` replaces `board/mgcall.c`
-before roulette, resource teardown and overlay dispatch. The end-turn call
-returns true so the existing board loop advances locally, without awards or
-unlocks. Direct attempts to load other incomplete overlays remain unsupported.
+Boards run the recovered minigame flow (`board/mgcall.c`): roulette, battle,
+duel, Donkey Kong and Bowser calls, instructions (`instdll`), the minigame
+module, then results (`resultdll`) and the board's reload. A minigame whose
+module is not recovered yet is the only stand-in: `src/os/overlay_fallback.c`
+ends it at once with nobody scoring and returns one step, so results, the
+turn save and the board continue unchanged. Mini-Game mode uses the same
+fallback but unwinds to its menu.
 
-The shared Aurora dependency is read-only. Its attested base adaptations live
-in `compat/aurora/base/`. The optimized Windows backend is built from a
-Port-local source/dependency copy under `build/`, with its additional adapters
-in `compat/aurora/windows/`.
+Aurora is vendored in `third_party/aurora/`: the pinned upstream commit with
+the port's renderer changes in place, one source for PC, Android and web
+(`third_party/aurora/MP6_PROVENANCE.md` says how it was made and how to
+update it). Only four dependency fixes remain as patches, in
+`compat/aurora/deps/`.
 
 The RmlUi launcher in `src/gx/ui/` uses portable `mp6_config.json` settings
 beside the executable. It is adapted from partyboard; see
@@ -108,6 +112,11 @@ this manageable:
   (`hsfdraw.c`, `hsfman.c`) run unmodified. Every sub-allocation is
   tagged with the model pointer so the game's own tagged bulk-free
   reclaims it on model kill.
+  Bitmap copies include the complete GX-tiled mip chain requested by either
+  the bitmap's level count or its attributes' inclusive maximum LOD. The
+  validator and loader share one size calculation; attribute requests are
+  resolved once at load time, not per frame. Base-only retail files retain
+  the existing bounded final-tile padding policy.
 - **Saves are marshalled field-wise** — see below.
 
 ## Save system

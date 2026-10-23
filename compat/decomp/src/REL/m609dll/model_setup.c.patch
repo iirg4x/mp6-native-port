@@ -1,0 +1,19 @@
+--- a/src/REL/m609dll/model_setup.c
++++ b/src/REL/m609dll/model_setup.c
+@@ -24 +24 @@
+-extern void fn_1_46F8(s16, s16, void *);
++extern void fn_1_46F8(s16 voiceSlot, s16 panMode, Vec *position);
+@@ -39 +39 @@
+-extern s32 fn_1_126F0(M609Player *player, s16 advanceAfterChase);
++extern s16 fn_1_126F0(M609Player *movement, s16 advanceAfterChase);
+@@ -65,0 +66,2 @@
++#include "mp6_widescreen.h"
++void fn_1_459C(void);
+@@ -75 +77 @@
+-void fn_1_CA6C(MGACTOR *,int);
++void fn_1_CA6C(MGACTOR *actor, intptr_t hookParameter);
+@@ -78 +80 @@
+-void fn_1_45EC(s32,s32);
++void fn_1_45EC(s16 streamSlot, s16 fadeFrames);
+@@ -144,0 +147 @@
++    mp6_widescreen_extend_wall_outer_sides(lbl_1_bss_8BC[4].model, "obj2", 0.0f, 3.0f, 0);

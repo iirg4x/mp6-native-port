@@ -1,0 +1,13 @@
+--- a/include/REL/m608dll.h
++++ b/include/REL/m608dll.h
+@@ -303,0 +304 @@
++#if !defined(TARGET_PC)
+@@ -304,0 +306 @@
++#endif
+@@ -305,0 +308 @@
++#if !defined(TARGET_PC)
+@@ -306,0 +310,2 @@
++#endif
++#if !defined(TARGET_PC)
+@@ -308,0 +314 @@
++#endif

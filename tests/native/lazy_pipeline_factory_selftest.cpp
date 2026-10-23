@@ -25,7 +25,7 @@ namespace wgpu { using RenderPipeline = uint32_t; }
 using PipelineRef = uint64_t;
 using HashType = uint64_t;
 enum class ShaderType { GX, Rml, Clear };
-enum class PipelinePriority { Background, Normal, Blocking };
+enum class PipelinePriority { Background, Normal, Blocking, Fallback };
 static uint32_t uniformAlignment = 256, layoutBuilds = 0;
 static uint32_t align_uniform(uint32_t value) {
   return (value + uniformAlignment - 1) & ~(uniformAlignment - 1);
@@ -66,6 +66,9 @@ struct PendingPipeline {
   PipelineRef hash;
   uint32_t firstFrameUsed;
   std::function<wgpu::RenderPipeline()> create;
+  bool prewarm = false;
+  bool warmup = false;
+  bool transient = false;
 };
 struct PipelineCacheWrite { uint32_t firstFrame; };
 static std::unordered_map<PipelineRef, CachedPipeline> g_pipelines;
@@ -114,8 +117,22 @@ struct Condition {
   }
 };
 static Condition g_pipelineReadyCv, g_pipelineQueueCv;
+// Telemetry, prewarm accounting and scene recording are exercised elsewhere.
+static uint64_t stat_now_ns() { return 1; }
+static void stat_record_stall(uint64_t) {}
+template <typename Fn> static wgpu::RenderPipeline timed_build(Fn&& fn) { return fn(); }
+static void prewarm_started_locked() {}
+static void prewarm_finished_locked() {}
+template <typename C> static bool is_main_target(const C&) { return false; }
+static void finish_pipeline_build(PipelineRef hash, uint32_t first, bool, wgpu::RenderPipeline pipeline, bool queued,
+                                  bool = false, bool = false) {
+  g_pipelines.try_emplace(hash, CachedPipeline{pipeline, first});
+  g_pendingPipelines.erase(hash);
+  notify_pipeline_ready(queued);
+}
 #define ZoneScoped
 #include "lazy_pipeline_subject.inc"
+static void tag_pipeline_scene(ShaderType, PipelineRef, bool) {}
 
 int main() {
   Config config;
@@ -192,6 +209,7 @@ int main() {
   find_gx_pipeline(config, info);
   assert(info == gx::layout_oracle(config.shaderConfig) && layoutBuilds == 2);
   g_pipelines.clear(); // Device/cache recreation must discard old layout data.
+  bump_gx_ready_pipeline_memo_generation(); // as initialize/shutdown_pipeline_cache do
   find_gx_pipeline(config, info);
   assert(info == gx::layout_oracle(config.shaderConfig) && layoutBuilds == 3);
 

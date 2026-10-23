@@ -35,7 +35,7 @@ inline unsigned button(int i)
 struct Layout
 {
     float w = 0, h = 0, unit = 0;
-    Rect controls[MP6_TOUCH_COUNT], menu, console;
+    Rect controls[MP6_TOUCH_COUNT], menu, console, mic;
     void make(float width, float height, const Mp6TouchConfig &c)
     {
         w = width;
@@ -90,6 +90,9 @@ struct Layout
         const float r = std::max(22.0f, unit * .041f);
         menu = {r + 12, r + 12, r, r};
         console = {3 * r + 24, r + 12, r, r};
+        // The GameCube Mic's talk button (include/mp6_mic.h), shown only while a
+        // mode has the Mic in use. Held, not tapped, so a little larger.
+        mic = {7 * r + 52, 1.3f * r + 12, 1.3f * r, 1.3f * r};
     }
     int hit(float x, float y, unsigned visible) const
     {

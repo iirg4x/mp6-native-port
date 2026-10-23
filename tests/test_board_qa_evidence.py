@@ -56,6 +56,16 @@ class BoardQaEvidence(unittest.TestCase):
             return (f'[BOARD-QA] {event} tick=500 turn={turn} time={turn%2} p={player} '
                     f'value={value} pos=(1,2,3) eye=(4,5,6) center=(7,8,9)')
         completed=[state('turn.end',t,p) for t in range(1,21) for p in range(4)]
+        history=[]
+        for turn in range(1,21):
+            history.append(state('round.complete',turn,-1,turn))
+            history.extend(f'[BOARD-QA] player={p} space=1 coin={turn+p} star={p} diceMode=0'
+                           for p in range(4))
+        for mode in range(2):
+            for p in range(4):
+                points=[0]+[p if mode else turn+p for turn in range(1,21)]
+                history.append(f'[RESULT-HISTORY] mode={mode} player={p} values=' +
+                               ','.join(map(str,points)))
         ending=[state('last5.begin',16,0),state('last5.end',16,0),
                 state('board.finished',21,-1,20),
                  *[f'[RESULT-QA] results.{stage} tick=501'
@@ -70,7 +80,7 @@ class BoardQaEvidence(unittest.TestCase):
                                 (completed+ending[:-2]+ending[-1:],False),
                                 (completed+[state('turn.begin',21,0)]+ending,False),
                                 (completed+[completed[-1]]+ending,False)]:
-                (directory/'game.log').write_text('\n'.join(lines))
+                (directory/'game.log').write_text('\n'.join(history+lines))
                 evidence=qa.validate(directory,full_match=True)
                 self.assertEqual(not evidence['errors'],valid,evidence)
 

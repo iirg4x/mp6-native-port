@@ -1,7 +1,10 @@
 --- a/src/game/dvd.c
 +++ b/src/game/dvd.c
-@@ -15 +15,23 @@
--static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async)
+@@ -18,4 +18,23 @@
+-// Allocates a file buffer, then either reads every chunk here or starts the data loader callback.
+-// Called by the path-based and fast-entry read helpers below.
+-static void *HuDvdDataReadWait(DVDFileInfo *dvdFile, int allocationMode, int heapOrAllocationNumber,
+-                               BOOL readAsync)
 +/* `outBufP`, when non-NULL, is written with `buf` immediately after
 + * allocation, before either read path below starts -- NOT a behavior
 + * change on real hardware (where nothing else could possibly run before
@@ -24,30 +27,35 @@
 + * published before any callback can possibly run closes the gap at its
 + * true root, for both this port and real hardware alike (a strict no-op
 + * there). */
-+static void *HuDvdDataReadWait(DVDFileInfo *file, int mode, int param, BOOL async, void **outBufP)
-@@ -18 +40 @@
--    void *buf;
-+    void *buf = NULL;
-@@ -40 +62 @@
++static void *HuDvdDataReadWait(DVDFileInfo *dvdFile, int allocationMode, int heapOrAllocationNumber, BOOL readAsync, void **outBufP)
+@@ -24 +43 @@
+-    u8 *dataBuffer;
++    u8 *dataBuffer = NULL;
+@@ -26,2 +44,0 @@
+-    // Preserve the full file size for callers, including when an asynchronous read starts in
+-    // chunks.
+@@ -29 +45,0 @@
+-    // Modes select the DVD heap, numbered DVD heap, selected heap, or selected heap tail.
+@@ -50 +66 @@
 -            break;
 +            return NULL; /* OSPanic is not assumed noreturn by the native ABI. */
-@@ -47,0 +70 @@
-+    if (outBufP) *outBufP = buf;
-@@ -81 +104 @@
--        data = HuDvdDataReadWait(&file, 0, 0, FALSE);
-+        data = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
-@@ -103 +126 @@
--            file_ptrs[i] = HuDvdDataReadWait(&file, 0, 0, FALSE);
-+            file_ptrs[i] = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
-@@ -117 +140 @@
--        data = HuDvdDataReadWait(&file, 2, heap, FALSE);
-+        data = HuDvdDataReadWait(&file, 2, heap, FALSE, NULL);
-@@ -130 +153 @@
--        data = HuDvdDataReadWait(&file, 0, 0, FALSE);
-+        data = HuDvdDataReadWait(&file, 0, 0, FALSE, NULL);
-@@ -143 +166 @@
--        data = HuDvdDataReadWait(&file, 1, num, FALSE);
-+        data = HuDvdDataReadWait(&file, 1, num, FALSE, NULL);
-@@ -158 +181 @@
--        data = HuDvdDataReadWait(&stat->dvdFile, 0, 0, TRUE);
-+        data = HuDvdDataReadWait(&stat->dvdFile, 0, 0, TRUE, &stat->dirP);
+@@ -58,0 +75 @@
++    if (outBufP) *outBufP = dataBuffer;
+@@ -96 +113 @@
+-        fileData = HuDvdDataReadWait(&dvdFile, 0, 0, FALSE);
++        fileData = HuDvdDataReadWait(&dvdFile, 0, 0, FALSE, NULL);
+@@ -120 +137 @@
+-            fileDataArray[pathIndex] = HuDvdDataReadWait(&dvdFile, 0, 0, FALSE);
++            fileDataArray[pathIndex] = HuDvdDataReadWait(&dvdFile, 0, 0, FALSE, NULL);
+@@ -135 +152 @@
+-        fileData = HuDvdDataReadWait(&dvdFile, 2, targetHeap, FALSE);
++        fileData = HuDvdDataReadWait(&dvdFile, 2, targetHeap, FALSE, NULL);
+@@ -149 +166 @@
+-        fileData = HuDvdDataReadWait(&dvdFile, 0, 0, FALSE);
++        fileData = HuDvdDataReadWait(&dvdFile, 0, 0, FALSE, NULL);
+@@ -163 +180 @@
+-        fileData = HuDvdDataReadWait(&dvdFile, 1, allocationTag, FALSE);
++        fileData = HuDvdDataReadWait(&dvdFile, 1, allocationTag, FALSE, NULL);
+@@ -180 +197 @@
+-        fileData = HuDvdDataReadWait(&readStatus->dvdFile, 0, 0, TRUE);
++        fileData = HuDvdDataReadWait(&readStatus->dvdFile, 0, 0, TRUE, &readStatus->dirP);

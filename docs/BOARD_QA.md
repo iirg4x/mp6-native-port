@@ -1,5 +1,865 @@
 # Board QA: current findings
 
+Current priority (latest user instruction): enable all 72 complete modules first,
+with basic native ABI and lifecycle validation. Widescreen/AO visual audits and
+known presentation regressions are the following polish phase. Source enablement
+and visual-audit status remain separate; the criteria below govern polish claims.
+
+Call a module integrated only after visually auditing the key widescreen frames:
+layout, motion/loop boundaries and relevant transitions, including wide edges.
+Build/loader coverage alone means enabled. Inspect actual captures alongside
+runtime checks; decoder or capture counters cannot prove correct presentation.
+Every module also needs reviewed AO-off/on captures, including actual
+interpolated frames where supported. Until both AO and widescreen audits pass,
+its status is enabled/unverified, not integrated. A reported regression reopens
+that gate; earlier passing captures do not override current user evidence.
+
+Current presentation regressions remain open: bus flower texture fragments and
+parallax speed, preview fallback when original movie files are absent, and
+instruction-screen movie placement/transitions. These are deferred polish, not
+passing visual audits. The normal extracted content tree was missing all 127
+movie files; missing original-disc assets were restored locally without changing
+saves. QA now checks that its requested content root was actually selected.
+
+## Board minigames use the real flow (2026-10-21)
+
+Boards compile the recovered `board/mgcall.c`; the port's `minigame_stub.c`
+and its board.c continue-in-place patch are gone. The roulette picks the game,
+instructions run, the module plays, results pay out and save the turn, and the
+board reloads. Only a minigame whose module is missing is stubbed: from a board
+it ends at once with nobody scoring (Bowser games: everyone escapes) and
+returns one step, so results or the duel/Bowser/DK hand-back still run.
+Stub-era duel gating in capspecial.c was removed; the game's own no-minigame
+duel roll applies again. `mgcall.c` needed per-TU prototypes for its float
+`mbObj*` setters (`include/mp6_board_mgcall.h`) and two caller-typed adapters
+(`src/os/board_mgcall_abi.c`).
+
+PC, CPU party, unlocked ticks: W01 ran 22 rounds unattended (13 real games
+including m644, m613, m627, m631, m651, 8 missing games stubbed, duel-type
+m673 stub returned through instdll), W05 ran 5 rounds with Quick Party 4x.
+No crash. AO/widescreen review of the results overlay on boards is pending.
+
+## Bus foreground looping and animated previews (2026-10-18)
+
+Foreground flowers retain their authored 2200-unit motion period. Scene-owned
+companions repeat the complete strip into the wide view instead of stretching
+its animation path. Sixteen captures spanning the loop boundary were taken at
+4:3, 16:9 and ultrawide; key frames around the boundary and wide edges were
+visually inspected. This fixes the premature wrap/pop without enlarging art.
+
+Original-disc THP video now streams through a native `THPSimple` adapter and
+pinned `stb_image` JPEG decoder. Bus textures are filled from decoded RGB only
+when the frame changes: interpolated rendering no longer captures unrelated
+menu scenery through an EFB-copy hook. Missing/corrupt movies keep the still
+fallback without waiting forever. These previews request volume zero; native
+movie-audio mixing is not implemented.
+
+Fourteen focused native/video/widescreen tests and 47 setup regressions pass.
+Visual checks cover selection changes, animation, native quit and same-process
+bus re-entry. Final 16:9 and ultrawide AO/unlocked runs inspect actual replay
+frames; the final 16:9 run decodes 207 frames across three movies without errors.
+This is a bus bugfix, not a new module: the lifecycle inventory remains 46/72.
+
+Local receipts under `build/mgmfree-qa/runs/`: flower boundaries `20261018-162105-639911`,
+`20261018-162239-148380`, `20261018-162256-675182`; native preview `20261018-164102-687131`;
+ultrawide replay `20261018-164159-072267`; final 16:9 replay `20261018-164532-293565`.
+The normal Windows Release builds 361 translation units with two compiler jobs;
+SHA-256: `be05892afd615b34c41cd1c71a26505e5b160660b44140e844cf60cd48fe5f88`.
+No Android/device, performance-gain or full-match claim is made.
+
+## Faire Square native integration (2026-10-18)
+
+`w03Dll` now has explicit lazy source ownership, shared loader/reset registration,
+typed dice hooks, named model-field accesses and complete close-time cleanup.
+Reload ownership covers 11 BSS and 59 initialized globals. A shared board-window
+adapter keeps borrowed native text pointers separate from archive IDs, including
+queued windows, recreation, measurement and live numeric/text replacement.
+
+Nine inspected captures cover 4:3, 16:9 and ultrawide board opening/turn setup.
+Four additional board-only captures exercise XeGTAO and unlocked FPS at 60 Hz
+simulation; three are interpolated frames. The run records 73,692 matching
+encoded/composited XeGTAO jobs and the normal system-exit transition to Party
+Results. Direct QA board loads now use `mbSavePartyInit`; exit checks distinguish
+a board's results transition from a minigame return and reject post-exit captures.
+These are entry, first-turn and lifecycle checks, not full-match/night-event proof.
+
+Local receipts under `build/widescreen-qa/runs/`: `20261018-153938-950163`
+(three aspects) and `20261018-154651-383292` (AO/interpolation).
+The earlier `154334` capture overlaps the exit and is superseded, not evidence
+of four board frames. The normal Release builds 360 translation units with two
+compiler jobs; SHA-256:
+`853850eb09acd5d5eb3737c913b2625de3cc62c0bce122cf0343543feddfaad5`.
+
+```sh
+python tests/integration/build_widescreen_qa.py
+python -m tests.integration.run_widescreen_scenes --scenes w03dll --sizes 640x480 960x540 1260x540 --delay 1800 --stride 300 --count 3 --request-exit --exit-target mdpresultdll --timeout 45
+python -m tests.integration.run_widescreen_scenes --scenes w03dll --sizes 960x540 --ao 2 --implementation xegtao --unlocked --require-replay --capture-trigger qa.board.turn=begin --delay 500 --stride 120 --count 4 --startup-slack 3000 --request-exit --exit-target mdpresultdll --timeout 105
+```
+
+## TT Wars integration and shared debug-HUD fixes (2026-10-18)
+
+`ttwarsdll` now uses the shared mode inventory and native loader. Its pointer
+registry clears all 256 native-width entries, its piece allocation uses the
+record size, and deletion returns before touching freed piece data. One explicit
+reset owner covers 24 BSS and 21 initialized globals. Executable checks exercise
+setup twice, normal/deleted piece updates and all reset storage.
+
+The screenshot audit caught two shared `printfunc` defects: the implicit GX
+array binding uploaded only four of the sixteen palette colors, and the native
+640-wide font canvas stretched across the wider viewport. Explicit full-span
+palette bindings and a centered orthographic canvas fix both without changing
+native 4:3 positions or upstream game presentation.
+
+All 65 focused checks pass. Nine inspected board/HUD captures cover 4:3, 16:9
+and 21:9; two more inspect the ultrawide configuration screen. A separate 16:9
+XeGTAO/unlocked run has four inspected interpolated captures and 92,368 matching
+encoded/composited XeGTAO jobs. Each final run observes the native system-exit
+return and subsequent overlay entry. The shared QA harness explicitly labels
+its exit request: these are lifecycle checks, not completed matches. Early
+runs without that request captured gameplay but did not pass the return gate.
+
+```sh
+python tests/integration/build_widescreen_qa.py
+python -m tests.integration.run_widescreen_scenes --scenes ttwarsdll --sizes 640x480 960x540 1260x540 --delay 240 --stride 180 --count 3 --request-exit --timeout 30
+python -m tests.integration.run_widescreen_scenes --scenes ttwarsdll --sizes 960x540 --ao 2 --implementation xegtao --unlocked --require-replay --capture-trigger qa.ttwars.piece=created --delay 500 --stride 120 --count 4 --request-exit --timeout 55
+```
+
+Local receipts under `build/widescreen-qa/runs/`: `20261018-150002-957074`
+(three aspects), `20261018-150045-954106` (AO/interpolation), and
+`20261018-150412-596549` (configuration). Normal Windows Release builds 358
+translation units with at most two compiler jobs; SHA-256:
+`f9099ad1fc21ae500ab287faf95fd1c2690215c828472d5e94e861eb8440812b`.
+No full-match, human-controller, Android or performance claim is made.
+
+## Mount Duel integration and visual audit (2026-10-18)
+
+`mgmtournamentdll` loads eight recovered units through the shared native bridge.
+Seven reset owners cover 66 mutable globals. Typed callback contracts, native
+allocation sizes and full-width window text pointers replace PPC assumptions.
+The preview path preserves the centered native EFB rectangle and guards failed
+THP sprites, empty lists and allocation failure. Gameplay and results remain
+upstream-owned; QA does not manufacture a minigame result.
+
+The 21:9 screenshot audit exposed a black gap below the sky. The shared backdrop
+adapter now accepts validated vertical QUAD stacks and extends only their outer
+perimeter. Native faces, materials, stage geometry and cameras are unchanged.
+The executable geometry fixture checks the measured two-quad sky, shared UV
+corners, restoration, rejection paths and the existing single-quad behavior.
+
+Verified with hidden windows and isolated saves:
+
+- Menu/preview and quit at 4:3 and 16:9; inspected captures preserve framing.
+- A real instructions-to-Trick-or-Tree round awards a native result and returns
+  through the tournament result screen, followed by normal quit.
+- Two 21:9 entries and exits in one process at 60 simulation ticks/second with
+  XeGTAO and unlocked FPS. All four inspected captures are interpolated presents;
+  192,718 XeGTAO jobs were encoded and composited. No black sky gap remains.
+- All 63 focused tests pass. The normal Windows Release builds 356 translation
+  units with at most two compiler jobs.
+
+Reproduce from the repository root:
+
+```sh
+python -m unittest tests.test_widescreen_effects tests.test_native_tournament tests.test_native_modes tests.test_native_minigames tests.test_mgmtournament_qa tests.test_overlay_probe
+python tests/integration/build_mgmtournament_qa.py
+python tests/integration/run_mgmtournament_qa.py --scenario round --window-size 960x540 --widescreen --capture-trigger qa.mgmtournament.state=10
+python tests/integration/run_mgmtournament_qa.py --scenario reload --window-size 1260x540 --widescreen --ao --unlocked-fps --capture-delay 300 --capture-stride 30 --capture-count 4 --timeout 120
+```
+
+Local receipts under `build/mgmtournament-qa/runs/`: `20261018-140201-727737`
+(16:9), `20261018-140802-225337` (native round/results),
+`20261018-143839-345452` (21:9 AO/interpolation reload), and
+`20261018-144056-653711` (final 4:3). A shorter 50-second real-time run timed out
+during the introduction and is not counted as a lifecycle pass. These checks do
+not certify a complete tournament, every random outcome, human controller play,
+Android or foreground performance. The normal Release SHA-256 is
+`705edb76695b46b0094786a4c5695b3c48facb2a2ac698806aa2025c1a982956`.
+No active save changes, Android testing, uploads or pushes were performed.
+
+## Conveyor Bolt integration and visual audit (2026-10-18)
+
+`m631dll` loads three recovered source units through the shared native bridge.
+One header owns cross-unit callback signatures and full-width owner pointers;
+scene/player allocations use native sizes. Three entry-time reset owners cover
+all 11 mutable globals. The original gameplay, day/night rules, cameras and
+scenery remain upstream-owned; no module-specific renderer or per-frame layout
+translation was introduced.
+
+Verified with isolated saves, hidden windows and native AI:
+
+| Case | Result |
+| --- | --- |
+| Day and night at 4:3, 16:9 and 21:9 | All six rounds reach normal overlay return; all 72 frames inspected, including result/return and subsequent menu frames. No exposed scene gaps or clipped settled HUD were found. |
+| Day and night at 16:9, XeGTAO plus unlocked FPS | All eight captures are interpolated presents and were inspected. Day encoded/composited 47,281 XeGTAO jobs; night 41,523. |
+| Live resize and widescreen toggle from 4:3 | Nine size/toggle states settle during gameplay; the round returns normally. All eight captures inspected. |
+| Normal Windows Release, 16:9 XeGTAO startup | Four frames inspected; all 599 AO jobs encoded and composited through XeGTAO. |
+
+All 81 focused checks pass (33 integration/ABI/tooling and 48 shared rendering
+contracts). The executable ABI probe exercises contact callbacks, full-width
+owner pointers, all 256 job slots, recycling, typed pair resolution, native
+allocation guards and reset dispatch with undefined-behavior checks. Strict
+prototype compilation and real reset-owner execution cover every source unit.
+The normal Release builds 348 translation units with at most two compiler jobs.
+These checks do not certify human controller play, same-process re-entry,
+all random outcomes, Android gameplay or foreground performance.
+
+Reproduce from the repository root:
+
+```sh
+python tests/integration/build_widescreen_qa.py
+python -m tests.integration.run_widescreen_scenes --scenes m631dll --sizes 640x480 960x540 1120x480 --all-cpu --cpu-difficulty 3 --delay 300 --stride 260 --count 12 --require-return --timeout 90
+# Repeat the preceding command with --night for the night variant.
+python -m tests.integration.run_widescreen_scenes --scenes m631dll --sizes 960x540 --all-cpu --cpu-difficulty 3 --ao 2 --implementation xegtao --unlocked --require-replay --capture-trigger se.play=1844 --delay 60 --stride 120 --count 4 --timeout 90
+# For night AO captures, add --night and use se.play=1840 instead of 1844.
+python -m tests.integration.run_widescreen_scenes --scenes m631dll --sizes 640x480 --all-cpu --cpu-difficulty 3 --delay 300 --stride 220 --count 8 --timeout 90 --resize-live
+python -m tests.integration.render_frame_contact_sheet <reported-run-directory>/<scene-size>/frames
+```
+
+Local-only receipts under `build/widescreen-qa/runs/`:
+`20261018-131834-574308` (day), `20261018-131931-976286` (night),
+`20261018-132113-484591` (day AO/replay), `20261018-132520-255068` (night AO/replay),
+`20261018-132641-149703` (resize/toggle), and `20261018-132801-399614`
+(normal Release startup). An earlier night AO run using the daytime sound cue
+captured no frames and was rejected, not counted as passing evidence.
+The normal executable SHA-256 is
+`1a3c152993de005d6bdcb3f6fc99a77856a1acc4b5a68126217fe473eb1f60a4`.
+No active user save, Android build, upload or push is involved.
+
+## Trick or Tree integration and visual audit (2026-10-18)
+
+The scenery acceptance in this historical section is superseded by the
+[19 October M662 follow-up](WIDESCREEN_QA.md#m662-fence-cap-joints-and-hill-follow-up-19-october):
+both side walls now retain concrete-cap joints through their extension, the
+outside dirt extrusion is removed, and the finite hill fills the wide margins.
+That follow-up records final three-aspect, native-round, resize and production
+captures; the native gameplay floor, collision and smaller trees stay unchanged.
+
+`m662dll` now loads its four recovered units through the shared native bridge.
+Typed native allocations, timer/callback signatures and three explicit reset
+owners replace PPC byte-size assumptions. The inactive shuffle path no longer
+reads its sentinel curve index. Forced-load QA supplies two valid duel groups;
+normal menu launches retain their own player assignment.
+
+The screenshot audit found floor and backdrop gaps beyond the original side
+walls. Asset-measured registrations now continue only the authored floor and
+untextured background gradient with existing shared geometry helpers. The
+native faces, camera, collision, lamps and randomized moving trees are unchanged.
+The distant decorative forest is not duplicated into a second gameplay layer.
+
+Verified using isolated saves, hidden windows and native AI:
+
+| Case | Result |
+| --- | --- |
+| 4:3, 16:9 and 21:9 actual AI rounds | All three reach normal overlay return; all 30 captured frames inspected. No exposed black ground/backdrop gap remains. |
+| 16:9 XeGTAO plus unlocked FPS | Four settled captures are real interpolated presents; all inspected. 53,178 AO jobs encoded and composited through XeGTAO. |
+| Live resize and widescreen toggle from 4:3 | Nine settled size/toggle states pass, followed by normal return; all eight captures inspected. |
+
+All 77 focused regression tests pass. Executable probes cover native-sized
+state clears, timer pointers, particle strides and inactive/active paths under
+undefined-behavior checks; the shared state suite executes all three owners.
+Strict native-prototype compilation covers all four recovered units. The normal
+Windows Release compiles and links 345 units with at most two compiler jobs.
+Its separate legacy AO and XeGTAO startup checks use the normal executable,
+not the QA build; all eight frames were inspected. These checks do not certify human controller play, same-process re-entry,
+all random arrangements, Android gameplay or foreground performance.
+
+Reproduce the main visual checks from the repository root:
+
+```sh
+python tests/integration/build_widescreen_qa.py
+python -m tests.integration.run_widescreen_scenes --scenes m662dll --sizes 640x480 960x540 1120x480 --all-cpu --cpu-difficulty 3 --delay 300 --stride 220 --count 10 --timeout 90 --require-return
+python -m tests.integration.run_widescreen_scenes --scenes m662dll --sizes 960x540 --all-cpu --cpu-difficulty 3 --ao 2 --implementation xegtao --unlocked --require-replay --capture-trigger se.play=2119 --delay 60 --stride 120 --count 4 --timeout 90
+python -m tests.integration.run_widescreen_scenes --scenes m662dll --sizes 640x480 --all-cpu --cpu-difficulty 3 --delay 300 --stride 220 --count 8 --timeout 90 --resize-live
+python -m tests.integration.render_frame_contact_sheet <reported-run-directory>/frames
+```
+
+Local-only receipts under `build/widescreen-qa/runs/`:
+`20261018-124313-011286` (three aspects), `20261018-124407-906622` (XeGTAO and
+interpolation), `20261018-124839-590121` (resize/toggle), and
+`20261018-125506-078356` (normal Release startup with legacy AO), and
+`20261018-125621-173557` (normal Release startup with XeGTAO).
+The Release executable SHA-256 is
+`c70900a6ceda4b536d608a99c9ebd6201bc70c4ecf23dc957f19d5498970fefa`.
+No active user save, Android build, upload or push is involved.
+
+## Endurance Alley integration and visual audit (2026-10-18)
+
+At decomp pin `fd4bf9b3`, `mgmrenshodll` is a native mode with seven explicit
+source owners. Each restores its native BSS and initialized data before entry;
+normal overlay teardown owns its processes and allocations. The shared lazy REL
+inventory feeds both compilation and the widescreen audit. An unavailable game
+returns to an implemented ancestor menu without fabricating an Endurance result.
+
+The screenshot audit found and fixed two separate rendering defects:
+
+- HSF bitmap loading copied only the base image despite material-requested mip
+  levels. The shared loader and preflight now size and validate the complete
+  tiled chain, fixing corrupted cave textures without disabling mip filtering.
+- Widescreen exposed the open upper rails of the original cave mesh. A shared
+  static-strip extension continues only the verified entrance and first-course
+  rims. It preserves native faces, camera motion, character proportions and
+  texture density. Its vertices update only when the aspect changes, not every
+  frame. Native aspect collapses the appended faces without changing the source.
+
+The preview retains an instruction still when THP is unavailable, uses a
+centered native-sized copy when playback is active, and closes both native GX
+primitives explicitly. No THP movie-decoding support is claimed.
+
+Verified with isolated hidden-window runs and virtual PAD input:
+
+| Case | Result |
+| --- | --- |
+| 16:9, AO and unlocked FPS | Real entry, quit and same-process reload pass. |
+| 21:9, AO and unlocked FPS | Quit/re-entry passes; all eight second-entry captures inspected. |
+| Actual first round through inst and m602 | Natural loss returns to the real Endurance result state in 4:3, 16:9 and 21:9. Eight captures per run inspected; no black side wedge remains. |
+| Mini-game Tour regression after the shared loader/build changes | All eight preview categories at 16:9 and an 11,200-tick parallax run at 21:9 pass; all contact sheets inspected. |
+
+All these runs exit normally without capture, script or renderer errors. All
+84 focused tests pass, including real reset owners, preview draw/copy paths,
+bitmap loading and rim geometry; strict native-prototype compilation covers
+all seven mode units. The normal Windows Release compiles and links 341 units.
+Its separate 16:9 startup checks execute XeGTAO successfully with both locked
+simulation frames and unlocked/interpolated presentation.
+This does not certify a 100-win streak, every course section, every minigame,
+physical controller input, Android gameplay or foreground performance.
+
+Reproduce from the repository root with the extracted disc cache:
+
+```sh
+python tests/integration/build_mgmrensho_qa.py
+python tests/integration/run_mgmrensho_qa.py --scenario reload --widescreen --ao --unlocked-fps --window-size 1120x480 --capture-trigger qa.endurance.reentry --capture-delay 100 --timeout 90
+python tests/integration/run_mgmrensho_qa.py --scenario round --widescreen --ao --unlocked-fps --capture-trigger qa.endurance.result --capture-delay 250 --timeout 120
+python tests/integration/run_mgmrensho_qa.py --scenario round --widescreen --ao --unlocked-fps --window-size 1120x480 --capture-trigger qa.endurance.result --capture-delay 250 --timeout 120
+python tests/integration/run_mgmrensho_qa.py --scenario round --window-size 640x480 --capture-trigger qa.endurance.result --capture-delay 250 --timeout 120
+python -m tests.integration.render_frame_contact_sheet <reported-run-directory>/frames
+```
+
+Final rim receipts are local-only under `build/mgmrensho-qa/runs/`:
+`20261018-115927-833282`, `20261018-115952-205911`,
+`20261018-120045-273691` and `20261018-120220-835287`.
+No user save was used by these runs. No Android build, upload or push was done.
+
+## Historical instDll integration (2026-10-09)
+
+The port-owned dependency now pins `abd33205633a540e2130a6672c2edf27b52b79e2`,
+advanced from `52a0209cc553a59a0f60726d2818ccddfd9695fe`. The recovered
+instruction overlay is integrated through five native units:
+`prolog.c`, `setup.c`, `stage.c`, `display.c` and `name.c`; `runtime.c` is
+excluded. Native ABI coverage includes glyph-pointer allocation, process
+payloads and `GXEnd`. Native BSS and initialized owners reset on every load,
+and the real DLL bridge route is used.
+
+The THP decoder remains unavailable. Native instructions use a recovered
+still-image preview fallback behind an explicit initialization-failure guard;
+this production fallback makes no movie-playback claim. The other five
+`mgm*` modes remain unavailable, and the board minigame-call stub is unchanged.
+
+Verification status:
+
+- Windows graphical Release (397 units) and Windows headless Release (367
+  units) pass. Android arm64 native Release now has 399 units compiled and
+  linked, with exactly one `-O2` per unit in the compile profile. No APK was
+  packaged, uploaded or installed, and no device result is claimed.
+- Final combined verification passes 115/115, including two widescreen camera
+  tests; there are no failures, errors or skips. The targeted inst suite is
+  8/8.
+- The final hidden 4:3 Back and Start routes both pass, including the Start →
+  m616 → QA-forced return → prior-game inst path → Mode Select → fresh inst
+  reload → Back route. Each scenario has six frames. The final 4:3 Start frame
+  `f000005` and widescreen Back frame `f000002` were visually inspected:
+  UI is correct, the background is fully tiled and no black strip remains.
+  The runtime QA helper fakes early minigame completion only; this is not
+  full-game proof.
+  Local-only receipts are `build/inst-qa/runs/20261009-031634-077824` and
+  `build/inst-qa/runs/20261009-031646-580806`.
+- The compiled real-GX draw probe passes with the centered quad/viewport and
+  64-unit texture repeat. The unavailable-overlay fallback gate passes for
+  `m601dll`, `mgmdecathlondll` and `mgmbattledll`.
+- No fatal, GPU-validation or script errors occurred; existing destroyed-
+  buffer/device warnings appear only at normal shutdown.
+- No device run, upload or push was performed.
+
+Reproduction:
+
+```powershell
+python tests/integration/build_inst_qa.py
+python tests/integration/run_inst_qa.py --scenario both
+python tests/integration/run_inst_qa.py --scenario back --widescreen --window-size 1280x720
+```
+
+
+## Historical AO-on regression (2026-10-08)
+
+A fresh private board-QA build exercised the current grounding and replay code,
+not the earlier frozen performance executable. The run reached real W01 startup
+at tick 2578 and exited normally at tick 5400 after 92.5 seconds. It used Windows'
+platform-default XeGTAO (High, two denoise passes, full resolution, R32 depth),
+AO2, AA2, widescreen 1920x1080, unlocked presentation and 60 Hz simulation, with
+GPU validation enabled and no grounding/foliage diagnostic overrides.
+
+All 34,621 encoded AO jobs were composited through XeGTAO. Six native captures
+covered the Treetop introduction at ticks 2871–3013, including real and replay
+frames; the first and last were visually inspected. No crash or runtime GPU
+validation error was logged. Shutdown logged the existing destroyed-buffer and
+destroyed-device warnings after normal tick-budget exit.
+
+This closes the missing AO-on integration smoke after the review cleanup. It is
+not a completed-turn/full-game, motion-quality, performance or Android-device
+acceptance result. The private executable SHA-256 is
+`6291ce58c7d5278419d4229832555cf6f66a189dd3c88c02c4bd2526538b5ac4`.
+Local-only receipts and captures are under
+`build/board-qa-runs/ao2-default-board-20261008-final/`; rebuild instructions below
+remain the portable reproduction route.
+
+The review follow-up also passed 136 distinct focused tests (107 core tests plus
+39 probe/grounding tests with 10 overlapping grounding cases), and incremental
+Windows graphical, Windows headless and Android arm64 native Release builds.
+No APK was installed or uploaded during this check.
+
+## Mini-game Tour visual audit (2026-10-18)
+
+The bus preview now captures the centered sprite-pass origin while keeping its
+native 128x128 texture. Missing/locked entries are rejected before asset lookup.
+When the host THP decoder is unavailable, the instruction still remains visible
+and the preview reaches its ready state; selection and exit no longer wait for
+a video that cannot start. This is still-image support, not THP video playback.
+
+The bus uses shared signed camera cutouts for its projected windows. Sky and
+ground repeat their original texture density; cloud/hill companions share HSF
+resources and retain native geometry size. Decorative motion snapshots widen
+travel on aspect changes rather than stretching characters or scenery. Model
+teardown owns companion cleanup and discards motion snapshots.
+
+Verified with the hidden-window, virtual-PAD harness and fresh QA saves:
+
+| Case | Result |
+| --- | --- |
+| 4:3, locked entries | Exit/cancel and same-process reload pass. |
+| 16:9, unlocked fixture, AO + unlocked FPS | All eight categories, changing previews, player grouping, actual Cash Flow instruction handoff and return pass. Exit/reload also pass. |
+| 21:9 parallax | 11,200-tick run plus dense captures around hill/cloud repeat boundaries; no black side gaps in the inspected frames. |
+| Shared native adapters and save utility | 42 tests pass, including signed clipping, native restoration, motion ownership, tile lifetime/allocation failure and preview fallback. |
+
+The normal release was rebuilt separately from the instrumented QA executable.
+No user's save is used by these visual runs. Unlocking entries does not imply
+that every selected minigame already has a native gameplay implementation.
+
+Reproduce from the repository root (requires the extracted disc cache):
+
+```sh
+python tests/integration/build_mgmfree_qa.py
+python tests/integration/run_mgmfree_qa.py --scenario audit --widescreen --unlocked --ao --unlocked-fps --window-size 960x540 --capture-delay 110 --capture-stride 140 --capture-count 24 --timeout 60
+python tests/integration/run_mgmfree_qa.py --scenario parallax --widescreen --unlocked --window-size 1120x480 --capture-delay 110 --capture-stride 500 --capture-count 22 --timeout 60
+python tests/integration/run_mgmfree_qa.py --scenario grouping --widescreen --unlocked --ao --unlocked-fps --window-size 960x540 --capture-trigger qa.mgmfree.group --capture-delay 80 --capture-stride 45 --capture-count 8 --timeout 60
+python tests/integration/run_mgmfree_qa.py --scenario instruction --widescreen --unlocked --ao --unlocked-fps --window-size 960x540 --capture-trigger qa.inst.ready --capture-delay 20 --capture-stride 20 --capture-count 6 --timeout 60
+python -m tests.integration.render_frame_contact_sheet <reported-run-directory>/<scenario>/frames
+```
+
+Local-only evidence is under `build/mgmfree-qa/runs/20261018-*` and
+`build/bus-mode-20261018/`; those generated files are not repository links or
+distributed assets. Each run includes `result.json`, the event log and native
+frame dumps. The renderer creates full-resolution PNGs and contact sheets.
+
+## Historical decomp and Mini-game Tour (2026-10-08)
+
+The port-owned dependency is clean and detached at upstream `main`
+`52a0209cc553a59a0f60726d2818ccddfd9695fe`, advanced from `e7ce823`.
+The final pin includes the late Infernal Tower naming/comment update after
+the initial build at `6ee6d5c`; that update changes no selected native unit.
+The shared decomp development checkout was not changed. The previous desktop
+executable is retained at `build/checkpoints/before-decomp-6ee6d5c/mp6native.exe`.
+
+The recovered `mgmfreedll` menu and mode flow are now compiled and bound to
+their real lifecycle. Their packed player-remapping table is decoded to
+native signed halfwords; byte-buffer pointer owners become typed pointers.
+All BSS and mutable initial values reset before the real prolog creates the
+scene, matching a fresh REL load. Runtime compiler helpers remain supplied by
+the native toolchain. No gameplay implementation was invented.
+
+This adds the Mini-game Tour / Free Play selection menu, not the missing
+instruction overlay (`instdll`) or the other five `mgm*` modes. Those overlays
+retain the existing safe fallback. The board minigame-call stub is unchanged.
+The September notes below are historical, including their old Free Play
+fallback expectations.
+
+Build and source verification:
+
+- Strict application of the complete native patch queue passes.
+- 57 targeted decomp, native ABI, lifecycle and widescreen tests pass, including
+  both new menu units compiled with implicit-function, pointer-type and
+  integer/pointer-conversion warnings promoted to errors.
+- All 58 setup tests pass, including the new Windows Release patch-order
+  regression. The AA hook now uses namespace-close context, avoiding
+  insertion inside a function after the expanded renderer patch queue.
+- Windows graphical Release: 392 units; headless Release: 362 units; Android
+  arm64 native Release: 394 units. All link; Android verifies exactly one `-O2`
+  per unit. Both graphics backends were refreshed and provenance-verified.
+- Full exploratory test run: 893 tests, 7 failures and 35 errors. These include
+  stale AO instrumentation anchors, older renderer fixture layouts, import-name
+  collisions and cached diagnostic-source expectations. This is not an all-suite
+  green claim; the targeted decomp suite above is independently green.
+- No APK packaging/upload, tablet access or device testing was performed.
+
+Runtime checks: isolated, hidden-window Tour lifecycle and reload runs both
+pass with exit code 0, six captures each and no logged fatal/renderer/script
+errors. They exercise the real intro, category and item navigation, canceling
+the Back prompt, confirming Yes, returning to Mode Select, and a second menu
+entry in the same process. Captures were visually inspected. Fresh test saves
+correctly show locked minigames as question marks; user saves are untouched.
+Evidence: `build/mgmfree-qa/runs/20261008-160517-067528/{lifecycle,reload}/`.
+The earlier failed runs were input-driver timing/selection failures and are
+retained, not counted as passing. The unavailable-overlay return gate also
+passes for `m601dll`, `instdll` and `mgmdecathlondll`.
+The normal Minigame Mode entrance-to-Tour handoff also passes: player/character
+selection and the mode menu reach the recovered Tour's input-ready state
+with exit code 0 and no logged errors. Evidence:
+`build/mdmini-qa/runs/20261008-160756-131622/handoff/`.
+
+Final build/test logs: `build/decomp-52a0209-{windows,headless,android}.log`,
+`build/decomp-52a0209-integration-tests.log`,
+`build/decomp-6ee6d5c-setup-tests.log`,
+`build/decomp-6ee6d5c-release-tests.log` and
+`build/decomp-6ee6d5c-engine-tests.log`.
+
+## Non-disruptive desktop tests (2026-09-30)
+
+The board, title, Minigame Mode and widescreen capture runners now require
+background-capable Windows Release binaries. They set `MP6_BACKGROUND_QA=1`,
+use dummy audio and hide the process console. The game window stays hidden
+from creation, but continues rendering and producing native frame captures.
+SDL controller, joystick, sensor and haptic initialization is skipped; hot-plug
+opening and rumble (including shutdown stop commands) are blocked. PAD reads
+accept only scripted virtual status, with normal disconnected/blocked states.
+This is opt-in test policy, not a saved setting or a change to normal play.
+
+The runner refuses an older executable before launching it. Rebuild the local
+Windows backend and the relevant QA executable first. Startup logs must contain
+`[BACKGROUND-QA] verified hidden=1 input-subsystems=0` and the scripted-only
+marker. Hidden presentation is for correctness/capture tests; its frame timing
+is not a foreground performance benchmark.
+
+## Native Minigame Mode entrance (2026-09-28)
+
+At the same `e7ce823` dependency pin, the port now consumes all 98 selected
+`mdminidll` C units, excluding the PPC runtime wrapper. These implement the
+entrance, player/character setup and mode menu. They do **not** include Free
+Play, Battle, Bingo, Tournament, Decathlon or Endurance: `mgmfreedll`,
+`mgmbattledll`, `mgmbingodll`, `mgmtournamentdll`, `mgmdecathlondll` and
+`mgmrenshodll` remain unavailable. No missing gameplay was reconstructed and
+the board minigame-call stub is unchanged.
+
+The missing native storage is generated from the user's original REL after
+checking its SHA1 against the pinned decomp's `build.sha1`. The generator
+validates section sizes and all four data-pointer relocations, endian-decodes
+typed tables and emits real host-width pointers. Pointer-bearing BSS uses
+native structures, not a transplanted PPC memory image. A constructor restores
+mutable initial data and clears BSS whenever the real prolog runs. Generated
+tables stay in ignored build output. The shared decomp checkout is untouched.
+
+Native compatibility changes:
+
+- Two camera clears use `sizeof(*state)` instead of the original 80 bytes.
+- The transition material callback uses `model->hookData` instead of reading a
+  pointer at PPC offset 288. The original expression caused a reproduced native
+  access violation when confirming the mode.
+- The transition's hardware FIFO writes are submitted through native GX
+  position/color/texture calls, with `GXEnd` before the texture copy.
+- Missing declarations and the consumed neighbor-record type are supplied
+  through narrow forced includes; the recovered selection logic is unchanged.
+
+Widescreen completion (same dependency pin):
+
+- Both camera entry paths register their own native lens with the shared Hor+
+  viewport/scissor/resize handling. They no longer inherit the previous menu's
+  camera registration. The existing centered sprite canvas keeps the character
+  cards, cursor, prompts and descriptions at their original proportions.
+- The cloud frame gains edge strips and the rotating gold backdrop gains a rim
+  extension before its linked twin is created. Trees, Twila and center artwork
+  are not scaled. The extensions use the same mechanisms as Party Mode.
+- The original floor/emblem/shadow receiver stays intact. A separate fill uses
+  the clean bottom 64 rows of the verified `ys80_floor` RGB565 texture, with
+  repeating UVs scaled to preserve plank density. This avoids both stretched
+  planks and repeated emblems/baked shadows. The texture view is tile-aligned
+  within the existing allocation; it allocates no additional texture storage.
+  Both scene teardown paths dispose of the fill. Party's `ys77_floor` retains
+  its separate, texture-specific border treatment.
+- Both screen-copy sources, the feedback quad and its projection cover the
+  current width. The indirect material uses the live camera aspect. The
+  320x240 copy destination, sampler dimensions and allocation remain matched;
+  widening the source does not overrun that buffer.
+
+Verification:
+
+- 205 engine/native tests and 57 setup tests pass. New tests check the complete
+  source manifest, namespaces, lifecycle binding, camera sizes, transition GX
+  submission, relocation rejection, bit-exact converted constants, native
+  pointer tables and repeated data/BSS reset.
+- Widescreen regressions check camera/geometry registration, teardown, actual
+  captures at several widths into the fixed allocation, active header inclusion
+  outside comments, and the bounded, native-density floor texture view. The
+  floor self-test rejects wrong assets, dimensions, layouts and mipmapped data.
+- All 98 recovered units pass strict compile checks for implicit functions,
+  incompatible pointers and integer/pointer conversion. The upstream unused
+  return in `fn_1_184D4` is retained; no return value is invented.
+- Windows graphical Release: 387 units; Windows headless Release: 358 units;
+  Android arm64 native Release: 389 units. All link. Android provenance verifies
+  exactly one `-O2` flag per unit and the Release safety profile.
+- The isolated graphical QA executable uses the same Release game objects,
+  with stage logging and a test-only second entrance request. Real PAD scripts
+  traverse intro → players → characters → modes, Back and forward again,
+  then quit with Yes and re-enter. A separate run confirms options/launch,
+  requests the unavailable Free Play overlay, and returns to mode select.
+  Both exit 0 with no timeout or crash marker. Engine frame captures confirm
+  the rendered entrance/mode screens and quit prompt. Audio uses SDL's dummy
+  driver. No desktop input automation is used for these fixtures.
+- Final evidence: `build/mdmini-qa/runs/20260928-210114-326268/`; strict compile
+  report: `build/mdmini-integration/compile.json`. Pre-integration source and
+  Release binary checkpoint: `build/checkpoints/before-mdmini-native/`.
+- Widescreen graphical evidence: `20260928-214018-387111` (16:9 lifecycle and
+  handoff), `20260928-214031-363630` (21:9 feedback transition),
+  `20260928-214037-515323` (native 4:3 character selection),
+  `20260928-214043-586007` (16:9 character selection) and
+  `20260928-214049-825488` (21:9 intro), all under `build/mdmini-qa/runs/`.
+  All six scripted runs exit 0, without timeout/crash/GPU validation errors.
+  Wide geometry probes also require that the tiled floor fill actually activates.
+  `20260928-213907-169388` contains the final 21:9 mode-menu capture. Windows
+  graphical/headless Release and Android arm64 native Release link successfully;
+  no new APK was packaged or uploaded for this widescreen change.
+- The normal `build/release/mp6native.exe`, without QA instrumentation, also
+  traverses the entrance and requests Free Play successfully at 16:9, then
+  exits normally at its tick budget. Log and captures:
+  `build/mdmini-qa/runs/20260928-214315-855274-production/`.
+
+Reproduce from the port root with the local GP6E01 disc tree available:
+
+```powershell
+python tests/integration/build_mdmini_qa.py
+python tests/integration/run_mdmini_qa.py
+python -m unittest discover -s tests -p test_*.py
+python -m unittest discover -s setup/lib -p test_*.py
+```
+
+This verification does not certify every mode option, widescreen layout or
+physical Android execution. No APK packaging/upload, push or release was done.
+
+## Main update, headless verification (2026-09-28)
+
+The port consumes clean decomp main
+`e7ce823b432329e247c5090c63543baaf8e4c1a4`, advancing its own dependency from
+`c51eb37`. The shared decomp development checkout is untouched. Pre-update
+source, binaries and player files are retained under
+`build/checkpoints/main-e7ce823-before/`.
+
+The native manifest adds 35 C units for m633, m659 and m668, with recovered
+prolog/epilog entry points and independent symbol namespaces. m659 was already
+source-complete at the previous pin: checking for a file named `prolog.c`
+incorrectly excluded it. Its lifecycle actually lives in `camera.c`; the
+regression gate now checks that case. The manifest covers 18 modules/100 units,
+plus the separately integrated m616 and m670.
+
+Native compatibility changes:
+
+- m668 player storage uses `sizeof(M668PlayerWork)` instead of a PPC-sized
+  84-byte allocation containing a host pointer. Its local `extern inline`
+  helpers use `static inline` so the native compiler does not emit duplicate
+  external definitions. The existing reciprocal-square-root helper is declared
+  with its actual double ABI, and the native fabs intrinsic is selected.
+- m659's collision-registration declaration matches its recovered definition;
+  m633's `abs` caller includes the host standard-library declaration.
+- The window callback consumes upstream's corrected `s16` character parameter.
+  Four window compatibility hunks were rebased for upstream's decimal literal
+  spelling, without altering native pointer/message behavior.
+- The headless SDK supplies real reflection and squared-distance math for the
+  added references. Numerical and input/output-alias tests cover these helpers;
+  graphical builds continue using Aurora's implementations.
+
+At this earlier checkpoint, Minigame Mode (`mdminidll`) reported 259 recovered
+functions but was not yet native-link complete. Its data/bss tables had declarations without C
+storage definitions (including `lbl_1_data_960`, `lbl_1_data_6B6`,
+`lbl_1_data_98`, and `lbl_1_bss_28`). No tables or gameplay were invented here.
+The entrance was subsequently integrated as documented above; the board
+minigame-selection/instruction stub remains.
+
+Verification:
+
+- Windows graphical Release: 288 units; Android arm64 native Release: 290 units;
+  Windows headless Release: 259 units. All link. Android's native provenance
+  manifest verifies the Release `-O2` profile.
+- 196 engine/native tests and 57 setup/release tests pass. New executable checks
+  cover the signed 16-bit window callback and headless vector operations; source
+  gates cover m659's lifecycle and m668's native storage/inline adaptations.
+- Strict compile-only checks cover all 35 added units on both targets. 34 pass
+  per target. The remaining warning promoted to error is m633 `fn_1_5ED0`,
+  declared `int` with no returned value. Every recovered caller discards its
+  result; this was retained rather than inventing a value. Its segment-pointer
+  casts remain within the native image's enforced low-4GB address contract.
+  The previously documented m640 return warning is unchanged.
+- `main-update-e7ce823/gameplay/third` records CPU-only fixtures. m633 and m659
+  reach phases 1 through 10 and their real epilogs, then exit normally. m668
+  reaches phase 5 without a crash marker but stays there until the 90-second
+  harness timeout; its completion is **not verified**. The null backend still
+  has matrix/GX sinks, so these runs do not certify collision/rendering parity.
+  Fixtures only seed CPU players, choose an overlay and observe sequence state;
+  they do not force a winner or alter recovered gameplay.
+- Production headless routing checks for m601, inst and mgmfree all return to
+  the supported mode-select screen and exit normally. Hash comparison against
+  the 726-file checkpoint confirms unrelated source changes and all four
+  backed-up player files were preserved. Remote `main` was rechecked at the
+  same pin after building. Build hashes and coverage are recorded in
+  `build/main-update-e7ce823/integration.json`.
+
+All runtime verification for this update is headless and explicitly reports
+no live audio device. No graphical game window, physical Android test, visual
+claim, framerate claim, APK packaging/upload, push or release is part of this update.
+
+## Recovered minigame integration (2026-09-23)
+
+The port consumes clean decomp main
+`c51eb379134c4f56603cf2068bd893faf6df656b`, rechecked against the remote branch
+after validation. Only the port-owned dependency advanced from `8540404`.
+The 711-file pre-update source state, native binaries and player files are
+retained under `build/checkpoints/main-c51eb37-before/`.
+
+An explicit manifest enables 65 C units across fifteen complete recovered
+modules: m602, m608, m612, m618, m621, m630, m632, m635, m637, m638, m640,
+m650, m651, m656 and m657. Each has its real lifecycle and a module-wide
+local-symbol namespace. m659 was incorrectly excluded by a filename-based
+lifecycle check (corrected in the September 28 update). The unavailable board
+selection/instruction flow remains stubbed; this does not make the new
+minigames selectable through the normal board UI.
+
+Native compatibility fixes preserve pointer-width actor callback arguments,
+replace m638's fixed-offset partial views with its canonical native structures,
+retain full scheduler-node pointers and provide native math declarations.
+m650's four-row initializer now has four rows of storage instead of corrupting
+the stack. Returning process entries are re-entered by the native scheduler:
+the recovered `HuPrcCreate` sets LR to the entry and `gclongjmp` enters without
+linking, so m618/m630/m637 rely on this behavior after their frame sleep.
+No recovered gameplay is replaced or decompiled here.
+
+The builder uses response files for the expanded link command and invalidates
+old compile records when a new compatibility header changes include resolution.
+Removed header patches cannot leave stale generated include shadows.
+
+Verification:
+
+- Windows Release (253 units) and Android arm64 native Release (255 units)
+  link; Android's authenticated manifest verifies `-O2` throughout.
+- All 192 engine/native and 57 setup/release tests pass. New executable tests
+  cover native layout aliases, full-width callback payloads, process-entry
+  returns and matrix storage, alongside namespace, lifecycle, response-file
+  and incremental-header checks.
+- Strict compilation checks cover every new unit on both targets: 64 of 65
+  pass per target. The exception is upstream m640 `fn_1_3274`, whose equal-angle
+  branch returns no scalar despite its `s16` type. Upstream explicitly records
+  that undefined return. It is unchanged, not concealed by an invented value;
+  the successful CPU match does not certify every branch of that function.
+- `main-update-c51eb37/gameplay/second` contains isolated Release runs for all
+  fifteen new modules. Every run reaches main, finish, winner and real epilog,
+  then exits normally without a crash marker. Fixtures seed CPU players and
+  observe phases; they do not force completion or replace gameplay. The existing
+  m616/m670 also complete in `gameplay/regression`. Representative m638, m650,
+  m616 and m670 captures were visually checked at 960x720, AO/AA off.
+- Production Release `mainc51eb37Final` reaches Towering Treetop with widescreen,
+  AO and FXAA, captures two frames and has no crash marker. Its last frame was
+  visually checked. The harness stops it after 20 seconds; this is a bounded
+  rendering check, not a complete board match or a manual launcher test.
+
+Evidence and binary hashes are in `build/main-update-c51eb37/integration.json`,
+strict diagnostics under `abi/`, and per-module logs/results under `gameplay/`.
+Checkpoint hashes verify unrelated pre-existing fixes and all four backed-up
+player files unchanged. The shared decomp development checkout was not touched.
+No physical Android test, framerate improvement, APK upload or push is claimed.
+
+## m670 integration (2026-09-13)
+
+The port consumes clean decomp main
+`85404041ba1f3ded03a5cdf65bed7fe081f6a5c7`, rechecked against the remote branch
+after building. Only the port-owned dependency advanced. Pre-update source,
+both native binaries and player state are backed up under
+`build/checkpoints/main-8540404-before/`.
+
+All eight recovered m670 C units are linked under one module-local namespace
+with their real prolog/epilog. Existing shared actor, collision, sequence,
+timer and microphone-menu code is reused. Its two projection callers now
+include the authoritative `game/hsfex.h` declaration. The partial m651 recovery
+still lacks `m651.c`, so that overlay remains stubbed rather than substituting
+missing gameplay. The board selection/instruction stub remains too.
+
+Verification:
+
+- Windows Release (188 units) and Android arm64 native Release (190 units)
+  link; the Android manifest verifies `-O2` on every game/platform unit.
+- 186 engine/native tests and 55 setup/release tests pass, including m670's
+  complete namespace/lifecycle, shared dependencies, required declarations,
+  incomplete-m651 gate and the CPU's four-candidate-per-word pattern tables.
+- Sixteen strict target compilations pass after supplying the projection
+  declaration. Both targets still warn about upstream's unused player-pointer
+  copy into `obj->work[1]`; m670's player callbacks use the full-width
+  `players[playerNo]` array instead. This is recorded, not hidden as a clean
+  diagnostic run. No new gameplay replacement or compatibility patch was added.
+- Isolated Release fixture `m670-qa/final` seeds four CPUs in 1-vs-3 groups
+  and controller microphone mode, then runs the recovered minigame. It reaches
+  active pillar cycles, player eliminations, finish, winner and real epilog,
+  then exits normally. Five gameplay frames are captured; first/last frames
+  were visually checked. This verifies CPU gameplay, not microphone recognition
+  or normal-menu minigame accessibility.
+- `main8540404Board` is a bounded 30-second production Release board-rendering
+  check with widescreen, AO and FXAA. It reaches Towering Treetop and captures
+  frames without a crash marker; the harness terminates it at its time limit.
+  It does not certify a full board match.
+
+Evidence and binary hashes are in `build/main-update-8540404/integration.json`.
+All previous startup, camera-loader, renderer and Android fixes and player
+files are preserved. The shared decomp was not modified. No physical Android
+test, performance gain, APK upload or push is claimed.
+
+## m616 integration (2026-09-13)
+
+The port consumes clean decomp main
+`994fb7c47b0a627201d2d44f8a7a936d7a132a26`, rechecked against the remote branch
+after both builds. Only the port-owned dependency checkout advanced. The
+pre-update source, Windows binary and player state are retained under
+`build/checkpoints/main-994fb7c-before/`; the shared decomp is untouched.
+
+The recovered m616 gameplay, initialization, utility and CPU sources are linked
+with their real overlay lifecycle and a shared local-symbol namespace. All 70
+existing compatibility patches apply unchanged. New speech, MusyX and MSL
+recoveries remain outside the native audio/memory/runtime implementation.
+The unavailable board minigame selection/instruction flow remains stubbed;
+this is not a claim that minigames are now selectable from the normal UI.
+
+Integration exposed two port-owned defects: duplicate REL source basenames
+could overwrite an unrelated overlay's object file, and the native HSF loader
+dropped transform tracks' object-type index. The latter left m616's animated
+camera at its default position. Object names now disambiguate collisions, and
+transform/morph tracks preserve the original index bytes. No recovered m616
+gameplay source or camera transform was changed to compensate.
+
+Verification:
+
+- Windows Release (180 units) and Android arm64 native Release (182 units)
+  link. Android's authenticated staging manifest verifies `-O2` throughout.
+- All 183 engine/native tests and 55 setup/release tests pass. New tests cover
+  overlay namespaces, lifecycle dispatch, object-name collisions, and actual
+  loader code on big-endian camera/mesh/morph records. Removing the index copy
+  makes the loader's negative control fail as intended.
+- All five m616 source files compile under both real target command lines with
+  stricter implicit-declaration, pointer and return-type checks: ten clean
+  compilations, recorded in `build/main-update-994fb7c/abi-audit.json`.
+- An isolated Release probe seeds four CPU players and enters real m616 code
+  directly. `m616-qa/cameraFixed` reaches gameplay, finish, winner and epilog,
+  then exits normally. Early gameplay captures were visually checked: camera,
+  four players, stage and countdown render after the loader correction. The
+  fixture does not substitute gameplay or expose a new production boot mode.
+- `main994fb7cFinal` reaches Towering Treetop with widescreen, AO and FXAA,
+  captures three frames, and has no crash marker. The last capture was visually
+  checked. The harness stops it at 40 seconds; this is a bounded board-rendering
+  test, not a full-match certification.
+
+Evidence and binary hashes are in `build/main-update-994fb7c/integration.json`.
+The existing Windows Play/startup fix and player files are preserved. No
+physical Android run, framerate improvement, APK upload or push is claimed.
+
 ## Board Masu / Single integration (2026-09-12)
 
 The port consumes clean decomp main

@@ -1,8 +1,11 @@
 --- a/src/board/shopevent.c
 +++ b/src/board/shopevent.c
-@@ -24,0 +25 @@
+@@ -26,0 +27 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -27,0 +28 @@
 +#include "mp6_widescreen.h"
-@@ -94,0 +96,13 @@
+@@ -96,0 +98,13 @@
++
 +/* Keep the description carousel's parked panels beyond the visible canvas.
 + * The base positions and movement retain their native 576-unit coordinates;
 + * only their displacement from the selected panel grows with the live aspect.
@@ -15,16 +18,22 @@
 +    mbWinPosSet(winId, x, basePos->y);
 +}
 +
-+
-@@ -1210,2 +1224 @@
--        PSVECAdd(&winPos[i], &movePos, &position);
--        mbWinPosSet(descWinId[i], position.x, position.y);
-+        ev_ShopDescPosSet(descWinId[i], &winPos[i], movePos.x, i);
-@@ -1217,0 +1231,3 @@
-+        for (i = 0; i < offerNum; i++) {
-+            ev_ShopDescPosSet(descWinId[i], &winPos[i], movePos.x, i);
+@@ -1262,2 +1276 @@
+-        descriptionBasePos[loopIndex].x =
+-            (SHOP_SELECT_WINDOW_SPACING * loopIndex) + descriptionWindowPos.x;
++        descriptionBasePos[loopIndex].x = (SHOP_SELECT_WINDOW_SPACING * loopIndex) + descriptionWindowPos.x;
+@@ -1266,2 +1279 @@
+-        PSVECAdd(&descriptionBasePos[loopIndex], &descriptionScroll, &screenPos);
+-        mbWinPosSet(descWinId[loopIndex], screenPos.x, screenPos.y);
++        ev_ShopDescPosSet(descWinId[loopIndex], &descriptionBasePos[loopIndex], descriptionScroll.x, loopIndex);
+@@ -1273,0 +1286,3 @@
++        for (loopIndex = 0; loopIndex < offerNum; loopIndex++) {
++            ev_ShopDescPosSet(descWinId[loopIndex], &descriptionBasePos[loopIndex], descriptionScroll.x, loopIndex);
 +        }
-@@ -1262,2 +1278 @@
--                    PSVECAdd(&winPos[j], &movePos, &position);
--                    mbWinPosSet(descWinId[j], position.x, position.y);
-+                    ev_ShopDescPosSet(descWinId[j], &winPos[j], movePos.x, j);
+@@ -1274,0 +1291,2 @@
++        /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++        if (!GwPlayer[visitWork->playerNo].comF) mp6_quick_play_hold("shop");
+@@ -1320,2 +1335 @@
+-                    PSVECAdd(&descriptionBasePos[componentIndex], &descriptionScroll, &screenPos);
+-                    mbWinPosSet(descWinId[componentIndex], screenPos.x, screenPos.y);
++                    ev_ShopDescPosSet(descWinId[componentIndex], &descriptionBasePos[componentIndex], descriptionScroll.x, componentIndex);

@@ -1,7 +1,12 @@
 --- a/src/board/roulette.c
 +++ b/src/board/roulette.c
-@@ -582 +582,8 @@
--    int playerBest;
+@@ -17,0 +18 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -560,0 +562,2 @@
++        /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++        mp6_quick_play_hold("roulette");
+@@ -609 +609,8 @@
+-    int bestPathPlayerNo;
 +    /* MP6_NATIVE_PORT: playerBest is assigned only when GWPartyGet() is TRUE,
 +     * and the very next line reads it (-Werror=sometimes-uninitialized). -1 is
 +     * the value this function already treats as "no best-path player": the
@@ -9,4 +14,4 @@
 +     * exists to fall through to the random pick. So minigame mode now takes
 +     * the random pick deterministically instead of taking it or not depending
 +     * on stack contents. */
-+    int playerBest = -1;
++    int bestPathPlayerNo = -1;

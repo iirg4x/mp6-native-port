@@ -14,7 +14,7 @@ always agree on where the read-only decomp checkout lives):
     <root>/port/                                          PORT_ROOT
     <root>/port/toolchain/                                TOOLCHAIN_DIR
     <root>/port/mp6-native[-setup]/build/deps/marioparty6/  DEFAULT_DECOMP_DIR
-    <root>/external_refs/repos/aurora/                     AURORA_DIR
+    <native>/third_party/aurora/                            AURORA_DIR (vendored source)
 """
 import ctypes
 import os
@@ -56,7 +56,8 @@ def _workspace_path_override(name, default):
 
 
 DECOMP_DIR = _workspace_path_override("MP6_DECOMP_DIR", DEFAULT_DECOMP_DIR)
-AURORA_DIR = os.path.normpath(os.path.join(PORT_ROOT, "..", "external_refs", "repos", "aurora"))
+# Aurora's vendored, port-modified source (see third_party/aurora/MP6_PROVENANCE.md).
+AURORA_DIR = os.path.join(NATIVE_ROOT, "third_party", "aurora")
 
 IS_WINDOWS = os.name == "nt"
 

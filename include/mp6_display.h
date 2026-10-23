@@ -93,6 +93,14 @@ int mp6_display_info_get(Mp6DisplayInfo *out);
  * not track it. */
 int mp6_display_vsync_enabled(void);
 
+/* Call once per frame from a loop with no other pacing (the pre-boot menu).
+ * With present sync off (MAILBOX/IMMEDIATE) such a loop draws as fast as it
+ * can and the compositor drops what the panel cannot show: the launcher read
+ * "130 / 120 Hz MAILBOX" on a Galaxy Tab S10 Ultra. This sleeps out the rest
+ * of one refresh period of the window's output, so frames run at the refresh
+ * rate with no wasted work. No-op with present sync on. */
+void mp6_display_pace_frame(void);
+
 /* Turn present sync on/off for the REST OF THIS SESSION. No-op when the state
  * already matches, so a settings row that re-selects its current value costs
  * nothing.

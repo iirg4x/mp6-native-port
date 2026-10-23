@@ -1,0 +1,42 @@
+--- a/src/REL/m632dll/game.c
++++ b/src/REL/m632dll/game.c
+@@ -1,0 +2 @@
++#include "mp6_widescreen.h"
+@@ -3,0 +5,28 @@
++
++/* The opening theater is skinned. Keep that owner and its deformation buffers
++ * untouched; an independent, non-animated copy draws only appended margins. */
++static void mp6_m632_theater_margins(void)
++{
++    static const MP6WSStaticMargin surfaces[] = {
++        {"stageG", MP6_WS_MARGIN_WALL, -1, 0, 1, TRUE},
++        {"stageA", MP6_WS_MARGIN_RECT, -1, 0, 1, TRUE},
++        {"stageAaddA", MP6_WS_MARGIN_RECT, -1, 0, 1, TRUE},
++        {"stageAsha", MP6_WS_MARGIN_TERRAIN, -1, 0, 1, FALSE},
++        {"stageAshaADD", MP6_WS_MARGIN_TERRAIN, -1, 0, 1, FALSE},
++        /* CLAMP sampling continues the baked edge shade without reflecting
++         * interior present shadows into the added floor. */
++        {"stageAshadow", MP6_WS_MARGIN_TERRAIN, -1, 0, 1, FALSE},
++    };
++    HU3D_MODELID model = Hu3DModelCreate(HuDataSelHeapReadNum(
++        DATANUM(DATA_m632, 5), HU_MEMNUM_OVL, HEAP_MODEL));
++    if (model == HU3D_MODELID_NONE) return;
++    /* This private copy has an embedded motion; detach it before growing its
++     * static buffers. The original scene model retains the native animation. */
++    Hu3DModelAttrReset(model, HU3D_ATTR_MOTION_MODEL | HU3D_ATTR_CLUSTER_ON);
++    Hu3DData[model].motId = HU3D_MOTIONID_NONE;
++    Hu3DModelCameraSet(model, 1U);
++    mp6_widescreen_static_margins(model, surfaces,
++        sizeof(surfaces) / sizeof(surfaces[0]));
++    Hu3DModelShadowMapObjSet(model, "632hakoniwaA-stageAsha");
++    Hu3DModelShadowMapObjSet(model, "632hakoniwaA-stageAshaADD");
++}
+@@ -373 +402 @@
+-void fn_1_3510(MGACTOR *actorP, int param)
++void fn_1_3510(MGACTOR *actorP, intptr_t param)
+@@ -560,0 +590,5 @@
++    mp6_m632_theater_margins();
++
++    /* Continue only the box's outer sloped walls; the playfield stays native. */
++    mp6_widescreen_extend_sloped_rim(lbl_1_bss_0.sceneModels[1], "stageBa", 1, 769.4330f);
++

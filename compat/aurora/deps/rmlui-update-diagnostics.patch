@@ -1,0 +1,124 @@
+Optional bounded Context::Update bucket timings for RmlUi. Disabled by default;
+no clock reads or logs occur unless MP6_RML_UPDATE_TIMINGS=1 is present before
+the first update. Reports 600 Update calls at a time through the registered
+Rml log interface. The buckets preserve Context::Update's original call order:
+prelude (locale/reset/scroll), hover, data models, recursive root update,
+document layout/position, and deferred document release.
+
+--- a/Source/Core/Context.cpp
++++ b/Source/Core/Context.cpp
+@@ -17,7 +17,10 @@
+ #include "ScrollController.h"
+ #include "StreamFile.h"
+ #include <algorithm>
++#include <array>
++#include <chrono>
+ #include <clocale>
++#include <cstdlib>
+ #include <iterator>
+ #include <limits>
+ 
+@@ -31,6 +34,56 @@
+ static constexpr float SCROLL_INERTIA_DELAY = 0.1f;
+ static constexpr float TOUCH_MOVEMENT_DECAY_RATE = 5.0f;
+ static constexpr float TOUCH_CLICK_MAX_DISTANCE = DOUBLE_CLICK_MAX_DIST; // [dp]
++
++static bool update_timings_enabled() noexcept
++{
++	static const bool enabled = [] {
++		const char* value = std::getenv("MP6_RML_UPDATE_TIMINGS");
++		return value && value[0] == '1' && value[1] == '\0';
++	}();
++	return enabled;
++}
++
++struct UpdateTimings
++{
++	using Clock = std::chrono::steady_clock;
++	static constexpr unsigned REPORT_PERIOD = 600;
++
++	const bool enabled = update_timings_enabled();
++	std::array<Clock::time_point, 7> marks{};
++
++	void Mark(size_t index)
++	{
++		if (enabled)
++			marks[index] = Clock::now();
++	}
++
++	void Report()
++	{
++		if (!enabled)
++			return;
++
++		static std::array<double, 6> totals{};
++		static unsigned frames = 0;
++		const auto milliseconds = [&](size_t from, size_t to) {
++			return std::chrono::duration<double, std::milli>(marks[to] - marks[from]).count();
++		};
++		const std::array sample{milliseconds(0, 1), milliseconds(1, 2), milliseconds(2, 3), milliseconds(3, 4), milliseconds(4, 5),
++			milliseconds(5, 6)};
++		for (size_t i = 0; i < totals.size(); ++i)
++			totals[i] += sample[i];
++
++		if (++frames == REPORT_PERIOD)
++		{
++			Log::Message(Log::LT_INFO,
++				"[MP6-RML-UPDATE-TIMINGS] frames=%u prelude_ms=%.6f hover_ms=%.6f data_ms=%.6f root_update_ms=%.6f layout_ms=%.6f "
++				"release_ms=%.6f",
++				frames, totals[0] / frames, totals[1] / frames, totals[2] / frames, totals[3] / frames, totals[4] / frames, totals[5] / frames);
++			totals = {};
++			frames = 0;
++		}
++	}
++};
+ 
+ static void DebugVerifyLocaleSetting()
+ {
+@@ -177,20 +230,25 @@
+ bool Context::Update()
+ {
+ 	RMLUI_ZoneScoped;
++	UpdateTimings timings;
++	timings.Mark(0);
+ 	DebugVerifyLocaleSetting();
+ 
+ 	next_update_timeout = std::numeric_limits<double>::infinity();
+ 
+ 	if (scroll_controller->Update(mouse_position, density_independent_pixel_ratio))
+ 		RequestNextUpdate(0);
++	timings.Mark(1);
+ 
+ 	// Update the hover chain to detect any new or moved elements under the mouse.
+ 	if (mouse_active)
+ 		UpdateHoverChain(mouse_position);
++	timings.Mark(2);
+ 
+ 	// Update all the data models before updating properties and layout.
+ 	for (auto& data_model : data_models)
+ 		data_model.second->Update(true);
++	timings.Mark(3);
+ 
+ 	// The style definition of each document should be independent of each other. By manually resetting these flags we avoid unnecessary definition
+ 	// lookups in unrelated documents, such as when adding a new document. Adding an element dirties the parent definition, which in this case is the
+@@ -199,6 +257,7 @@
+ 	root->dirty_child_definitions = false;
+ 
+ 	root->Update(density_independent_pixel_ratio, Vector2f(dimensions));
++	timings.Mark(4);
+ 
+ 	for (int i = 0; i < root->GetNumChildren(); ++i)
+ 	{
+@@ -208,9 +267,12 @@
+			doc->UpdatePosition();
+ 		}
+ 	}
++	timings.Mark(5);
+ 
+ 	// Release any documents that were unloaded during the update.
+ 	ReleaseUnloadedDocuments();
++	timings.Mark(6);
++	timings.Report();
+ 
+ 	return true;
+ }

@@ -1,65 +1,90 @@
 --- a/src/board/capsule.c
 +++ b/src/board/capsule.c
-@@ -0,0 +1,4 @@
+@@ -1 +1,5 @@
+-// Board capsule inventory, selection, throwing, collision, and visual effects.
++#include "mp6_test_capsule_sweep.h" /* MP6_TEST_CAPSULE_SWEEP */
 +#include "mp6_gxarray_registry.h"
 +/* The native PPC-intrinsic replacement returns double, not implicit int.
 + * Crack particles use it to normalize their position/velocity vectors. */
 +extern double __frsqrte(double x);
-@@ -831,2 +831,4 @@
+@@ -56,0 +61 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -805,2 +810,4 @@ extern int mbev_CapEffMasuHitAdd(OMOBJ *obj, HuVecF *pos, HuVecF *rotA, HuVecF *
 -extern int mbev_CapEffRingAdd(OMOBJ *obj, HuVecF *pos, HuVecF *rot, HuVecF *vel, int kind, int time,
 -    int mode, GXColor *color);
 +/* MP6_NATIVE_PORT: match capevent.c's by-value effect API. AArch64 passes
 + * these vectors in FP registers; pointers are not ABI-compatible. */
 +extern int mbev_CapEffRingAdd(OMOBJ *obj, HuVecF pos, HuVecF rot, HuVecF vel, int kind, int time,
 +    int mode, GXColor color);
-@@ -1645 +1645,7 @@
--    int objId;
+@@ -1649 +1656,7 @@ int mbCapThrowColCreate(int dataNum)
+-    int collisionObjId;
 +    /* MP6_NATIVE_PORT: the `dataNum == MB_MODEL_NONE` path returns objId
 +     * without assigning it (-Werror=sometimes-uninitialized). That same path
 +     * stores MB_MODEL_NONE into capsuleColObjId, so returning MB_MODEL_NONE
 +     * is the value the function already means by "no collision model" -- a
 +     * caller that checks the return the way it checks capsuleColObjId now gets
 +     * a consistent answer instead of a stack leftover. */
-+    int objId = MB_MODEL_NONE;
-@@ -2314,2 +2314,2 @@
++    int collisionObjId = MB_MODEL_NONE;
+@@ -1652,0 +1666,5 @@ int mbCapThrowColCreate(int dataNum)
++#ifdef __EMSCRIPTEN__
++        /* wasm checks call signatures exactly: the cast's int parameter
++         * against the definition's s16 traps there. The id already fits. */
++        mbObjDispSet(collisionObjId, FALSE);
++#else
+@@ -1653,0 +1672 @@ int mbCapThrowColCreate(int dataNum)
++#endif
+@@ -2335,2 +2354,2 @@ static int CapEffThrowMasu(int masuId, int capsuleNo, int playerNo, BOOL bonusF)
 -    mbev_CapEffRingAdd(capsuleThrowRingOMObj, ringStartPosP,
 -        ringStartRotP, ringStartVelP, 3, 15, 1, ringStartColorP);
 +    mbev_CapEffRingAdd(capsuleThrowRingOMObj, *ringStartPosP,
 +        *ringStartRotP, *ringStartVelP, 3, 15, 1, *ringStartColorP);
-@@ -2346,2 +2346,2 @@
+@@ -2368,2 +2387,2 @@ static int CapEffThrowMasu(int masuId, int capsuleNo, int playerNo, BOOL bonusF)
 -            mbev_CapEffRingAdd(capsuleThrowRingOMObj, ringBurstPosP,
 -                ringBurstRotP, ringBurstVelP, 3, 10, 2, ringBurstColorP);
 +            mbev_CapEffRingAdd(capsuleThrowRingOMObj, *ringBurstPosP,
 +                *ringBurstRotP, *ringBurstVelP, 3, 10, 2, *ringBurstColorP);
-@@ -5671 +5671,4 @@
+@@ -3066,0 +3086,2 @@ static int CapSelectMasuPlayer(CAP_SELECT_MASU_WORK *work)
++        /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++        mp6_quick_play_hold("orb target");
+@@ -4896,0 +4918,3 @@ int mbCapSelectComGet(int playerNo, int *capsuleTbl, int capsuleNum)
++    if ((i = mp6_test_capsule_sweep_force(playerNo, capsuleTbl, capsuleNum)) != -2) {
++        return i; /* MP6_TEST_CAPSULE_SWEEP: use the swept capsule */
++    }
+@@ -5792 +5816,4 @@ int mbCapObjCreate(int capsuleNo, BOOL specialF)
 -extern int capsuleBorderFileTbl[6];
 +/* MP6_NATIVE_PORT: this TU owns the table below with internal linkage.
 + * Keep the forward declaration static so latest-main's later initialized
 + * definition does not conflict with an earlier extern declaration. */
 +static int capsuleBorderFileTbl[6];
-@@ -7247,1 +7259,2 @@
+@@ -7449 +7476,2 @@ static void CapEffCrackDraw(HU3D_MODEL *modelP, Mtx *mtx)
 -    GXSetArray(GX_VA_POS, work->vtx, sizeof(*work->vtx));
 +    mp6_gxarray_bind_span(GX_VA_POS, work->vtx,
 +        work->vtxNum * sizeof(*work->vtx), sizeof(*work->vtx));
-@@ -7250,1 +7263,3 @@
+@@ -7452 +7480,3 @@ static void CapEffCrackDraw(HU3D_MODEL *modelP, Mtx *mtx)
 -    GXSetArray(GX_VA_CLR0, &work->data->color, sizeof(*work->data));
 +    mp6_gxarray_bind_span(GX_VA_CLR0, &work->data->color,
 +        (work->num - 1) * sizeof(*work->data) + sizeof(GXColor),
 +        sizeof(*work->data));
-@@ -7253,1 +7268,2 @@
+@@ -7455 +7485,2 @@ static void CapEffCrackDraw(HU3D_MODEL *modelP, Mtx *mtx)
 -    GXSetArray(GX_VA_TEX0, work->st, sizeof(*work->st));
 +    mp6_gxarray_bind_span(GX_VA_TEX0, work->st,
 +        work->vtxNum * sizeof(*work->st), sizeof(*work->st));
-@@ -7801,1 +7817,2 @@
+@@ -8017 +8048,2 @@ static void CapEffDraw(HU3D_MODEL *modelP, Mtx *mtx)
 -        GXSetArray(GX_VA_POS, effP->vertex, sizeof(HuVecF));
 +        mp6_gxarray_bind_span(GX_VA_POS, effP->vertex,
 +            effP->num * 4 * sizeof(HuVecF), sizeof(HuVecF));
-@@ -7804,1 +7821,3 @@
+@@ -8020 +8052,3 @@ static void CapEffDraw(HU3D_MODEL *modelP, Mtx *mtx)
 -        GXSetArray(GX_VA_CLR0, &effP->data->color, sizeof(CAP_EFF_DATA));
 +        mp6_gxarray_bind_span(GX_VA_CLR0, &effP->data->color,
 +            (effP->num - 1) * sizeof(CAP_EFF_DATA) + sizeof(GXColor),
 +            sizeof(CAP_EFF_DATA));
-@@ -7807,1 +7826,2 @@
+@@ -8023 +8057,2 @@ static void CapEffDraw(HU3D_MODEL *modelP, Mtx *mtx)
 -        GXSetArray(GX_VA_TEX0, effP->st, sizeof(HuVec2f));
 +        mp6_gxarray_bind_span(GX_VA_TEX0, effP->st,
 +            effP->num * 4 * sizeof(HuVec2f), sizeof(HuVec2f));
+@@ -3191,0 +3191,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;
+@@ -3407,0 +3407,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

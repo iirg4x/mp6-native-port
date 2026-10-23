@@ -1,0 +1,26 @@
+--- a/include/REL/micquizseldll/window_functions.h
++++ b/include/REL/micquizseldll/window_functions.h
+@@ -674 +674 @@
+-            lbl_1_bss_4C[0]->property = (void *) lbl_1_data_20A;
++            lbl_1_bss_4C[0]->property = (void *)(intptr_t)lbl_1_data_20A;
+@@ -682 +682 @@
+-            lbl_1_bss_4C[0]->property = (void *) lbl_1_data_20C;
++            lbl_1_bss_4C[0]->property = (void *)(intptr_t)lbl_1_data_20C;
+@@ -699 +699 @@
+-                lbl_1_bss_4C[playerIndex + 2]->property = (void *) lbl_1_data_210[playerIndex];
++                lbl_1_bss_4C[playerIndex + 2]->property = (void *)(intptr_t)lbl_1_data_210[playerIndex];
+@@ -710 +710 @@
+-            lbl_1_bss_4C[0]->property = (void *) lbl_1_data_218;
++            lbl_1_bss_4C[0]->property = (void *)(intptr_t)lbl_1_data_218;
+@@ -717 +717 @@
+-            lbl_1_bss_4C[1]->property = (void *) lbl_1_data_21A;
++            lbl_1_bss_4C[1]->property = (void *)(intptr_t)lbl_1_data_21A;
+@@ -725 +725 @@
+-            lbl_1_bss_4C[0]->property = (void *) lbl_1_data_20C;
++            lbl_1_bss_4C[0]->property = (void *)(intptr_t)lbl_1_data_20C;
+@@ -840 +840 @@
+-    sprite = (s16)process->property;
++    sprite = (s16)(intptr_t)process->property;
+@@ -876 +876 @@
+-    groupId = (s16)currentProcess->property;
++    groupId = (s16)(intptr_t)currentProcess->property;

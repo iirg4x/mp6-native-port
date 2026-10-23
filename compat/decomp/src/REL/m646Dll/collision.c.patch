@@ -1,0 +1,143 @@
+--- a/src/REL/m646Dll/collision.c
++++ b/src/REL/m646Dll/collision.c
+@@ -4 +4,2 @@
+-#include "REL/m646Dll/m646_float_classification.h"
++/* Use native math classification, not PPC word-order aliases. */
++#include <math.h>
+@@ -7 +8 @@
+-#define M646_COLLISION_SLOT_BYTES 640
++#define M646_COLLISION_SLOT_BYTES (160 * sizeof(void *))
+@@ -11,23 +12,2 @@
+-typedef struct M646MeshEdge_s {
+-    Vec first; /* First endpoint in the source mesh's local coordinates. */
+-    Vec second; /* Second endpoint in the source mesh's local coordinates. */
+-    Mtx *matrix; /* Transform used to produce the world-space edge. */
+-} M646MeshEdge;
+-
+-typedef struct M646WorldEdge_s {
+-    Vec first; /* First endpoint in world coordinates. */
+-    Vec second; /* Second endpoint in world coordinates. */
+-    Vec normal; /* Edge normal; zero when its endpoints coincide, including model-target buffers. */
+-    f32 planeConstant; /* Plane offset in world units. */
+-} M646WorldEdge;
+-
+-typedef struct M646CollisionRecord_s {
+-    u8 stageCollisionPrefix[32]; /* Stage collision data before the edge list. */
+-    s32 edgeCount; /* Number of quad edges included in the collision sweep. */
+-    M646WorldEdge *current; /* Edges used by this frame's collision checks. */
+-    M646WorldEdge *alternate; /* Spare edge buffer swapped with current during transform updates. */
+-    M646MeshEdge *original; /* Source-mesh endpoints retained for transforms. */
+-    s32 transformCount; /* Number of source objects with transform records. */
+-    HSF_TRANSFORM **transforms; /* Source transforms for the HSF object list. */
+-    Mtx *matrices; /* Per-object matrices used to transform source edges. */
+-} M646CollisionRecord;
++
++
+@@ -39,72 +19,3 @@
+-typedef struct M646BodyAnchor_s M646BodyAnchor;
+-struct M646BodyAnchor_s {
+-    u32 kind; /* Collision participation and response flags. */
+-    u32 group; /* Group bits used to filter collision pairs. */
+-    u32 callbackType; /* Contact category used by the response callbacks. */
+-    s32 playerIndex; /* Player index associated with this actor. */
+-    s32 callbackMode; /* Selects actor versus attachment collision processing. */
+-    OMOBJ *owner; /* Object passed to the update callback. */
+-    void (*update)(OMOBJ *); /* Runs after the manager's collision pass. */
+-    s32 (*contact)(void *, void *); /* Optional contact response callback. */
+-    Vec *position; /* Current actor position in stage units. */
+-    Vec *direction; /* Movement vector changed by collision response. */
+-    Vec savedPosition; /* Previous frame position for swept contacts. */
+-    f32 radius; /* Collision radius in stage units. */
+-    f32 responseScale; /* Scales movement added by actor-actor contact. */
+-};
+-
+-typedef struct M646CollisionHeader_s {
+-    u32 kind; /* Flags checked before this record enters collision processing. */
+-    u32 group; /* Collision group bits. */
+-    u32 callbackType; /* Contact category. */
+-    s32 playerIndex; /* Associated player index, when the record has one. */
+-    s32 callbackMode; /* Selects the record's collision callback path. */
+-    void *owner; /* Owning actor or attachment work record. */
+-    void (*update)(void *); /* Optional per-frame update callback. */
+-    s32 (*contact)(void *, void *); /* Optional collision callback. */
+-} M646CollisionHeader;
+-
+-typedef struct M646SurfaceCollider_s {
+-    u32 kind; /* Collision participation and response flags. */
+-    u32 group; /* Group mask used to select projectile contacts. */
+-    u32 callbackType; /* Contact category passed to the projectile callback. */
+-    s32 playerIndex; /* Associated player index, when the surface has one. */
+-    s32 callbackMode; /* 10 selects the stage-edge collision test. */
+-    void *owner; /* Work record passed to the optional update callback. */
+-    void (*update)(void *); /* Runs after the manager's contact pass. */
+-    s32 (*contact)(void *, void *); /* Optional response; nonzero suppresses reflection. */
+-    s32 edgeCount; /* Number of collision edges. */
+-    M646WorldEdge *current; /* Active world-space edge buffer. */
+-    M646WorldEdge *alternate; /* Spare buffer swapped during transform updates. */
+-    M646MeshEdge *original; /* Source edge endpoints in local coordinates. */
+-    s32 transformCount; /* Number of transforms used by this collider. */
+-    HSF_TRANSFORM **transforms; /* Source model transforms. */
+-    Mtx *matrices; /* Matrices applied to source edge endpoints. */
+-    M646WorldEdge *contactEdge; /* Edge active during the contact callback. */
+-} M646SurfaceCollider;
+-
+-typedef struct M646ModelAttachment_s M646ModelAttachment;
+-typedef struct M646ModelCollider_s {
+-    u32 kind; /* Registration and active-collision flags. */
+-    s32 group; /* Collision group bits. */
+-    s32 callbackType; /* Target type used for score and sound reactions. */
+-    s32 unusedPlayerIndex; /* Player-index slot unused by target attachments. */
+-    s32 callbackMode; /* Manager mode for model attachment collision checks. */
+-    M646ModelAttachment *owner; /* Attachment work that owns this collider. */
+-    void (*update)(M646ModelAttachment *); /* Unused target-update callback; setup assigns an empty
+-                                            * function. */
+-    s32 (*contact)(void *, void *); /* Optional callback for a target contact. */
+-    s32 edgeCount; /* Number of edges in this collider. */
+-    M646WorldEdge *current; /* Active world-space edge buffer. */
+-    M646WorldEdge *alternate; /* Spare edge buffer. */
+-    s32 transformCount; /* Number of transforms applied to the collider. */
+-    HSF_TRANSFORM pose; /* Joint position and scale used by this attachment. */
+-    Mtx *matrices; /* Transform matrices for collider geometry. */
+-    M646WorldEdge *contactEdge; /* Edge supplied to the target's contact callback. */
+-    s16 category; /* Selects the category-specific contact distance. */
+-    HU3D_MODELID model; /* Model that supplies this attachment's joint position. */
+-    char jointName[64]; /* Joint used to follow the target model. */
+-    HSF_OBJECT *source; /* HSF object used to initialize this collider. */
+-    s32 assigned; /* Nonzero while a computer player's target selection has reserved this
+-                   * attachment. */
+-} M646ModelCollider;
++
++
++
+@@ -122,2 +32,0 @@
+-f64 fn_1_2968(Vec lhs, Vec rhs);
+-void fn_1_2B50(OMOBJMAN *objMan);
+@@ -130,2 +38,0 @@
+-s32 fn_1_3E80(void *collisionResource);
+-s32 fn_1_3EF8(void *collisionResource);
+@@ -136,2 +42,0 @@
+-void fn_1_436C(M646CollisionRecord *record, HSF_OBJECT *object);
+-void fn_1_43A0(M646CollisionRecord *record);
+@@ -139,3 +43,0 @@
+-s32 fn_1_48A4(const M646CollisionRecord *anchor, const Point3d *position);
+-s32 fn_1_48DC(M646ModelCollider *collider, HSF_OBJECT *objects, HU3D_MODELID model, char *name);
+-void fn_1_4DD0(M646ModelCollider *collider);
+@@ -148,2 +49,0 @@
+-f64 fn_1_2968(Vec lhs, Vec rhs);
+-void fn_1_2B50(OMOBJMAN *objMan);
+@@ -156,2 +55,0 @@
+-s32 fn_1_3E80(void *collisionResource);
+-s32 fn_1_3EF8(void *collisionResource);
+@@ -162,2 +59,0 @@
+-void fn_1_436C(M646CollisionRecord *record, HSF_OBJECT *object);
+-void fn_1_43A0(M646CollisionRecord *record);
+@@ -165,3 +60,0 @@
+-s32 fn_1_48A4(const M646CollisionRecord *anchor, const Point3d *position);
+-s32 fn_1_48DC(M646ModelCollider *collider, HSF_OBJECT *objects, HU3D_MODELID model, char *name);
+-void fn_1_4DD0(M646ModelCollider *collider);
+@@ -803 +696 @@
+-s32 fn_1_48DC(M646ModelCollider *collider, HSF_OBJECT *objects, HU3D_MODELID model, char *name)
++void fn_1_48DC(M646ModelCollider *collider, HSF_OBJECT *objects, HU3D_MODELID model, char *name)
+@@ -885,0 +779,2 @@
++
++/* Storage only; runtime allocations are freed by normal overlay teardown. */

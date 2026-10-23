@@ -1,0 +1,51 @@
+--- a/src/REL/mgmbattledll/preview.c
++++ b/src/REL/mgmbattledll/preview.c
+@@ -1,0 +2 @@
++#include "mp6_widescreen.h"
+@@ -38,3 +39,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        if (movieSprite != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        }
+@@ -56,0 +60,4 @@
++    /* The order array needs one slot for its terminator. */
++    if (count < 0 || playerOrder == NULL) count = 0;
++    if (count >= (s16)sizeof(lbl_1_bss_2))
++        count = (s16)sizeof(lbl_1_bss_2) - 1;
+@@ -59,0 +67,4 @@
++    lbl_1_bss_84 = lbl_1_bss_98;
++    lbl_1_bss_2[0] = 255;
++    lbl_1_bss_8C = NULL;
++    if (count == 0) return;
+@@ -61,0 +73,4 @@
++    if (lbl_1_bss_8C == NULL) {
++        lbl_1_bss_0 = 0;
++        return;
++    }
+@@ -76 +90,0 @@
+-    lbl_1_bss_84 = lbl_1_bss_98;
+@@ -81,0 +96 @@
++    if (lbl_1_bss_0 <= 0 || lbl_1_bss_8C == NULL) return;
+@@ -144,3 +159,5 @@
+-        HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
+-        HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
+-        HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        if (movieSprite != HUSPR_NONE) {
++            HuSprGrpMemberSet(lbl_1_bss_A2, 0, movieSprite);
++            HuSprGrpDrawNoSet(lbl_1_bss_A2, 127);
++            HuSprPosSet(lbl_1_bss_A2, 0, 128.0f, 128.0f);
++        }
+@@ -165 +182,4 @@
+-    Hu3DFbCopyExec(0, 0, 284, 256, GX_TF_RGB565, 0, lbl_1_bss_94);
++    if (HuTHPStartCheck() != 0) {
++        Hu3DFbCopyExec((s16)((mp6_widescreen_render_width() - 640) / 2), 0,
++                       284, 256, GX_TF_RGB565, 0, lbl_1_bss_94);
++    }
+@@ -207,0 +228 @@
++    GXEnd();
+@@ -225,0 +247 @@
++    GXEnd();

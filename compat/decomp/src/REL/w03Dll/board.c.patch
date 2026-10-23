@@ -1,0 +1,71 @@
+--- a/src/REL/w03Dll/board.c
++++ b/src/REL/w03Dll/board.c
+@@ -66,2 +65,0 @@
+-#define W03_OFFSET_FINAL_MODEL_5 152
+-#define W03_OFFSET_MOTION_MODEL 156
+@@ -161 +159,8 @@
+-int sprintf();
++#include <stdio.h>
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
++#include "mp6_board_window.h"
++#include "game/hsfex.h"
++void mbWipeWait(void);
++void mbWipeDissolveFadeIn(void);
++void mbWipeDissolveFadeOutTime(int durationFrames);
++int fn_1_12A14(s32 cueIndex);
+@@ -201,2 +205,2 @@
+-s32 fn_1_2490(void);
+-void fn_1_24C4(void);
++u16 fn_1_2490(int playerNo);
++void fn_1_24C4(int playerNo);
+@@ -652 +656,2 @@
+-    lbl_1_bss_0 = 0;
++    if (lbl_1_bss_0) omDelObjEx(mbObjMan, lbl_1_bss_0);
++    lbl_1_bss_0 = NULL;
+@@ -698,0 +704,3 @@
++    }
++    if (lbl_1_bss_4D4.finalModels[5] != -1) {
++        mbObjKill((s16)lbl_1_bss_4D4.finalModels[5]);
+@@ -729 +737 @@
+-        if ((u8) (((*(u8 *)((s8 *)(&GwSystem) + 16)) >> 6U) & 1) == 0) {
++        if (GwSystem.curTime == 0) {
+@@ -924,2 +932,2 @@
+-        mbDicePadBtnHookSet(-1, (u16 (*)(int))fn_1_2490);
+-        mbDiceMotHookSet(-1, (void (*)(int))fn_1_24C4);
++        mbDicePadBtnHookSet(-1, fn_1_2490);
++        mbDiceMotHookSet(-1, fn_1_24C4);
+@@ -935 +943 @@
+-        mbWinTopInsertMesSet((u32)rewardText, 0);
++        mp6_board_window_top_insert_text(rewardText, 0);
+@@ -955 +963 @@
+-s32 fn_1_2490(void) {
++u16 fn_1_2490(int playerNo) {
+@@ -963 +971 @@
+-void fn_1_24C4(void) {
++void fn_1_24C4(int playerNo) {
+@@ -1913 +1921 @@
+-        mbWinTopInsertMesSet((u32)rewardText, 0);
++        mp6_board_window_top_insert_text(rewardText, 0);
+@@ -1934,0 +1934,3 @@
++            /* [MP6] Quick Party: from hiding the star to the reveal, the
++             * player has to follow it, so keep normal speed. */
++            mp6_quick_play_event_watch("shell game");
+@@ -4445,2 +4453,2 @@
+-    mbObjDispSet((s16) (*(s32 *)((s8 *)(&lbl_1_bss_4D4) + (W03_OFFSET_MOTION_MODEL))), 1);
+-    mbObjDispSet((s16) (*(s32 *)((s8 *)(&lbl_1_bss_4D4) + (W03_OFFSET_FINAL_MODEL_5))), 0);
++    mbObjDispSet((s16) lbl_1_bss_4D4.motionModel, 1);
++    mbObjDispSet((s16) lbl_1_bss_4D4.finalModels[5], 0);
+@@ -4515 +4523 @@
+-        mbWinTopInsertMesSet((u32)priceText, 0);
++        mp6_board_window_top_insert_text(priceText, 0);
+@@ -4561 +4569 @@
+-                mbWinTopInsertMesSet((u32)priceText, 0);
++                mp6_board_window_top_insert_text(priceText, 0);
+@@ -4728,2 +4736,2 @@
+-                mbWinTopInsertMesSet((u32)quantityText, 0);
+-                mbWinTopInsertMesSet((u32)priceText, 1);
++                mp6_board_window_top_insert_text(quantityText, 0);
++                mp6_board_window_top_insert_text(priceText, 1);
+@@ -5099,0 +5108,2 @@
++
++

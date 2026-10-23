@@ -1,0 +1,28 @@
+--- a/src/REL/m613Dll/bitmap.c
++++ b/src/REL/m613Dll/bitmap.c
+@@ -8,0 +9 @@
++#include "mp6_widescreen.h"
+@@ -287,0 +289,19 @@
++    if (selectedNight == 0) {
++        mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "wall", 0, 0, 1400.0f, 0.0f, 0);
++        mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "fog", 0, 0, 1400.0f, 0.0f, 0);
++        mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "wall", 1, 0, 1400.0f, 0.0f, 0);
++    } else {
++        /* The night set (DATA_m613[7]) names its wall, fog band and sky
++         * Dwall/Dfog/Dbg; left native they end inside 21:9 and leave
++         * black upper corners. */
++        mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "Dwall", 0, 0, 1400.0f, 0.0f, 0);
++        mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "Dfog", 0, 0, 1400.0f, 0.0f, 0);
++        mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "Dbg", 0, 0, 1400.0f, 0.0f, 0);
++    }
++    mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "bgSiba", 0, -1, 1000.0f, 0.0f, 1);
++    mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "bgSiba1", 0, 1, 1000.0f, 0.0f, 1);
++    mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "plant", 0, -1, 1200.0f, 400.0f, 1);
++    mp6_widescreen_extend_outer_x(lbl_1_bss_1C.modelIds[3], "plant2", 0, 1, 1200.0f, 400.0f, 1);
++    mp6_widescreen_add_stems(lbl_1_bss_1C.modelIds[3], "kuki", "fp", 40.0f);
++    mp6_widescreen_add_stems(lbl_1_bss_1C.modelIds[3], "kuki", "fpB", 40.0f);
++    mp6_widescreen_add_stems(lbl_1_bss_1C.modelIds[3], "kuki1", "fp2", 40.0f);
++    mp6_widescreen_add_stems(lbl_1_bss_1C.modelIds[3], "kuki1", "fpB1", 40.0f);
+@@ -536 +548 @@
+-    lbl_1_bss_C = HuMemDirectMallocNum(0, 1200, HU_MEMNUM_OVL);
++    lbl_1_bss_C = HuMemDirectMallocNum(0, 150 * sizeof(M613ValueKey), HU_MEMNUM_OVL);

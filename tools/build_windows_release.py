@@ -1,8 +1,10 @@
-"""Build an optimized Windows backend without changing dependency checkouts.
+"""Build the optimized Windows Aurora backend from third_party/aurora.
 
-Requires the verified, patched Debug Aurora setup. Snapshot its source and
-fetched dependencies into build/, then compile RelWithDebInfo and attest the
-actual release link inputs. Run tools/build.py --configuration release next.
+Configures build/aurora-release straight from the vendored Aurora source
+(no copy, no patch step), with third-party sources copied from an existing
+fetch (tools/aurora_deps.py, no downloads), compiles RelWithDebInfo and
+attests the actual release link inputs. Run tools/build.py --configuration
+release next.
 """
 import argparse
 from pathlib import Path
@@ -13,47 +15,36 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from setup.lib import common, step_aurora, step_toolchain
+import aurora_deps
 import build
+import host_cpus
 
 
 def main():
+    host_cpus.apply_cpu_exclusion()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('-j', type=int, default=4)
+    parser.add_argument('-j', type=int, default=min(4, host_cpus.allowed_cpu_count()))
     args = parser.parse_args()
-    # Match the proven native CMake, not an MSYS CMake earlier on PATH (which
-    # interprets C:/ as a relative POSIX path and cannot drive these wrappers).
-    cache = Path(build.AURORA_BUILD_RMLUI) / 'CMakeCache.txt'
-    cmake = next((line.split('=', 1)[1] for line in cache.read_text().splitlines()
-                  if line.startswith('CMAKE_COMMAND:INTERNAL=')), shutil.which('cmake'))
-    if not cmake:
-        parser.error('CMake is required')
+    source_deps = Path(build.aurora_deps_cache())
+    cmake = aurora_deps.find_cmake(str(source_deps.parent), build.AURORA_BUILD_RMLUI)
     build._VERIFIED_ZIG_TREE_IDENTITY = step_toolchain.verified_required_zig_tree()
-    problems = step_aurora.verify_link_inputs('windows', build_module=build)
-    problems += step_aurora._verify_patch_sources()
-    if problems:
-        parser.error('Debug source/artifact prerequisites failed: ' + '; '.join(problems))
-    upstream = Path(build.AURORA_ROOT)
-    cached_deps = Path(build.AURORA_DEPS_RMLUI)
-    source = ROOT / 'build' / 'aurora-release-source'
     destination = ROOT / 'build' / 'aurora-release'
-    # Copy sources only. Never reuse Debug objects or a CMake cache with paths
-    # into the dependency checkout. Resource-compiler scratch files stay local.
-    ignore = shutil.ignore_patterns('.git', 'build', 'build-*', '.cache', '.idea')
-    shutil.copytree(upstream, source, ignore=ignore, dirs_exist_ok=True)
-    for patch in sorted((ROOT / 'compat/aurora/windows').glob('*.patch')):
-        if not step_aurora._apply_patch(build.apply_patches, str(patch), [str(source)]):
-            parser.error(f'Release patch has no target: {patch}')
-    definitions = []
-    for dep in sorted(cached_deps.glob('*-src')):
-        local = destination / '_deps' / dep.name
-        shutil.copytree(dep, local, ignore=shutil.ignore_patterns('.git'), dirs_exist_ok=True)
-        definitions.append(f'-DFETCHCONTENT_SOURCE_DIR_{dep.name[:-4].upper()}={local.as_posix()}')
+    # A tree configured from the former build/aurora-release-source copy
+    # cannot be re-pointed at the vendored source; start its cache over.
+    cache = destination / 'CMakeCache.txt'
+    home = 'CMAKE_HOME_DIRECTORY:INTERNAL=' + Path(build.AURORA_SOURCE).as_posix()
+    if cache.exists() and home not in cache.read_text(encoding='utf-8', errors='replace'):
+        cache.unlink()
+        shutil.rmtree(destination / 'CMakeFiles', ignore_errors=True)
+    # Third-party sources only; never reuse another tree's objects or CMake
+    # cache. Resource-compiler scratch files stay local to this tree.
+    definitions = aurora_deps.copy_sources(str(source_deps), str(destination / '_deps'))
     original_toolchain = common.TOOLCHAIN_DIR
     original_aurora = common.AURORA_DIR
     try:
         common.TOOLCHAIN_DIR = str(ROOT / 'build' / 'release-toolchain')
         wrappers = step_aurora._write_wrapper_scripts(build.ZIG)
-        common.AURORA_DIR = str(source)
+        common.AURORA_DIR = build.AURORA_SOURCE
         command = step_aurora._configure_args(cmake, str(destination), wrappers, True)
     finally:
         common.TOOLCHAIN_DIR = original_toolchain

@@ -1,0 +1,224 @@
+--- a/src/REL/m680Dll/gameplay.c
++++ b/src/REL/m680Dll/gameplay.c
+@@ -241,71 +241,71 @@
+-void fn_1_A0();
+-void fn_1_280();
+-void fn_1_308();
+-void fn_1_3C8();
+-void fn_1_42C();
+-void fn_1_15C0();
+-void fn_1_16E8();
+-void fn_1_17E4();
+-void fn_1_1974();
+-void fn_1_1978();
+-void fn_1_19B4();
+-void fn_1_1B0C();
+-void fn_1_1BF8();
+-void fn_1_1D10();
+-void fn_1_1E2C();
+-void fn_1_1EA4();
+-void fn_1_1EEC();
+-void fn_1_33D0();
+-void fn_1_390C();
+-void fn_1_395C();
+-void fn_1_39D0();
+-void fn_1_613C();
+-s32 fn_1_62FC();
+-void fn_1_646C();
+-void fn_1_6538();
+-void fn_1_65FC();
+-void fn_1_6624();
+-void fn_1_6904();
+-void fn_1_6AE0();
+-void fn_1_6B38();
+-s32 fn_1_6DCC();
+-s32 fn_1_700C();
+-s32 fn_1_70BC();
+-s32 fn_1_7140();
+-void fn_1_7340();
+-void fn_1_73EC();
+-void fn_1_7434();
+-void fn_1_765C();
+-void fn_1_76E8();
+-void fn_1_7724();
+-void *fn_1_7730();
+-void fn_1_7788();
+-s32 fn_1_8288();
+-void fn_1_8AAC();
+-void fn_1_8B24();
+-s32 fn_1_8CAC();
+-void fn_1_9400();
+-void fn_1_9448();
+-void fn_1_9580();
+-void fn_1_95C0();
+-void fn_1_9600();
+-void fn_1_9630();
+-void fn_1_9754();
+-void fn_1_9898();
+-s32 fn_1_9944();
+-void fn_1_99B4();
+-s32 fn_1_9A34();
+-s32 fn_1_9B00();
+-s32 fn_1_9BDC();
+-s32 fn_1_9CA0();
+-void fn_1_9D5C();
+-s32 fn_1_9D9C();
+-s32 fn_1_9F18();
+-s32 fn_1_A0E4();
+-s32 fn_1_A234();
+-void fn_1_A388();
+-s32 fn_1_A490();
+-void fn_1_A5F4();
+-s32 fn_1_A658();
+-s32 fn_1_A708();
+-void fn_1_A7E8();
++void fn_1_A0(void);
++void fn_1_280(s16 mode, s16 frameNo);
++void fn_1_308(s16 mode, s16 frameNo);
++void fn_1_3C8(s16 mode, s16 frameNo);
++void fn_1_42C(s16 mode, s16 frameNo);
++void fn_1_15C0(s16 mode, s16 frameNo);
++void fn_1_16E8(s16 mode, s16 frameNo);
++void fn_1_17E4(s16 mode, s16 frameNo);
++void fn_1_1974(s16 mode, s16 frameNo);
++void fn_1_1978(s16 mode, s16 frameNo);
++void fn_1_19B4(void);
++void fn_1_1B0C(void);
++void fn_1_1BF8(void);
++void fn_1_1D10(M680State *state);
++void fn_1_1E2C(OMOBJ *state);
++void fn_1_1EA4(OMOBJ *object);
++void fn_1_1EEC(M680State *state);
++void fn_1_33D0(M680State *state);
++void fn_1_390C(M680State *state);
++void fn_1_395C(M680GridNode *work);
++void fn_1_39D0(M680GridNode *work);
++void fn_1_613C(M680GridNode *state);
++s32 fn_1_62FC(M680GridNode *piece);
++void fn_1_646C(M680GridNode *piece);
++void fn_1_6538(M680CharacterState *character, s32 turnOrder);
++void fn_1_65FC(M680State *state);
++void fn_1_6624(M680State *board);
++void fn_1_6904(M680State *work);
++void fn_1_6AE0(Vec *position, const M680PathPoint *pathPoint);
++void fn_1_6B38(M680GridNode *work);
++s32 fn_1_6DCC(M680GridNode *work);
++s32 fn_1_700C(M680GridNode *work, s32 column, s32 row);
++s32 fn_1_70BC(M680GridNode *piece);
++s32 fn_1_7140(M680GridNode *work);
++void fn_1_7340(M680State *board);
++void fn_1_73EC(M680State *board);
++void fn_1_7434(M680State *work);
++void fn_1_765C(M680State *state);
++void fn_1_76E8(M680State *list, s32 mode);
++void fn_1_7724(M680GridNode *work);
++void *fn_1_7730(M680State *board);
++void fn_1_7788(M680State *work);
++s32 fn_1_8288(void *argument);
++void fn_1_8AAC(M680State *sequence);
++void fn_1_8B24(M680State *work, M680CharacterState *controllerWork);
++s32 fn_1_8CAC(M680State *argument);
++void fn_1_9400(M680State *sequence);
++void fn_1_9448(M680State *state);
++void fn_1_9580(M680State *sequence);
++void fn_1_95C0(M680State *sequence);
++void fn_1_9600(void);
++void fn_1_9630(M680State *state, s32 firstIndex);
++void fn_1_9754(M680State *state);
++void fn_1_9898(M680State *work, s32 firstIndex);
++s32 fn_1_9944(M680GridNode *work);
++void fn_1_99B4(M680MotionDurationState *durationWork, s32 duration, s32 reverse);
++s32 fn_1_9A34(void *durationData);
++s32 fn_1_9B00(void *durationData);
++s32 fn_1_9BDC(void *pieceData);
++s32 fn_1_9CA0(void *pieceData);
++void fn_1_9D5C(M680PhaseState *phase_state);
++s32 fn_1_9D9C(void *state);
++s32 fn_1_9F18(void *pieceData);
++s32 fn_1_A0E4(void *boardData);
++s32 fn_1_A234(void *boardData);
++void fn_1_A388(M680EffectState *effect);
++s32 fn_1_A490(void *effectData);
++void fn_1_A5F4(M680MotionTimerState *gateTimer, s32 reverse);
++s32 fn_1_A658(void *timerData);
++s32 fn_1_A708(void *timerData);
++void fn_1_A7E8(M680State *board);
+@@ -313,3 +313,3 @@
+-void fn_1_AD38();
+-void fn_1_AB70();
+-void fn_1_B844();
++void fn_1_AD38(OMOBJ *object);
++void fn_1_AB70(s32 count, M680PlayerRankEntry *entries);
++void fn_1_B844(M680CharacterState *work, s32 targetIndex, s32 speedIndex);
+@@ -316,0 +317 @@
++void fn_1_BCBC(M680CharacterState *motion);
+@@ -320,3 +321,3 @@
+-    0, 0, (MGSEQ_FUNC)fn_1_280, (MGSEQ_FUNC)fn_1_308,
+-    (MGSEQ_FUNC)fn_1_3C8, (MGSEQ_FUNC)fn_1_42C, (MGSEQ_FUNC)fn_1_15C0, (MGSEQ_FUNC)fn_1_16E8,
+-    (MGSEQ_FUNC)fn_1_17E4, (MGSEQ_FUNC)fn_1_1974, (MGSEQ_FUNC)fn_1_1978
++    0, 0, fn_1_280, fn_1_308,
++    fn_1_3C8, fn_1_42C, fn_1_15C0, fn_1_16E8,
++    fn_1_17E4, fn_1_1974, fn_1_1978
+@@ -424,3 +425,3 @@
+-    fn_1_19B4(boardWork);
+-    fn_1_1B0C(boardWork);
+-    fn_1_1BF8(boardWork);
++    fn_1_19B4();
++    fn_1_1B0C();
++    fn_1_1BF8();
+@@ -431 +432 @@
+-void fn_1_280(void) {
++void fn_1_280(s16 mode, s16 frameNo) {
+@@ -445 +446 @@
+-void fn_1_308(void)
++void fn_1_308(s16 mode, s16 frameNo)
+@@ -474 +475 @@
+-void fn_1_3C8(void)
++void fn_1_3C8(s16 mode, s16 frameNo)
+@@ -490 +491 @@
+-void fn_1_42C(void) {
++void fn_1_42C(s16 mode, s16 frameNo) {
+@@ -1053 +1054 @@
+-void fn_1_15C0(void)
++void fn_1_15C0(s16 mode, s16 frameNo)
+@@ -1092 +1093 @@
+-void fn_1_16E8(void)
++void fn_1_16E8(s16 mode, s16 frameNo)
+@@ -1130 +1131 @@
+-void fn_1_17E4(void)
++void fn_1_17E4(s16 mode, s16 frameNo)
+@@ -1175 +1176 @@
+-void fn_1_1974(void) { }
++void fn_1_1974(s16 mode, s16 frameNo) { }
+@@ -1178 +1179 @@
+-void fn_1_1978(void) {
++void fn_1_1978(s16 mode, s16 frameNo) {
+@@ -1296 +1297 @@
+-void fn_1_1EA4(void) {
++void fn_1_1EA4(OMOBJ *object) {
+@@ -1876 +1877 @@
+-        fn_1_A5F4(&board->gate.elapsedFrames, 0);
++        fn_1_A5F4(&board->gate, 0);
+@@ -1937 +1938 @@
+-        fn_1_A5F4(&board->gate.elapsedFrames, 1);
++        fn_1_A5F4(&board->gate, 1);
+@@ -1984 +1985 @@
+-        fn_1_A5F4(&board->gate.elapsedFrames, 0);
++        fn_1_A5F4(&board->gate, 0);
+@@ -2044 +2045 @@
+-            fn_1_A5F4(&board->gate.elapsedFrames, 1);
++            fn_1_A5F4(&board->gate, 1);
+@@ -2,0 +2 @@
++#include "mp6_mg_winner.h"
+@@ -1108,0 +1108,11 @@
++        /* Port addition: name the winners (retail never did; see mp6_mg_winner.h). */
++        {
++            s16 mp6Winners[4] = { -1, -1, -1, -1 };
++            s32 mp6Index;
++            for (mp6Index = 0; mp6Index < 4; mp6Index++) {
++                if (sequence->actors[mp6Index]->eliminated == 0) {
++                    mp6Winners[mp6Index] = sequence->actors[mp6Index]->character;
++                }
++            }
++            mp6_mg_winner_message(mp6Winners[0], mp6Winners[1], mp6Winners[2], mp6Winners[3]);
++        }

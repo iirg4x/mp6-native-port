@@ -20,6 +20,14 @@ extern "C" int mp6_console_is_open() { return testConsole; }
 extern "C" void mp6_console_toggle() { testConsole = !testConsole; }
 extern "C" void mp6_console_open() { testConsole = true; }
 extern "C" void mp6_console_close() { testConsole = false; }
+static int testMicInUse = 0;
+static unsigned testMicTalk = 0;
+extern "C" int mp6_mic_in_use() { return testMicInUse; }
+extern "C" void mp6_mic_set_talk_button(unsigned source, int held)
+{
+    if (held) testMicTalk |= source;
+    else testMicTalk &= ~source;
+}
 extern "C" SDL_Window *SDL_GetKeyboardFocus() { return useSafeArea ? (SDL_Window *)1 : nullptr; }
 extern "C" bool SDL_GetWindowSize(SDL_Window *, int *w, int *h) { *w=640; *h=360; return true; }
 extern "C" bool SDL_GetWindowSafeArea(SDL_Window *, SDL_Rect *r) { *r={20,10,600,340}; return true; }
@@ -246,6 +254,26 @@ static void test_adapter()
     frame(); poll();
     tap(console.x, console.y);
     assert(!testConsole && neutral(poll()));
+    // The Mic's talk button: only while a mode uses the Mic, held (not
+    // tapped), never a pad button, and released by a reset.
+    auto mic = g_pad.layout.mic;
+    assert(mic.x > console.x + console.rx);
+    touch(SDL_EVENT_FINGER_DOWN, 9, mic.x, mic.y);
+    assert(testMicTalk == 0);
+    touch(SDL_EVENT_FINGER_UP, 9, mic.x, mic.y);
+    testMicInUse = 1;
+    frame(); poll();
+    touch(SDL_EVENT_FINGER_DOWN, 9, mic.x, mic.y);
+    assert(testMicTalk == MP6_MIC_TALK_TOUCH && neutral(poll()));
+    touch(SDL_EVENT_FINGER_MOTION, 9, mic.x + 200, mic.y + 200);
+    assert(testMicTalk == MP6_MIC_TALK_TOUCH);
+    touch(SDL_EVENT_FINGER_UP, 9, mic.x + 200, mic.y + 200);
+    assert(testMicTalk == 0);
+    touch(SDL_EVENT_FINGER_DOWN, 9, mic.x, mic.y);
+    mp6_touch_pad_savestate_reset();
+    assert(testMicTalk == 0);
+    testMicInUse = 0;
+    frame(); poll();
     testConsole = testMenu = true;
     frame(); poll();
     assert(mp6_touch_pad_control_at(console.x/g_windowW, console.y/g_windowH));

@@ -84,8 +84,8 @@ namespace {
 
     void update_carousel_arrow_color(Rml::Element *arrow, bool dim)
     {
-        const Rml::Colourb &color = Rml::Colourb(255, 255, 255, dim ? 128 : 255);
-        arrow->SetProperty(Rml::PropertyId::Color, Rml::Property(color, Rml::Unit::COLOUR));
+        // Let the shared paper theme own normal/focus/disabled colors.
+        arrow->SetPseudoClass("disabled", dim);
     }
 
 } // namespace

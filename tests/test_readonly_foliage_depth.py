@@ -4,14 +4,14 @@ import subprocess
 import tempfile
 import unittest
 from tools import build
-from test_frame_resource_lifetimes import function
+from tests.test_frame_resource_lifetimes import function
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReadonlyFoliageDepth(unittest.TestCase):
     def test_production_admission_and_descriptor(self):
-        source = (ROOT/'build/android-aurora-source/lib/gfx/common.cpp').read_text()
+        source = (ROOT/'third_party/aurora/lib/gfx/common.cpp').read_text()
         render = function(source, 'render')
         start = render.index('      depthStencilAttachment = {')
         end = render.index('      depthStencilAttachmentPtr', start)

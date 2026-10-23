@@ -1,0 +1,169 @@
+--- a/src/REL/m649Dll/player.c
++++ b/src/REL/m649Dll/player.c
+@@ -10,13 +10,13 @@
+-#include "include/game/charman.h"
+-
+-#include "include/game/memory.h"
+-
+-#include "include/game/audio.h"
+-
+-#include "include/game/gamework.h"
+-
+-#include "include/game/pad.h"
+-
+-#include "include/game/frand.h"
+-
+-#include "include/string.h"
++#include "game/charman.h"
++
++#include "game/memory.h"
++
++#include "game/audio.h"
++
++#include "game/gamework.h"
++
++#include "game/pad.h"
++
++#include "game/frand.h"
++
++#include "string.h"
+@@ -69,47 +69,5 @@
+-typedef struct M649PlayerState_s {
+-    u32 camera;
+-    s32 previousPlayer, player, controlEnabled;
+-    Vec position, velocity, rotation;
+-    u32 buttonsDown, buttons;
+-    float stickAngle, stickMagnitude;
+-    s32 currentMotion, motionTime, requestedMotion;
+-    float motionSpeed;
+-    s32 phase, timer;
+-    /* Cleared at character setup; no player update reads these bytes. */
+-    u8 unknown_5C_to_6B[16];
+-    s32 updateCount; /* Count of player-manager updates since registration. */
+-    s32 computer, difficulty, computerPhase; /* Computer control, difficulty, and input phase. */
+-    s32 computerTimer; /* Frames until the next computer-controlled button press. */
+-    float computerDirection; /* Facing angle used to select the computer-controlled button. */
+-    /* Turn-motion active flag and a counter kept at zero by player updates. */
+-    s32 motionActive, motionTimer;
+-    /* Cleared at character setup; no player update reads these bytes. */
+-    u8 unknown_8C_to_97[12];
+-    s32 turnTimer, itemModel, turnDirection;
+-    M649PlayerConfig config;
+-} M649PlayerState;
+-
+-typedef struct M649PlayerWork_s {
+-    M649PlayerState state;
+-    s32 player, character, phase;
+-    /* Cleared at character setup; no player update reads these bytes. */
+-    u8 unknown_F0_to_F3[4];
+-    s32 timer; /* Number of object updates since the character was created. */
+-    s32 volumeEnabled;
+-} M649PlayerWork;
+-
+-typedef struct M649PlayerMotionParam_s {
+-    u16 motion;
+-    s16 overlay;
+-    float blend;
+-    u32 attr;
+-} M649PlayerMotionParam;
+-
+-typedef struct M649ComputerParam_s {
+-    float firstDelay, delay, randomDelay, error;
+-    s32 targetScore;
+-} M649ComputerParam;
+-
+-extern OMOBJ *lbl_1_bss_334;
+-
+-extern OMOBJ *lbl_1_bss_324[4];
++
++
++
++
++
+@@ -123,5 +81,2 @@
+-extern void fn_1_1338(s32 player, u32 first, u32 second);
+-
+-extern s32 lbl_1_bss_310;
+-
+-extern void *lbl_1_bss_314[4];
++
++
+@@ -131,3 +86 @@
+-extern Vec lbl_1_data_128[4];
+-
+-extern float lbl_1_data_158[4];
++
+@@ -139,9 +92,4 @@
+-extern s32 lbl_1_data_1B4[4], lbl_1_data_C8[6];
+-
+-extern M649PlayerConfig lbl_1_data_174;
+-
+-extern s32 fn_1_1210(s32 resource);
+-
+-extern s32 fn_1_1218(s32 camera);
+-
+-extern s32 fn_1_48DC(s32 resource);
++
++
++
++
+@@ -161 +108,0 @@
+-s32 fn_1_5B04(void *state);
+@@ -171 +117,0 @@
+-extern void fn_1_88FC(u32 camera, s32 mode);
+@@ -175,9 +121,4 @@
+-extern float fn_1_4AF4(float current, float target, float speed);
+-
+-extern float fn_1_4C10(float current, float target);
+-
+-extern void fn_1_1368(s32 player);
+-
+-extern BOOL fn_1_1388(void);
+-
+-extern s32 fn_1_127C(u32 camera);
++
++
++
++
+@@ -187,5 +128,2 @@
+-extern s32 fn_1_3630(s32 camera, Vec *position);
+-
+-extern s32 fn_1_3850(s32 camera, Vec *position);
+-
+-extern void fn_1_4788(s32 camera, s32 effect, s32 handle, Vec *position, s32 pan, s32 volume);
++
++
+@@ -195,3 +133 @@
+-extern M649PlayerMotionParam lbl_1_data_E0[6];
+-
+-extern void fn_1_88FC(u32 camera, s32 direction);
++
+@@ -201,9 +137,4 @@
+-extern M649ComputerParam lbl_1_data_1C4[4];
+-
+-extern s32 fn_1_8D20(s32 camera, s32 direction, s32 frames);
+-
+-extern s32 fn_1_1244(void);
+-
+-extern s32 fn_1_A644(s32 player);
+-
+-extern OMOBJ *lbl_1_bss_324[];
++
++
++
++
+@@ -272 +203 @@
+-        *(s32 *) ((u8 *) &lbl_1_bss_314 + (playerIndex * 4)) = 0;
++        lbl_1_bss_314[playerIndex] = NULL;
+@@ -289 +220 @@
+-        playerState = * (void * *)((u8 *) & lbl_1_bss_314 + (playerIndex * 4));
++        playerState = lbl_1_bss_314[playerIndex];
+@@ -492 +492,4 @@
+-        if (++((M649PlayerState *)state)->timer < 10) { return; }
++        /* Hardware returned the non-null state pointer still in r3 from these
++         * two paths, so fn_1_5564 moved on to the turn-to-front and win/lose
++         * phases. Native code must say so, or the result is always 0. */
++        if (++((M649PlayerState *)state)->timer < 10) { return 1; }
+@@ -497 +497 @@
+-        return;
++        return done;

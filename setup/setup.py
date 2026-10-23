@@ -70,9 +70,8 @@ def parse_args(argv):
     p.add_argument("--disc", metavar="PATH",
                    help="path to your Mario Party 6 (USA) disc image (.iso/.rvz/.gcm/.ciso/...) "
                         "or an already-extracted folder. Prompted for if omitted and not already extracted.")
-    p.add_argument("--include-movies", action="store_true",
-                   help="also extract files/movie/ (336MB of FMVs, not needed to build or boot to the "
-                        "menu slice this port currently covers). Default: skipped.")
+    p.add_argument("--include-movies", action="store_true", default=True,
+                   help="extract files/movie/ for animated previews (enabled by default)")
     p.add_argument("--force-disc", action="store_true", help="re-extract the disc even if already done")
     p.add_argument("--decomp-url", metavar="URL", help="override the decomp git remote "
                    "(default: the fork URL, or $MP6_DECOMP_URL)")

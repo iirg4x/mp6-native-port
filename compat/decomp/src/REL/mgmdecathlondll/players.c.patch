@@ -1,0 +1,10 @@
+--- a/src/REL/mgmdecathlondll/players.c
++++ b/src/REL/mgmdecathlondll/players.c
+@@ -2,0 +3 @@
++#include "string.h"
+@@ -149,2 +150,3 @@
+-        object->data = HuMemDirectMallocNum(HEAP_HEAP, 60, HU_MEMNUM_OVL);
+-        memset(object->data, 0, 60);
++        object->data = HuMemDirectMallocNum(
++            HEAP_HEAP, sizeof(DecathlonPlayerActorData), HU_MEMNUM_OVL);
++        memset(object->data, 0, sizeof(DecathlonPlayerActorData));

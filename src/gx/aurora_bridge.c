@@ -75,6 +75,7 @@
 #include <aurora/aurora.h>
 #include "../audio/msm_mixer.h"
 #include <aurora/event.h>
+#include <aurora/gfx.h> /* aurora_pipeline_stats_take (MP6-PIPE lines) */
 
 #include <dolphin/gx.h>
 #include <dolphin/vi.h>
@@ -87,6 +88,8 @@
 #include "mp6_widescreen.h" /* dynamic true-widescreen support */
 #include "mp6_enhancements.h" /* mp6_enh_widescreen -- the switch's one front door */
 #include "mp6_savestate.h"  /* F5/F8 hotkeys -> queued, serviced at the frame boundary */
+#include "mp6_quick_play.h" /* Mods-page Quick Party: per-tick board speed */
+#include "mp6_decode_ahead.h" /* mp6_decode_ahead_idle: the web's decode-ahead */
 #include "mp6_unlocked_fps.h" /* Mods-page Unlocked FPS: retained-stream frame interpolation
                                * (src/gx/frame_interp.c); hooks at the frame boundaries
                                * + the tick throttle's idle window below, all single-compare
@@ -94,6 +97,8 @@
 #include "mp6_frame_gate.h" /* Android: no simulation work without a presentable frame */
 #include "mp6_parse.h" /* strict operational env/script numbers */
 #include "mp6_events.h" /* the game-event bus the input script's waitev/pressuntil steps block on */
+#include "mp6_freecam.h" /* mp6_freecam_enabled: the free camera owns WASD and the mouse */
+#include "mp6_retaddr.h" /* MP6_RETURN_ADDRESS: free on the web */
 #include "mp6_console.h" /* dev console: keyboard ownership, the stat sampler's hooks,
                           * and the runtime overrides for this file's own diag levers */
 #include "mp6_display.h" /* the output the window is on + live present sync -- section 2b
@@ -105,8 +110,15 @@
                    * platform-independent. */
 
 #include <stdio.h>
+#ifdef __ANDROID__
+#include <android/log.h> /* MP6-AO A/B lines */
+#endif
 #include <stdint.h>
 #include <stdlib.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/heap.h>
+#include <malloc.h>
+#endif
 #include <string.h>
 
 #include <SDL3/SDL.h>
@@ -127,6 +139,10 @@
 #else
 #include <sched.h> /* sched_yield for the throttle's non-aarch64 spin fallback */
 #endif /* _WIN32 */
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h> /* emscripten_sleep: the no-frame hold in VIWaitForRetrace */
+#endif
 
 /* SAVESTATE CARVE-OUT: host-owned statics in this TU must land in the
  * carve-out section (see mp6_host_section.h), and the #include below has
@@ -677,16 +693,16 @@ u32 VIGetNextField(void)
  * merge_virtual_status) -- purely additive, never overrides a real
  * controller if one actually is connected.
  *
- * Mapping (documented here since there is no in-game prompt for it):
- *   Enter or Space -> PAD_BUTTON_START -- satisfies BOTH the warning
- *                     screen's "press ANY button" check (game/REL/
- *                     bootDll/boot.c's BootWarningExec ORs all 4 ports'
- *                     HuPadBtnDown together, so any single real button
- *                     works) AND BootTitleExec's specific
- *                     PAD_BUTTON_START confirm check at the title screen.
- *   Z -> PAD_BUTTON_A, X -> PAD_BUTTON_B, arrow keys -> D-pad.
- * Port 0 only -- single-player boot-to-menu flow, no split-screen concern
- * this early. */
+ * Mapping (Settings > Controls > Keyboard controls shows the same table):
+ *   WASD -> control stick (Shift held = half tilt, for walking and fine
+ *   aim), arrow keys -> D-pad, numpad 8/4/6/2 -> C stick.
+ *   Space, J or Z -> A; K or X -> B; L -> X; I -> Y; O -> Z trigger;
+ *   Q -> L trigger, E -> R trigger (full analog press); Enter -> Start.
+ *   Mouse: left click -> A, right click -> B.
+ * Start satisfies BOTH the warning screen's "press ANY button" check
+ * (game/REL/bootDll/boot.c's BootWarningExec ORs all 4 ports' HuPadBtnDown
+ * together) AND BootTitleExec's specific PAD_BUTTON_START confirm.
+ * Port 0 only: a second player uses a controller. */
 
 /* MP6_AUTO_START_TICKS: a direct, focus-independent alternative to
  * SendKeys/keybd_event-based driving (two independently-running
@@ -787,12 +803,21 @@ static bool mp6_auto_start_due_now(void)
  * genuinely-HELD key keeps working exactly as before via the plain state
  * poll for as long as it's actually held; the latch only ever adds
  * coverage for the sub-tick-blip case the poll alone could miss. */
+extern int mp6_launcher_menu_visible(void); /* src/gx/ui/launcher_core.cpp */
 typedef struct { SDL_Scancode scancode; u16 button; } MP6KeyBind;
 static const MP6KeyBind g_keyBinds[] = {
     { SDL_SCANCODE_RETURN, PAD_BUTTON_START },
-    { SDL_SCANCODE_SPACE,  PAD_BUTTON_START },
+    { SDL_SCANCODE_KP_ENTER, PAD_BUTTON_START },
+    { SDL_SCANCODE_SPACE,  PAD_BUTTON_A },
+    { SDL_SCANCODE_J,      PAD_BUTTON_A },
     { SDL_SCANCODE_Z,      PAD_BUTTON_A },
+    { SDL_SCANCODE_K,      PAD_BUTTON_B },
     { SDL_SCANCODE_X,      PAD_BUTTON_B },
+    { SDL_SCANCODE_L,      PAD_BUTTON_X },
+    { SDL_SCANCODE_I,      PAD_BUTTON_Y },
+    { SDL_SCANCODE_O,      PAD_TRIGGER_Z },
+    { SDL_SCANCODE_Q,      PAD_TRIGGER_L },
+    { SDL_SCANCODE_E,      PAD_TRIGGER_R },
     { SDL_SCANCODE_UP,     PAD_BUTTON_UP },
     { SDL_SCANCODE_DOWN,   PAD_BUTTON_DOWN },
     { SDL_SCANCODE_LEFT,   PAD_BUTTON_LEFT },
@@ -812,6 +837,10 @@ static const MP6KeyBind g_keyBinds[] = {
 };
 #define MP6_KEYBIND_COUNT (sizeof(g_keyBinds)/sizeof(g_keyBinds[0]))
 
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+#include "mp6_touch_pad.h" /* on-screen controller, see below */
+#endif
+#include "mp6_mic.h" /* the GameCube Mic: talk button + backend pump */
 #ifdef __ANDROID__
 /* On-screen touch controls (src/android/touch_pad.cpp -- an
  * Android-only C++ TU; see its file header for the full design). The three
@@ -870,6 +899,7 @@ static void mp6_pad_motor_apply_pending(void)
  * tick; see the file comment above for why this exists alongside (not
  * instead of) the plain state poll. */
 static u16 g_padKeyLatch = 0;
+static SDL_MouseButtonFlags g_mouseHeld; /* real mouse only: touches also arrive as mouse events */
 
 /* Drop host input sampled on a timeline that will not advance.  Used by both
  * savestate restore and Android's background/surface-loss gate: the collector
@@ -878,15 +908,41 @@ static u16 g_padKeyLatch = 0;
 void mp6_aurora_input_reset_transients(void)
 {
     g_padKeyLatch = 0;
+    g_mouseHeld = 0;
     mp6_freecam_input_savestate_reset();
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__) /* touch controls: Android + browser */
     mp6_touch_pad_savestate_reset();
 #endif
+}
+
+/* Mouse buttons as pad buttons. Not while a launcher/settings page is
+ * open (its own clicks must not land in the game the moment it closes) or
+ * while the free camera owns the mouse (right button = look). */
+static u16 mp6_mouse_buttons_to_pad(SDL_MouseButtonFlags held)
+{
+    u16 buttons = 0;
+    if (mp6_launcher_menu_visible() || mp6_freecam_enabled()) {
+        return 0;
+    }
+    if (held & SDL_BUTTON_LMASK) buttons |= PAD_BUTTON_A;
+    if (held & SDL_BUTTON_RMASK) buttons |= PAD_BUTTON_B;
+    return buttons;
 }
 
 static void mp6_latch_key_down_event(const SDL_Event *sdlEvent)
 {
     size_t i;
+    if ((sdlEvent->type == SDL_EVENT_MOUSE_BUTTON_DOWN || sdlEvent->type == SDL_EVENT_MOUSE_BUTTON_UP) &&
+        sdlEvent->button.which != SDL_TOUCH_MOUSEID) {
+        const SDL_MouseButtonFlags bit = SDL_BUTTON_MASK(sdlEvent->button.button);
+        if (sdlEvent->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+            g_mouseHeld |= bit;
+            g_padKeyLatch |= mp6_mouse_buttons_to_pad(bit);
+        } else {
+            g_mouseHeld &= ~bit;
+        }
+        return;
+    }
     if (sdlEvent->type != SDL_EVENT_KEY_DOWN) {
         return;
     }
@@ -1018,6 +1074,23 @@ static void mp6_latch_console_key_event(const SDL_Event *sdlEvent)
  * mp6_pump_keyboard_to_pad() below.
  * --------------------------------------------------------------------- */
 
+/* Either stick click on any open gamepad: the Mic's talk button. */
+static int mp6_gamepad_stick_click_held(void)
+{
+    int count = 0, i, held = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&count);
+    if (ids == NULL) return 0;
+    for (i = 0; i < count && !held; i++) {
+        SDL_Gamepad *pad = SDL_GetGamepadFromID(ids[i]);
+        if (pad != NULL && (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK) ||
+                            SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK))) {
+            held = 1;
+        }
+    }
+    SDL_free(ids);
+    return held;
+}
+
 static void mp6_pump_keyboard_to_pad(void)
 {
     int numKeys = 0;
@@ -1052,7 +1125,45 @@ static void mp6_pump_keyboard_to_pad(void)
                 status.button |= g_keyBinds[i].button;
             }
         }
+        /* The free camera flies on WASD/QE: leave those to it. */
+        if (mp6_freecam_enabled()) {
+            status.button &= (u16)~(PAD_TRIGGER_L | PAD_TRIGGER_R);
+        } else {
+            /* Sticks: the same ranges the touch sticks use (72 main, 59 C),
+             * diagonals scaled onto the circle. Shift = half tilt. */
+            const int dx = (int)keys[SDL_SCANCODE_D] - (int)keys[SDL_SCANCODE_A];
+            const int dy = (int)keys[SDL_SCANCODE_W] - (int)keys[SDL_SCANCODE_S];
+            const int cx = (int)keys[SDL_SCANCODE_KP_6] - (int)keys[SDL_SCANCODE_KP_4];
+            const int cy = (int)keys[SDL_SCANCODE_KP_8] - (int)keys[SDL_SCANCODE_KP_2];
+            const bool half = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
+            const int main = (dx && dy ? 51 : 72) / (half ? 2 : 1);
+            const int sub = cx && cy ? 42 : 59;
+            status.stickX = (s8)(dx * main);
+            status.stickY = (s8)(dy * main);
+            status.substickX = (s8)(cx * sub);
+            status.substickY = (s8)(cy * sub);
+        }
+        /* The keyboard is a full player-one controller now, so the port
+         * counts as configured: no "Configure controller port 1" warning
+         * for a keyboard player. PADSetKeyboardActive only flips that flag
+         * (see the touch block below for the full reasoning). */
+        {
+            static bool keyboardMarkedConnected = false;
+            if (!keyboardMarkedConnected) {
+                PADSetKeyboardActive(PAD_CHAN0, TRUE);
+                keyboardMarkedConnected = true;
+            }
+        }
+        if (status.button & PAD_TRIGGER_L) status.triggerLeft = 255;
+        if (status.button & PAD_TRIGGER_R) status.triggerRight = 255;
+        status.button |= mp6_mouse_buttons_to_pad(g_mouseHeld);
     }
+    /* The GameCube Mic's talk button (include/mp6_mic.h): M on the
+     * keyboard, either stick click on a gamepad (the GameCube pad has
+     * neither, so nothing the game reads is taken). */
+    mp6_mic_set_talk_button(MP6_MIC_TALK_KEYBOARD,
+                            keys != NULL && SDL_SCANCODE_M < numKeys && keys[SDL_SCANCODE_M]);
+    mp6_mic_set_talk_button(MP6_MIC_TALK_GAMEPAD, mp6_gamepad_stick_click_held());
     status.button |= g_padKeyLatch;
     g_padKeyLatch = 0;
     status.button |= mp6_input_script_advance();
@@ -1064,7 +1175,7 @@ static void mp6_pump_keyboard_to_pad(void)
             status.stickY = scriptStickY;
         }
     }
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__) /* touch controls: Android + browser */
     {
         /* The touch overlay's PAD state, OR-merged like every other
          * virtual source in this function. Touch analog tilt only applies
@@ -1077,12 +1188,14 @@ static void mp6_pump_keyboard_to_pad(void)
             status.stickX = touch.stickX;
             status.stickY = touch.stickY;
         }
-        status.substickX = touch.cstickX;
-        status.substickY = touch.cstickY;
-        status.triggerLeft = touch.triggerL;
-        status.triggerRight = touch.triggerR;
-        status.analogA = (touch.buttons & PAD_BUTTON_A) ? 255 : 0;
-        status.analogB = (touch.buttons & PAD_BUTTON_B) ? 255 : 0;
+        if (touch.cstickX != 0 || touch.cstickY != 0) {
+            status.substickX = touch.cstickX;
+            status.substickY = touch.cstickY;
+        }
+        if (touch.triggerL > status.triggerLeft) status.triggerLeft = touch.triggerL;
+        if (touch.triggerR > status.triggerRight) status.triggerRight = touch.triggerR;
+        status.analogA = (status.button & PAD_BUTTON_A) ? 255 : 0;
+        status.analogB = (status.button & PAD_BUTTON_B) ? 255 : 0;
         /* On Android, the touch overlay IS this device's controller -- a
          * stock Android install has no Bluetooth/USB pad. The merge just
          * above
@@ -1276,6 +1389,8 @@ static void mp6_clean_shutdown_exit(const char *reason)
 static double  g_tickHz = -1.0;          /* -1 = env not parsed yet; 0 = disabled */
 static int64_t g_tickPeriodNs = 0;       /* ns per tick at g_tickHz */
 static int64_t g_tickNextDeadline = 0;   /* ns; 0 = schedule not anchored yet */
+static int     g_tickQuickFactor = 1;    /* Quick Party multiplier g_tickPeriodNs is built for */
+static double  g_tickQuickBaseHz = 0.0;  /* Quick Party base rate; 0 = unpaced free-run */
 
 /* Defined in launcher_core.cpp -- 1 in automation/straight-boot mode. Used
  * below to pick the no-env throttle default (automation = free-run). */
@@ -1289,6 +1404,8 @@ void mp6_tick_rate_refresh(void)
     g_tickHz = -1.0;
     g_tickPeriodNs = 0;
     g_tickNextDeadline = 0;
+    g_tickQuickFactor = 1;
+    g_tickQuickBaseHz = 0.0;
 }
 
 static void mp6_tick_throttle_init(void)
@@ -1325,6 +1442,7 @@ static void mp6_tick_throttle_init(void)
         return;
     }
     g_tickPeriodNs = (int64_t)((double)MP6_TICK_NS_PER_SEC / hz + 0.5);
+    g_tickQuickFactor = 1;
     {
         /* The lazy timer-resolution push (winmm timeBeginPeriod(1) +
          * atexit timeEndPeriod) lives in mp6_host_init(); its return is
@@ -1384,6 +1502,9 @@ static long    g_tickSlackStarved = 0; /* ticks with no idle window at all */
 static int64_t g_phGameNs, g_phEndFrameNs, g_phSealNs, g_phViPostNs;
 static long    g_phSamples = 0;
 static int64_t g_phLastReturnNs = 0; /* when the previous VIWaitForRetrace returned */
+/* The same two instants on the always-running clock, for the replay layer
+ * (mp6_fi_note_tick_times); the g_ph* clock reads 0 unless stats are on. */
+static int64_t g_fiTickReturnNs = 0;
 
 /* The overlay composite's own sub-bracket, carved OUT of the endframe bucket
  * above rather than added beside it.
@@ -1431,14 +1552,107 @@ static void mp6_tick_throttle_overflow(void)
     g_tickNextDeadline = 0;
 }
 
+/* Quick Party (include/mp6_quick_play.h): pace the next tick at the mod's
+ * multiplier of the configured rate. Asked once per tick, so a board waiting
+ * on a human drops to normal speed for exactly the ticks it waits. Only the
+ * period changes; the absolute-deadline schedule carries on from the current
+ * deadline, so a switch never bursts or stalls.
+ *
+ * FREE-RUN. With no tick rate configured (MP6_TICK_HZ=0, Fast Forward, or a
+ * launch that leaves pacing to the display, as the web build does) there is
+ * no schedule to multiply: each tick waits for its present. A sped-up board
+ * is then paced at the multiple of the 60 Hz design rate, and its surplus
+ * ticks are hidden frames (below) that never wait for the display.
+ *
+ * ACHIEVED RATE. Extra ticks are only as fast as the device. The multiple of
+ * the base rate actually reached is measured here and handed to the mod,
+ * which makes up the shortfall inside the game (shorter board waits, moves
+ * and camera moves; mp6_quick_play_set_achieved), so a phone that runs 1.5x
+ * still plays the board at the chosen speed. Returns 0 when this tick is not
+ * paced at all (plain free-run). */
+#define MP6_QUICK_FREE_RUN_BASE_HZ 60.0
+static int64_t g_quickLastTickNs = 0;
+static double  g_quickTickNsEma = 0.0;   /* smoothed interval between sped-up ticks */
+
+static int mp6_tick_quick_play_apply(void)
+{
+    const int factor = mp6_quick_play_tick_factor();
+    const double base = g_tickHz > 0.0 ? g_tickHz
+                        : (factor > 1 ? MP6_QUICK_FREE_RUN_BASE_HZ : 0.0);
+    int64_t now;
+    if (mp6_tick_clock_now(&now)) {
+        if (factor > 1 && factor == g_tickQuickFactor && base == g_tickQuickBaseHz &&
+            g_quickLastTickNs != 0 && now > g_quickLastTickNs) {
+            const double dt = (double)(now - g_quickLastTickNs);
+            g_quickTickNsEma = g_quickTickNsEma > 0.0 ? g_quickTickNsEma * 0.95 + dt * 0.05 : dt;
+            mp6_quick_play_set_achieved((double)MP6_TICK_NS_PER_SEC / g_quickTickNsEma / base);
+        }
+        g_quickLastTickNs = now;
+    }
+    if (base <= 0.0) {
+        g_tickQuickFactor = 1;
+        g_tickQuickBaseHz = 0.0;
+        g_tickNextDeadline = 0; /* the next paced tick anchors afresh */
+        return 0;
+    }
+    if (factor != g_tickQuickFactor || base != g_tickQuickBaseHz) {
+        g_tickQuickFactor = factor;
+        g_tickQuickBaseHz = base;
+        g_tickPeriodNs = (int64_t)((double)MP6_TICK_NS_PER_SEC / (base * factor) + 0.5);
+    }
+    return 1;
+}
+
+/* Quick Party frame budget. A sped-up board runs more ticks than the display
+ * can show (4x is 240 ticks/s; a 60 Hz phone shows 60), and drawing and
+ * presenting every one of them made the speed depend on the refresh rate:
+ * each present waits for a vblank, and on a GPU-bound phone the extra draws
+ * alone ate the frame. So only one tick per display refresh is shown; the
+ * others become aurora hidden frames (aurora_hide_next_frame): never
+ * presented, and every pass nothing reads is dropped, while EFB copies and
+ * other passes a later frame reads still render. Game logic runs every tick.
+ *
+ * Decided at frame begin, i.e. for the tick about to run: shown when a
+ * refresh interval has passed since the last shown tick began, so a device
+ * that cannot reach the full multiple simply shows more of its ticks. Off at
+ * normal speed (holds, menus, minigames) and whenever ticks already arrive
+ * no faster than the display refreshes (a 240 Hz monitor at 4x). An
+ * unreadable refresh rate counts as 60 Hz. */
+static int64_t g_quickShownNs = 0;
+
+static int mp6_tick_quick_play_hide(void)
+{
+    static int lastFactor = 0;
+    static int64_t intervalNs = 0;
+    int64_t now;
+    if (g_tickQuickFactor <= 1 || g_tickQuickBaseHz <= 0.0) {
+        lastFactor = g_tickQuickFactor;
+        return 0;
+    }
+    if (g_tickQuickFactor != lastFactor) {
+        Mp6DisplayInfo info;
+        const double refresh = (mp6_display_info_get(&info) && info.refreshMilliHz > 0)
+                                   ? info.refreshMilliHz / 1000.0 : 60.0;
+        lastFactor = g_tickQuickFactor;
+        /* 10% early: a tick shown a little before the vblank is still on
+         * time, one shown a little after misses it entirely. */
+        intervalNs = (int64_t)(0.9 * (double)MP6_TICK_NS_PER_SEC / refresh);
+    }
+    if (!mp6_tick_clock_now(&now)) return 0;
+    if (g_quickShownNs != 0 && now - g_quickShownNs < intervalNs) return 1;
+    g_quickShownNs = now;
+    return 0;
+}
+
 static void mp6_tick_throttle_wait(void)
 {
     int64_t now;
     int fiDeclined;
+    int preciseTried, precise;
     if (g_tickHz < 0.0) {
         mp6_tick_throttle_init();
     }
-    if (g_tickHz <= 0.0) {
+    if (!mp6_tick_quick_play_apply()) {
         return; /* MP6_TICK_HZ=0: the legacy free-run timing path */
     }
     if (!mp6_tick_clock_now(&now)) {
@@ -1500,6 +1714,8 @@ static void mp6_tick_throttle_wait(void)
      * verdict: the worker can free a slot before this deadline, so yield and
      * retry it without decaying the CPU budget estimate. */
     fiDeclined = 0;
+    preciseTried = 0;
+    precise = 0;
     for (;;) {
         int64_t remain;
         if (!mp6_tick_clock_now(&now)) {
@@ -1512,7 +1728,7 @@ static void mp6_tick_throttle_wait(void)
         }
         {
             double remainMs = (double)remain / 1000000.0;
-            if (remainMs > MP6_TICK_SPIN_WINDOW_MS) {
+            if (remainMs > MP6_TICK_SPIN_WINDOW_MS && !fiDeclined) {
                 /* Unlocked FPS (include/mp6_unlocked_fps.h): spend the
                  * idle window presenting interpolated frames instead of
                  * sleeping through it. Pass the throttle's actual absolute
@@ -1522,17 +1738,31 @@ static void mp6_tick_throttle_wait(void)
                  * Declines (feature off, snapshots not ready, or insufficient
                  * time/resources) fall through to the ordinary sleep below;
                  * the sub-2ms spin tail never attempts a present. */
-                if (!fiDeclined) {
-                    int replay = mp6_fi_idle_present(g_tickNextDeadline, g_tickPeriodNs);
-                    if (replay != 0) {
-                        if (replay < 0) mp6_host_sleep_ns(0);
-                        continue;
-                    }
-                    fiDeclined = 1; /* final for this window -- see above */
-                    /* Replay admission/build may have consumed part of the
-                     * window. Never sleep using the pre-attempt remainder. */
+                int replay = mp6_fi_idle_present(g_tickNextDeadline, g_tickPeriodNs);
+                if (replay != 0) {
+                    if (replay < 0) mp6_host_sleep_ns(0);
                     continue;
                 }
+                fiDeclined = 1; /* final for this window -- see above */
+                /* Replay admission/build may have consumed part of the
+                 * window. Never sleep using the pre-attempt remainder. */
+                continue;
+            }
+            /* Where the host has a precise deadline sleep (host.h
+             * mp6_host_sleep_until_ns; Windows by default), one OS wait
+             * carries the window to just before the deadline and only the
+             * timer's measured wake-up lateness is spun, instead of
+             * sleeping in whole milliseconds to 2 ms out and spinning (or
+             * yielding) the rest. */
+            /* Without worker threads (the web), decode-ahead uses this idle
+             * window for queued decodes before the tick sleeps it away. */
+            if (remainMs > 2.0 && mp6_decode_ahead_idle(g_tickNextDeadline)) continue;
+            if (!preciseTried) {
+                preciseTried = 1;
+                precise = mp6_host_sleep_until_ns((uint64_t)g_tickNextDeadline);
+                if (precise) continue;
+            }
+            if (remainMs > MP6_TICK_SPIN_WINDOW_MS && !precise) {
                 uint32_t sleepMs = (uint32_t)(remainMs - MP6_TICK_SPIN_WINDOW_MS);
                 if (sleepMs > 0) {
                     mp6_host_sleep_ns((uint64_t)sleepMs * 1000000ull); /* was Sleep(sleepMs) */
@@ -1765,6 +1995,25 @@ static void mp6_display_cache_invalidate(void)
  * 239, and a nominal "75 Hz" virtual display can genuinely be 74.973. Falls
  * back to the float only when the denominator is zero (SDL's own
  * "unspecified" encoding). */
+/* The mode a display is showing now, without SDL_GetCurrentDisplayMode: that
+ * call first rebuilds the display's whole fullscreen mode list, and on
+ * Windows the first rebuild costs 110-160 ms (DXGI mode enumeration). It
+ * landed on the game thread at the board start whenever Quick Party asked
+ * for the refresh rate. A window or display only differs from the desktop
+ * mode while it holds an exclusive fullscreen mode, so `win` (may be NULL)
+ * answers for its own display and every other display reports its
+ * desktop mode, which SDL keeps current from display-change events. */
+static const SDL_DisplayMode *mp6_display_mode_now(SDL_DisplayID id, SDL_Window *win)
+{
+    if (win != NULL && SDL_GetDisplayForWindow(win) == id) {
+        const SDL_DisplayMode *exclusive = SDL_GetWindowFullscreenMode(win);
+        if (exclusive != NULL && (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN)) {
+            return exclusive;
+        }
+    }
+    return SDL_GetDesktopDisplayMode(id);
+}
+
 static int mp6_display_milli_hz(const SDL_DisplayMode *mode)
 {
     if (mode == NULL) return 0;
@@ -1794,7 +2043,7 @@ int mp6_display_info_get(Mp6DisplayInfo *out)
     if (win == NULL) return 0;
     id = SDL_GetDisplayForWindow(win);
     if (id == 0) return 0;
-    mode = SDL_GetCurrentDisplayMode(id);
+    mode = mp6_display_mode_now(id, win);
     if (mode == NULL) return 0;
     milli = mp6_display_milli_hz(mode);
     if (milli <= 0) return 0;
@@ -1823,7 +2072,7 @@ int mp6_display_info_get(Mp6DisplayInfo *out)
             if (ids != NULL) {
                 int i;
                 for (i = 0; i < count; ++i) {
-                    const SDL_DisplayMode *m = SDL_GetCurrentDisplayMode(ids[i]);
+                    const SDL_DisplayMode *m = mp6_display_mode_now(ids[i], NULL);
                     if (mp6_display_milli_hz(m) > milli) {
                         highest = 0;
                         break;
@@ -1856,6 +2105,30 @@ int mp6_display_info_get(Mp6DisplayInfo *out)
 int mp6_display_vsync_enabled(void)
 {
     return s_dispVsyncOn ? 1 : 0;
+}
+
+void mp6_display_pace_frame(void)
+{
+    static uint64_t s_nextNs, s_periodNs, s_readNs;
+    uint64_t now;
+    if (s_dispVsyncOn) {
+        s_nextNs = 0;
+        return; /* FIFO blocks on the refresh already */
+    }
+    now = mp6_host_monotonic_ns();
+    if (s_readNs == 0 || now - s_readNs >= 500000000ull) {
+        Mp6DisplayInfo info;
+        s_periodNs = (mp6_display_info_get(&info) && info.refreshMilliHz > 0)
+                         ? 1000000000000ull / (uint64_t)info.refreshMilliHz : 0;
+        s_readNs = now;
+    }
+    if (s_periodNs == 0) return;
+    /* A deadline grid rather than a fixed sleep: frames average exactly the
+     * refresh rate. A frame that ran past its slot restarts the grid instead
+     * of drawing a burst to catch up. */
+    if (s_nextNs == 0 || now > s_nextNs + s_periodNs) s_nextNs = now;
+    else if (s_nextNs > now) mp6_host_sleep_ns(s_nextNs - now);
+    s_nextNs += s_periodNs;
 }
 
 long mp6_display_follow_count(void)
@@ -1905,7 +2178,33 @@ void mp6_display_note_init_present_mode(const char *token)
  * can never intersect an open frame. */
 void mp6_display_set_vsync(int on)
 {
+#ifdef __EMSCRIPTEN__
+    /* The web has no tearing present mode: a canvas reaches the screen only in
+     * the browser's rendering update, once per display refresh. "VSync off"
+     * there only stopped the frame yield from waiting for that refresh, so
+     * the game drew several frames per refresh and the browser showed
+     * whichever came last: wasted work and motion sampled at uneven times
+     * (measured: 37% of refreshes received 2+ frames with VSync off, none
+     * with it on). Every user-facing present on the web waits for the
+     * display. Quick Party's faster ticks show one tick per refresh and hide
+     * the rest (mp6_tick_quick_play_hide), so they need no exception here. */
+    const int want = 1;
+    (void)on;
+#elif defined(__ANDROID__)
+    /* Android composites every surface (SurfaceFlinger), so nothing tears
+     * with either present mode, and the VSync setting looked like it did
+     * nothing. What it did change was pacing, for the worse: FIFO blocks the
+     * render worker on every present, and on a Galaxy S22+ at 120 Hz
+     * (Treetop, 1-minute runs) FIFO left 42% of refreshes without a new
+     * frame against 18% with MAILBOX (present gaps p90 13.1 vs 11.2 ms) at
+     * the same 119 frames/s. Frames never exceed the panel's rate either way
+     * (Unlocked FPS caps replays per tick from the refresh rate). So Android
+     * always presents MAILBOX and the Settings row is hidden. */
+    const int want = 0;
+    (void)on;
+#else
     const int want = on ? 1 : 0;
+#endif
     if (want == s_dispVsyncOn) return; /* re-selecting the current value is free */
     s_dispVsyncOn = want;
     /* The label can no longer claim aurora's logged mode: on -> FifoRelaxed
@@ -2278,7 +2577,7 @@ int mp6_display_select(const char *name)
         target = SDL_GetPrimaryDisplay();
     } else if (SDL_strcasecmp(name, "auto") == 0) {
         for (i = 0; i < count; ++i) {
-            const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(ids[i]);
+            const SDL_DisplayMode *mode = mp6_display_mode_now(ids[i], NULL);
             double hz = mode ? mode->refresh_rate : 0.0;
             if (hz > bestHz) { bestHz = hz; target = ids[i]; }
         }
@@ -2432,7 +2731,7 @@ int mp6_display_resolve_launch_pos(int launcherMode, unsigned int reqW,
          * first enumerated one, which is SDL's primary-first order. */
         int i, bestMilli = -1;
         for (i = 0; i < count; ++i) {
-            const int milli = mp6_display_milli_hz(SDL_GetCurrentDisplayMode(ids[i]));
+            const int milli = mp6_display_milli_hz(mp6_display_mode_now(ids[i], NULL));
             if (milli > bestMilli) {
                 bestMilli = milli;
                 chosen = i;
@@ -2445,7 +2744,7 @@ int mp6_display_resolve_launch_pos(int launcherMode, unsigned int reqW,
         SDL_Rect usable;
         if (SDL_GetDisplayUsableBounds(ids[chosen], &usable)) {
             const char *name = SDL_GetDisplayName(ids[chosen]);
-            const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(ids[chosen]);
+            const SDL_DisplayMode *mode = mp6_display_mode_now(ids[chosen], NULL);
             /* USABLE bounds, not full bounds: they exclude the taskbar, so a
              * centered window's caption cannot start underneath it. The two
              * clamps keep a window LARGER than the output from being pushed
@@ -2491,6 +2790,13 @@ static int mp6_present_rate_log_enabled(void)
     return mp6_console_cvar_get(MP6_CVAR_PRESENT_RATE_LOG, s_enabled);
 }
 
+/* Aurora's renderer owns this rolling one-second window. It records a
+ * timestamp only after a surface present succeeds, so this is deliberately a
+ * surface-success rate, not the display refresh rate and not the number of
+ * frame-end requests submitted by MP6. Keep the declaration local: the C
+ * bridge cannot include Aurora's C++ gfx header. */
+extern float aurora_get_fps(void);
+
 static void mp6_present_rate_log(void)
 {
     static int64_t s_windowStartNs = 0;
@@ -2509,9 +2815,15 @@ static void mp6_present_rate_log(void)
     elapsed = (double)(now - s_windowStartNs) / (double)MP6_TICK_NS_PER_SEC;
     if (elapsed >= 5.0) {
         double rate = (double)(g_mp6EndFrames - s_windowStartEnds) / elapsed;
+        /* Query once per existing five-second report. aurora_get_fps() is
+         * already a mutex-protected rolling one-second successful-present
+         * window; do not add another counter or callback here. */
+        double surfaceSuccessRate1s = (double)aurora_get_fps();
         fprintf(stderr, "[MP6-PRESENTRATE] window=%.2fs presents=%ld rate=%.3f presents/s "
+                        "surface-success-rate-1s=%.3f "
                         "(cum: begin-frames=%ld end-frames=%ld ticks=%ld)\n",
                 elapsed, g_mp6EndFrames - s_windowStartEnds, rate,
+                surfaceSuccessRate1s,
                 g_mp6BeginFrames, g_mp6EndFrames, mp6_tick_count);
         fflush(stderr);
         s_windowStartNs = now;
@@ -2568,6 +2880,69 @@ static void mp6_tick_phase_add(int64_t *bucket, int64_t from, int64_t to)
     if (from > 0 && to > from) *bucket += to - from;
 }
 
+/* MP6_AO_AB (include/mp6_enhancements.h): label the window that just closed
+ * with its AO variant, then switch AO for the next window. The tick-rate line
+ * above carries the CPU side; the page adds frame and GPU-queue timings.
+ * With MP6_AO_AB_GPU=1 the line also carries the GPU pass timestamps recorded
+ * under this variant; re-arming the timer discards that history, so the next
+ * window never includes frames from this one. Pass names are '|'-separated
+ * name=avg-ms pairs; ao_gpu sums the AO-named passes. */
+/* One A/B line to stderr, and on Android also to logcat (tag MP6-AO), where
+ * stderr is not collected. */
+static void mp6_ao_ab_emit(const char *line)
+{
+    fprintf(stderr, "%s\n", line);
+#ifdef __ANDROID__
+    __android_log_print(ANDROID_LOG_INFO, "MP6-AO", "%s", line);
+#endif
+}
+
+static void mp6_ao_ab_window_end(double rate, double gameMs, double endFrameMs)
+{
+    extern void mp6_ao_ab_stats(char *out, size_t size);
+    const int variant = mp6_enh_ao_ab_variant();
+    char line[2048], stats[160];
+    size_t used;
+    if (variant < 0) return;
+    mp6_ao_ab_stats(stats, sizeof stats);
+    snprintf(line, sizeof line, "[MP6-AO-AB] ao=%d variant=%s %s ticks/s=%.3f game=%.3f endframe=%.3f",
+             mp6_enh_ao_ab_level(), mp6_enh_ao_ab_variant_name(variant), stats, rate, gameMs, endFrameMs);
+    used = strlen(line);
+#ifdef AURORA_GPU_STAT_ROWS
+    if (mp6_enh_ao_ab_gpu_timing()) {
+        AuroraGpuStats gpu;
+        double aoMs = 0.0;
+        unsigned i;
+        int n;
+        memset(&gpu, 0, sizeof gpu);
+        aurora_gpu_stats_read(&gpu);
+        for (i = 0; i < gpu.rowCount && i < AURORA_GPU_STAT_ROWS; ++i) {
+            const char *name = gpu.rows[i].name;
+            if (!strcmp(name, "GTAO") || !strncmp(name, "AO ", 3) || !strncmp(name, "XeGTAO ", 7))
+                aoMs += gpu.rows[i].averageMs;
+        }
+        n = snprintf(line + used, sizeof line - used, " gpu_status=%u gpu_frames=%u gpu_dropped=%u gpu_span=%.3f "
+                     "gpu_span_max=%.3f gpu_between=%.3f ao_gpu=%.3f passes=",
+                     gpu.status, gpu.sampleCount, gpu.droppedFrames, gpu.spanAverageMs,
+                     gpu.spanMaxMs, gpu.betweenAverageMs, aoMs);
+        if (n > 0 && (size_t)n < sizeof line - used) used += (size_t)n;
+        for (i = 0; i < gpu.rowCount && i < AURORA_GPU_STAT_ROWS; ++i) {
+            n = snprintf(line + used, sizeof line - used, "%s%s=%.3f", i ? "|" : "",
+                         gpu.rows[i].name, gpu.rows[i].averageMs);
+            if (n < 0 || (size_t)n >= sizeof line - used) break;
+            used += (size_t)n;
+        }
+        aurora_gpu_stats_set_enabled(false);
+        aurora_gpu_stats_set_enabled(true);
+    }
+#endif
+    mp6_ao_ab_emit(line);
+    mp6_enh_ao_ab_flip();
+    snprintf(line, sizeof line, "[MP6-AO-AB] next ao=%d variant=%s", mp6_enh_ao_ab_level(),
+             mp6_enh_ao_ab_variant_name(mp6_enh_ao_ab_variant()));
+    mp6_ao_ab_emit(line);
+}
+
 static void mp6_tick_rate_log(void)
 {
     static int64_t s_windowStartNs = 0;
@@ -2607,6 +2982,7 @@ static void mp6_tick_rate_log(void)
                 (double)g_phGameNs / phN / 1e6, (double)g_phEndFrameNs / phN / 1e6,
                 (double)g_phSealNs / phN / 1e6, (double)g_phViPostNs / phN / 1e6,
                 g_phSamples, mp6_tick_count);
+        mp6_ao_ab_window_end(rate, (double)g_phGameNs / phN / 1e6, (double)g_phEndFrameNs / phN / 1e6);
         fflush(stderr);
         s_windowStartNs = now;
         s_windowStartTick = mp6_tick_count;
@@ -2621,6 +2997,34 @@ static void mp6_tick_rate_log(void)
         g_phGameNs = g_phEndFrameNs = g_phSealNs = g_phViPostNs = 0;
         g_phOverlayNs = 0;
         g_phSamples = 0;
+        {
+            /* Shader/pipeline builds in the same window: stalls are draws that
+             * waited for their pipeline (mid-frame compiles). */
+            AuroraPipelineStats pipe;
+            aurora_pipeline_stats_take(&pipe);
+            fprintf(stderr, "[MP6-PIPE] window=%.2fs stalls=%u stall_ms=%.1f stall_max_ms=%.1f "
+                            "built=%u build_ms=%.1f prewarmed=%u queued=%u resident=%u tick=%ld "
+                            "uber_draws=%u skipped=%u\n",
+                    elapsed, pipe.stalls, pipe.stallMs, pipe.stallMaxMs, pipe.built, pipe.buildMs,
+                    pipe.prewarmed, pipe.queued, pipe.resident, mp6_tick_count, pipe.uberDraws,
+                    pipe.skippedDraws);
+            extern void mp6_ao_window_stats(char *out, size_t size);
+            char ao[160];
+            mp6_ao_window_stats(ao, sizeof(ao));
+            fprintf(stderr, "[MP6-AO] window=%.2fs %s\n", elapsed, ao);
+#ifdef __EMSCRIPTEN__
+            {
+                /* Web memory: what malloc holds now, and the linear memory
+                 * it has grown to (it never shrinks; iOS counts the pages
+                 * touched). */
+                const struct mallinfo mi = mallinfo();
+                fprintf(stderr, "[MP6-HEAP] window=%.2fs malloc_used=%.1fMB malloc_free=%.1fMB heap=%.1fMB\n",
+                        elapsed, mi.uordblks / 1048576.0, mi.fordblks / 1048576.0,
+                        (double)emscripten_get_heap_size() / 1048576.0);
+            }
+#endif
+            fflush(stderr);
+        }
     }
 }
 
@@ -2733,7 +3137,7 @@ static void mp6_dispatch_aurora_events(const AuroraEvent *event)
                 extern void mp6_display_note_sdl_event(const SDL_Event *ev);
                 mp6_display_note_sdl_event(&event->sdl);
             }
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__) /* touch controls: Android + browser */
             mp6_touch_pad_event(&event->sdl); /* finger tracking (touch_pad.cpp) */
 #endif
         }
@@ -2790,6 +3194,7 @@ void VIWaitForRetrace(void)
     /* Tick-phase attribution (see the g_ph* block above). tEntry closes the
      * game's own slice, which began when the previous call returned. */
     int64_t tEntry = mp6_tick_phase_now(), tEndFrame = 0, tSeal = 0, tThrottleOut = 0;
+    int64_t fiEntryNs = (int64_t)mp6_host_monotonic_ns();
     int64_t tOverlayIn = 0, tOverlayOut = 0; /* the overlay's own excluded bucket */
     /* g_phLastReturnNs is overwritten at the bottom of this function, so this
      * tick's game slice has to be taken while it still names the PREVIOUS
@@ -2824,6 +3229,7 @@ void VIWaitForRetrace(void)
         aurora_end_frame();
         tEndFrame = mp6_tick_phase_now();
         mp6_present_counters_add(0, 1); /* MP6_PRESENT_RATE_LOG accounting */
+        mp6_fi_note_tick_times(g_fiTickReturnNs, fiEntryNs); /* game slice of this tick */
         mp6_fi_note_frame_end(); /* Unlocked FPS: seal tick N's retained GX stream,
                                   * snapshot camera-cut history, and timestamp its present */
         tSeal = mp6_tick_phase_now();
@@ -2868,9 +3274,14 @@ void VIWaitForRetrace(void)
      * pump lifecycle events until a real frame opens.  No retrace callback,
      * PAD sample, Freecam integration, widescreen/game write, or tick advance
      * occurs inside the gate. */
-    (void)mp6_frame_gate_wait(mp6_frame_gate_pump_events,
-                              mp6_frame_gate_try_begin,
-                              mp6_frame_gate_idle, &androidGate);
+    {
+        int64_t tGate = (int64_t)mp6_host_monotonic_ns();
+        if (mp6_fi_smooth_hide_tick() | mp6_tick_quick_play_hide()) aurora_hide_next_frame(); /* Unlocked FPS smooth mode; Quick Party frame budget */
+        (void)mp6_frame_gate_wait(mp6_frame_gate_pump_events,
+                                  mp6_frame_gate_try_begin,
+                                  mp6_frame_gate_idle, &androidGate);
+        mp6_fi_note_begin_wait((int64_t)mp6_host_monotonic_ns() - tGate);
+    }
     frameBegan = 1;
     /* Apply deferred motor commands from main-loop context (see the
      * mp6_PADControlMotor queue above) -- right after the event pump, on
@@ -2902,13 +3313,51 @@ void VIWaitForRetrace(void)
     }
 
 #ifndef __ANDROID__
-    frameBegan = aurora_begin_frame() ? 1 : 0;
+    {
+        int64_t tBegin = (int64_t)mp6_host_monotonic_ns();
+        if (mp6_fi_smooth_hide_tick() | mp6_tick_quick_play_hide()) aurora_hide_next_frame(); /* Unlocked FPS smooth mode; Quick Party frame budget */
+        frameBegan = aurora_begin_frame() ? 1 : 0;
+#ifdef __EMSCRIPTEN__
+        /* A browser tick with no frame open still runs the game, and every
+         * GX call it makes stays queued in Aurora's fifo until a frame
+         * finally opens. Back from the iPhone home screen, Safari can go
+         * seconds without handing back the GPU's staging buffers: the game
+         * played on unseen (black screen), the queue grew by hundreds of MB
+         * and the first frame that opened ran the heap out. Hold the tick
+         * here until a frame opens instead, like the hidden-tab hold in
+         * Aurora's poll_events; events still pump (and are dropped, as on
+         * Android) so the page's lifecycle changes get through. */
+        if (!frameBegan) {
+            const int64_t holdStart = (int64_t)mp6_host_monotonic_ns();
+            int64_t lastLog = holdStart;
+            while (!frameBegan) {
+                emscripten_sleep(8);
+                (void)aurora_update();
+                mp6_aurora_input_reset_transients();
+                frameBegan = aurora_begin_frame() ? 1 : 0;
+                const int64_t now = (int64_t)mp6_host_monotonic_ns();
+                if (!frameBegan && now - lastLog >= 2000000000ll) {
+                    lastLog = now;
+                    printf("[MP6-FRAME] no frame for %lld ms: %s\n", (long long)((now - holdStart) / 1000000),
+                           aurora_begin_frame_fail_reason());
+                    fflush(stdout);
+                }
+            }
+            if ((int64_t)mp6_host_monotonic_ns() - holdStart >= 500000000ll) {
+                printf("[MP6-FRAME] frame resumed after %lld ms\n",
+                       (long long)(((int64_t)mp6_host_monotonic_ns() - holdStart) / 1000000));
+                fflush(stdout);
+            }
+        }
+#endif
+        mp6_fi_note_begin_wait((int64_t)mp6_host_monotonic_ns() - tBegin);
+    }
 #endif
     if (frameBegan) {
         g_frameOpen = true;
         mp6_present_counters_add(1, 0); /* MP6_PRESENT_RATE_LOG accounting */
         mp6_fi_note_frame_begin(); /* Unlocked FPS: arm retained-stream capture */
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__) /* touch controls: Android + browser */
         /* Draw the touch overlay into the just-opened ImGui frame
          * (aurora ran ImGui::NewFrame inside the successful
          * aurora_begin_frame above; the overlay's foreground draw list is
@@ -2970,11 +3419,15 @@ void VIWaitForRetrace(void)
         mp6_freecam_input_tick();
     }
     mp6_pump_keyboard_to_pad();
+    /* Mic backends start/stop only here, on the main loop's real stack
+     * (JNI and COM must never run on a HuPrc coroutine stack). */
+    mp6_mic_host_pump();
     if (g_postRetraceCB) {
         g_postRetraceCB((u32)mp6_tick_count);
     }
 
     g_phLastReturnNs = mp6_tick_phase_now();
+    g_fiTickReturnNs = (int64_t)mp6_host_monotonic_ns();
     mp6_tick_phase_add(&g_phViPostNs, tThrottleOut, g_phLastReturnNs);
     if (tEntry > 0) g_phSamples++;
 
@@ -3028,12 +3481,14 @@ void VIWaitForRetrace(void)
 #undef PSMTXInvXpose
 #undef PSMTXReorder
 #undef PSMTXTrans
+#undef PSMTXTransApply
 #undef PSMTXScale
 #undef PSMTXRotRad
 #undef PSMTXRotAxisRad
 #undef PSMTXMultVec
 #undef PSMTXMultVecArray
 #undef PSMTXMultVecSR
+#undef PSMTXMultVecArraySR
 #undef PSMTXROMultVecArray
 #undef PSVECAdd
 #undef PSVECSubtract
@@ -3048,6 +3503,9 @@ u32 PSMTXInverse(const Mtx src, Mtx inv) { return C_MTXInverse(src, inv); }
 u32 PSMTXInvXpose(const Mtx src, Mtx invX) { return C_MTXInvXpose(src, invX); }
 void PSMTXReorder(const Mtx src, ROMtx dest) { C_MTXReorder(src, dest); }
 void PSMTXTrans(Mtx m, f32 xT, f32 yT, f32 zT) { C_MTXTrans(m, xT, yT, zT); }
+void PSMTXTransApply(const Mtx src, Mtx dst, f32 xT, f32 yT, f32 zT) {
+    C_MTXTransApply(src, dst, xT, yT, zT);
+}
 void PSMTXScale(Mtx m, f32 xS, f32 yS, f32 zS) { C_MTXScale(m, xS, yS, zS); }
 void PSMTXRotRad(Mtx m, char axis, f32 rad) { C_MTXRotRad(m, axis, rad); }
 void PSMTXRotAxisRad(Mtx m, const Vec* axis, f32 rad) { C_MTXRotAxisRad(m, axis, rad); }
@@ -3056,6 +3514,13 @@ void PSMTXMultVecArray(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count)
     C_MTXMultVecArray(m, srcBase, dstBase, count);
 }
 void PSMTXMultVecSR(const Mtx m, const Vec* src, Vec* dst) { C_MTXMultVecSR(m, src, dst); }
+void PSMTXMultVecArraySR(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count) {
+    /* Aurora exposes the scalar scale/rotation operation. Preserve its
+     * in-place support while adapting the SDK array entry point. */
+    for (u32 i = 0; i < count; ++i) {
+        C_MTXMultVecSR(m, &srcBase[i], &dstBase[i]);
+    }
+}
 void PSMTXROMultVecArray(const ROMtx m, const Vec* srcBase, Vec* dstBase, u32 count) {
     C_MTXROMultVecArray(m, srcBase, dstBase, count);
 }
@@ -3335,7 +3800,7 @@ static void mp6_gx_close_stale_primitive(const char *context)
 
 void mp6_GXBegin(GXPrimitive type, GXVtxFmt vtxfmt, u16 nverts)
 {
-    void *ret = __builtin_return_address(0);
+    void *ret = MP6_RETURN_ADDRESS();
     u32 drawIdx;
     g_gxCallNo++;
     mp6_gx_close_stale_primitive("closing it before the next GXBegin");
@@ -3389,7 +3854,7 @@ void mp6_GXEnd(void)
  * separate open/close pairing exists for this shape). */
 void mp6_GXCallDisplayList(const void *list, u32 nbytes)
 {
-    void *ret = __builtin_return_address(0);
+    void *ret = MP6_RETURN_ADDRESS();
     u32 drawIdx = g_mp6DrawIndex++;
     bool hidden = mp6_draw_should_skip(drawIdx);
     if (hidden) {
@@ -3726,8 +4191,15 @@ int mp6_widescreen_enabled(void)
         return 1;
     }
     {
-        const char *forceWide = getenv("MP6_WIDESCREEN");
-        return (forceWide != NULL && forceWide[0] != '\0' && forceWide[0] != '0') ? 1 : 0;
+        /* Read once: this runs for every widened draw and sprite, and
+         * getenv scans the environment under a lock (~3% of a board's
+         * game-thread time with widescreen off). */
+        static int forceWide = -1;
+        if (forceWide < 0) {
+            const char *value = getenv("MP6_WIDESCREEN");
+            forceWide = (value != NULL && value[0] != '\0' && value[0] != '0') ? 1 : 0;
+        }
+        return forceWide;
     }
 }
 

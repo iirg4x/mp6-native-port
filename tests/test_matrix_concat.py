@@ -10,8 +10,8 @@ ROOT=Path(__file__).resolve().parents[1]
 class MatrixConcat(unittest.TestCase):
     def test_original_arithmetic_and_aliases(self):
         unit='lib/dolphin/mtx/mtx.c'
-        source=(ROOT/'build/aurora-release-source'/unit).read_text()
-        self.assertEqual(source,(ROOT/'build/android-aurora-source'/unit).read_text())
+        source=(ROOT/'third_party/aurora'/unit).read_text()
+        self.assertEqual(source,(ROOT/'third_party/aurora'/unit).read_text())
         # The preserved scalar fallback is the reference for every alias mode.
         # Do not depend on an ignored local checkpoint to run this test.
         original=source[source.index('static inline void mtx_concat_scalar('):source.index('void C_MTXConcat(')]

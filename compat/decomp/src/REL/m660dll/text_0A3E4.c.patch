@@ -1,0 +1,23 @@
+--- a/src/REL/m660dll/text_0A3E4.c
++++ b/src/REL/m660dll/text_0A3E4.c
+@@ -15,0 +16 @@
++#include "game/mg/timer.h"
+@@ -71,3 +72,3 @@
+-int fn_1_90A8(struct ColNarrowParam_s *first, struct ColNarrowParam_s *second);
+-void fn_1_9128(struct MgActor_s *actor, int value);
+-struct MgTimer_s *fn_1_2FA0(s32, s32, s32, f32, f32);
++s32 fn_1_90A8(COL_NARROW_PARAM *first, COL_NARROW_PARAM *second);
++void fn_1_9128(MGACTOR *actor, intptr_t parameter);
++MGTIMER *fn_1_2FA0(int type,int duration,int end,float x,float y);
+@@ -77 +78 @@
+-void fn_1_4004(HuVecF *origin);
++void fn_1_4004(Vec *origin);
+@@ -81 +82 @@
+-void fn_1_67D4(s16 slot, s16 mode, struct VoicePosition *position);
++void fn_1_67D4(s16 slot, s16 mode, Vec *position);
+@@ -176 +177 @@
+-s16 fn_1_A9B0() {
++s16 fn_1_A9B0(void) {
+@@ -186 +187 @@
+-s16 fn_1_A9F0() {
++s16 fn_1_A9F0(void) {

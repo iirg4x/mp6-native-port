@@ -1,0 +1,8 @@
+{
+  "name": "chapter-picture",
+  "tool": "built-in imagegen",
+  "source": "sources/chapter-picture.png",
+  "asset": "assets/chapter-picture.png",
+  "prompt": "Use case: style-transfer. Asset type: transparent Picture settings icon for a Mario Party 6 storybook UI. Input image 1 (picture.png) is a composition reference: a simple gold picture-frame icon with a star at the top and a blue sky, one white cloud and rounded green hills inside. Input images 2 and 3 (chapter-sound.png and chapter-game.png) are the exact STYLE references. Create a new Picture icon with the simplicity of image 1 but the smooth plump 2.5D shading, saturated colors, crisp thin dark contour and narrow ivory die-cut rim of images 2 and 3. Slight playful tilt like image 1, but no exaggerated perspective. Use a softly beveled golden yellow frame, a small puffy yellow star at its top, cyan-blue sky, two very simple rounded green hill silhouettes, and one tiny white cloud. Keep all shapes broad and instantly readable at 220 pixels. Match the toy-like sun/moon game sprites, neither flat vector nor elaborate realistic render. No extra sparkles, objects, symbols, text, letters, captions, grain, busy scenery, checkerboard or backdrop. Entire silhouette centered with generous clear padding on genuinely transparent background. Only ONE icon, not a UI screen. Do not add any external panel/frame beyond the icon's own simple picture frame.",
+  "referenceRole": "Existing picture composition and approved Sound/Game sprite shading; generated alpha preserved"
+}

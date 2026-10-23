@@ -1,0 +1,16 @@
+--- a/src/REL/m609dll/course.c
++++ b/src/REL/m609dll/course.c
+@@ -78 +78 @@
+-void fn_1_46F8(s16,s16,void *);
++void fn_1_46F8(s16 voiceSlot, s16 panMode, Vec *position);
+@@ -84,2 +84,2 @@
+-s32 fn_1_126F0(M609Player *,s16);
+-s32 fn_1_125C4(void);
++s16 fn_1_126F0(M609Player *movement, s16 advanceAfterChase);
++void fn_1_125C4(void);
+@@ -87 +87 @@
+-void fn_1_CA6C(MGACTOR *actor, int hookParameter);
++void fn_1_CA6C(MGACTOR *actor, intptr_t hookParameter);
+@@ -2029 +2029 @@
+-void fn_1_CA6C(MGACTOR *actor, int hookParameter)
++void fn_1_CA6C(MGACTOR *actor, intptr_t hookParameter)

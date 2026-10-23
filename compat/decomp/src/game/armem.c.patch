@@ -1,56 +1,49 @@
 --- a/src/game/armem.c
 +++ b/src/game/armem.c
-@@ -2,0 +3 @@
+@@ -3,0 +4 @@
 +#include "be.h"
-@@ -257 +258 @@
--    HuAR_ARAMtoMRAMNum(aMemP, 0);
-+    return HuAR_ARAMtoMRAMNum(aMemP, 0);
-@@ -266,0 +268,3 @@
-+    if(block == NULL) {
+@@ -281,3 +281,0 @@
+-/* HuDataDirRead and HuDataDirReadAsync call this to queue an ARAM-to-main-memory copy; the
+- * synchronous caller waits and then looks up its data record. */
+-/* HuDataDirRead paths call this wrapper; it starts the transfer without returning its result. */
+@@ -285 +283 @@
+-    HuAR_ARAMtoMRAMNum(aramAddress, 0);
++    return HuAR_ARAMtoMRAMNum(aramAddress, 0);
+@@ -294,0 +293 @@
++
+@@ -295,0 +295,3 @@
++    if(allocatedBlock == NULL) {
 +        return NULL;
 +    }
-@@ -268 +272 @@
+@@ -297,2 +299 @@
+-        /* The resource is already present; this path returns no buffer pointer. */
 -        return;
-+        return HuDataGetDirPtr(block->dir << 16);
-@@ -270,0 +275,3 @@
-+    if(size <= 0) {
++        return HuDataGetDirPtr(allocatedBlock->dataDirId << 16);
+@@ -300,0 +302,3 @@
++    if(transferSize <= 0) {
 +        return NULL;
 +    }
-@@ -327 +334 @@
--    s32 *dirBuf;
-+    s32 *dirBuf; s32 nextOff; s32 rawLen; s32 decodeType;
-@@ -348 +355,12 @@
--    count = dirBuf[0];
-+    /* preLoadBuf is DMA'd straight from ARAM -- itself a raw copy of the
-+     * original big-endian disc bytes -- so dirBuf[0]/dirBuf[1] here are
-+     * two consecutive BE u32 offsets into this ARAM-cached directory's
-+     * blob, the exact same per-file offset-table shape game/data.c's
-+     * GetFileInfo already reads via be32(), not native ints. Confirmed a
-+     * real bug, not a guess: an unfixed read here fed a bogus, huge size
-+     * into HuMemDirectMallocNum a few lines down, printing a genuine
-+     * "HuMem>memory alloc error" and -- via HuWinFrameCreate's own
-+     * missing NULL check one level up (game/window.c) -- crashing
-+     * OpeningExec's window-frame setup the first time this port ever
-+     * reached that far. */
-+    count = (s32)be32(&dirBuf[0]);
-@@ -350 +368,2 @@
--    if(dirBuf[1] - count < 0) {
-+    nextOff = (s32)be32(&dirBuf[1]);
-+    if(nextOff - count < 0) {
-@@ -353 +372 @@
--        size = (dirBuf[1] - count + 0x3F) & 0xFFFFFFFE0;
-+        size = (nextOff - count + 0x3F) & 0xFFFFFFFE0;
-@@ -367 +386,9 @@
--    dst = HuMemDirectMallocNum(heap, (dirBuf[0] + 1) & ~1, num);
-+    /* Same container-header shape game/data.c's GetFileInfo and
-+     * src/REL/bootDll/boot.c's NintendoDataDecode/WarningDataDecode
-+     * (both already patched) fix elsewhere: a BE u32 rawLen then a BE
-+     * u32 decodeType immediately before the actual payload bytes
-+     * HuDecodeData consumes (those payload bytes themselves are never
-+     * byte-swapped -- decode.c/sprman.c's own concern, not this one). */
-+    rawLen = (s32)be32(&dirBuf[0]);
-+    decodeType = (s32)be32(&dirBuf[1]);
-+    dst = HuMemDirectMallocNum(heap, (rawLen + 1) & ~1, num);
-@@ -371 +398 @@
--    HuDecodeData(&dirBuf[2], dst, dirBuf[0], dirBuf[1]);
-+    HuDecodeData(&dirBuf[2], dst, rawLen, decodeType);
+@@ -362 +365,0 @@
+-/* Character and message loaders call this to copy and decode one file from a resident archive. */
+@@ -364 +367 @@
+-    s32 *directoryEntry;
++    s32 *directoryEntry; s32 nextOff; s32 rawLen; s32 decodeType;
+@@ -390 +393,2 @@
+-    fileOffset = directoryEntry[0];
++    fileOffset = (s32)be32(&directoryEntry[0]);
++    nextOff = (s32)be32(&directoryEntry[1]);
+@@ -394 +398 @@
+-    if(directoryEntry[1] - fileOffset < 0) {
++    if(nextOff - fileOffset < 0) {
+@@ -399 +403 @@
+-        transferSize = (directoryEntry[1] - fileOffset + ARMEM_FILE_TRANSFER_ROUNDUP_BIAS) &
++        transferSize = (nextOff - fileOffset + ARMEM_FILE_TRANSFER_ROUNDUP_BIAS) &
+@@ -415,0 +420,2 @@
++    rawLen = (s32)be32(&directoryEntry[0]);
++    decodeType = (s32)be32(&directoryEntry[1]);
+@@ -417 +423 @@
+-        heap, (directoryEntry[0] + 1) & ARMEM_FILE_SIZE_ALIGN_DOWN_MASK, allocationNumber);
++        heap, (rawLen + 1) & ARMEM_FILE_SIZE_ALIGN_DOWN_MASK, allocationNumber);
+@@ -422 +428 @@
+-    HuDecodeData(&directoryEntry[2], decodedData, directoryEntry[0], directoryEntry[1]);
++    HuDecodeData(&directoryEntry[2], decodedData, rawLen, decodeType);

@@ -10,10 +10,10 @@ body {
     height: 100%;
     margin: 0;
     padding: 0;
-    font-family: "Inter";
+    font-family: "Titan One";
     font-weight: normal;
     font-size: 16dp;
-    color: #E0DBC8;
+    color: #17100b;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -25,8 +25,25 @@ body {
 fps,
 toast {
     position: absolute;
-    border: 1dp #009dda;
-    background-color: rgba(37, 59, 156, 100%);
+}
+
+fps,
+toast,
+notice {
+    border: 2dp #dfbd60;
+    background-color: #fff9e7;
+}
+
+/* [MP6] The drop edge is a thicker bottom border, not a box-shadow. RmlUi
+   bakes a box-shadow together with the background into a texture at the
+   panel's first layout and keeps it when the panel then grows, so a panel
+   whose width settles a frame later (a long message, a clamped max-width,
+   a tablet's dp scale) drew its background as a short stub under the
+   heading, leaving the message text bare over the game. */
+toast,
+notice {
+    border-width: 2dp 2dp 5dp 2dp;
+    border-color: #dfbd60 #dfbd60 #a87a28 #dfbd60;
 }
 
 toast {
@@ -34,16 +51,14 @@ toast {
     right: 40dp;
     display: flex;
     flex-flow: column;
-    border-radius: 14dp;
+    max-width: 90%;
+    border-radius: 10dp;
     overflow: hidden;
-    backdrop-filter: blur(5dp);
-    box-shadow: 0 0 15dp 3dp;
     filter: opacity(0);
     transform: scale(0.9);
     transform-origin: center;
     transition: filter transform 0.2s cubic-in-out;
-    padding: 18dp 24dp;
-    gap: 8dp;
+    padding: 0;
 }
 
 toast[open] {
@@ -51,40 +66,38 @@ toast[open] {
     transform: scale(1);
 }
 
-/*toast:hover {
-    cursor: pointer;
-    background-color: rgba(61, 59, 36, 80%);
-}
-
-toast:active {
-    background-color: rgba(45, 43, 26, 80%);
-}*/
-
-toast heading {
+toast heading,
+notice heading {
     display: flex;
     gap: 18dp;
     align-items: center;
-    font-size: 14dp;
-    font-weight: bold;
-    text-transform: uppercase;
-    color: #009dda;
+    padding: 10dp 18dp;
+    font-size: 17dp;
+    font-weight: normal;
+    color: #ffffff;
+    background-color: #e92313;
 }
 
-toast heading > span {
-    flex: 1 0 auto;
+toast heading > span,
+notice heading > span {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 toast heading > row {
-    flex: 1 0 auto;
+    flex: 1 1 auto;
     display: flex;
     align-items: center;
     gap: 4dp;
 }
 
-toast message {
+toast message,
+notice message {
     display: flex;
     flex-flow: column;
+    padding: 12dp 18dp 16dp;
     gap: 8dp;
+    line-height: 1.35;
 }
 
 toast message row {
@@ -92,7 +105,7 @@ toast message row {
 }
 
 toast message row.muted {
-    opacity: 0.5;
+    color: #756345;
 }
 
 toast progress {
@@ -104,21 +117,22 @@ toast progress {
 }
 
 toast progress fill {
-    background-color: rgba(194, 164, 45, 80%);
+    background-color: #e6b624;
 }
 
 toast.achievement {
-    border: 1dp #00b4fa;
+    border-color: #dfbd60 #dfbd60 #a87a28 #dfbd60;
 }
 
 toast.achievement heading {
-    color: #00b4fa;
+    color: #ffffff;
 }
 
 toast.controller-warning {
     top: auto;
     right: auto;
-    bottom: 40dp;
+    /* Keep the persistent notice above the book's Choose/Back strip. */
+    bottom: 13vh;
     left: 50%;
     width: 440dp;
     max-width: 90%;
@@ -130,7 +144,7 @@ toast.controller-warning[open] {
 }
 
 toast.controller-warning heading {
-    color: #00b4fa;
+    color: #ffffff;
 }
 
 toast.menu-notification {
@@ -154,6 +168,49 @@ toast.menu-notification message {
 toast.menu-notification message row {
     align-items: center;
     gap: 6dp;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* [MP6] The centered notice (overlay.cpp create_notice): the layer fills the
+   screen and centers the panel, which wraps inside its width cap, so it fits
+   any aspect ratio and never reaches the corner badges. */
+noticelayer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    filter: opacity(0);
+    transition: filter 0.2s cubic-in-out;
+}
+
+noticelayer[open] {
+    filter: opacity(1);
+}
+
+notice {
+    display: flex;
+    flex-flow: column;
+    width: 560dp;
+    max-width: 86%;
+    border-radius: 10dp;
+    overflow: hidden;
+    transform: scale(0.9);
+    transition: transform 0.2s cubic-in-out;
+}
+
+noticelayer[open] notice {
+    transform: scale(1);
+}
+
+notice heading,
+notice message {
+    justify-content: center;
+    text-align: center;
 }
 
 icon {
@@ -194,9 +251,9 @@ icon.warning {
 fps {
     display: none;
     z-index: 99;
-    font-family: "N64 Party";
+    font-family: "Titan One";
     font-size: 18dp;
-    font-weight: bold;
+    font-weight: normal;
     padding: 9dp 12dp;
     border-radius: 7dp;
     pointer-events: none;
@@ -253,13 +310,13 @@ statunit {
     z-index: 99;
     min-width: 218dp;
     padding: 8dp 10dp;
-    border: 1dp #009dda;
+    border: 1dp #dfbd60;
     border-radius: 7dp;
-    background-color: rgba(6, 10, 26, 82%);
+    background-color: #fff9e7;
     font-family: "Inter";
     font-size: 14dp;
     font-weight: bold;
-    color: #CFE4F2;
+    color: #17100b;
     pointer-events: none;
     white-space: nowrap;
 }
@@ -291,19 +348,19 @@ statunit pcell {
     display: block;
     flex: 0 0 auto;
     text-align: right;
-    color: #7CFF7C;
+    color: #287138;
 }
 
 statunit pcell.lbl {
     flex: 1 1 auto;
     text-align: left;
-    color: #9FB6C6;
+    color: #756345;
     font-weight: normal;
 }
 
-statunit prow.good pcell { color: #7CFF7C; }
-statunit prow.bad pcell  { color: #FF6B5E; }
-statunit prow.info pcell { color: #CFE4F2; }
+statunit prow.good pcell { color: #287138; }
+statunit prow.bad pcell  { color: #b3261e; }
+statunit prow.info pcell { color: #17100b; }
 
 statunit ptitle,
 statunit pgroup,
@@ -323,8 +380,8 @@ statunit pmore {
  * cannot reach the <statunit> block above, whose rows are deliberately a
  * different shape (label:value pairs, no title, no bars).
  *
- * Colours follow the reference: white title, orange group label, yellow column
- * headers, green values. Column alignment is LAYOUT, not a font -- numeric
+ * Paper/gold/red match the storybook; compact Inter data stays readable.
+ * Column alignment is LAYOUT, not a font -- numeric
  * cells are fixed-width and right-aligned so they form a column under the
  * proportional UI face. res/fonts has no monospace family and adding one is a
  * font-licensing decision reserved for the project owner.
@@ -433,26 +490,27 @@ statpanel {
     max-height: 100%;
     overflow: hidden;
     padding: 6dp 10dp 8dp 10dp;
-    border: 1dp #009dda;
+    border: 1dp #dfbd60;
     border-radius: 7dp;
-    background-color: rgba(6, 10, 26, 82%);
+    background-color: #fff9e7;
     font-family: "Inter";
     font-size: 12dp;
-    color: #CFE4F2;
+    color: #17100b;
     pointer-events: none;
 }
 
 statpanel ptitle {
     display: block;
-    color: #FFFFFF;
-    font-weight: bold;
+    color: #df200c;
+    font-family: "Titan One";
+    font-weight: normal;
     font-size: 15dp;
     padding: 2dp 0 4dp 0;
 }
 
 statpanel pgroup {
     display: block;
-    color: #FFB02E;
+    color: #765616;
     font-weight: bold;
     padding: 6dp 0 2dp 0;
 }
@@ -494,8 +552,8 @@ statpanel pcells {
 }
 
 statpanel phead {
-    color: #F2E14C;
-    border-bottom: 1dp rgba(242, 225, 76, 30%);
+    color: #765616;
+    border-bottom: 1dp #dfbd60;
     margin-bottom: 2dp;
 }
 
@@ -534,20 +592,20 @@ statpanel pcell.lbl {
 }
 
 statpanel prow pcell {
-    color: #7CFF7C;
+    color: #287138;
 }
 
 statpanel prow pcell.lbl {
-    color: #B8E6B8;
+    color: #17100b;
 }
 
 /* Row kinds (see the R record's <kind> field). */
-statpanel prow.pool pcell.lbl { color: #7FD2FF; }
-statpanel prow.cat  pcell     { color: #9FB6C6; }
-statpanel prow.cat  pcell.lbl { color: #9FB6C6; }
-statpanel prow.good pcell     { color: #7CFF7C; }
-statpanel prow.bad  pcell     { color: #FF6B5E; }
-statpanel prow.info pcell     { color: #CFE4F2; }
+statpanel prow.pool pcell.lbl { color: #0900ed; }
+statpanel prow.cat  pcell     { color: #756345; }
+statpanel prow.cat  pcell.lbl { color: #756345; }
+statpanel prow.good pcell     { color: #287138; }
+statpanel prow.bad  pcell     { color: #b3261e; }
+statpanel prow.info pcell     { color: #17100b; }
 
 /* The reference's red proportional bar: behind the row, length = this row's
  * share of the hottest one. z-index below the cells so the numbers stay
@@ -562,10 +620,10 @@ statpanel pbar {
      * against the containing block rather than against the line it sits on. */
     height: 14dp;
     z-index: -1;
-    background-color: rgba(196, 42, 42, 34%);
+    background-color: rgba(233, 35, 19, 16%);
 }
 
-/* Dimmer than the panel body (#CFE4F2) and that is the WHOLE differentiation.
+/* Dimmer than the panel body and that is the WHOLE differentiation.
  * Same defect and same fix as console.rcss's `acmore`, which see: this row
  * used to add `font-style: italic`, ui.cpp:78-79 loads Regular and Bold only,
  * and FontFamily::GetFaceHandle's style match is exact -- so
@@ -573,13 +631,13 @@ statpanel pbar {
  * glyphs. Only the italic is gone; every box declaration here is untouched. */
 statpanel pmore {
     display: block;
-    color: #9FB6C6;
+    color: #756345;
     padding: 2dp 0 0 2dp;
 }
 
 statpanel pnote {
     display: block;
-    color: #8FA9BC;
+    color: #756345;
     padding: 1dp 0 0 2dp;
 }
 
@@ -637,13 +695,21 @@ logo img.outer {
     toast {
         top: 20dp;
         right: 20dp;
+        font-size: 14dp;
     }
 
-    toast.controller-warning {
-        bottom: 20dp;
-    }
+    toast heading, notice heading { font-size: 15dp; padding: 8dp 14dp; }
+    toast message, notice message { padding: 10dp 14dp 12dp; }
+    notice { font-size: 14dp; }
 
     toast.menu-notification {
         top: 20dp;
     }
+}
+
+/* Avoid percentage translations of a max-clamped box on narrow screens.
+   Equal viewport insets keep the notice centered through live resizing. */
+@media (max-width: 500dp) {
+    toast.controller-warning { left: 5vw; width: 90vw; max-width: none; transform: scale(0.9); }
+    toast.controller-warning[open] { transform: scale(1); }
 }

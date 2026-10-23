@@ -1,13 +1,19 @@
 --- a/src/REL/bootDll/boot.c
 +++ b/src/REL/bootDll/boot.c
 @@ -15,0 +16 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -16,0 +17 @@
 +#include "be.h"
-@@ -16,0 +18,4 @@
+@@ -17,0 +19,5 @@
 +#include <stdio.h>  /* census diagnostics used below (CameraOutView) */
 +#include <stdlib.h>
 +#include <string.h> /* string helpers used below */
 +#include "mp6_widescreen.h" /* widescreen support */
-@@ -105,2 +110,18 @@
++#include "mp6_ambient_occlusion.h" /* title art is not scene geometry */
+@@ -68,0 +75,2 @@
++static void BootTitleAOPreDrawHook(s16 layerNo);
++
+@@ -109,2 +117,18 @@
 -    Hu3DCameraPerspectiveSet(1, 45.0f, 20.0f, 15000.0f, 1.2f);
 -    Hu3DCameraViewportSet(1, 0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
 +    /* This overlay sets its own 3D camera (matching hsfman.c's defCamera
@@ -28,7 +34,41 @@
 +     * ViewportSet, so this camera stayed frozen at scene-load size without
 +     * this. Same literals, same effect on this call. */
 +    mp6_widescreen_camera_widen(1, 45.0f, 20.0f, 15000.0f, 1.2f, 480.0f);
-@@ -309,0 +331,84 @@
+@@ -153 +178 @@
+-    if (omovlevtno == 0) {
++    if (omovlevtno == 0 && !mp6_quick_play_skip_intro()) {
+@@ -186,0 +212,30 @@
++        if (mp6_quick_play_skip_intro() && getenv("MP6_BOOT_TO") == NULL) {
++            /* [MP6] Quick Party: no warning, logos, opening or title. The
++             * same one-time setup the first-boot path below performs (and
++             * the title hand-off after it), then straight to file select.
++             * Backing out of file select still reaches the title as usual.
++             * MP6_BOOT_TO keeps its own developer route (below) instead. */
++            OSReport("[QUICK-PLAY] intro skipped: boot -> file select\n");
++            CharInit();
++            HuWindowInit();
++            GameMesInit();
++            HuWinInit(1);
++            buf = HuMemDirectMallocNum(HEAP_DVD, msmSysGetSampSize(FALSE), HU_MEMNUM_OVL);
++            msmSysLoadGroup(0, buf, FALSE);
++            HuMemDirectFree(buf);
++            msmSysSetGroupLoadMode(TRUE);
++            HuAudSndGrpSetSet(MSM_GRP_MENU);
++            NintendoDispF = TRUE;
++            asyncStat = HuDataDirReadAsync(DATA_filesel);
++            while (!HuDataGetAsyncStat(asyncStat)) {
++                HuPrcVSleep();
++            }
++            omOvlCallEx(DLL_fileseldll, TRUE, 0, 0);
++            for (frame = 0; frame < GW_PLAYER_MAX; frame++) {
++                GwPlayerConf[frame].charNo = -1;
++            }
++            HuPrcEnd();
++            while (TRUE) {
++                HuPrcVSleep();
++            }
++        }
+@@ -318,0 +343,84 @@
 +    /* Native-port developer boot route (MP6_BOOT_TO).
 +     *
 +     * The shipped flow can only leave this overlay one way: through the
@@ -113,7 +153,13 @@
 +        }
 +    }
 +
-@@ -485,0 +626,21 @@
+@@ -341,0 +450,5 @@
++    /* Title art remains present through the START hold/fade.  Drop the
++     * title-only exclusion only after the boot wipe has made it invisible;
++     * OpeningExec installs its own pre/post hooks for the 3D book. */
++    Hu3DCameraLayerHookReset(1, 0);
++
+@@ -505,0 +619,21 @@
 +    /* Diagnostic: answers whether CameraOutView runs at all at the title
 +     * tick and what it writes, for tracking down the title's residual zoom
 +     * (camera pos z=500, the opening's last write, where this function
@@ -135,7 +181,20 @@
 +        }
 +    }
 +
-@@ -609,0 +771,29 @@
+@@ -632,2 +766,40 @@
+-// BootExec calls this after title data is available to create and initially hide the title logo
+-// models.
++static void BootTitleAOPreDrawHook(s16 layerNo)
++{
++    (void)layerNo;
++    /* BootTitleExec's PARTY/SIX/STAR HSFs are a flat authored collage.  The
++     * hook runs before layer 0 of camera 1, so this segment is excluded
++     * before any title depth can reach AO; actual opening book geometry on
++     * layer 1 becomes eligible again after OpeningExec installs PreDrawHook
++     * and the normal depth epochs are rebuilt. */
++    mp6_ao_camera_exclude(Hu3DCameraNo);
++}
++
 +/* Replaces an earlier name-prefix classifier ("match every grid*-prefixed
 + * object, plus hikari") that turned out to check the wrong data: this
 + * model's loader always writes mesh.material as one whole-array pointer
@@ -165,7 +224,7 @@
 + * above still stands as the reason grid5/grid14, and only those two, get
 + * any widescreen treatment at all. */
 +
-@@ -619,0 +810,59 @@
+@@ -643,0 +816,55 @@
 +    /* Diagnostic: maps the wordmark census (compat/decomp/src/game/
 +     * hsfman.c.patch's MP6_DRAW_CENSUS, which reports models by index only)
 +     * back to these three named models. Unconditional, once per overlay
@@ -209,23 +268,23 @@
 +     *
 +     * TitleMdlId[2] ("STAR") does mix foreground and background within its
 +     * own 65 sub-objects (see the per-object material analysis above) --
-+     * grid5/grid14 are the only two that are real backdrop art. Rather
-+     * than stretching their vertices (which visibly distorts grid5's round
-+     * balloons/stars and grid14's house proportions), each keeps its
-+     * native vertices and gets a mirror-extend instead:
-+     * mp6_widescreen_extend_mirror() appends one border quad per side into
-+     * the object's own buffers, with u running backward from the fold (u=0
-+     * exactly at the native edge, so the seam is C0-continuous by
-+     * construction). Mirroring rather than tiling because neither texture
-+     * has any measurable horizontal periodicity to tile. One visible
-+     * artifact (a twinned balloon at grid5's fold) was judged acceptable.
-+     * Appended faces live in the objects' own buffers, so they ride the
-+     * title's baked reveal motion exactly like the native quads; k=1
-+     * appends zero-area quads only, so a disabled build stays
-+     * byte-identical. */
-+    mp6_widescreen_extend_mirror(TitleMdlId[2], "grid5", 288.0f);
-+    mp6_widescreen_extend_mirror(TitleMdlId[2], "grid14", 288.0f);
-@@ -626,3 +875,14 @@
++     * grid5 (back_ex, the balloon/starfield sky) and grid14 (back_house,
++     * the town row) are the only two that are real backdrop art. Each is a
++     * single 576x480-unit CLAMP quad with no horizontal periodicity, so
++     * neither stretching (distorts balloons and houses) nor mirroring
++     * (visibly twinned balloons, houses and stars at each fold) reads as
++     * natural. Both are instead scaled proportionally by the width factor:
++     * the sky about its middle, the town about its bottom edge so it stays
++     * on the ground line. The art keeps its proportions and is simply
++     * framed closer; the extra height falls outside the frame. The cast,
++     * wordmark and copyright stay native. Scale 1 is bit-exact. */
++    mp6_widescreen_scale_backdrop(TitleMdlId[2], "grid5", 0);
++    mp6_widescreen_scale_backdrop(TitleMdlId[2], "grid14", -1);
+@@ -649,0 +877,3 @@
++    /* The title camera's layer-0 hook is the narrow semantic scope for the
++     * three authored HSF collage models; do not disable AO for bootDll. */
++    Hu3DCameraLayerHookSet(1, 0, BootTitleAOPreDrawHook);
+@@ -652,3 +882,14 @@
 -    Hu3DCameraPerspectiveSet(1, 20.0f, 20.0f, 5000.0f, 1.2f);
 -    Hu3DCameraViewportSet(1, 0.0f, 0.0f,
 -                          640.0f, 480.0f, 0.0f, 1.0f);
@@ -243,7 +302,7 @@
 +     * Perspective/ViewportSet) -- see ObjectSetup's own camera comment
 +     * above. */
 +    mp6_widescreen_camera_widen(1, 20.0f, 20.0f, 5000.0f, 1.2f, 480.0f);
-@@ -652,2 +912,20 @@
+@@ -678,2 +919,20 @@
 -        while (Hu3DMotionTimeGet(TitleMdlId[2]) < 70.0f) {
 -            HuPrcVSleep();
 +        /* Real, unpatched decomp code assumes TitleMdlId[2] (the title
@@ -266,37 +325,38 @@
 +                 mp6TitleMotionWaitFrame++) {
 +                HuPrcVSleep();
 +            }
-@@ -696 +974 @@
+@@ -723 +982 @@
 -    size = *src++;
 +    size = be32(src); src++;
-@@ -698 +976 @@
+@@ -725 +984 @@
 -    decodeType = *src++;
 +    decodeType = be32(src); src++;
-@@ -712 +990 @@
+@@ -740 +999 @@
 -    size = *src++;
 +    size = be32(src); src++;
-@@ -714 +992 @@
+@@ -742 +1001 @@
 -    decodeType = *src++;
 +    decodeType = be32(src); src++;
-@@ -750 +1028 @@
+@@ -780 +1039 @@
 -    warningSize = *warningPacked++;
 +    warningSize = be32(warningPacked); warningPacked++;
-@@ -752 +1030,5 @@
+@@ -782 +1041,5 @@
 -    warningDecodeType = *warningPacked++;
 +    warningDecodeType = be32(warningPacked); warningPacked++;
 +#ifdef MP6_ANIM_DEBUG_DUMP
 +    OSReport("[ANIM] warningSize=%u warningDecodeType=%d warningRawData=%p\n",
 +              warningSize, warningDecodeType, warningRawData);
 +#endif
-@@ -764 +1046 @@
+@@ -794 +1057 @@
 -    pressStartSize = *pressStartPacked++;
 +    pressStartSize = be32(pressStartPacked); pressStartPacked++;
-@@ -766 +1048 @@
+@@ -796 +1059 @@
 -    pressStartDecodeType = *pressStartPacked++;
 +    pressStartDecodeType = be32(pressStartPacked); pressStartPacked++;
-@@ -785,0 +1068,5 @@
+@@ -816,0 +1080,6 @@
 +    /* Temporary diagnostic: prints the real VIGetRetraceCount() tick right
 +     * as the warning screen starts accepting input, so a driving session
 +     * can compute a reliable MP6_AUTO_START_TICKS value instead of
 +     * guessing. Remove once no longer needed. */
 +    OSReport("[MP6-DIAG-WARN] BootWarningExec input-wait loop starting at tick=%u\n", VIGetRetraceCount());
++

@@ -1,4 +1,5 @@
-/* SNPC uses the board camera: test the actual port camera adapter. */
+/* The board preserves native framing inputs; shared Hu3D mapping is executed
+ * separately by widescreen_camera_selftest.c, including CAM2 and resize. */
 #include "game/board/camera.h"
 #include "game/hu3d.h"
 #include <stdio.h>
@@ -33,19 +34,17 @@ int main(void) {
     const int sizes[]={640,854,1120,1600,640};
     for (unsigned i=0;i<sizeof(sizes)/sizeof(sizes[0]);i++) {
         width=sizes[i];wide=1;
-        for (int repeat=0;repeat<4;repeat++) mp6WsBoardCameraApply(&camera);
+        for (int repeat=0;repeat<4;repeat++) subject(&camera);
         CHECK(camera_bits==(HU3D_CAM0|HU3D_CAM1));
-        CHECK(fabsf(aspect-1.2f*width/640.0f)<0.000001f);
-        CHECK(viewport==width && scissor==width);
-        CHECK(Hu3DCamera[2].viewportW==width && Hu3DCamera[2].scissorW==width);
-        CHECK(fabsf(Hu3DCamera[2].aspect-aspect)<0.000001f);
+        CHECK(fabsf(aspect-1.2f)<0.000001f);
+        CHECK(viewport==640 && scissor==0);
         CHECK(Hu3DCamera[2].viewportH==480 && Hu3DCamera[2].scissorH==480);
         CHECK(memcmp(&camera,&original,sizeof(camera))==0);
     }
     wide=0;width=640;
-    mp6WsBoardCameraApply(&camera);
+    subject(&camera);
     CHECK(viewport==640 && aspect==1.2f);
     CHECK(memcmp(&camera,&original,sizeof(camera))==0);
-    puts("SNPC board camera: 4:3, 16:9, ultrawide, resize, unchanged framing: PASS");
+    puts("SNPC board camera: native auto-fit inputs, no per-tick scissor overwrite: PASS");
     return 0;
 }

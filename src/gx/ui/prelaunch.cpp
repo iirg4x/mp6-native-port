@@ -1,378 +1,151 @@
-/* Adapted from mariopartyrd/partyboard (unlicensed upstream; see docs/PARTYBOARD_PROVENANCE.md).
- * Credit: TwilitRealm. */
-/* [MP6] adaptation summary (the second-most-adapted ripped file):
- *   - their DISC IMAGE concept (SDL file picker, background hash
- *     verification thread + progress/warning modals, update checker) maps
- *     to our CONTENT ROOT concept: the first menu button relabels
- *     "Play" <-> "Set Content Root" and, with no content, jumps to the
- *     Settings GAME tab with the content-root row focused;
- *   - their PartyBoard_IsGameLaunched / IsRunning globals become our
- *     request_play()/request_quit() loop flags (launcher_state.hpp);
- *   - their hero (logo.png + team eyebrow) becomes our disc-decoded MP6
- *     wordmark (mp6tex://wordmark runtime texture -- NO Nintendo art in
- *     the repo) with a text fallback, plus the faded mario_ex watermark;
- *   - their HuPadInit() call position is kept as a direct aurora PADInit()
- *     (installs default keyboard bindings; idempotent for the game's own
- *     later HuPadInit);
- *   - SUPPORTS_PROCESS_RESTART is constexpr false here, selecting their
- *     single-OK "Apply Options" modal branch verbatim (body text ours);
- *   - everything else (intro stagger, open/close transitions, focus/nav
- *     model, restart-modal suppress/re-arm rules) is their code as ripped.
- */
-// Credits: TwilitRealm
-
+/* Launcher callbacks adapted from mariopartyrd/partyboard; credit TwilitRealm.
+ * Presentation: the native MP6 storybook, shared with Settings.
+ * Intent: get a player into their game, including a first launch with no disc.
+ * Ivory layered paper, red ribbon, gold star, day/night skies and Titan One;
+ * generous 112-unit action rhythm keeps all three actions above the hosts. */
 #include "prelaunch.hpp"
-
-#include "content_setup.hpp"  /* [MP6] A4: first-run content onboarding dialog */
-#include "launcher_state.hpp" /* [MP6] replaces <port/settings.h> + prelaunch state */
+#include "../../audio/menu_sfx.hpp"
+#include "content_setup.hpp"
+#include "launcher_state.hpp"
 #include "modal.hpp"
 #include "settings.hpp"
-
-#include "lib/logging.hpp" /* [MP6] aurora internal, via -I AURORA_ROOT */
-#include <dolphin/pad.h>   /* [MP6] PADInit (their HuPadInit position) */
-#include <fmt/format.h>
-
-#include <algorithm>
-#include <memory>
-#include <string_view>
-
-/* SAVESTATE CARVE-OUT: host-owned statics (RmlUi document
- * sources, UI framework state, debug-tool latches) must not be captured or
- * restored. Must sit AFTER this TU's own includes and at preprocessor TOP
- * LEVEL (build.py rejects a conditionally-nested include -- a platform
- * branch would silently uncarve the TU). See mp6_host_section.h. */
+#include "storybook_view.hpp"
+#include <dolphin/pad.h>
+#include <cmath>
 #include "mp6_host_section.h"
 
 
 namespace mp6::ui {
 namespace {
-    aurora::Module PrelaunchLog { "mp6::ui::prelaunch" };
+Rml::String launcher_source() {
+    const char* source=R"RML(<rml><head><link type="text/rcss" href="res/rml/prelaunch.rcss" /></head>
+<body><content id="root" open data-full-window-ui><div id="menu-list" /></content></body></rml>)RML";
+    char formatted[4096];format_document_source(source,formatted,sizeof(formatted));return formatted;
+}
+}
 
-    /* [MP6] SUPPORTS_PROCESS_RESTART: partyboard defines this per-platform;
-     * our port has no in-process restart, so the single-OK modal branch of
-     * their code is the live one. */
-    constexpr bool kSupportsProcessRestart = false;
-
-    /* [MP6] document skeleton: their structure with the .background div
-     * (their bundled prelaunch-bg.png art) removed, the hero img swapped
-     * for our runtime-decoded wordmark, and the faded watermark added.
-     * The hero/menu/disc-info/version-info blocks and every intro-item
-     * delay class are theirs verbatim. The two BRANDED variants exist
-     * because a missing wordmark (no disc content yet) must fall back to
-     * text rather than a broken <img>. */
-    const Rml::String kDocumentSourceWithWordmark = R"RML(
-<rml>
-<head>
-    <link type="text/rcss" href="res/rml/prelaunch.rcss" />
-</head>
-<body>
-    <div class="gradient" />
-    <img class="watermark" src="mp6tex://watermark" />
-    <content id="root" open>
-        <menu>
-            <hero class="intro-item delay-0">
-                <div class="eyebrow"><span>Mario Party 6</span> native port</div>
-                <img src="mp6tex://wordmark" />
-            </hero>
-            <div id="menu-list" />
-        </menu>
-        <disc-info class="intro-item delay-4">
-            <div id="disc-status">
-                <icon />
-                <span id="disc-status-label" />
-            </div>
-            <span id="disc-version" class="detail" />
-        </disc-info>
-        <version-info class="intro-item delay-5">
-            <div class="version">Version <span id="version-text"></span></div>
-        </version-info>
-    </content>
-</body>
-</rml>
-)RML";
-
-    const Rml::String kDocumentSourceTextHero = R"RML(
-<rml>
-<head>
-    <link type="text/rcss" href="res/rml/prelaunch.rcss" />
-</head>
-<body>
-    <div class="gradient" />
-    <content id="root" open>
-        <menu>
-            <hero class="intro-item delay-0">
-                <div class="eyebrow"><span>Mario Party 6</span> native port</div>
-                <div class="hero-fallback">MARIO PARTY 6</div>
-            </hero>
-            <div id="menu-list" />
-        </menu>
-        <disc-info class="intro-item delay-4">
-            <div id="disc-status">
-                <icon />
-                <span id="disc-status-label" />
-            </div>
-            <span id="disc-version" class="detail" />
-        </disc-info>
-        <version-info class="intro-item delay-5">
-            <div class="version">Version <span id="version-text"></span></div>
-        </version-info>
-    </content>
-</body>
-</rml>
-)RML";
-
-    /* [MP6] res-base href/src rewrite (see launcher_state.hpp). */
-    Rml::String formatted_source(const Rml::String &raw)
-    {
-        char buf[4096];
-        mp6::ui::format_document_source(raw.c_str(), buf, sizeof(buf));
-        return Rml::String(buf);
+Prelaunch::Prelaunch() : Document(launcher_source()) {
+    mRoot=mDocument->GetElementById("root");
+    PADInit();
+    static Rml::ElementInstancerGeneric<StorybookView> instancer;
+    Rml::Factory::RegisterElementInstancer("storybook-view",&instancer);
+    mStorybook=static_cast<StorybookView*>(append(mRoot,"storybook-view"));
+    auto* list=mDocument->GetElementById("menu-list");
+    for(const char* label:{"Select Game","Settings","Quit"}) {
+        const int index=int(mMenuButtons.size());
+        mMenuButtons.push_back(std::make_unique<Button>(list,label));
+        listen(mMenuButtons.back()->root(),Rml::EventId::Focus,[this,index](Rml::Event&){
+            if(mSelected==index)return;
+            audio::play_menu_sound(audio::MenuSound::Move);
+            mSelected=index;
+            mStoryStateDirty=true;
+        });
     }
+    mMenuButtons[0]->on_pressed([this]{
+        if(!content_ready()){mCovered=true;push_document(std::make_unique<ContentSetup>());return;}
+        mPlayOnClose=true;hide(true);
+    });
+    mMenuButtons[1]->on_pressed([this]{
+        mRestartSuppressed=false;
+        auto settings=std::make_unique<SettingsWindow>(true);
+        settings->turn_from_launcher(*mStorybook);
+        push(std::move(settings));
+    });
+    mMenuButtons[2]->on_pressed([this]{mQuitOnClose=true;hide(true);});
+    listen(mStorybook,Rml::EventId::Mousedown,[this](Rml::Event& event){
+        if(visible()&&event.GetParameter<int>("button",0)==0)mMenuButtons[mSelected]->focus();
+    });
+    listen(mStorybook,Rml::EventId::Mousemove,[this](Rml::Event& event){storybook_pointer(event,false);});
+    listen(mStorybook,Rml::EventId::Click,[this](Rml::Event& event){storybook_pointer(event,true);});
+}
 
-    Rml::String select_document_source()
-    {
-        /* wordmark_available() also triggers the one-time disc-asset decode
-         * (the [LAUNCHER] wordmark/watermark log lines, same as L2). */
-        if (wordmark_available() && watermark_available()) {
-            return formatted_source(kDocumentSourceWithWordmark);
-        }
-        return formatted_source(kDocumentSourceTextHero);
+void Prelaunch::show() {
+    const bool returning=mHasShown;
+    mCovered=mClosing=mPendingClose=false;mRoot->SetAttribute("open","");
+    refresh_content_state();mShownContentState=-99;
+    mStoryStateDirty=true;
+    Document::show();
+    mStorybook->enter(cfg().menuMotion!=0&&!returning);mHasShown=true;
+    if(returning)mStorybook->spring_chapters(cfg().menuMotion!=0);
+    if(restart_pending()&&!mRestartSuppressed){
+        mCovered=true;
+        const auto dismiss=[this](Modal& modal){mRestartSuppressed=true;modal.pop();};
+        push_document(std::make_unique<Modal>(Modal::Props{
+            .title="Apply Options",
+            .bodyRml="A restart is required to apply selected options.<br/><br/>Close and reopen the port to apply them.",
+            .actions={{.label="OK",.onPressed=dismiss}},.onDismiss=dismiss}));
     }
+}
 
-} // namespace
+void Prelaunch::hide(bool close) {
+    if(!close){mRoot->RemoveAttribute("open");return;}
+    mClosing=mPendingClose=true;mStorybook->leave(cfg().menuMotion!=0);
+}
 
-/* Their helper, kept verbatim. */
-void apply_intro_animation(Rml::Element *element, const char *delay_class)
-{
-    if (element == nullptr || delay_class == nullptr) {
+void Prelaunch::update() {
+    // Settings and content-link documents hide the launcher by removing its
+    // open attribute. Keep the opening spread alive behind a modal (covered
+    // keeps the attribute) and while its closing animation is running, but do
+    // not rebuild/pump the hidden launcher every frame.
+    if (!mRoot->HasAttribute("open") && !mClosing) return;
+
+    const bool linked=content_ready();
+    if(int(linked)!=mShownContentState){
+        mShownContentState=int(linked);
+        mWordmark=linked&&wordmark_available(); // Never needs disc art on first launch.
+        mMenuButtons[0]->set_text(linked?"Play":"Select Game");
+        mStoryStateDirty=true;
+    }
+    const bool motion=cfg().menuMotion!=0;
+    if(!mStoryMotionValid||motion!=mStoryMotion){
+        mStoryMotion=motion;
+        mStoryMotionValid=true;
+        mStoryStateDirty=true;
+    }
+    if(mStoryStateDirty){
+        StorybookState state;
+        state.launcher=true;state.linked=linked;state.wordmark=mWordmark;state.version=port_version();
+        state.motion=motion;state.chapters={"Welcome"};state.chapter="Welcome";state.selected=mSelected;
+        state.rows={{linked?"Play":"Select Game",""},{"Settings",""},{"Quit",""}};
+        state.description=mSelected==0?(linked?"Start Starlit Party with your current settings.":
+            "Link your Mario Party 6 (USA) disc image or extracted game folder."):
+            mSelected==1?"Open the book to adjust picture, sound and game options.":"Close the native port.";
+        mStoryStateDirty=false;
+        mStorybook->set_state(std::move(state));
+    }
+    if(mClosing&&mStorybook->exit_finished()){
+        Document::hide(true);
+        if(mPlayOnClose)request_play();
+        if(mQuitOnClose)request_quit();
         return;
     }
-    element->SetClass("intro-item", true);
-    element->SetClass(delay_class, true);
-}
-
-Prelaunch::Prelaunch()
-    : Document(select_document_source())
-{
-    mRoot = mDocument != nullptr ? mDocument->GetElementById("root") : nullptr;
-
-    PADInit(); /* [MP6] their HuPadInit() position -- default keyboard bindings for the warning logic */
-
-    if (auto *menuList = mDocument->GetElementById("menu-list")) {
-        const bool contentLoaded = content_ready();
-        mMenuButtons.push_back(std::make_unique<Button>(menuList, contentLoaded ? "Play" : "Select Game"));
-        mMenuButtons.back()->on_pressed([this] {
-            if (!content_ready()) {
-                /* [MP6] their open_iso_picker() becomes the A4 content
-                 * onboarding dialog (disc image via nod, or an extracted
-                 * GP6E01 folder -- content_setup.cpp); it was the jump to
-                 * the Settings GAME tab before A4, which remains reachable
-                 * through Settings for hand-typed paths. */
-                mRestartSuppressed = false;
-                push(std::make_unique<ContentSetup>());
-                return;
-            }
-
-            // mDoAud_seStartMenu(kSoundPlay); // TODO PC (their punt, kept)
-
-            request_play(); /* [MP6] their PartyBoard_IsGameLaunched = true */
-            hide(true);
-        });
-        apply_intro_animation(mMenuButtons.back()->root(), "delay-1");
-
-        mMenuButtons.push_back(std::make_unique<Button>(menuList, "Settings"));
-        mMenuButtons.back()->on_pressed([this] {
-            mRestartSuppressed = false;
-            push(std::make_unique<SettingsWindow>(true));
-        });
-        apply_intro_animation(mMenuButtons.back()->root(), "delay-2");
-
-        mMenuButtons.push_back(std::make_unique<Button>(menuList, "Quit"));
-        mMenuButtons.back()->on_pressed([] { request_quit(); }); /* [MP6] their PartyBoard_IsRunning = false */
-        apply_intro_animation(mMenuButtons.back()->root(), "delay-3");
+    // Once per launcher session, not every return from Settings or cancellation.
+    // Keep the opening spread behind the modal, while its input stays blocked.
+    if(!mWelcomeChecked&&!mCovered&&!mClosing){
+        mWelcomeChecked=true;
+        if(!linked){mCovered=true;push_document(std::make_unique<ContentSetup>());}
+        else if(content_missing_movies()){mCovered=true;push_document(std::make_unique<ContentSetup>(true));}
     }
-
-    mDiscStatus = mDocument->GetElementById("disc-status");
-    mDiscDetail = mDocument->GetElementById("disc-version");
-    mVersion = mDocument->GetElementById("version-text");
-
-    if (mVersion != nullptr) {
-        /* [MP6] our git-describe equivalent; their leading-'v' strip is
-         * moot for a short hash but the shape is theirs. */
-        std::string_view versionStr(port_version());
-        if (!versionStr.empty() && versionStr[0] == 'v') {
-            versionStr = versionStr.substr(1);
-        }
-        mVersion->SetInnerRML(escape(versionStr));
-    }
-
-    listen(mDocument, Rml::EventId::Transitionend, [this](Rml::Event &event) {
-        auto *target = event.GetTargetElement();
-        if (target == nullptr) {
-            return;
-        }
-        if (target == mDocument && !mDocument->HasAttribute("open")) {
-            Document::hide(true);
-        }
-        else if (target->GetTagName() == "button" && !target->IsClassSet("anim-done")) {
-            target->SetClass("anim-done", true);
-        }
-    });
-}
-
-void Prelaunch::show()
-{
-    Document::show();
-    mDocument->SetAttribute("open", "");
-    mRoot->SetAttribute("open", "");
-
-    /* [MP6] returning from Settings re-validates the content root (their
-     * ensure_initialized/refresh path did the disc equivalent). */
-    refresh_content_state();
-    mShownContentState = -99;
-
-    if (restart_pending() && !mRestartSuppressed) {
-        const auto dismiss = [this](Modal &modal) {
-            mRestartSuppressed = true;
-            modal.pop();
-        };
-        std::vector<ModalAction> actions;
-        if constexpr (kSupportsProcessRestart) {
-            actions.push_back(ModalAction {
-                .label = "Restart later",
-                .onPressed = dismiss,
-            });
-            actions.push_back(ModalAction {
-                .label = "Restart now",
-                .onPressed = [](Modal &) { /* unreachable in this port */ },
-            });
-        }
-        else {
-            actions.push_back(ModalAction {
-                .label = "OK",
-                .onPressed = dismiss,
-            });
-        }
-        push(std::make_unique<Modal>(Modal::Props {
-            .title = "Apply Options",
-            .bodyRml = kSupportsProcessRestart ? "A restart is required to apply selected options.<br/><br/>Restart now to "
-                                                 "apply them immediately?"
-                                               : "A restart is required to apply selected options.<br/><br/>Close and reopen "
-                                                 "the port to apply them.", /* [MP6] body text ours */
-            .actions = std::move(actions),
-            .onDismiss = dismiss,
-        }));
-    }
-}
-
-void Prelaunch::hide(bool close)
-{
-    if (close) {
-        if (!mEntranceAnimationStarted) {
-            // Close document immediately
-            Document::hide(true);
-        }
-        else {
-            mPendingClose = true;
-        }
-        mDocument->RemoveAttribute("open");
-    }
-    else {
-        mRoot->RemoveAttribute("open");
-    }
-}
-
-void Prelaunch::update()
-{
-    const bool contentLoaded = content_ready();
-
-    if (!mEntranceAnimationStarted && mDocument != nullptr) {
-        mDocument->SetClass("animate-in", true);
-        mEntranceAnimationStarted = true;
-    }
-
-    if (!mMenuButtons.empty()) {
-        /* Button::set_text guards on change internally (their code). */
-        mMenuButtons[0]->set_text(contentLoaded ? "Play" : "Select Game");
-    }
-
-    /* [MP6] their per-frame disc-status refresh, reduced to our two content
-     * states (good/bad -- L3's mapping) and guarded to only touch the DOM
-     * when the state actually changes (SetInnerRML re-parses; the menu-idle
-     * leakgate wants allocation-flat frames). */
-    const int state = contentLoaded ? 1 : 0;
-    if (state != mShownContentState && mDiscStatus != nullptr) {
-        mShownContentState = state;
-        const auto discStatusLabel = mDiscStatus->GetElementById("disc-status-label");
-        if (discStatusLabel != nullptr) {
-            if (contentLoaded) {
-                mDiscStatus->SetAttribute("status", "good");
-                discStatusLabel->SetInnerRML("Content ready.");
-            }
-            else {
-                mDiscStatus->SetAttribute("status", "bad");
-                discStatusLabel->SetInnerRML("Game content not found.");
-            }
-        }
-        if (mDiscDetail != nullptr) {
-            if (contentLoaded) {
-                mDiscDetail->SetProperty(Rml::PropertyId::Display, Rml::Style::Display::Block);
-                Rml::String innerRML = "GameCube \xE2\x80\xA2 USA"; /* their detail-line shape; our disc is USA */
-                mDiscDetail->SetInnerRML(innerRML);
-            }
-            else {
-                mDiscDetail->SetProperty(Rml::PropertyId::Display, Rml::Style::Display::None);
-            }
-        }
-    }
-
     Document::update();
 }
 
-bool Prelaunch::focus()
-{
-    if (mMenuButtons.empty()) {
-        return false;
-    }
-    return mMenuButtons.front()->focus();
+bool Prelaunch::visible() const {return !mCovered&&!mClosing&&mRoot->HasAttribute("open");}
+bool Prelaunch::focus() {return visible()&&!mMenuButtons.empty()&&mMenuButtons[mSelected]->focus();}
+
+void Prelaunch::storybook_pointer(Rml::Event& event,bool click) {
+    if(!visible()||mStorybook->entering())return;
+    const auto p=mStorybook->design_point(event.GetParameter<float>("mouse_x",-100),event.GetParameter<float>("mouse_y",-100));
+    if(click&&p.y>=877-mStorybook->footer_lift()&&p.y<=941-mStorybook->footer_lift()&&p.x>=540&&p.x<780){mMenuButtons[mSelected]->root()->DispatchEvent(Rml::EventId::Click,{});return;}
+    const float y=StorybookView::unwarp_y(p.x,p.y)-StorybookView::launcherRowTop;
+    const int row=int(std::floor(y/StorybookView::launcherRowStride));
+    if(p.x<119||p.x>=812||row<0||row>=3||y-row*StorybookView::launcherRowStride>=StorybookView::launcherRowHeight)return;
+    mMenuButtons[row]->focus();
+    if(click)mMenuButtons[row]->root()->DispatchEvent(Rml::EventId::Click,{});
 }
 
-bool Prelaunch::visible() const
-{
-    return mDocument->HasAttribute("open") && mRoot->HasAttribute("open");
+bool Prelaunch::handle_nav_command(Rml::Event& event,NavCommand cmd) {
+    if(cmd!=NavCommand::Down&&cmd!=NavCommand::Up)return false;
+    const int next=(mSelected+(cmd==NavCommand::Down?1:2))%3;
+    mMenuButtons[next]->focus();event.StopPropagation();return true;
 }
-
-bool Prelaunch::handle_nav_command(Rml::Event &event, NavCommand cmd)
-{
-    int direction = 0;
-    if (cmd == NavCommand::Down) {
-        direction = 1;
-    }
-    else if (cmd == NavCommand::Up) {
-        direction = -1;
-    }
-    else {
-        return false;
-    }
-    auto *target = event.GetTargetElement();
-    int focusedButton = -1;
-    for (int i = 0; i < mMenuButtons.size(); ++i) {
-        if (mMenuButtons[i]->contains(target)) {
-            focusedButton = i;
-            break;
-        }
-    }
-    const auto n = static_cast<int>(mMenuButtons.size());
-    int i = ((focusedButton + direction) % n + n) % n;
-    while (i >= 0 && i < mMenuButtons.size()) {
-        if (mMenuButtons[i]->focus()) {
-            // mDoAud_seStartMenu(kSoundItemFocus); // TODO (their punt, kept)
-            event.StopPropagation();
-            return true;
-        }
-        i += direction;
-    }
-    return false;
-}
-
 } // namespace mp6::ui

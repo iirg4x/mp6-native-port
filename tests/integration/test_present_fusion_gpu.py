@@ -20,7 +20,7 @@ import wgpu
 
 class PresentRenderer:
     def __init__(self):
-        source = (ROOT / 'build/aurora-release-source/lib/webgpu/gpu.cpp').read_text()
+        source = (ROOT / 'third_party/aurora/lib/webgpu/gpu.cpp').read_text()
         resample = re.search(r'resampleShaderSource = R"\((.*?)\)"sv;', source, re.S).group(1)
         copy = re.search(r'sourceDescriptor.code = R"""\((.*?)\)""";', source, re.S).group(1)
         self.adapter = wgpu.gpu.request_adapter_sync(power_preference='high-performance')
@@ -61,11 +61,13 @@ class PresentRenderer:
         source = self.texture(sw,sh,fmt)
         device.queue.write_texture(dict(texture=source),data,dict(bytes_per_row=sw*4),(sw,sh,1))
         intermediate, output = self.texture(w,h,fmt), self.texture(ow,oh,fmt)
-        uniform = device.create_buffer_with_data(data=struct.pack('<IffI',area,w,h,fxaa),
+        # frame_origin: where the viewport starts in the target the resample draws into.
+        fx,fy = origin if direct else (0,0)
+        uniform = device.create_buffer_with_data(data=struct.pack('<IffIff8x',area,w,h,fxaa,fx,fy),
                                                   usage=wgpu.BufferUsage.UNIFORM)
         resample,copy,over = [self.pipeline(fmt,k) for k in ('resample','copy','overlay')]
         sample_group = device.create_bind_group(layout=resample.get_bind_group_layout(0),entries=[
-            dict(binding=0,resource=dict(buffer=uniform,size=16)),dict(binding=1,resource=self.sampler),
+            dict(binding=0,resource=dict(buffer=uniform,size=32)),dict(binding=1,resource=self.sampler),
             dict(binding=2,resource=source.create_view())])
         def copy_group(pipeline,texture):
             return device.create_bind_group(layout=pipeline.get_bind_group_layout(0), entries=[
@@ -147,6 +149,24 @@ class PresentFusion(unittest.TestCase):
         old = self.renderer.run((2960,1848),(2960,1848),fxaa=1)
         new = self.renderer.run((2960,1848),(2960,1848),fxaa=1,direct=True)
         np.testing.assert_array_equal(new,old)
+
+    def test_whole_pixel_letterbox_is_exact(self):
+        # The game's content is the surface size rounded down to 16 pixels, so
+        # the present viewport is offset by whole pixels; with an unscaled
+        # source, drawing it straight into the surface must give the two-pass
+        # result bit for bit, for both samplers and FXAA.
+        for fmt in ('bgra8unorm','rgba8unorm'):
+            for source,target,surface,origin,area in (
+                    ((1908,1080),(1908,1080),(1920,1080),(6,0),0),
+                    ((2784,1290),(2784,1290),(2796,1290),(6,0),0),
+                    ((1280,960),(1280,960),(1440,960),(80,0),0),
+                    ((1908,1080),(1908,1080),(1920,1080),(6,0),1),
+                    ((511,257),(511,257),(520,280),(4,11),1)):
+                for fxaa in (0,1):
+                    with self.subTest(fmt=fmt,source=source,origin=origin,fxaa=fxaa,area=area):
+                        kw=dict(fmt=fmt,fxaa=fxaa,area=area,surface_size=surface,origin=origin)
+                        np.testing.assert_array_equal(self.renderer.run(source,target,direct=True,**kw),
+                                                      self.renderer.run(source,target,**kw))
 
     def test_integer_letterbox_and_android_rounding(self):
         for fmt in ('bgra8unorm','rgba8unorm'):

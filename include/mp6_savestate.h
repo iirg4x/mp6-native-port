@@ -91,8 +91,12 @@ extern "C" {
  * and gained an explicit capture-time capacity (Mp6SsAudioShadow.voiceCap).
  * Both are header-layout changes, so v6 files are refused as before -- the
  * compatibility this version buys is between two RUNS of a v7 build with
- * DIFFERENT voice-table sizes, not with older files. See Mp6SsAudioShadow. */
-#define MP6_SAVESTATE_VERSION 7u
+ * DIFFERENT voice-table sizes, not with older files. See Mp6SsAudioShadow.
+ *
+ * v8: the payload is independent 1 MB blocks (all-zero blocks stored as
+ * nothing, the rest one zlib stream each) behind a block table, so capture
+ * and restore run on every core -- see "Payload" in src/os/savestate.c. */
+#define MP6_SAVESTATE_VERSION 8u
 
 #define MP6_SAVESTATE_MAGIC   0x36505336u /* "6PS6" */
 

@@ -1,0 +1,8 @@
+--- a/src/board/single.c
++++ b/src/board/single.c
+@@ -1749,4 +1749 @@
+-    asm {
+-        fabs value, value
+-    }
+-    return value;
++    return fabsf(value);

@@ -1,54 +1,49 @@
 --- a/src/board/wipe.c
 +++ b/src/board/wipe.c
-@@ -17,0 +18,2 @@
+@@ -6,0 +7 @@
++double sqrt(double x);
+@@ -18,0 +20,2 @@
 +#include "mp6_widescreen.h" /* widescreen support */
 +#include "mp6_events.h" /* board.paperwipe observability -- see WipePaperUpdate */
-@@ -532 +534,25 @@
+@@ -20,0 +24,9 @@
++
++/* Screen coverage and texture storage are separate coordinate domains. */
++static void WipeCaptureFrame(void *image)
++{
++    GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT);
++    GXSetTexCopyDst(HU_FB_WIDTH/2, HU_FB_HEIGHT/2, GX_TF_RGB565, GX_TRUE);
++    GXCopyTex(image, GX_FALSE);
++    GXPixModeSync();
++}
+@@ -532 +544,5 @@
+-        shapeScale = 0.5 * (1.0 - sin(M_PI * (90.0f * progress) / 180.0));
++        /* The space-tile shape holding the captured screen was sized for a
++         * 4:3 view; grow it uniformly by the aspect widening so it still
++         * covers the whole wide frame before shrinking (1.0 when native). */
++        shapeScale = 0.5 * (1.0 - sin(M_PI * (90.0f * progress) / 180.0))
++            * mp6_widescreen_scale_factor();
+@@ -548,2 +562,3 @@
+-        Hu3DModelScaleSet(wipeData->masuModelId[wipeData->updateType - 1],
+-            1.0f, 1.0f, 1.0f);
++        Hu3DModelScaleSet(wipeData->masuModelId[wipeData->updateType - 1],
++            mp6_widescreen_scale_factor(), mp6_widescreen_scale_factor(),
++            mp6_widescreen_scale_factor());
+@@ -552,3 +564 @@
 -        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565,
-+        /* THE CAPTURE, not just the draw. Every mbWipeSpecial style works
-+         * the same way: photograph the OUTGOING frame into wipeData->texData
-+         * here, then draw that photograph back with some animated geometry.
-+         * The photograph was taken at the native 640 while the EFB it is
-+         * taken from is mp6_widescreen_render_width() wide, so at any wide
-+         * aspect it holds only the frame's left 640 -- and everything
-+         * downstream that maps it back assumes it holds the WHOLE frame.
-+         * For this style (masu-shape, types 1-3) that consumer is
-+         * WipeMasuMatHook's projected texture matrix, built from the live
-+         * camera fov and ASPECT: it stretches whatever is in texData across
-+         * the full widened frame, so a native-width capture shows up
-+         * horizontally stretched with its right edge missing.
-+         *
-+         * Widening the capture is free of any allocation question under
-+         * this port: GXCopyTex resolves GPU-side into a texture keyed by the
-+         * destination POINTER (aurora lib/dolphin/gx/GXFrameBuffer.cpp
-+         * copy_tex + lib/gx/gx.cpp's copyTextures.find(obj.data)), so no CPU
-+         * bytes are ever written into wipeData->texData -- its fixed
-+         * GXGetTexBufferSize(320, 240) allocation and the literal 320x240 in
-+         * the three Hu3DTexLoad calls that bind it are both pure keys here,
-+         * not byte counts, which is why neither has to grow (and must not:
-+         * the copy is mipmapF=GX_TRUE, so Hu3DFbCopyExec's own
-+         * GXSetTexCopyDst(w/2, h/2) already tracks this width on its own).
-+         * HU_FB_WIDTH (640, byte-identical) when widescreen is disabled. */
-+        Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565,
-@@ -587,2 +613,9 @@
--                entry->pos.x = 320.0f / (work->xCount - 1)
--                    + (640.0f * j) / (work->xCount - 1);
-+                /* The grid wipe's 11x8 tile lattice is laid out across a
-+                 * hardcoded 640-wide screen box while WipeGridDraw's own
-+                 * ortho/viewport/scissor (widened further below) spans the
-+                 * live render width -- so the lattice covered only the left
-+                 * 640 of a wider frame. Widened here so the tiles reach the
-+                 * real edges; the Y axis is untouched (height never
-+                 * changes). Exactly 320.0f/640.0f when disabled. */
-+                entry->pos.x = (0.5f * mp6_widescreen_render_width()) / (work->xCount - 1)
-+                    + ((float)mp6_widescreen_render_width() * j) / (work->xCount - 1);
-@@ -597 +630,4 @@
+-            GX_TRUE, wipeData->screenTexture);
+-        GXPixModeSync();
++        WipeCaptureFrame(wipeData->screenTexture);
+@@ -608,2 +618,2 @@
+-                gridCell->pos.x = 320.0f / (gridWork->xCount - 1)
+-                    + (640.0f * columnIndex) / (gridWork->xCount - 1);
++                gridCell->pos.x = (0.5f * mp6_widescreen_render_width()) / (gridWork->xCount - 1)
++                    + ((float)mp6_widescreen_render_width() * columnIndex) / (gridWork->xCount - 1);
+@@ -618,3 +628 @@
 -        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565,
-+        /* Same capture widen as WipeShapeUpdate above -- see that comment.
-+         * This style's consumer is WipeGridDraw's per-tile [0,1] texcoords,
-+         * which likewise span the whole photograph. */
-+        Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565,
-@@ -670,0 +707,7 @@
+-            GX_TRUE, wipeData->screenTexture);
+-        GXPixModeSync();
++        WipeCaptureFrame(wipeData->screenTexture);
+@@ -694,0 +703,7 @@
 +    /* The board turn-change "paper flip" (mbWipeSpecial type 5, created at
 +     * board/player.c:585 when a player's turn ends and consumed at :493 as
 +     * the next player's begins) builds ALL of its geometry once, here, in a
@@ -56,7 +51,7 @@
 +     * These two carry the live frame's own width into that math. */
 +    float mp6PaperW;
 +    float mp6PaperCornerX[4];
-@@ -676,0 +720,13 @@
+@@ -700,0 +716,13 @@
 +        /* Observability, the same reason board/opening.c posts
 +         * board.diceseat/board.turnorder: this fold is a ~42-frame event
 +         * buried inside a multi-minute board drive, and a screenshot
@@ -67,10 +62,10 @@
 +         * the log itself records whether the fold was laid out native or
 +         * wide. Never reached in the headless build (no board), so no
 +         * game-flow log line moves. */
-+        if (wipeData->time == 0) {
++        if (wipeData->elapsedFrames == 0) {
 +            mp6_event_post("board.paperwipe", (long)mp6_widescreen_render_width(), "out");
 +        }
-@@ -701 +757,27 @@
+@@ -726 +754,27 @@
 -        startPoint.x = 320.0f - (400.0f * direction.x);
 +        /* The fold sweeps along a line through the screen's CENTRE in the
 +         * per-player direction paperST[playerNo]; startPoint/endPoint place
@@ -99,41 +94,41 @@
 +        mp6PaperCornerX[2] = mp6PaperW;
 +        mp6PaperCornerX[3] = 0.0f;
 +        startPoint.x = (0.5f * mp6PaperW) - (400.0f * direction.x);
-@@ -703 +785 @@
+@@ -728 +782 @@
 -        endPoint.x = 320.0f + (400.0f * direction.x);
 +        endPoint.x = (0.5f * mp6PaperW) + (400.0f * direction.x);
-@@ -711 +793 @@
--                    + ((direction.x * paperPos[i].x)
-+                    + ((direction.x * mp6PaperCornerX[i])
-@@ -742 +824,4 @@
+@@ -734 +787,0 @@
+-        // Project each screen corner onto the diagonal to find the full screen span.
+@@ -737 +790 @@
+-                    + ((direction.x * paperPos[pointIndex].x)
++                    + ((direction.x * mp6PaperCornerX[pointIndex])
+@@ -768 +821,4 @@
 -            intersections[1] = (640.0f - point.x) / direction.x;
 +            /* The x = right-edge clip plane of the screen box each fold
 +             * segment is trimmed against (intersections[0] is x = 0, [2]/[3]
 +             * are y = 0/480). Native 640 kept the fold's far end short. */
 +            intersections[1] = (mp6PaperW - point.x) / direction.x;
-@@ -757 +842,6 @@
--            vtx->texCoord[0].x = vtx->pos[0].x / 640.0f;
+@@ -784 +840,6 @@
+-            paperVertex->texCoord[0].x = paperVertex->pos[0].x / 640.0f;
 +            /* u is the fold vertex's own screen x normalised over the frame
 +             * width, because the photograph this samples (the Hu3DFbCopyExec
 +             * below) now spans the whole live frame. Dividing by the native
 +             * 640 here would slide the paper's printed image off to the
 +             * right and clamp past u=1. */
-+            vtx->texCoord[0].x = vtx->pos[0].x / mp6PaperW;
-@@ -762 +852 @@
--            vtx->texCoord[1].x = vtx->pos[1].x / 640.0f;
-+            vtx->texCoord[1].x = vtx->pos[1].x / mp6PaperW;
-@@ -767 +857,5 @@
++            paperVertex->texCoord[0].x = paperVertex->pos[0].x / mp6PaperW;
+@@ -789 +850 @@
+-            paperVertex->texCoord[1].x = paperVertex->pos[1].x / 640.0f;
++            paperVertex->texCoord[1].x = paperVertex->pos[1].x / mp6PaperW;
+@@ -794,3 +855 @@
 -        Hu3DFbCopyExec(0, 0, HU_FB_WIDTH, HU_FB_HEIGHT, GX_TF_RGB565,
-+        /* Same capture widen as WipeShapeUpdate above -- see that comment.
-+         * This is the image printed on the flipping page; the texCoords just
-+         * above are what map it back, and the two have to agree on what "the
-+         * whole frame" means. */
-+        Hu3DFbCopyExec(0, 0, mp6_widescreen_render_width(), HU_FB_HEIGHT, GX_TF_RGB565,
-@@ -774,0 +869,3 @@
+-            GX_TRUE, wipeData->screenTexture);
+-        GXPixModeSync();
++        WipeCaptureFrame(wipeData->screenTexture);
+@@ -801,0 +861,3 @@
 +        /* The photograph is taken and the flat page is now standing in for
 +         * the outgoing frame -- see the "out" post above. */
 +        mp6_event_post("board.paperwipe", (long)mp6_widescreen_render_width(), "in");
-@@ -844,2 +941,14 @@
+@@ -873,2 +935,14 @@
 -    C_MTXOrtho(projection, 0.0f, 480.0f,
 -        0.0f, 640.0f, 0.0f, 1000.0f);
 +    /* This function's own ortho/viewport/scissor are a SEPARATE,
@@ -150,25 +145,22 @@
 +     * when widescreen is disabled. */
 +    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f,
 +        1000.0f);
-@@ -847,2 +956,2 @@
+@@ -876,2 +950,2 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f, 480.0f, 0.0f, 1.0f);
 -    GXSetScissor(0, 0, 640, 480);
 +    GXSetViewport(0.0f, 0.0f, mp6_widescreen_render_width(), 480.0f, 0.0f, 1.0f);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -886 +995,4 @@
--    tileWidth = 640.0f / (work->xCount - 1);
-+    /* The tile's own drawn width has to track the widened lattice pitch
-+     * WipeGridUpdate now uses, or the tiles would keep native width and
-+     * leave gaps between them. 640.0f/10 = 64.0f exactly when disabled. */
-+    tileWidth = mp6_widescreen_render_width() / (float)(work->xCount - 1);
-@@ -906,0 +1019,6 @@
+@@ -915 +989 @@
+-    tileWidth = 640.0f / (gridWork->xCount - 1);
++    tileWidth = mp6_widescreen_render_width() / (float)(gridWork->xCount - 1);
+@@ -935,0 +1010,6 @@
 +            /* Closes this tile's own GXBegin(GX_QUADS, 4) twelve lines up;
 +             * anchors to the last of its four position/texcoord pairs, still
 +             * inside the per-tile loop, so every iteration closes its own
 +             * primitive instead of leaving it for the next iteration's GXBegin
 +             * to auto-close. Empty inline on hardware (GXVert.h). */
 +            GXEnd();
-@@ -927,2 +1045,6 @@
+@@ -957,2 +1037,6 @@
 -    C_MTXOrtho(projection, 0.0f, 480.0f,
 -        0.0f, 640.0f, 0.0f, 1000.0f);
 +    /* Same widen as WipeGridDraw above -- see that comment. Tile/vertex-
@@ -177,18 +169,31 @@
 +     * exercised by testing. Flagged, not assumed fine. */
 +    C_MTXOrtho(projection, 0.0f, 480.0f, 0.0f, mp6_widescreen_render_width(), 0.0f,
 +        1000.0f);
-@@ -930,3 +1052,2 @@
+@@ -960,3 +1044,2 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f,
 -        480.0f, 0.0f, 1.0f);
 -    GXSetScissor(0, 0, 640, 480);
 +    GXSetViewport(0.0f, 0.0f, mp6_widescreen_render_width(), 480.0f, 0.0f, 1.0f);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -1024,0 +1146,4 @@
-+        /* Closes this segment's GXBegin(GX_QUADS, 4); anchors to the last of
-+         * its four position/normal/texcoord triples, before the loop
-+         * advances current[]. Empty inline on hardware (GXVert.h). */
+@@ -1054,0 +1138 @@
 +        GXEnd();
-@@ -1048,3 +1173,11 @@
+@@ -1060 +1144,14 @@
+-// The Hu3D draw hook uses the board image's alpha as a black mask and fills its outside region.
++static float WipeCircleHalfSize(float size)
++{
++    float halfSize = 0.5f * size;
++    float delta = mp6_widescreen_half_width_delta();
++    if (delta > 0.0f) {
++        float halfWidth = 288.0f + delta;
++        /* Keep the native corner-clearance timing with a circular, not
++         * horizontally stretched, iris on wider canvases. */
++        halfSize *= (float)sqrt((halfWidth * halfWidth + 240.0f * 240.0f) /
++                               (288.0f * 288.0f + 240.0f * 240.0f));
++    }
++    return halfSize;
++}
++
+@@ -1079,3 +1176,11 @@
 -    GXSetViewport(0.0f, 0.0f, 640.0f,
 -        480.0f, 0.0f, 1.0f);
 -    GXSetScissor(0, 0, 640, 480);
@@ -203,7 +208,7 @@
 +     * is. 640 (byte-identical) when disabled. */
 +    GXSetViewport(0.0f, 0.0f, mp6_widescreen_render_width(), 480.0f, 0.0f, 1.0f);
 +    GXSetScissor(0, 0, mp6_widescreen_render_width(), 480);
-@@ -1070,2 +1203,6 @@
+@@ -1101,2 +1206,6 @@
 -    C_MTXOrtho(imageProjection, 0.0f, 480.0f,
 -        0.0f, 576.0f, 0.0f, 1000.0f);
 +    /* Recenter this ortho the same way HuSprDispInit's shared 2D canvas is
@@ -212,7 +217,10 @@
 +     * all). No-op when disabled. */
 +    C_MTXOrtho(imageProjection, 0.0f, 480.0f, -mp6_widescreen_half_width_delta(), 576.0f + mp6_widescreen_half_width_delta(), 0.0f,
 +        1000.0f);
-@@ -1082,0 +1220,10 @@
+@@ -1111 +1220 @@
+-    halfSize = 0.5f * imageWork->size;
++    halfSize = imageWork->imageNo == 0 ? WipeCircleHalfSize(imageWork->size) : 0.5f * imageWork->size;
+@@ -1113,0 +1223,10 @@
 +    /* work->x is hardcoded to 288.0f (WipeImageUpdate) -- exactly
 +     * HU_DISP_WIDTH/2, the exact center of BOTH the native canvas AND the
 +     * recentered wide one (the recenter is symmetric around that same
@@ -223,7 +231,7 @@
 +     * be a pure double-shift, pushing the right edge further right than
 +     * the left edge is pushed left. Reverted to the plain native
 +     * computation. */
-@@ -1097,0 +1245,9 @@
+@@ -1128,0 +1248,9 @@
 +    /* These 4 mask quads fill the area between the growing/shrinking
 +     * reveal hole and the canvas edges -- their 0.0f/576.0f literals ARE
 +     * the canvas-edge constants. Widened here to the recentered bounds
@@ -233,7 +241,7 @@
 +     * transition at a wide aspect. left/right/top/bottom themselves are
 +     * NOT touched (see the `right` comment above -- already correct,
 +     * symmetric around work->x=288). No-op when disabled. */
-@@ -1100,4 +1256,8 @@
+@@ -1131,4 +1259,8 @@
 -        GXPosition2f32(0.0f, 0.0f);
 -        GXPosition2f32(576.0f, 0.0f);
 -        GXPosition2f32(576.0f, top);
@@ -246,7 +254,7 @@
 +         * fourth and last GXPosition2f32 (widened just above). Empty inline
 +         * on hardware (GXVert.h). */
 +        GXEnd();
-@@ -1107,6 +1267,9 @@
+@@ -1138,6 +1270,9 @@
 -        GXPosition2f32(0.0f, bottom);
 -        GXPosition2f32(576.0f, bottom);
 -        GXPosition2f32(576.0f, 480.0f);
@@ -262,10 +270,10 @@
 +        GXEnd();
 +    }
 +    if (left > -mp6_widescreen_half_width_delta()) {
-@@ -1114 +1277 @@
+@@ -1145 +1280 @@
 -        GXPosition2f32(0.0f, top);
 +        GXPosition2f32(-mp6_widescreen_half_width_delta(), top);
-@@ -1117,3 +1280,6 @@
+@@ -1148,3 +1283,6 @@
 -        GXPosition2f32(0.0f, bottom);
 -    }
 -    if (left < 576.0f) {
@@ -275,16 +283,16 @@
 +        GXEnd();
 +    }
 +    if (left < 576.0f + mp6_widescreen_half_width_delta()) {
-@@ -1122,2 +1288,2 @@
+@@ -1153,2 +1291,2 @@
 -        GXPosition2f32(576.0f, top);
 -        GXPosition2f32(576.0f, bottom);
 +        GXPosition2f32(576.0f + mp6_widescreen_half_width_delta(), top);
 +        GXPosition2f32(576.0f + mp6_widescreen_half_width_delta(), bottom);
-@@ -1124,0 +1291,3 @@
+@@ -1155,0 +1294,3 @@
 +        /* Closes the right mask quad's GXBegin(GX_QUADS, 4), anchored to its
 +         * fourth and last GXPosition2f32. */
 +        GXEnd();
-@@ -1148,0 +1318,4 @@
+@@ -1179,0 +1321,4 @@
 +    /* Closes WipeImageDraw's final textured quad, GXBegin(GX_QUADS, 4)
 +     * eight lines up; anchors to the last of its four position/texcoord
 +     * pairs -- the function's last statement. */

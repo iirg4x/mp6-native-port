@@ -1,6 +1,5 @@
 """Runtime and source-layout regressions; dependency checkouts are read-only."""
 from pathlib import Path
-import hashlib
 import os
 import re
 import subprocess
@@ -52,36 +51,56 @@ class RuntimeContracts(unittest.TestCase):
                                     text=True, timeout=5)
             self.assertIn('live shadow allocation: PASS', result.stdout)
 
-    def test_native_settings_and_minigame_continuation(self):
+    def test_native_settings(self):
         env = {key: value for key, value in os.environ.items() if not key.startswith('MP6_')}
         with tempfile.TemporaryDirectory(dir=ROOT / 'build') as temporary:
             exe = Path(temporary) / 'runtime-selftest.exe'
-            subprocess.run([build.ZIG, 'cc', '-O2', '-I', str(ROOT / 'include'),
+            subprocess.run([build.ZIG, 'cc', *build.COMMON_FLAGS, '-O2', '-UNDEBUG',
                             'tests/native/runtime_settings_selftest.c',
                             'src/enh/mp6_enhancements.c', 'src/os/heap_scale.c',
-                            'src/os/minigame_stub.c', '-o', str(exe)],
+                            '-o', str(exe)],
                            cwd=ROOT, env=env, check=True, capture_output=True)
             result = subprocess.run([str(exe)], env=env, check=True, capture_output=True,
                                     text=True, timeout=5)
-            self.assertIn('continuation: PASS', result.stdout)
+            self.assertIn('runtime settings: PASS', result.stdout)
 
-    def test_board_never_compiles_the_unavailable_minigame_transition(self):
-        self.assertNotIn('src/board/mgcall.c', [source for source, _ in build.board_sources()])
-        source = (ROOT / 'tools/build.py').read_text()
-        self.assertEqual(source.count('"minigame_stub.c"'), 1)
+    def test_board_compiles_the_real_minigame_flow(self):
+        # Boards run the recovered roulette/instruction hand-off; only a
+        # missing minigame module falls back (src/os/overlay_fallback.c).
+        self.assertIn('src/board/mgcall.c', [source for source, _ in build.board_sources()])
+        self.assertFalse((ROOT / 'src/os/minigame_stub.c').exists())
+        flags = dict(build.board_sources())['src/board/mgcall.c']
+        self.assertIn('-DmbMgCallSingleOnCheck=mp6_mgcall_single_on_check', flags)
+        self.assertIn('-DmbMgCallVsEffCreate=mp6_mgcall_vs_eff_create', flags)
+        self.assertIn('src/os/board_mgcall_abi.c', build.PLATFORM_SOURCES_COMMON)
+        adapters = (ROOT / 'src/os/board_mgcall_abi.c').read_text(encoding='utf-8')
+        self.assertIn('BOOL mbMgCallSingleOnCheck(u16 ovl)', adapters)
+        self.assertIn('void mbMgCallVsEffCreate(void)', adapters)
 
     def test_board_skip_return_still_means_continue(self):
         source = (Path(build.DECOMP) / 'src/board/board.c').read_text(encoding='utf-8')
-        transition = source[source.index('mgCallF = mbev_MgCall();'):]
-        self.assertRegex(transition, r'if\s*\(!mgCallF\)\s*\{\s*mbNextTimeSet\(\);\s*HuPrcSleep\(-1\);\s*\}\s*else\s*\{\s*GwSystem.turnPlayerNo = 0;\s*mbNextTime\(\);')
+        call = re.search(r'\b(\w+)\s*=\s*mbev_MgCall\(\);', source)
+        self.assertIsNotNone(call)
+        transition = source[call.end():]
+        self.assertRegex(transition, r'if\s*\(!\s*' + re.escape(call[1])
+                         + r'\s*\)\s*\{\s*mbNextTimeSet\(\);\s*HuPrcSleep\(-1\);\s*\}\s*else\s*\{\s*GwSystem.turnPlayerNo\s*=\s*0;\s*mbNextTime\(\);')
 
     def test_consolidated_filesel_patch_preserves_host_state_fixes(self):
         relative = 'src/REL/fileseldll/filesel.c'
         original = (Path(build.DECOMP) / relative).read_text(encoding='utf-8', errors='surrogateescape')
         current = apply_patches.apply_unified_diff(original, (ROOT / 'compat/decomp' / (relative + '.patch')).read_text(encoding='utf-8', errors='surrogateescape'))
-        # Verified against the old patch + fragment before consolidation.
-        self.assertEqual(hashlib.sha256(current.encode('utf-8', errors='surrogateescape')).hexdigest(),
-                         '01927378e68101aadb71cbe61f5ace5e61d16c79c6bbd152d65be61bfc9d457a')
+        # Check the host fixes, not an entire-source hash tied to an old
+        # upstream spelling. Capture/texgen and badge geometry have separate
+        # executable coverage in test_widescreen_effects.
+        code = re.sub(r'/\*.*?\*/|//[^\n]*', '', current, flags=re.S)
+        self.assertRegex(code, r'if\s*\(slotObject\s*!=\s*NULL\)\s*\{\s*strcpy\(slotObject->name,\s*lbl_1_data_190\[i\]\);')
+        self.assertRegex(code, r'if\s*\(i\s*>=\s*4\)\s*\{\s*HuPrcEnd\(\);\s*return;\s*\}\s*prevState\s*=\s*p->visualState;')
+        self.assertRegex(code, r'mp6_anim_unregister_for_free\(lbl_1_bss_D8\[i\]\.cardTextureAnim\);\s*if\s*\(mp6PackedBacking\s*!=\s*NULL\)\s*\{\s*HuMemDirectFree\(mp6PackedBacking\);\s*\}\s*HuMemDirectFree\(lbl_1_bss_D8\[i\]\.cardTextureAnim\);')
+        for assignment in ('proc->property = (void *)(intptr_t)processProperty;',
+                           'bank = (s32)(intptr_t)proc->property;',
+                           'proc2->property = (void *)(intptr_t)selectedBoxNo;',
+                           'idx = (s32)(intptr_t)proc->property;'):
+            self.assertIn(assignment, code)
 
     def test_compatibility_and_layout_contract(self):
         self.assertEqual(Path(apply_patches.DEFAULT_PATCHES_DIR), ROOT / 'compat/decomp')

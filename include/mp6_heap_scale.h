@@ -70,10 +70,20 @@ extern "C" {
     (MP6_HEAP_RETAIL_HEAP + MP6_HEAP_RETAIL_SOUND + \
      MP6_HEAP_RETAIL_MODEL + MP6_HEAP_RETAIL_DVD)
 
+#ifdef __EMSCRIPTEN__
+/* The web build commits the whole arena up front (it is wasm linear memory,
+ * which never shrinks, and iOS Safari kills a page near ~1.4 GB). The
+ * headroom becomes HEAP_SPACE, which the game never allocates from (0 KB
+ * used through a board and a minigame, MP6_MEM_TRACE), so 16 MB is ample
+ * there: the arena is 114 MB instead of 256. */
+#define MP6_ARENA_HEADROOM_BYTES (16u * 1024u * 1024u)
+#define MP6_ARENA_RETAIL_BYTES (MP6_HEAP_RETAIL_FIXED_TOTAL + MP6_ARENA_HEADROOM_BYTES)
+#else
 /* The reservation src/os/arena.c made before this file existed. */
 #define MP6_ARENA_RETAIL_BYTES (256u * 1024u * 1024u)
 #define MP6_ARENA_HEADROOM_BYTES \
     (MP6_ARENA_RETAIL_BYTES - MP6_HEAP_RETAIL_FIXED_TOTAL)
+#endif
 
 /* The only two settings the seam may produce (mp6_enhancements.h:
  * "returns 1 or 4"). */
@@ -81,9 +91,9 @@ extern "C" {
 #define MP6_HEAP_SCALE_EXPANDED 4u
 
 /* The largest arena this port can request, and the base it is reserved at
- * (the first entry of the host reservation ladder, host_win32.c/
- * host_android.c -- the arena is the first reservation the process makes,
- * so it takes that entry). Named because src/host/coro_arena.c has to
+ * (the preferred game entry of the host reservation ladder, host_win32.c/
+ * host_android.c). Windows claims the maximum address-space envelope before
+ * graphics initialization. Named because src/host/coro_arena.c has to
  * place the coroutine stack pool ABOVE the arena's largest possible extent:
  * the pool used to be first-fitted after the arena, which made its base a
  * function of this setting, and a moving pool base makes every coroutine
@@ -146,14 +156,16 @@ _Static_assert(MP6_HEAP_RETAIL_FIXED_TOTAL == 0x6200000u, /* 98 MiB */
  * [BOOT] banner and every savestate's recorded arena size unchanged. */
 _Static_assert(MP6_HEAP_RETAIL_FIXED_TOTAL * MP6_HEAP_SCALE_RETAIL +
                    MP6_ARENA_HEADROOM_BYTES == MP6_ARENA_RETAIL_BYTES,
-               "scale 1 must reproduce the 256 MB arena exactly");
+               "scale 1 must reproduce the retail arena exactly");
 /* The expanded row must still be expressible. Both products are u32 values
  * the runtime feeds to OSAlloc/VirtualAlloc, and both stay comfortably below
  * the 4 GB the whole arena is pinned under (src/os/arena.c). */
 _Static_assert(MP6_HEAP_RETAIL_MODEL <= 0xFFFFFFFFu / MP6_HEAP_SCALE_EXPANDED,
                "HEAP_MODEL x4 overflows u32");
+#ifndef __EMSCRIPTEN__ /* the web build always runs x1 with less headroom */
 _Static_assert(MP6_ARENA_EXPANDED_BYTES == 0x22600000u, /* 550 MiB */
                "the expanded arena is not the documented 550 MB");
+#endif
 _Static_assert((unsigned long long)MP6_ARENA_LOW_BASE +
                    (unsigned long long)MP6_ARENA_EXPANDED_BYTES <= 0x100000000ull,
                "the expanded arena must still end below 4GB");

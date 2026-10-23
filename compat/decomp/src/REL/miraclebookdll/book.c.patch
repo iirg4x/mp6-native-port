@@ -1,0 +1,8 @@
+--- a/src/REL/miraclebookdll/book.c
++++ b/src/REL/miraclebookdll/book.c
+@@ -0,0 +1 @@
++#include "game/audio.h"
+@@ -2490,0 +2492,3 @@
++
++/* Native overlay storage is restored only at the REL load boundary. */
++

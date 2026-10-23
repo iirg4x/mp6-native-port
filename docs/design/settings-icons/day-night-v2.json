@@ -1,0 +1,18 @@
+{
+  "tool": "Built-in image_gen",
+  "status": "Superseded by v3 after the user requested contemporary Mario Party presentation",
+  "prompt": "Use case: style-transfer.\nAsset type: transparent settings header emblem for Mario Party 6.\nInput image 1 is the icon to REPLACE; its glossy generic mobile-game style was rejected. Images 2 and 3 are authoritative character-design references: Brighton and Twila from Mario Party 6.\nRedraw image 1 completely as a compact pair of their recognizable HEADS ONLY, not their bodies. Brighton left foreground, Twila right slightly behind, both clearly visible. Preserve Brighton's sharp alternating orange-red/yellow triangular rays, his face sharply divided yellow and orange-red with an angular nose boundary, and opposite-colored simple oval eyes. Preserve Twila's actual asymmetric chartreuse green/yellow crescent head, opposite-colored oval eyes and angular nose. Twila is NOT a blue crescent. Their simple curved smiles are closed, with no teeth or tongue.\nArt direction: authentic playful 2004 GameCube Mario Party menu illustration, bold slightly irregular dark ink outlines and thin cream sticker edge, matte painted/cel-shaded surfaces with just two or three broad shadow planes. Slight asymmetry, jaunty personality, sharp shapes alongside the round faces. Not polished plastic, rubber toys, chrome, airbrushed inflated blobs, excessive specular highlights, generic emoji, kawaii mascots, or modern mobile-game art. No tiny decorative sparkles.\nCentered square isolated emblem, generous transparent margins, completely transparent background, no lettering or logo, no scene or ground shadow. Faces must remain readable at 64px. This should look designed specifically for Mario Party 6, not merely a yellow sun and a moon.",
+  "output": "day-night-v2.png",
+  "references": [
+    {
+      "path": "references/brighton.jpg",
+      "source": "https://www.mariowiki.com/images/2/27/Brighton.jpg",
+      "page": "https://www.mariowiki.com/Brighton"
+    },
+    {
+      "path": "references/twila.jpg",
+      "source": "https://www.mariowiki.com/images/d/df/Twila.jpg",
+      "page": "https://www.mariowiki.com/Twila"
+    }
+  ]
+}

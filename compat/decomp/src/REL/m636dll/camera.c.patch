@@ -1,0 +1,31 @@
+--- a/src/REL/m636dll/camera.c
++++ b/src/REL/m636dll/camera.c
+@@ -5,4 +4,0 @@
+-#define PIXEL_CAMERA_MOTION_LIST_OFFSET 16
+-#define PIXEL_CAMERA_MODEL_OFFSET 20
+-#define PIXEL_CAMERA_FRAME_OFFSET 24
+-#define PIXEL_CAMERA_LAST_FRAME_OFFSET 28
+@@ -13,2 +9,2 @@
+-    (*(f32 *) ((s8 *) (&lbl_1_bss_0) + (PIXEL_CAMERA_FRAME_OFFSET))) =
+-        Hu3DMotionTimeGet((*(s16 *) ((s8 *) (&lbl_1_bss_0) + (PIXEL_CAMERA_MODEL_OFFSET))));
++    (lbl_1_bss_0.cameraFrame) =
++        Hu3DMotionTimeGet((lbl_1_bss_0.cameraModel));
+@@ -24 +20 @@
+-        (*(s16 *) ((s8 *) &lbl_1_bss_0 + (motionIndex * 2) + (PIXEL_CAMERA_MOTION_LIST_OFFSET))),
++        (lbl_1_bss_0.cameraMotions[motionIndex]),
+@@ -27,2 +23,2 @@
+-    (*(f32 *)((s8 *)&lbl_1_bss_0 + (PIXEL_CAMERA_FRAME_OFFSET))) = (0.0);
+-    (*(f32 *) ((s8 *) &lbl_1_bss_0 + (PIXEL_CAMERA_LAST_FRAME_OFFSET))) =
++    (lbl_1_bss_0.cameraFrame) = (0.0);
++    (lbl_1_bss_0.cameraLastFrame) =
+@@ -31,2 +27,2 @@
+-    if ((*(s16 *)((s8 *)&lbl_1_bss_0 + (PIXEL_CAMERA_MODEL_OFFSET))) != -1) {
+-        Hu3DModelKill((*(s16 *)((s8 *)&lbl_1_bss_0 + (PIXEL_CAMERA_MODEL_OFFSET))));
++    if ((lbl_1_bss_0.cameraModel) != -1) {
++        Hu3DModelKill((lbl_1_bss_0.cameraModel));
+@@ -34 +30 @@
+-    (*(s16 *)((s8 *)&lbl_1_bss_0 + (PIXEL_CAMERA_MODEL_OFFSET))) = cameraModel;
++    (lbl_1_bss_0.cameraModel) = cameraModel;
+@@ -40 +36 @@
+-    Hu3DMotionEndCheck((*(s16 *)((s8 *)(&lbl_1_bss_0) + (PIXEL_CAMERA_MODEL_OFFSET))));
++    Hu3DMotionEndCheck((lbl_1_bss_0.cameraModel));

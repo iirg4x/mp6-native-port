@@ -12,6 +12,9 @@
 #include "host.h"
 #include "mp6_path.h"
 #include "mp6_utf8_file.h"
+#include "mp6_heap_scale.h"
+#include "mp6_coro_layout.h"
+#include "host_precise_sleep.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -160,6 +163,41 @@ void mp6_host_sleep_ns(uint64_t ns)
     Sleep((DWORD)(ns / 1000000ull));
 }
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+/* The tick throttle's thread owns this timer; a high-resolution waitable
+ * timer (Windows 10 1803+) wakes within about half a millisecond without
+ * timeBeginPeriod. NULL until first use, INVALID_HANDLE_VALUE when the
+ * system has none. */
+static _Thread_local HANDLE t_preciseTimer;
+static _Thread_local Mp6PreciseSleep t_preciseSleep;
+
+static void mp6_win32_wait_until(int64_t targetNs)
+{
+    LARGE_INTEGER due;
+    int64_t wait = targetNs - (int64_t)mp6_host_monotonic_ns();
+    if (wait <= 0) return;
+    due.QuadPart = -(wait / 100); /* relative, in 100 ns units */
+    if (SetWaitableTimerEx(t_preciseTimer, &due, 0, NULL, NULL, NULL, 0)) {
+        WaitForSingleObject(t_preciseTimer, INFINITE);
+    }
+}
+
+int mp6_host_sleep_until_ns(uint64_t deadlineNs)
+{
+    if (!mp6_precise_sleep_enabled(1)) return 0;
+    if (t_preciseTimer == NULL) {
+        t_preciseTimer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                                TIMER_ALL_ACCESS);
+        if (t_preciseTimer == NULL) t_preciseTimer = INVALID_HANDLE_VALUE;
+    }
+    if (t_preciseTimer == INVALID_HANDLE_VALUE) return 0;
+    mp6_precise_sleep(&t_preciseSleep, (int64_t)deadlineNs, mp6_win32_wait_until);
+    return 1;
+}
+
 void mp6_host_wallclock(Mp6DateTime *out)
 {
     SYSTEMTIME lt;
@@ -179,15 +217,18 @@ void mp6_host_wallclock(Mp6DateTime *out)
  * arena (src/os/arena.c, which keeps the FATAL/exit policy and the
  * [BOOT] banner) and the coroutine stack pool
  * (src/host/coro_arena.c). They are separate reservations; either
- * can fall back to an OS-picked address independently. Every successful
- * reservation is verified as a whole before it leaves this seam.
+ * has its address space reserved before graphics starts, with commitment
+ * deferred until Play. Every successful reservation is verified as a whole.
  *
  * `preferredBase` (0 = none) is tried ahead of the candidate list -- see
  * host.h for why the coroutine pool names one: first-fit made ITS base a
  * function of the arena's SIZE, which is now a setting.
  * ======================================================================= */
 
-void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size)
+static void *g_preparedGameArena;
+static void *g_preparedCoroPool;
+
+static void *mp6_find_low_region(uintptr_t preferredBase, size_t size, DWORD allocationType)
 {
     /* 0x8xxxxxxx first, matching real GameCube MEM1's 0x80000000 base:
      * game/memory.c's allocator sanity-checks every block pointer with
@@ -204,9 +245,10 @@ void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size)
     };
     size_t i;
     void *got = NULL;
+    if (size == 0 || (uint64_t)size > 0xFFFF0000ull) return NULL;
 
     if (preferredBase != 0) {
-        got = VirtualAlloc((void *)preferredBase, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        got = VirtualAlloc((void *)preferredBase, size, allocationType, PAGE_READWRITE);
         if (got && !mp6_host_range_below_4gb(got, size)) {
             VirtualFree(got, 0, MEM_RELEASE);
             got = NULL;
@@ -214,15 +256,41 @@ void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size)
     }
     for (i = 0; !got && i < sizeof(kCandidateBases) / sizeof(kCandidateBases[0]); i++) {
         void *want = (void *)kCandidateBases[i];
-        got = VirtualAlloc(want, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        got = VirtualAlloc(want, size, allocationType, PAGE_READWRITE);
         if (got && mp6_host_range_below_4gb(got, size)) break;
         if (got) {
             VirtualFree(got, 0, MEM_RELEASE);
             got = NULL;
         }
     }
+    /* A sparse list of fixed addresses can miss large free holes between
+     * driver allocations. Walk actual free regions, high-bit addresses first.
+     * VirtualAlloc is non-clobbering if another thread wins the region. */
     if (!got) {
-        got = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        const uint64_t starts[] = {0x80000000ull, 0x10000ull};
+        const uint64_t ends[] = {0x100000000ull, 0x80000000ull};
+        SYSTEM_INFO info;
+        GetSystemInfo(&info);
+        const uint64_t granularity = info.dwAllocationGranularity;
+        for (i = 0; !got && i < 2; ++i) {
+            uint64_t cursor = starts[i];
+            while (cursor < ends[i]) {
+                MEMORY_BASIC_INFORMATION region;
+                if (!VirtualQuery((void *)(uintptr_t)cursor, &region, sizeof(region))) break;
+                uint64_t end = (uint64_t)(uintptr_t)region.BaseAddress + region.RegionSize;
+                if (end <= cursor) break;
+                if (end > ends[i]) end = ends[i];
+                uint64_t start = (cursor + granularity - 1) & ~(granularity - 1);
+                if (region.State == MEM_FREE && start < end && size <= end - start) {
+                    got = VirtualAlloc((void *)(uintptr_t)start, size, allocationType, PAGE_READWRITE);
+                    if (got) break;
+                }
+                cursor = end;
+            }
+        }
+    }
+    if (!got) {
+        got = VirtualAlloc(NULL, size, allocationType, PAGE_READWRITE);
         if (!got) {
             return NULL; /* caller (arena.c) keeps its own FATAL+exit policy */
         }
@@ -236,6 +304,44 @@ void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size)
         }
     }
     return got;
+}
+
+int mp6_host_memory_prepare(void)
+{
+    if (g_preparedGameArena) return 1;
+#ifndef MP6_CORO_FIBERS
+    /* Claim the fixed stack range first so a relocated large arena cannot
+     * consume it. Neither reservation charges the game's RAM commitment. */
+    g_preparedCoroPool = mp6_find_low_region(MP6_CORO_POOL_BASE, MP6_CORO_POOL_SIZE, MEM_RESERVE);
+    if (!g_preparedCoroPool) return 0;
+#endif
+    g_preparedGameArena = mp6_find_low_region(0, MP6_ARENA_EXPANDED_BYTES, MEM_RESERVE);
+    if (!g_preparedGameArena) {
+        if (g_preparedCoroPool) VirtualFree(g_preparedCoroPool, 0, MEM_RELEASE);
+        g_preparedCoroPool = NULL;
+        return 0;
+    }
+    printf("[BOOT] low address space reserved before graphics: game=%p (max %u MB), coro=%p\n",
+           g_preparedGameArena, MP6_ARENA_EXPANDED_BYTES / (1024u * 1024u), g_preparedCoroPool);
+    return 1;
+}
+
+void *mp6_host_arena_reserve(uintptr_t preferredBase, size_t size)
+{
+    void *prepared = NULL;
+    size_t capacity = 0;
+    if (preferredBase == 0 && g_preparedGameArena) {
+        prepared = g_preparedGameArena;
+        capacity = MP6_ARENA_EXPANDED_BYTES;
+    } else if (preferredBase == MP6_CORO_POOL_BASE && g_preparedCoroPool) {
+        prepared = g_preparedCoroPool;
+        capacity = MP6_CORO_POOL_SIZE;
+    }
+    if (prepared) {
+        if (size == 0 || size > capacity || !mp6_host_range_below_4gb(prepared, size)) return NULL;
+        return VirtualAlloc(prepared, size, MEM_COMMIT, PAGE_READWRITE);
+    }
+    return mp6_find_low_region(preferredBase, size, MEM_RESERVE | MEM_COMMIT);
 }
 
 int mp6_host_image_below_4gb(void)
@@ -435,6 +541,7 @@ uint64_t mp6_host_process_id(void)
     return (uint64_t)GetCurrentProcessId();
 }
 
+
 int mp6_host_sync_file_path(const char *path)
 {
     wchar_t widePath[MP6_WINDOWS_PATH_WCHARS];
@@ -586,6 +693,8 @@ int    mp6_coro_slot_count(void) { return 0; }
 int    mp6_coro_slot_in_use(int slot) { (void)slot; return 0; }
 int    mp6_coro_slots_peak(void) { return 0; }
 void  *mp6_coro_slot_addr(int slot) { (void)slot; return NULL; }
+void   mp6_coro_savestate_precapture(void) {}
+int    mp6_coro_savestate_rehydrate(void) { return 0; }
 
 #endif /* MP6_CORO_FIBERS -- else src/host/coro_arena.c provides mp6_coro_* */
 
@@ -620,6 +729,33 @@ typedef struct {
     void *arg;
 } Mp6HostThreadThunk;
 
+int mp6_host_sem_init(Mp6Sem *s)
+{
+    HANDLE h = CreateSemaphoreW(NULL, 0, 0x7fffffff, NULL);
+    s->opaque[0] = h;
+    return h != NULL;
+}
+
+void mp6_host_sem_post(Mp6Sem *s)
+{
+    ReleaseSemaphore((HANDLE)s->opaque[0], 1, NULL);
+}
+
+void mp6_host_sem_wait(Mp6Sem *s)
+{
+    WaitForSingleObject((HANDLE)s->opaque[0], INFINITE);
+}
+
+int mp6_host_cpu_count(void)
+{
+    DWORD_PTR process = 0, system = 0;
+    int n = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) {
+        for (; process; process &= process - 1) n++;
+    }
+    return n > 0 ? n : 1;
+}
+
 static DWORD WINAPI mp6_host_thread_entry(LPVOID param)
 {
     Mp6HostThreadThunk t = *(Mp6HostThreadThunk *)param;
@@ -648,6 +784,79 @@ int mp6_host_thread_start(void (*fn)(void *), void *arg)
      * observes this accounting -- a stable count either way (host.h
      * contract). */
     return 0;
+}
+
+/* =======================================================================
+ * Read-only content files: positional reads on a shared handle
+ * ======================================================================= */
+
+struct Mp6HostFile {
+    HANDLE handle;
+};
+
+Mp6HostFile *mp6_host_file_open(const char *utf8Path)
+{
+    wchar_t widePath[MP6_WINDOWS_PATH_WCHARS];
+    Mp6HostFile *f;
+    HANDLE h;
+    if (utf8Path == NULL ||
+        mp6_utf8_to_wide_full_path(utf8Path, widePath, MP6_WINDOWS_PATH_WCHARS) != 0) {
+        return NULL;
+    }
+    h = CreateFileW(widePath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    f = (Mp6HostFile *)malloc(sizeof(*f));
+    if (f == NULL) {
+        CloseHandle(h);
+        return NULL;
+    }
+    f->handle = h;
+    return f;
+}
+
+int64_t mp6_host_file_size(Mp6HostFile *f)
+{
+    LARGE_INTEGER size;
+    if (f == NULL || !GetFileSizeEx(f->handle, &size)) return -1;
+    return (int64_t)size.QuadPart;
+}
+
+int64_t mp6_host_file_read_at(Mp6HostFile *f, void *dst, size_t len, uint64_t offset)
+{
+    size_t done = 0;
+    if (f == NULL || (dst == NULL && len > 0)) return -1;
+    while (done < len) {
+        OVERLAPPED at;
+        DWORD want = (len - done) > 0x40000000u ? 0x40000000u : (DWORD)(len - done);
+        DWORD got = 0;
+        uint64_t pos = offset + done;
+        memset(&at, 0, sizeof(at));
+        at.Offset = (DWORD)pos;
+        at.OffsetHigh = (DWORD)(pos >> 32);
+        if (!ReadFile(f->handle, (char *)dst + done, want, &got, &at)) {
+            if (GetLastError() == ERROR_HANDLE_EOF) break;
+            return -1;
+        }
+        if (got == 0) break;
+        done += got;
+    }
+    return (int64_t)done;
+}
+
+void mp6_host_file_close(Mp6HostFile *f)
+{
+    if (f == NULL) return;
+    CloseHandle(f->handle);
+    free(f);
+}
+
+int mp6_host_file_prefetch(const char *utf8Path, uint64_t offset, uint64_t len)
+{
+    (void)utf8Path;
+    (void)offset;
+    (void)len;
+    return 0; /* a local disk: the OS cache already reads ahead */
 }
 
 /* =======================================================================
@@ -826,9 +1035,60 @@ static LONG WINAPI mp6_crash_filter(EXCEPTION_POINTERS *ep)
     return EXCEPTION_EXECUTE_HANDLER; /* let the process terminate after printing */
 }
 
+static void mp6_sample_profile_start(void);
+
+/* MP6_CPU_EXCLUDE=8,9 keeps the game (and every thread it starts later:
+ * Dawn, audio, decode-ahead workers) off those logical CPUs, as the build
+ * tools already do (tools/host_cpus.py). For machines with a faulty core. */
+static void mp6_cpu_exclude_apply(void)
+{
+    const char *e = getenv("MP6_CPU_EXCLUDE");
+    DWORD_PTR process = 0, system = 0, remove = 0;
+    if (!e || !e[0] || !GetProcessAffinityMask(GetCurrentProcess(), &process, &system)) return;
+    while (*e) {
+        char *end;
+        unsigned long cpu = strtoul(e, &end, 10);
+        if (end == e) {
+            e++;
+            continue;
+        }
+        if (cpu < sizeof(DWORD_PTR) * 8) remove |= (DWORD_PTR)1 << cpu;
+        e = end;
+    }
+    if ((process & ~remove) != 0 && (process & remove) != 0)
+        SetProcessAffinityMask(GetCurrentProcess(), process & ~remove);
+}
+
+/* MP6_CRASH_VEH=1: report faults from a vectored handler too. A fault on a
+ * coroutine stack never reaches the unhandled-exception filter (the thread's
+ * recorded stack bounds do not cover it, so dispatch gives up and the
+ * process just dies); vectored handlers run before that check. Opt-in:
+ * they also see first-chance exceptions that drivers raise and handle. */
+static LONG WINAPI mp6_crash_vectored(EXCEPTION_POINTERS *ep)
+{
+    switch (ep->ExceptionRecord->ExceptionCode) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_STACK_OVERFLOW:
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+        mp6_crash_filter(ep);
+        TerminateProcess(GetCurrentProcess(), ep->ExceptionRecord->ExceptionCode);
+        break;
+    default:
+        break;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 void mp6_host_crash_install(void)
 {
+    const char *veh = getenv("MP6_CRASH_VEH");
     SetUnhandledExceptionFilter(mp6_crash_filter);
+    if (veh && veh[0] == '1') AddVectoredExceptionHandler(1, mp6_crash_vectored);
+    mp6_cpu_exclude_apply();
+    /* Both mains call this first thing on the game thread, which is the
+     * thread the opt-in sampler below watches. */
+    mp6_sample_profile_start();
 }
 
 /* ---------------------------------------------------------------------
@@ -927,4 +1187,270 @@ void mp6_symbolize_addr(void *addr, char *outBuf, size_t outBufSz)
     } else {
         snprintf(outBuf, outBufSz, "<no symbol for %p>", addr);
     }
+}
+
+/* =======================================================================
+ * Game-thread sampling profiler (MP6_SAMPLE_PROFILE=<firstTick>-<lastTick>)
+ * Opt-in hitch finder for load and frame-time work. A helper thread
+ * suspends the game thread about once a millisecond while mp6_tick_count
+ * is inside the window, records its instruction pointer, and at exit
+ * prints the hottest functions over the window, every tick that took more
+ * than 25 samples (~25 ms), and a per-function breakdown of ticks over 60.
+ * One sample is roughly one millisecond of game-thread time. Release
+ * builds keep their PDB, so names resolve through mp6_symbolize_addr;
+ * code without symbols is attributed to its module ([ucrtbase.dll]).
+ * Unset, nothing is allocated and no thread is started.
+ * ======================================================================= */
+
+#define MP6_SAMPLE_MAX (1 << 20)
+#define MP6_SAMPLE_HITCH_MS 25
+#define MP6_SAMPLE_DETAIL_MS 60
+
+#define MP6_SAMPLE_FRAMES 8
+
+typedef struct {
+    uint64_t pc[MP6_SAMPLE_FRAMES]; /* [0] = where it was, then its callers */
+    long tick;
+} Mp6Sample;
+
+typedef struct {
+    char name[160];
+    long count;
+} Mp6SampleFn;
+
+static Mp6Sample *g_samples;
+static volatile LONG g_sampleCount;
+static HANDLE g_sampleThread;
+static long g_sampleFirst, g_sampleLast;
+static volatile int g_sampleStop;
+/* MP6_SAMPLE_THREAD=render samples Aurora's render worker instead of the game
+ * thread; its handle exists only once the renderer has started. */
+static int g_sampleRender;
+
+/* Aurora's (render_worker.cpp) when linked; the headless build has none. */
+__attribute__((weak)) void *aurora_render_worker_thread_handle(void) { return NULL; }
+
+static DWORD WINAPI mp6_sample_loop(LPVOID unused)
+{
+    (void)unused;
+    while (!g_sampleStop) {
+        CONTEXT ctx;
+        long tick;
+        Sleep(1);
+        tick = mp6_tick_count;
+        if (tick < g_sampleFirst || tick > g_sampleLast) continue;
+        if (g_sampleCount >= MP6_SAMPLE_MAX) break;
+        if (g_sampleThread == NULL) {
+            HANDLE worker = (HANDLE)aurora_render_worker_thread_handle();
+            if (worker == NULL ||
+                !DuplicateHandle(GetCurrentProcess(), worker, GetCurrentProcess(), &g_sampleThread,
+                                 THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                                 FALSE, 0)) {
+                g_sampleThread = NULL;
+                continue;
+            }
+        }
+        if (SuspendThread(g_sampleThread) == (DWORD)-1) break;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.ContextFlags = CONTEXT_FULL;
+        if (GetThreadContext(g_sampleThread, &ctx)) {
+            Mp6Sample *sample = &g_samples[g_sampleCount];
+            int f;
+            memset(sample, 0, sizeof(*sample));
+            sample->tick = tick;
+            /* Unwind a few frames so time inside the C runtime or the OS can
+             * be charged to the game code that called it. */
+            for (f = 0; f < MP6_SAMPLE_FRAMES && ctx.Rip; f++) {
+                DWORD64 image = 0, frame = 0;
+                PVOID handler = NULL;
+                PRUNTIME_FUNCTION fn;
+                sample->pc[f] = ctx.Rip;
+                fn = RtlLookupFunctionEntry(ctx.Rip, &image, NULL);
+                if (fn) {
+                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, ctx.Rip, fn, &ctx, &handler, &frame, NULL);
+                } else {
+                    ctx.Rip = *(DWORD64 *)(uintptr_t)ctx.Rsp; /* leaf function */
+                    ctx.Rsp += 8;
+                }
+            }
+            g_sampleCount++;
+        }
+        ResumeThread(g_sampleThread);
+    }
+    return 0;
+}
+
+static int mp6_sample_fn_cmp(const void *a, const void *b)
+{
+    long ca = ((const Mp6SampleFn *)a)->count;
+    long cb = ((const Mp6SampleFn *)b)->count;
+    return (ca < cb) - (ca > cb);
+}
+
+/* Function name without the +offset, or [module] when there is no symbol. */
+static void mp6_sample_name(uint64_t pc, char *out, size_t n)
+{
+    char buf[700];
+    char *plus;
+    mp6_symbolize_addr((void *)(uintptr_t)pc, buf, sizeof(buf));
+    plus = strchr(buf, '+');
+    if (plus) *plus = 0;
+    if (strncmp(buf, "<no symbol", 10) == 0) {
+        HMODULE mod = NULL;
+        char path[MAX_PATH] = "?";
+        const char *base;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)(uintptr_t)pc, &mod)) {
+            GetModuleFileNameA(mod, path, sizeof(path));
+        }
+        base = strrchr(path, '\\');
+        snprintf(buf, sizeof(buf), "[%s]", base ? base + 1 : path);
+    }
+    snprintf(out, n, "%s", buf);
+}
+
+/* 1 when name is one of list's comma-separated function names. */
+static int mp6_sample_listed(const char *list, const char *name)
+{
+    const char *p;
+    size_t n = strlen(name);
+    for (p = list; p && *p; p = strchr(p, ',') ? strchr(p, ',') + 1 : NULL) {
+        size_t len = strcspn(p, ",");
+        if (len == n && strncmp(p, name, n) == 0) return 1;
+    }
+    return 0;
+}
+
+/* MP6_SAMPLE_CALLERS: shared helpers charged to their callers. */
+static int mp6_sample_charge_callers(const char *name)
+{
+    static const char *list = (const char *)-1;
+    if (list == (const char *)-1) list = getenv("MP6_SAMPLE_CALLERS");
+    return mp6_sample_listed(list, name);
+}
+
+/* MP6_SAMPLE_LINES: functions whose samples are split by source line. */
+static void mp6_sample_add_line(uint64_t pc, char *name, size_t n)
+{
+    static const char *list = (const char *)-1;
+    char buf[700];
+    const char *open, *colon;
+    if (list == (const char *)-1) list = getenv("MP6_SAMPLE_LINES");
+    if (!mp6_sample_listed(list, name)) return;
+    mp6_symbolize_addr((void *)(uintptr_t)pc, buf, sizeof(buf));
+    open = strrchr(buf, '(');
+    colon = open ? strrchr(open, ':') : NULL;
+    if (colon) {
+        size_t used = strlen(name);
+        snprintf(name + used, n - used, ":%s", colon + 1);
+        used = strlen(name);
+        if (used && name[used - 1] == ')') name[used - 1] = 0;
+    }
+}
+
+static void mp6_sample_report_range(const char *label, long t0, long t1)
+{
+    static Mp6SampleFn fns[4096];
+    int nf = 0, k;
+    long total = 0;
+    LONG i;
+    for (i = 0; i < g_sampleCount; i++) {
+        char name[160];
+        int f;
+        if (g_samples[i].tick < t0 || g_samples[i].tick > t1) continue;
+        mp6_sample_name(g_samples[i].pc[0], name, sizeof(name));
+        mp6_sample_add_line(g_samples[i].pc[0], name, sizeof(name));
+        /* Shared helpers named in MP6_SAMPLE_CALLERS (e.g. memset,memcpyFast)
+         * are charged to their two nearest callers instead. */
+        if (mp6_sample_charge_callers(name)) {
+            for (f = 1; f <= 2 && f < MP6_SAMPLE_FRAMES && g_samples[i].pc[f]; f++) {
+                char caller[160];
+                size_t used = strlen(name);
+                mp6_sample_name(g_samples[i].pc[f], caller, sizeof(caller));
+                snprintf(name + used, sizeof(name) - used, " <- %s", caller);
+            }
+        }
+        /* A runtime or OS module: name the first caller that has a symbol. */
+        for (f = 1; name[0] == '[' && f < MP6_SAMPLE_FRAMES && g_samples[i].pc[f]; f++) {
+            char caller[160];
+            mp6_sample_name(g_samples[i].pc[f], caller, sizeof(caller));
+            if (caller[0] != '[') {
+                size_t used = strlen(name);
+                snprintf(name + used, sizeof(name) - used, " <- %s", caller);
+                break;
+            }
+        }
+        for (k = 0; k < nf; k++) {
+            if (strcmp(fns[k].name, name) == 0) break;
+        }
+        if (k == nf) {
+            if (nf == 4096) continue;
+            snprintf(fns[nf].name, sizeof(fns[nf].name), "%s", name);
+            fns[nf].count = 0;
+            nf++;
+        }
+        fns[k].count++;
+        total++;
+    }
+    qsort(fns, nf, sizeof(fns[0]), mp6_sample_fn_cmp);
+    fprintf(stderr, "[MP6-SAMPLE] %s ticks %ld-%ld: %ld samples\n", label, t0, t1, total);
+    for (k = 0; k < nf && k < 30; k++) {
+        fprintf(stderr, "[MP6-SAMPLE]   %6ld %5.1f%%  %s\n", fns[k].count,
+                100.0 * fns[k].count / (total ? total : 1), fns[k].name);
+    }
+}
+
+static void mp6_sample_profile_report(void)
+{
+    long span, t;
+    long *perTick;
+    LONG i;
+    g_sampleStop = 1;
+    if (!g_samples) return;
+    mp6_sample_report_range("all", g_sampleFirst, g_sampleLast);
+    span = g_sampleLast - g_sampleFirst + 1;
+    perTick = (long *)calloc((size_t)span, sizeof(long));
+    if (perTick) {
+        for (i = 0; i < g_sampleCount; i++) perTick[g_samples[i].tick - g_sampleFirst]++;
+        for (t = 0; t < span; t++) {
+            if (perTick[t] > MP6_SAMPLE_HITCH_MS) {
+                fprintf(stderr, "[MP6-SAMPLE] hitch tick %ld ~%ld ms\n", g_sampleFirst + t, perTick[t]);
+            }
+        }
+        for (t = 0; t < span; t++) {
+            if (perTick[t] > MP6_SAMPLE_DETAIL_MS) {
+                mp6_sample_report_range("hitch", g_sampleFirst + t, g_sampleFirst + t);
+            }
+        }
+        free(perTick);
+    }
+    fflush(stderr);
+}
+
+static void mp6_sample_profile_start(void)
+{
+    const char *e = getenv("MP6_SAMPLE_PROFILE");
+    if (!e || !e[0]) return;
+    if (sscanf(e, "%ld-%ld", &g_sampleFirst, &g_sampleLast) != 2 || g_sampleLast < g_sampleFirst) {
+        fprintf(stderr, "[MP6-SAMPLE] MP6_SAMPLE_PROFILE must be <firstTick>-<lastTick>\n");
+        return;
+    }
+    {
+        const char *which = getenv("MP6_SAMPLE_THREAD");
+        g_sampleRender = which != NULL && strcmp(which, "render") == 0;
+    }
+    g_samples = (Mp6Sample *)calloc(MP6_SAMPLE_MAX, sizeof(Mp6Sample));
+    if (!g_samples ||
+        (!g_sampleRender &&
+         !DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &g_sampleThread,
+                          THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
+                          FALSE, 0)) ||
+        !CreateThread(NULL, 0, mp6_sample_loop, NULL, 0, NULL)) {
+        fprintf(stderr, "[MP6-SAMPLE] could not start the sampler\n");
+        return;
+    }
+    atexit(mp6_sample_profile_report);
+    fprintf(stderr, "[MP6-SAMPLE] sampling the %s thread for ticks %ld-%ld\n",
+            g_sampleRender ? "render worker" : "game", g_sampleFirst, g_sampleLast);
 }

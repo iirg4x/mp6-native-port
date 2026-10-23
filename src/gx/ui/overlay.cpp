@@ -8,12 +8,16 @@
 /* [MP6] dropped: #include "port/achievements.h" */
 /* [MP6] dropped: #include "magic_enum.hpp" */
 #include "window.hpp"
+#include <aurora/aurora.h> /* aurora_frame_hidden: the badge counts shown frames */
 
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <dolphin/pad.h>
 #include "launcher_state.hpp" /* [MP6] replaces <port/settings.h> */
+#ifdef __EMSCRIPTEN__
+extern "C" int mp6_web_touch_device(void); /* src/android/touch_pad.cpp (EM_JS) */
+#endif
 
 /* [MP6] EVERY STAT PANEL IS AN OVERLAY, and they all live in THIS document.
  *
@@ -117,8 +121,9 @@ namespace {
         return Rml::String(buf);
     }
 
-    Rml::Element *create_toast(Rml::Element *parent, const Toast &toast)
+    Rml::Element *create_toast(Rml::Element *parent, const Toast &toast, Rml::Element *&progress_out)
     {
+        progress_out = nullptr;
         auto *elem = append(parent, "toast");
         if (!toast.type.empty()) {
             elem->SetClass(toast.type, true);
@@ -153,8 +158,8 @@ namespace {
             }
         }
         {
-            auto *progress = append(elem, "progress");
-            progress->SetAttribute("value", 1.f);
+            progress_out = append(elem, "progress");
+            progress_out->SetAttribute("value", 1.f);
         }
         return elem;
     }
@@ -172,7 +177,7 @@ namespace {
 
         auto *message = append(elem, "message");
         auto *content = append(message, "span");
-        content->SetInnerRML("Configure controller port 1 in Settings.");
+        content->SetInnerRML("Connect a USB or Bluetooth controller to play.");
 
         return elem;
     }
@@ -234,6 +239,21 @@ namespace {
         return elem;
     }
 
+    /* [MP6] A full-screen layer that centers the panel, so the panel lays
+     * out as an ordinary flex child: it wraps inside its width cap on any
+     * aspect ratio and stays clear of the corner badges. */
+    Rml::Element *create_notice(Rml::Element *parent, const Notice &notice)
+    {
+        auto *layer = append(parent, "noticelayer");
+        auto *elem = append(layer, "notice");
+        if (!notice.type.empty()) {
+            elem->SetClass(notice.type, true);
+        }
+        append(append(elem, "heading"), "span")->SetInnerRML(notice.title);
+        append(append(elem, "message"), "span")->SetInnerRML(notice.content);
+        return layer;
+    }
+
     void remove_element(Rml::Element *&elem) noexcept
     {
         if (elem == nullptr) {
@@ -245,11 +265,62 @@ namespace {
         elem = nullptr;
     }
 
+    void set_attribute_presence(Rml::Element *element, const char *name, bool present)
+    {
+        if (element == nullptr) {
+            return;
+        }
+        if (present) {
+            if (!element->HasAttribute(name)) {
+                element->SetAttribute(name, "");
+            }
+        }
+        else if (element->HasAttribute(name)) {
+            element->RemoveAttribute(name);
+        }
+    }
+
+    void set_pseudo_class(Rml::Element *element, const char *name, bool active)
+    {
+        if (element != nullptr && element->IsPseudoClassSet(name) != active) {
+            element->SetPseudoClass(name, active);
+        }
+    }
+
+    void open_transition(Rml::Element *element)
+    {
+        set_attribute_presence(element, "open", true);
+        set_pseudo_class(element, "opened", true);
+        set_pseudo_class(element, "done", false);
+    }
+
+    void close_transition(Rml::Element *element)
+    {
+        set_attribute_presence(element, "open", false);
+    }
+
+    void remove_toast(Rml::Element *&toast, Rml::Element *&progress) noexcept
+    {
+        /* The progress child is owned by the toast. Clear its borrowed pointer
+         * before detaching the parent so no later frame can write through a
+         * stale element. */
+        progress = nullptr;
+        remove_element(toast);
+    }
+
 } // namespace
 
 // https://vplesko.com/posts/how_to_implement_an_fps_counter.html
 void Overlay::advance_fps_counter(float &outFps, Uint64 perfFreq)
 {
+    /* Count only frames that reach the screen. Smooth mode records each tick
+     * frame hidden (never presented) and shows the replays around it, so
+     * counting every recorded frame read 180 on a 120 Hz panel: 60 hidden
+     * tick frames + 120 shown (Galaxy Tab S10 Ultra report, 0.5.0-rc1). */
+    if (aurora_frame_hidden()) {
+        outFps = mFpsLast;
+        return;
+    }
     if (perfFreq == 0) {
         outFps = 0.f;
         return;
@@ -281,7 +352,7 @@ void Overlay::advance_fps_counter(float &outFps, Uint64 perfFreq)
     }
 
     const double avgSeconds = static_cast<double>(mFpsSumTicks) / static_cast<double>(n) / static_cast<double>(perfFreq);
-    outFps = static_cast<float>(1.0 / avgSeconds);
+    outFps = mFpsLast = static_cast<float>(1.0 / avgSeconds);
 }
 
 Overlay::Overlay()
@@ -297,16 +368,20 @@ Overlay::Overlay()
 
     listen(mDocument, Rml::EventId::Focus, [](Rml::Event &) { Log.warn("Overlay received focus"); });
     listen(mDocument, Rml::EventId::Transitionend, [this](Rml::Event &event) {
-        if (event.GetTargetElement() == mCurrentToast) {
-            if (get_toasts().empty() || clock::now() >= mCurrentToastStartTime + get_toasts().front().duration) {
-                mCurrentToast->SetPseudoClass("done", true);
+        if (mCurrentToast != nullptr && event.GetTargetElement() == mCurrentToast) {
+            const auto &toasts = get_toasts();
+            if (toasts.empty() || clock::now() >= mCurrentToastStartTime + toasts.front().duration) {
+                set_pseudo_class(mCurrentToast, "done", true);
             }
         }
         else if (mControllerWarning != nullptr && event.GetTargetElement() == mControllerWarning && !mControllerWarning->HasAttribute("open")) {
-            mControllerWarning->SetPseudoClass("done", true);
+            set_pseudo_class(mControllerWarning, "done", true);
         }
         else if (mMenuNotification != nullptr && event.GetTargetElement() == mMenuNotification && !mMenuNotification->HasAttribute("open")) {
-            mMenuNotification->SetPseudoClass("done", true);
+            set_pseudo_class(mMenuNotification, "done", true);
+        }
+        else if (mNotice != nullptr && event.GetTargetElement() == mNotice && !mNotice->HasAttribute("open")) {
+            set_pseudo_class(mNotice, "done", true);
         }
     });
 }
@@ -341,7 +416,10 @@ void Overlay::refresh_stat_overlays()
      * would sit on top of the first stacked panel. */
     if (mPanelStack != nullptr) {
         if (mp6_console_overlay(kHudPanel) != 0) {
-            mPanelStack->SetAttribute("hud", kFpsCorners[cfg().fpsCorner]);
+            const char *corner = kFpsCorners[cfg().fpsCorner];
+            if (mPanelStack->GetAttribute<Rml::String>("hud", "") != corner) {
+                mPanelStack->SetAttribute("hud", corner);
+            }
         }
         else if (mPanelStack->HasAttribute("hud")) {
             mPanelStack->RemoveAttribute("hud");
@@ -397,8 +475,13 @@ void Overlay::refresh_stat_overlays()
             mPanel[i] = elem;
         }
         if (i == kHudPanel) {
-            elem->SetAttribute("open", "");
-            elem->SetAttribute("corner", kFpsCorners[cfg().fpsCorner]);
+            if (!elem->HasAttribute("open")) {
+                elem->SetAttribute("open", "");
+            }
+            const char *corner = kFpsCorners[cfg().fpsCorner];
+            if (elem->GetAttribute<Rml::String>("corner", "") != corner) {
+                elem->SetAttribute("corner", corner);
+            }
         }
         if (mPanelTick[i] < 0 || mp6_tick_count - mPanelTick[i] >= kPanelRefreshTicks) {
             mPanelTick[i] = mp6_tick_count;
@@ -421,7 +504,9 @@ void Overlay::update()
     if (mFpsCounter != nullptr) {
         if (cfg().showFps && !hudOn) { /* [MP6] our flat config in place of their ConfigVar registry */
             const int idx = cfg().fpsCorner;
-            mFpsCounter->SetAttribute("open", "");
+            if (!mFpsCounter->HasAttribute("open")) {
+                mFpsCounter->SetAttribute("open", "");
+            }
             const char *corner = kFpsCorners[idx];
 #if defined(__ANDROID__)
             /* Android touch build: the in-game gear button (src/android/
@@ -434,7 +519,9 @@ void Overlay::update()
                 corner = "tl-gear";
             }
 #endif
-            mFpsCounter->SetAttribute("corner", corner);
+            if (mFpsCounter->GetAttribute<Rml::String>("corner", "") != corner) {
+                mFpsCounter->SetAttribute("corner", corner);
+            }
 
             const Uint64 perfFreq = SDL_GetPerformanceFrequency();
             float fps = 0.f;
@@ -464,16 +551,21 @@ void Overlay::update()
                  * ever fails, the badge degrades to what it always showed
                  * rather than to a blank chip or an invented refresh rate. */
                 Mp6DisplayInfo di;
+                Rml::String text;
                 if (mp6_display_info_get(&di) && di.refreshHz > 0) {
-                    mFpsCounter->SetInnerRML(escape(
-                        fmt::format("{:.0f} / {} Hz {}", fps, di.refreshHz, di.presentMode)));
+                    text = escape(fmt::format("{:.0f} / {} Hz {}", fps, di.refreshHz, di.presentMode));
                 } else {
-                    mFpsCounter->SetInnerRML(escape(fmt::format("{:.0f} FPS", fps)));
+                    text = escape(fmt::format("{:.0f} FPS", fps));
+                }
+                if (mFpsCounter->GetInnerRML() != text) {
+                    mFpsCounter->SetInnerRML(text);
                 }
             }
         }
         else {
-            mFpsCounter->RemoveAttribute("open");
+            if (mFpsCounter->HasAttribute("open")) {
+                mFpsCounter->RemoveAttribute("open");
+            }
             mFpsFrameEvents.clear();
             mFpsSumTicks = 0;
             mFpsHavePrevCounter = false;
@@ -482,22 +574,33 @@ void Overlay::update()
     }
 
     u32 buttonCount;
-    const bool showControllerWarning = PADGetIndexForPort(PAD_CHAN0) < 0 && PADGetKeyButtonBindings(PAD_CHAN0, &buttonCount) == nullptr
+    bool showControllerWarning = PADGetIndexForPort(PAD_CHAN0) < 0 && PADGetKeyButtonBindings(PAD_CHAN0, &buttonCount) == nullptr
         && dynamic_cast<Window *>(top_document()) == nullptr && dynamic_cast<WindowSmall *>(top_document()) == nullptr;
+#ifdef __EMSCRIPTEN__
+    // Phones and tablets: the on-screen controller is port 1's controller.
+    if (mp6_web_touch_device()) {
+        showControllerWarning = false;
+    }
+#elif defined(__ANDROID__)
+    // The touch overlay is port 1's controller. It only marks the port
+    // connected once the game polls input (aurora_bridge.c), which the
+    // launcher shown before the first tick never does.
+    if (mp6::ui::cfg().touch.enabled) {
+        showControllerWarning = false;
+    }
+#endif
     if (showControllerWarning && mControllerWarning == nullptr) {
         mControllerWarning = create_controller_warning(mDocument);
     }
     else if (showControllerWarning && mControllerWarning != nullptr) {
-        mControllerWarning->SetAttribute("open", "");
-        mControllerWarning->SetPseudoClass("opened", true);
-        mControllerWarning->SetPseudoClass("done", false);
+        open_transition(mControllerWarning);
     }
     else if (!showControllerWarning && mControllerWarning != nullptr) {
         if (mControllerWarning->IsPseudoClassSet("done") || !mControllerWarning->IsPseudoClassSet("opened")) {
             remove_element(mControllerWarning);
         }
         else {
-            mControllerWarning->RemoveAttribute("open");
+            close_transition(mControllerWarning);
         }
     }
 
@@ -507,13 +610,11 @@ void Overlay::update()
                 remove_element(mMenuNotification);
             }
             else {
-                mMenuNotification->RemoveAttribute("open");
+                close_transition(mMenuNotification);
             }
         }
         else {
-            mMenuNotification->SetAttribute("open", "");
-            mMenuNotification->SetPseudoClass("opened", true);
-            mMenuNotification->SetPseudoClass("done", false);
+            open_transition(mMenuNotification);
         }
     }
     if (consume_menu_notification_request()) {
@@ -523,11 +624,32 @@ void Overlay::update()
         mMenuNotificationStartTime = clock::now();
     }
 
+    /* [MP6] The centered notice: a new generation replaces the panel at once;
+     * an expired one fades out like the menu notification. */
+    if (const Notice *notice = current_notice()) {
+        if (mNotice != nullptr && mNoticeGeneration != notice_generation()) {
+            remove_element(mNotice);
+        }
+        if (mNotice == nullptr) {
+            mNotice = create_notice(mDocument, *notice);
+            mNoticeGeneration = notice_generation();
+        }
+        open_transition(mNotice);
+    }
+    else if (mNotice != nullptr) {
+        if (mNotice->IsPseudoClassSet("done") || !mNotice->IsPseudoClassSet("opened")) {
+            remove_element(mNotice);
+        }
+        else {
+            close_transition(mNotice);
+        }
+    }
+
     auto &toasts = get_toasts();
     if (mCurrentToast == nullptr) {
         if (!toasts.empty()) {
             const auto &toast = toasts.front();
-            mCurrentToast = create_toast(mDocument, toast);
+            mCurrentToast = create_toast(mDocument, toast, mCurrentToastProgress);
             mCurrentToastStartTime = clock::now();
         }
     }
@@ -537,25 +659,22 @@ void Overlay::update()
         const float elapsed = std::chrono::duration<float>(clock::now() - mCurrentToastStartTime).count();
         const float ratio = duration > 0.0f ? std::clamp(elapsed / duration, 0.0f, 1.0f) : 1.0f;
         const auto remaining = 1.f - ratio;
-        Rml::ElementList list;
-        mDocument->GetElementsByTagName(list, "progress");
-        for (auto *elem : list) {
-            elem->SetAttribute("value", remaining);
+        if (mCurrentToastProgress != nullptr && mCurrentToastProgress->GetAttribute<float>("value", -1.f) != remaining) {
+            mCurrentToastProgress->SetAttribute("value", remaining);
         }
         if (remaining == 0.f) {
             if (mCurrentToast->IsPseudoClassSet("done") ||
                 // Fallback for large gaps in time where we never actually opened it
                 !mCurrentToast->IsPseudoClassSet("opened")) {
-                remove_element(mCurrentToast);
+                remove_toast(mCurrentToast, mCurrentToastProgress);
                 toasts.pop_front();
             }
             else {
-                mCurrentToast->RemoveAttribute("open");
+                close_transition(mCurrentToast);
             }
         }
         else {
-            mCurrentToast->SetAttribute("open", "");
-            mCurrentToast->SetPseudoClass("opened", true);
+            open_transition(mCurrentToast);
         }
     }
 }

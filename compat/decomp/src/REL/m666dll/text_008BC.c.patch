@@ -1,0 +1,17 @@
+--- a/src/REL/m666dll/text_008BC.c
++++ b/src/REL/m666dll/text_008BC.c
+@@ -2,0 +3,3 @@
++#include <string.h>
++float __fabsf(float value);
++int HuMCProbe(u32 channel);
+@@ -457 +459,0 @@
+-extern s32 HuMCProbe(s32 channel);
+@@ -2879 +2881 @@
+-    if ((u32) lbl_1_bss_604[groupIndex][entryIndex].actor == 0U) {
++    if (lbl_1_bss_604[groupIndex][entryIndex].actor == NULL) {
+@@ -2904 +2906 @@
+-    if ((u32)lbl_1_bss_604[groupIndex][obstacleIndex].secondaryActor == 0U) {
++    if (lbl_1_bss_604[groupIndex][obstacleIndex].secondaryActor == NULL) {
+@@ -2981 +2983 @@
+-    if ((u32)lbl_1_bss_604[groupIndex][obstacleIndex].actor == 0U) {
++    if (lbl_1_bss_604[groupIndex][obstacleIndex].actor == NULL) {

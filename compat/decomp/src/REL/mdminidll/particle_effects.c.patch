@@ -1,0 +1,79 @@
+--- a/src/REL/mdminidll/particle_effects.c
++++ b/src/REL/mdminidll/particle_effects.c
+@@ -0,0 +1,2 @@
++#include "mp6_widescreen.h"
++#include <string.h>
+@@ -480 +482 @@
+-        GXSetTexCopySrc(0, 0, 640, 480);
++        GXSetTexCopySrc(0, 0, mp6_widescreen_render_width(), 480);
+@@ -509 +511 @@
+-    C_MTXLightPerspective(projectionMatrix, camera->fov, 1.2f, 0.5f, (-0.5f), 0.5f, 0.5f);
++    C_MTXLightPerspective(projectionMatrix, camera->fov, camera->aspect, 0.5f, (-0.5f), 0.5f, 0.5f);
+@@ -702 +704 @@
+-        0.0f, 640.0f, 0.0f, 10.0f);
++        0.0f, mp6_widescreen_render_width(), 0.0f, 10.0f);
+@@ -738,36 +740,24 @@
+-        GXWGFifo.f32 = (f32) (quadIndex * -1);
+-        GXWGFifo.f32 = (f32) (quadIndex * -1);
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (128.0f * blendProgress);
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.f32 = (f32) (quadIndex + 640);
+-        GXWGFifo.f32 = (f32) (quadIndex * -1);
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (128.0f * blendProgress);
+-        GXWGFifo.f32 = 1.0f;
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.f32 = (f32) (quadIndex + 640);
+-        GXWGFifo.f32 = (f32) (quadIndex + 480);
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (128.0f * blendProgress);
+-        GXWGFifo.f32 = 1.0f;
+-        GXWGFifo.f32 = 1.0f;
+-        GXWGFifo.f32 = (f32) (quadIndex * -1);
+-        GXWGFifo.f32 = (f32) (quadIndex + 480);
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (255.0f - (8.0f * blendProgress));
+-        GXWGFifo.u8 = (s32) (128.0f * blendProgress);
+-        GXWGFifo.f32 = 0.0f;
+-        GXWGFifo.f32 = 1.0f;
++        GXPosition3f32((f32)(quadIndex * -1), (f32)(quadIndex * -1), 0.0f);
++        GXColor4u8((u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(128.0f * blendProgress));
++        GXTexCoord2f32(0.0f, 0.0f);
++        GXPosition3f32((f32)(quadIndex + mp6_widescreen_render_width()), (f32)(quadIndex * -1), 0.0f);
++        GXColor4u8((u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(128.0f * blendProgress));
++        GXTexCoord2f32(1.0f, 0.0f);
++        GXPosition3f32((f32)(quadIndex + mp6_widescreen_render_width()), (f32)(quadIndex + 480), 0.0f);
++        GXColor4u8((u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(128.0f * blendProgress));
++        GXTexCoord2f32(1.0f, 1.0f);
++        GXPosition3f32((f32)(quadIndex * -1), (f32)(quadIndex + 480), 0.0f);
++        GXColor4u8((u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(255.0f - 8.0f * blendProgress),
++                    (u8)(s32)(128.0f * blendProgress));
++        GXTexCoord2f32(0.0f, 1.0f);
+@@ -776 +766,2 @@
+-    GXSetTexCopySrc(0U, 0U, 640U, 480U);
++    GXEnd();
++    GXSetTexCopySrc(0U, 0U, mp6_widescreen_render_width(), 480U);

@@ -8,9 +8,11 @@
  * transcript is most useful, and the OSReport tap that feeds it lives in
  * shims_manual.c, which is also in both.
  */
+#include "mp6_load_trace.h"
 #include "mp6_events.h"
 #include "mp6_boot.h" /* mp6_tick_count -- the shared VI tick */
 #include "mp6_diag_probe.h" /* the chronological tail ring -- see mp6_event_post */
+#include "mp6_dvd_files.h" /* mp6_dvd_scene_hint: overlay changes drive disc prefetch */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +31,22 @@ static const char *const kOvlNames[] = {
 #undef DLL
 
 #define OVL_NAME_COUNT ((long)(sizeof(kOvlNames) / sizeof(kOvlNames[0])))
+
+/* The instructions screen runs for seconds before its minigame, and the
+ * game already knows which one: fetch (and decode ahead) that minigame's
+ * files while it shows, not when the minigame starts. */
+#include "game/gamework.h"
+#include "game/mgdata.h"
+#include "game/omovl.h" /* DLL_NONE */
+static void mp6_event_prefetch_next(const char *started)
+{
+    unsigned mg = (unsigned)GwSystem.mgNo, i;
+    if (started == NULL || strcmp(started, "instdll") != 0) return;
+    for (i = 0; i <= mg; i++) {
+        if (MgDataTbl[i].ovl == (u16)DLL_NONE) return; /* past the table's end */
+    }
+    mp6_dvd_scene_prefetch(mp6_event_ovl_name((long)MgDataTbl[mg].ovl));
+}
 
 const char *mp6_event_ovl_name(long ovlNo)
 {
@@ -278,6 +296,9 @@ void mp6_event_scan_line(const char *line)
         long ovl = strtol(rest, NULL, 10);
         const char *name = mp6_event_ovl_name(ovl);
         mp6_event_post("ovl.start", ovl, name);
+        mp6_dvd_scene_hint(name);
+        mp6_event_prefetch_next(name);
+        mp6_mem_trace(name ? name : "ovl.start", mp6_tick_count);
         return;
     }
     /* omOvlCallEx -- the REQUEST, several frames before ovl.start (the old
@@ -287,6 +308,7 @@ void mp6_event_scan_line(const char *line)
     if (starts_with(line, "objman>Call New Ovl ", &rest)) {
         long ovl = strtol(rest, NULL, 10);
         mp6_event_post("ovl.call", ovl, mp6_event_ovl_name(ovl));
+        mp6_dvd_scene_hint(mp6_event_ovl_name(ovl));
         return;
     }
     if (starts_with(line, "objman>Ovl Return ", &rest)) {

@@ -1,0 +1,36 @@
+--- a/src/REL/m674Dll/main.c
++++ b/src/REL/m674Dll/main.c
+@@ -4,0 +5,2 @@
++#include "game/data.h"
++#include "game/hu3d.h"
+@@ -42 +44 @@
+-extern void fn_1_21A8(s32 camera, Vec *direction, Vec *target, f32 fov, f32 radius);
++extern void fn_1_21A8(s32 camera, Vec *direction, Vec *target, float fov, float radius);
+@@ -52 +54 @@
+-void fn_1_9B8(s16 sequenceMode, s16 frameNo);
++void fn_1_9B8(short sequenceMode, short frameNo);
+@@ -92,5 +94,3 @@
+-    extern void fn_1_4E4(s16 sequenceMode, s16 frameNo);
+-    extern void Hu3DBGColorSet(u8, u8, u8);
+-    extern s32 HuDataSelHeapReadNum(s32, u32, s32);
+-    extern void fn_1_27E4(s32, s32);
+-    extern void fn_1_FA48(OMOBJMAN *);
++    extern void fn_1_4E4(short sequenceMode, short frameNo);
++    extern void fn_1_27E4(u32 cameras, void *data);
++    extern void fn_1_FA48(HUPROCESS *process);
+@@ -98,4 +98,3 @@
+-    extern void fn_1_52FC(OMOBJMAN *);
+-    extern void fn_1_8ACC(OMOBJMAN *);
+-    extern void fn_1_E0C4(OMOBJMAN *);
+-    extern void HuPrcVSleep(void);
++    extern void fn_1_52FC(HUPROCESS *manager);
++    extern void fn_1_8ACC(HUPROCESS *process);
++    extern void fn_1_E0C4(HUPROCESS *process);
+@@ -470 +469 @@
+-int fn_1_F3C() {
++int fn_1_F3C(void) {
+@@ -2,0 +2 @@
++#include "mp6_mg_winner.h"
+@@ -232,0 +232,2 @@
++        /* Port addition: name the winners (retail never did; see mp6_mg_winner.h). */
++        mp6_mg_winner_message(lbl_1_bss_14[0], lbl_1_bss_14[1], lbl_1_bss_14[2], lbl_1_bss_14[3]);

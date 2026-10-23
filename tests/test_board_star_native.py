@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from tools import apply_patches, build
-from test_frame_resource_lifetimes import function
+from tests.test_frame_resource_lifetimes import function
 
 ROOT = Path(__file__).resolve().parents[1]
 

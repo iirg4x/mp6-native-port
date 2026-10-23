@@ -1,0 +1,4 @@
+--- a/src/REL/m664dll/setup.c
++++ b/src/REL/m664dll/setup.c
+@@ -29,0 +30 @@
++void fn_1_3C0(void);

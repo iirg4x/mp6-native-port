@@ -1,0 +1,13 @@
+--- a/backends/imgui_impl_wgpu.cpp
++++ b/backends/imgui_impl_wgpu.cpp
+@@ -52,9 +52,7 @@
+     #error exactly one of IMGUI_IMPL_WEBGPU_BACKEND_DAWN or IMGUI_IMPL_WEBGPU_BACKEND_WGPU must be defined!
+     #endif
+ #else
+-    #if defined(IMGUI_IMPL_WEBGPU_BACKEND_DAWN) || defined(IMGUI_IMPL_WEBGPU_BACKEND_WGPU)
+-    #error neither IMGUI_IMPL_WEBGPU_BACKEND_DAWN nor IMGUI_IMPL_WEBGPU_BACKEND_WGPU may be defined if targeting emscripten!
+-    #endif
++    /* MP6 wasm: emdawnwebgpu implements the Dawn API on emscripten. */
+ #endif
+ 
+ #ifndef IMGUI_DISABLE

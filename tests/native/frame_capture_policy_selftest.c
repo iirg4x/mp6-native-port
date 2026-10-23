@@ -42,9 +42,16 @@ void mp6_fi_model_reset(void) { ++model_resets; }
 void mp6_fi_model_snapshot(void) { ++snapshots; }
 void mp6_fi_model_animlog(long tick) { assert(tick == ++animlogs); }
 uint64_t mp6_host_monotonic_ns(void) { static uint64_t clock; return ++clock; }
+int mp6_fi_deformed_list(const Mp6FiDeformed **out) { *out = NULL; return 0; }
+void mp6_fi_deformed_reset(void) {}
+int mp6_launcher_cfg_smooth_frames(void) { return -1; }
 
 static void frame(void) {
-    static const uint8_t command[] = {GX_NOP, GX_NOP};
+    /* A raw NOP span is intentionally batch-walked without fi_walk_one, so
+     * it cannot prove that the live capture path invokes the actual walker.
+     * Use one valid, no-effect BP write for the lifecycle fixture; the
+     * separate replay walker tests cover NOP-span batching itself. */
+    static const uint8_t command[] = {GX_LOAD_BP_REG, 0x00, 0x00, 0x00, 0x00};
     mp6_fi_note_frame_begin();
     if (capture) capture(command, sizeof(command), NULL);
     mp6_fi_note_frame_end();

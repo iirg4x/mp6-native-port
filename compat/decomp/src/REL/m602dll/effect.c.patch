@@ -1,0 +1,9 @@
+--- a/src/REL/m602dll/effect.c
++++ b/src/REL/m602dll/effect.c
+@@ -2,0 +3 @@
++#include "mp6_widescreen.h"
+@@ -135,0 +137 @@
++    mp6_widescreen_extend_edge(lbl_1_bss_23C[0], "kyaku", 2, 800.0f);
+@@ -139,0 +142,2 @@
++    mp6_widescreen_extend_edge(lbl_1_bss_23C[2], "kyaku", 2, 800.0f);
++    mp6_widescreen_extend_sides(lbl_1_bss_23C[1], "ground", 1);

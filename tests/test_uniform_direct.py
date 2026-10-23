@@ -15,8 +15,8 @@ def span(text, first, last):
 
 class UniformDirect(unittest.TestCase):
     def test_full_serialization_and_writer_contract(self):
-        source = ROOT/'build/aurora-release-source'
-        android = ROOT/'build/android-aurora-source'
+        source = ROOT/'third_party/aurora'
+        android = ROOT/'third_party/aurora'
         for unit in ('lib/gfx/common.hpp', 'lib/gfx/common.cpp', 'lib/gfx/uniform_writer.hpp',
                      'lib/gx/gx.hpp', 'lib/gx/shader_info.cpp'):
             self.assertEqual((source/unit).read_text(), (android/unit).read_text(), unit)
@@ -29,6 +29,9 @@ class UniformDirect(unittest.TestCase):
              '  if (!buf) {\n    g_gxState.stateDirty = false;\n    return {};\n  }',
              '  static ByteBuffer buf;\n  buf.clear();\n  buf.reserve_extra(info.uniformSize);'),
             ('  return buf.finish();', '  return gfx::push_uniform(buf.data(), buf.size());'),
+            ('  const auto appendMtx = [&buf](u32 slot, bool normal) {\n'
+             '    if (fifo::g_retainRecording) fifo::retained_note_matrix(buf.offset(), slot, normal);\n',
+             '  const auto appendMtx = [](u32 slot, bool normal) {\n'),
         ):
             self.assertEqual(reference.count(new), 1)
             reference = reference.replace(new, old)

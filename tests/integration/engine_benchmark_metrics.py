@@ -43,18 +43,60 @@ def gpu_window(log):
 
 def frame_profile(log):
     """CPU stages overlap across threads; callers must not sum them as frame time."""
-    def fields(marker, expected):
+    def fields(marker, expected, optional=()):
         lines=re.findall(r'^\['+re.escape(marker)+r'\] (.*)$',log,re.M)
         if len(lines)!=1: raise ValueError(f'expected one {marker} record')
         pairs=re.findall(r'(\w+)=([\d.]+)',lines[0])
         result={key:float(value) for key,value in pairs}
-        if len(pairs)!=len(result) or set(result)!=set(expected):
+        allowed=set(expected)|set(optional)
+        if (len(pairs)!=len(result) or not set(expected).issubset(result)
+                or not set(result).issubset(allowed)):
             raise ValueError(f'unexpected {marker} fields')
         if not all(math.isfinite(value) and value>=0 for value in result.values()):
             raise ValueError(f'invalid {marker} value')
         return result
-    cpu=fields('FRAME-PROFILE',('frames','frameAdmission','stagingAdmission','encode','acquire','finish','submit','present','queueDelayMax'))
+    cpu=fields('FRAME-PROFILE',
+               ('frames','frameAdmission','stagingAdmission','encode','acquire','finish','submit','present','queueDelayMax'),
+               optional=('aoEncode','aoCompositeRecord','aoFoliageSeedRecord'))
+    # The Record fields were historically draw-only scopes. A one-time marker
+    # is required before interpreting newly instrumented values as complete
+    # callback CPU recording; never relabel old logs based on field names alone.
+    record_marker_lines=re.findall(r'^\[FRAME-AO-RECORD-SCOPE\].*$',log,re.M)
+    if len(record_marker_lines)>1:
+        raise ValueError('duplicate AO record scope marker')
+    record_fields={'aoCompositeRecord','aoFoliageSeedRecord'}
+    observed_record_fields=record_fields & set(cpu)
+    if record_marker_lines:
+        if record_marker_lines[0] != '[FRAME-AO-RECORD-SCOPE] callbacks=complete':
+            raise ValueError('malformed AO record scope marker')
+        if observed_record_fields != record_fields:
+            raise ValueError('complete AO record scope marker requires both Record fields')
+        ao_record_scope='complete callback CPU recording (lookup/binding/setup/draw); nested inside encode; not GPU execution'
+    elif observed_record_fields:
+        ao_record_scope='legacy draw-command recording only; nested inside encode; not GPU execution'
+    else:
+        ao_record_scope=None
     if cpu.pop('frames')!=4000: raise ValueError('incomplete frame profile')
+    # This marker was introduced with game-thread replay instrumentation.
+    # Its absence in older logs means unmeasured, not zero cost. Replay and
+    # FaceDraw are nested CPU scopes, separate from async worker encoding.
+    ao_game = None
+    if '[FRAME-AO-GAME]' in log:
+        ao_game = fields('FRAME-AO-GAME', (
+            'renderInclusive', 'renderExclusive', 'faceDrawInclusive',
+            'faceDrawExclusive', 'renderCalls', 'faceDrawCalls'))
+        marker = re.findall(r'^\[FRAME-AO-GAME\] (.*)$', log, re.M)[0]
+        if not re.fullmatch(r'(?:\w+=[\d.]+)(?: \w+=[\d.]+)*', marker):
+            raise ValueError('malformed AO game-thread profile')
+        for prefix in ('render', 'faceDraw'):
+            if ao_game[prefix+'Exclusive'] > ao_game[prefix+'Inclusive']+0.000002:
+                raise ValueError('exclusive AO game cost exceeds inclusive cost')
+            if ao_game[prefix+'Calls'] == 0 and ao_game[prefix+'Inclusive'] != 0:
+                raise ValueError('AO game cost without calls')
+        if ao_game['faceDrawInclusive'] > ao_game['renderInclusive']+0.000002:
+            raise ValueError('AO FaceDraw cost exceeds enclosing replay cost')
+        if ao_game['renderCalls'] == 0 and ao_game['faceDrawCalls'] != 0:
+            raise ValueError('AO FaceDraw calls outside replay')
     work=fields('FRAME-WORK',('passes','gxDraws','sourceVertices','indices','drawElements','copies','copyBytes'))
     passes=re.findall(r'^\[FRAME-PASS\] (.*)$',log,re.M)
     if not passes: raise ValueError('missing final-frame pass inventory')
@@ -88,6 +130,19 @@ def frame_profile(log):
         texture=fields('FRAME-TEXTURE-LOADS',('texture','identical','palette','identicalPalette'))
         if texture['identical']>texture['texture'] or texture['identicalPalette']>texture['palette']:
             raise ValueError('texture repeats exceed loads')
+    scope=('4000 instrumented desktop frames. CPU stages overlap; admission includes waiting. '
+           'aoEncode is CPU attribution nested inside encode and must not be added to it.')
+    if ao_record_scope:
+        scope+=f' AO Record values measure {ao_record_scope} and are separate from aoEncode.'
+    else:
+        scope+=' AO Record values are absent from this historical report.'
+    if ao_game is not None:
+        scope+=(' AO game-thread replay includes nested FaceDraw and synchronous FIFO work; '
+                'exclusive values subtract nested AO scopes only, not all renderer work. '
+                'Do not sum these with frame, front-end, or worker times.')
+    scope+=(' Scene-pass count excludes custom AO passes and final presentation. '
+             'Copy counts/bytes cover staging-buffer uploads, not texture snapshots or total GPU bandwidth. '
+             'Vertices are submitted references, not unique mesh vertices or hardware invocations.')
     return dict(cpu_average_ms=cpu,work_average_per_frame=work,final_frame_passes=passes,
         front_end_average=front,cp_register_census=cp,texture_load_census=texture,
-        scope='4000 instrumented desktop frames. CPU stages overlap; admission includes waiting. Scene-pass count excludes custom AO passes and final presentation. Vertices are submitted references, not unique mesh vertices or hardware invocations.')
+        ao_record_scope=ao_record_scope,ao_game_average=ao_game,scope=scope)

@@ -1,0 +1,16 @@
+--- a/src/REL/m676Dll/camera_audio.c
++++ b/src/REL/m676Dll/camera_audio.c
+@@ -17 +16,0 @@
+-extern inline float tanf(float x) { return (float)tan(x); }
+@@ -29 +28 @@
+-HuVecF *fn_1_1AD8();
++HuVecF *fn_1_1AD8(void);
+@@ -196 +195 @@
+-HuVecF *fn_1_1AD8() {
++HuVecF *fn_1_1AD8(void) {
+@@ -708 +707 @@
+-    data = HuMemDirectMallocNum(HEAP_HEAP, 1544, HU_MEMNUM_OVL);
++    data = HuMemDirectMallocNum(HEAP_HEAP, sizeof(*data), HU_MEMNUM_OVL);
+@@ -710 +709 @@
+-    memset(data, 0, 1544);
++    memset(data, 0, sizeof(*data));

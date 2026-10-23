@@ -1,0 +1,13 @@
+--- a/src/REL/m644dll/stage.c
++++ b/src/REL/m644dll/stage.c
+@@ -2,0 +3 @@
++#include <string.h>
+@@ -46 +47 @@
+-f32 fn_1_65A4(s32, s32, s32);
++float fn_1_65A4(s32 side, s32 route, s32 variant);
+@@ -54 +55 @@
+-extern s32 fn_1_6588(s32 route);
++extern s16 fn_1_6588(s32 route_motion);
+@@ -147,0 +147,2 @@
++    /* No caller reads this result; hardware left r3 unspecified. */
++    return 0;

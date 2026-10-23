@@ -11,7 +11,16 @@ from tools import build
 
 
 def shader_source(path=None, *, android=False, compatibility=None, prepared_depth=False,
-                  attachment_depth=False, multisampled_depth=False, decals=True):
+                  attachment_depth=False, multisampled_depth=False, decals=True,
+                  canonical_depth=False):
+    """Return the production-selected WGSL for one explicit factory variant.
+
+    ``canonical_depth`` is an opt-in sixth factory argument added after the
+    existing ``decals`` argument.  Older checkpoints keep the five-argument
+    factory and remain usable for every legacy request; asking an old header
+    for the new variant fails clearly instead of silently returning a
+    hand-reconstructed shader.
+    """
     path = Path(path).resolve() if path else ROOT / 'src/gx/ambient_occlusion_shader.hpp'
     header = path.read_text()
     if 'inline std::string ambient_occlusion_shader(' in header:
@@ -19,10 +28,20 @@ def shader_source(path=None, *, android=False, compatibility=None, prepared_dept
         # C++ branches. Android defaults to the conservative test variant.
         mode = android if compatibility is None else compatibility
         values = (mode, prepared_depth)
+        supports_canonical = bool(re.search(
+            r'inline\s+std::string\s+ambient_occlusion_shader\s*\([^)]*\bcanonicalDepth\b',
+            header, re.S,
+        ))
+        if canonical_depth and not supports_canonical:
+            raise ValueError(
+                'canonical_depth=True requires the six-argument ambient_occlusion_shader factory'
+            )
         if 'bool attachmentDepth' in header:
             values += (attachment_depth, multisampled_depth, decals)
         elif attachment_depth or multisampled_depth or not decals:
             raise ValueError('This checkpoint does not support attachment depth')
+        if supports_canonical:
+            values += (canonical_depth,)
         with tempfile.TemporaryDirectory(prefix='ao-source-', dir=ROOT/'build') as tmp:
             folder = Path(tmp)
             cpp, exe = folder/'dump.cpp', folder/'dump.exe'
@@ -35,6 +54,10 @@ def shader_source(path=None, *, android=False, compatibility=None, prepared_dept
                                     capture_output=True, text=True, timeout=90)
             if result.returncode: raise RuntimeError(result.stderr)
             return subprocess.run([str(exe)], capture_output=True, text=True, check=True, timeout=10).stdout
+    if canonical_depth:
+        raise ValueError(
+            'canonical_depth=True requires the six-argument ambient_occlusion_shader factory'
+        )
     result = subprocess.run([build.ZIG, 'c++', '-E', '-P', '-x', 'c++',
                              *(['-D__ANDROID__'] if android else []), str(path)],
                             capture_output=True, text=True, check=True, timeout=30)
@@ -52,7 +75,8 @@ if __name__ == '__main__':
     parser.add_argument('--attachment-depth', action='store_true')
     parser.add_argument('--multisampled-depth', action='store_true')
     parser.add_argument('--no-decals', action='store_true')
+    parser.add_argument('--canonical-depth', action='store_true')
     args = parser.parse_args()
     print(shader_source(compatibility=args.compatibility, prepared_depth=args.prepared_depth,
                         attachment_depth=args.attachment_depth, multisampled_depth=args.multisampled_depth,
-                        decals=not args.no_decals))
+                        decals=not args.no_decals, canonical_depth=args.canonical_depth))

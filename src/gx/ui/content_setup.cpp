@@ -1,8 +1,8 @@
 /* MP6 native port -- first-run content onboarding dialog implementation.
  * See content_setup.hpp for the design story. OUR file; structural idiom
  * follows the ripped modal.cpp / partyboard's DiscVerificationModal (their
- * src/port/ui/prelaunch.cpp) so the ripped window.rcss modal + progress
- * styles apply unchanged. */
+ * src/port/ui/prelaunch.cpp). Scoped content-link styles match the storybook;
+ * the native picker, validation and cancellable import pipeline are retained. */
 #include "content_setup.hpp"
 
 #include "launcher_state.hpp"
@@ -34,6 +34,7 @@ const char *SDL_GetAndroidInternalStoragePath(void);
  * mp6_host_section.h for the full contract; build.py enforces top-level
  * placement. */
 #include "mp6_host_section.h"
+
 
 namespace mp6::ui {
 namespace {
@@ -83,23 +84,28 @@ namespace {
     }
 
     const char *kChooseMessage =
-        "Mario Party 6 game content was not found.<br/><br/>"
-        "The port needs the game files from your own <b>Mario Party 6 (USA)</b> disc. "
-        "Select a disc image (<b>.iso</b>, <b>.gcm</b>, <b>.rvz</b> and other formats) "
-        "or an already-extracted <b>GP6E01</b> folder \xE2\x80\x94 the needed files "
-        "(about 400 MB) are imported once and kept on this device.";
+        "Choose your own Mario Party 6 (USA) disc image or an extracted GP6E01 folder.<br/><br/>"
+        "ISO, GCM and RVZ images are supported. Game files are imported once "
+        "(about 740 MB) and kept on this device. No game content is bundled.";
+
+    const char *kAddMoviesMessage =
+        "Your game files were linked before minigame preview movies were "
+        "supported, so instruction screens show a still picture instead.<br/><br/>"
+        "Select your disc image or folder again to add them (about 340 MB more).";
 
 } // namespace
 
-ContentSetup::ContentSetup()
-    : WindowSmall("modal", "modal-dialog")
+ContentSetup::ContentSetup(bool addMovies)
+    : WindowSmall("modal", "modal-dialog"), mAddMovies(addMovies)
 {
+    mDocument->SetClass("content-link-document",true);
+    mRoot->SetClass("content-link",true);
     auto *header = append(mDialog, "div");
     header->SetClass("modal-header", true);
 
     mTitle = append(header, "div");
     mTitle->SetClass("modal-title", true);
-    mTitle->SetInnerRML("Game Content Setup");
+    mTitle->SetInnerRML("Link your game");
 
     auto *body = append(mDialog, "div");
     body->SetClass("modal-body", true);
@@ -123,6 +129,69 @@ ContentSetup::ContentSetup()
     mActions->SetClass("modal-actions", true);
 
     set_stage(Stage::Choose);
+    if (mAddMovies) {
+        (void)reimport_remembered_source();
+    }
+}
+
+namespace {
+    const char *kSourceRecord = "sys/.mp6-content-source";
+}
+
+/* The source of the last successful import, one line: its kind ('i', 'f'
+ * or 't') then the path or content:// URI. */
+void ContentSetup::remember_source()
+{
+    if (mSourceKind == 0 || mSource.empty()) return;
+#ifdef __ANDROID__
+    if (mSource.rfind("content://", 0) == 0 && mp6_saf_persist_uri(mSource.c_str()) != 0) {
+        printf("[CONTENT] the picked source cannot be kept for later imports\n");
+        fflush(stdout);
+        return;
+    }
+#endif
+    const std::string record = dest_disc_root() + "/" + kSourceRecord;
+    const std::string line = std::string(1, mSourceKind) + mSource + "\n";
+    if (!SDL_SaveFile(record.c_str(), line.data(), line.size())) {
+        printf("[CONTENT] could not record the import source: %s\n", SDL_GetError());
+        fflush(stdout);
+    }
+}
+
+bool ContentSetup::reimport_remembered_source()
+{
+    const std::string record = dest_disc_root() + "/" + kSourceRecord;
+    size_t size = 0;
+    char *data = (char *)SDL_LoadFile(record.c_str(), &size);
+    if (data == nullptr) return false;
+    std::string line(data, size);
+    SDL_free(data);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    if (line.size() < 2) return false;
+    const char kind = line[0];
+    const std::string source = line.substr(1);
+    printf("[CONTENT] importing again from the linked source to add preview movies\n");
+    fflush(stdout);
+    if (kind == 'i') {
+        begin_import_image(source);
+    } else if (kind == 'f') {
+        begin_import_folder(source);
+#ifdef __ANDROID__
+    } else if (kind == 't') {
+        mCancelRequested = false;
+        mUsingSafTree = true;
+        mSourceKind = 't';
+        mSource = source;
+        if (mp6_saf_tree_import_start(source.c_str(), dest_disc_root().c_str()) != 0) {
+            show_error("Could not start the folder import.");
+        } else {
+            set_stage(Stage::Importing);
+        }
+#endif
+    } else {
+        return false;
+    }
+    return mStage == Stage::Importing;
 }
 
 ContentSetup::~ContentSetup()
@@ -144,15 +213,15 @@ ContentSetup::~ContentSetup()
 void ContentSetup::set_stage(Stage stage)
 {
     mStage = stage;
-    const bool importing = (stage == Stage::Importing);
+    bool importing = stage == Stage::Importing;
     mMessage->SetProperty(Rml::PropertyId::Display,
                           importing ? Rml::Style::Display::None : Rml::Style::Display::Block);
     mProgressWrap->SetProperty(Rml::PropertyId::Display,
                                importing ? Rml::Style::Display::Block : Rml::Style::Display::None);
     switch (stage) {
         case Stage::Choose:
-            mTitle->SetInnerRML("Game Content Setup");
-            mMessage->SetInnerRML(kChooseMessage);
+            mTitle->SetInnerRML(mAddMovies ? "Add Preview Movies" : "Link your game");
+            mMessage->SetInnerRML(mAddMovies ? kAddMoviesMessage : kChooseMessage);
             break;
         case Stage::PickingImage:
         case Stage::PickingFolder:
@@ -188,7 +257,7 @@ void ContentSetup::rebuild_actions()
         case Stage::Choose:
             add("Select Disc Image", [this] { begin_image_pick(); });
             add("Select Folder", [this] { begin_folder_pick(); });
-            add("Cancel", [this] { pop(); });
+            add("Not now", [this] { pop(); });
             break;
         case Stage::PickingImage:
         case Stage::PickingFolder:
@@ -241,6 +310,7 @@ std::string ContentSetup::dest_disc_root()
 #endif
 }
 
+
 void ContentSetup::begin_image_pick()
 {
     static const SDL_DialogFileFilter kFilters[] = {
@@ -271,6 +341,8 @@ void ContentSetup::begin_import_image(const std::string &source)
 {
     mCancelRequested = false;
     mUsingSafTree = false;
+    mSourceKind = 'i';
+    mSource = source;
     if (mp6_import_start_image(source.c_str(), dest_disc_root().c_str()) != 0) {
         show_error("An import is already running.");
         return;
@@ -282,6 +354,8 @@ void ContentSetup::begin_import_folder(const std::string &source)
 {
     mCancelRequested = false;
     mUsingSafTree = false;
+    mSourceKind = 'f';
+    mSource = source;
     if (mp6_import_start_folder(source.c_str(), dest_disc_root().c_str()) != 0) {
         show_error("An import is already running.");
         return;
@@ -308,6 +382,9 @@ void ContentSetup::finish_success()
         cfg_save();
     }
 #endif
+    {
+        remember_source();
+    }
     refresh_content_state();
     printf("[CONTENT] import complete -- content root ready\n");
     fflush(stdout);
@@ -398,6 +475,8 @@ void ContentSetup::update()
             if (r == MP6_SAF_PICK_READY) {
                 mCancelRequested = false;
                 mUsingSafTree = true;
+                mSourceKind = 't';
+                mSource = uri;
                 if (mp6_saf_tree_import_start(uri, dest_disc_root().c_str()) != 0) {
                     show_error("Could not start the folder import.");
                 } else {

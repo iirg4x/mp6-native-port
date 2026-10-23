@@ -1,0 +1,5 @@
+--- a/include/REL/m632dll.h
++++ b/include/REL/m632dll.h
+@@ -141 +141 @@
+-void fn_1_3510(MGACTOR *actorP, int param);
++void fn_1_3510(MGACTOR *actorP, intptr_t param);

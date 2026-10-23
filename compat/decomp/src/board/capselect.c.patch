@@ -1,0 +1,7 @@
+--- a/src/board/capselect.c
++++ b/src/board/capselect.c
+@@ -23,0 +24 @@
++#include "mp6_quick_play.h" /* [MP6] Quick Party mod */
+@@ -662,0 +664,2 @@
++        /* [MP6] Quick Party: waiting on a human -- keep normal speed. */
++        mp6_quick_play_hold("orb menu");
