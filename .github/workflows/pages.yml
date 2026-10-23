@@ -1,10 +1,11 @@
 # MP6 native port -- deploys web/ (the static packager site) to GitHub
-# Pages on push to the default branch.
+# Pages on push to the default branch, plus the web game from the latest
+# release under /play/.
 #
-# Scope, on purpose: this workflow only ever reads the `packaging/web/` directory --
-# it uploads exactly that folder as the Pages artifact and touches nothing
-# else in the repo. There is no disc image, no game data, and no build step
-# anywhere in this job; `packaging/web/` is already plain static files (vanilla
+# Scope, on purpose: this workflow only ever reads the `packaging/web/` directory
+# and the latest release's prebuilt *-web.zip -- it uploads exactly that as the
+# Pages artifact and touches nothing else in the repo. There is no disc image,
+# no game data, and no build step anywhere in this job; `packaging/web/` is already plain static files (vanilla
 # JS/HTML/CSS, no bundler). See web/README-equivalent docs (the site's own
 # `index.html` "Legal / policy" section) and docs/RELEASING.md for what
 # does and doesn't get published for this project.
@@ -22,6 +23,8 @@ on:
     paths:
       - "packaging/web/**"
       - ".github/workflows/pages.yml"
+  release:
+    types: [published, edited]
   workflow_dispatch: {}
 
 permissions:
@@ -45,6 +48,26 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
+      # The playable web build (an installable app; each player picks their
+      # own disc image, which never leaves their device) is not built here:
+      # building it needs the decomp and data from the disc, which are never
+      # uploaded. It is built from the public source on the maintainer's PC
+      # and attached to the latest release as *-web.zip; this step serves it
+      # under /play/. No zip on the release: the site goes out without it.
+      - name: Add the web game from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset=$(gh release view --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name | select(endswith("-web.zip"))' | head -n 1)
+          if [ -n "$asset" ]; then
+            gh release download --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir "$RUNNER_TEMP"
+            mkdir -p packaging/web/play
+            unzip -q "$RUNNER_TEMP/$asset" -d packaging/web/play
+            echo "Serving $asset under /play/"
+          else
+            echo "No web build on the latest release"
+          fi
 
       - name: Upload web/ as the Pages artifact
         uses: actions/upload-pages-artifact@v3
